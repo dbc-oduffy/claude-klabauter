@@ -1,0 +1,2810 @@
+"""
+coordinator_core.session.tests.test_scope — parity tests for
+coordinator_core.session.scope (session touch-tracking + scoped-staging-set
+computation).
+
+Port of: scope.sh (example-doctrine-repo e34f2484, 2026-07-22).
+
+Two strategies (per the T4a test pattern):
+  (a) The scope.sh boundary matrix transcribed 1:1 — the touch()
+      normalization/dedup/still-absolute-skip cases, the
+      compute_scope() set-math cases (incl. the nested
+      _cs_other_claim_owner first-writer-wins scan), and the archive()
+      idempotency/date cases.
+  (b) GOLDEN-DIFF against reality — compute_scope() is exercised against a
+      real git repo with real `git diff`/`git ls-files` output and real
+      on-disk mtimes, and against a FROZEN copy of this repo's own session
+      registry corpus (see below for why frozen, not live).
+
+The corpus test in strategy (b) used to be a live
+``sorted(Path(core.git_root() or ".", ".git", "coordinator-sessions").glob(
+"*/meta.json"))[:25]`` walk. That corpus lives inside ``.git/`` — untracked,
+machine-local, never cloned — so on a fresh clone, in CI, or on any machine
+that has never run a coordinator session, the glob returns ``[]``,
+``parametrize`` silently collects ZERO tests, and this golden-diff reports
+nothing wrong while exercising nothing at all. Frozen 2026-07-22 into
+``fixtures/frozen_coordinator_sessions_corpus_2026-07-22.json`` (the same
+snapshot test_core.py freezes) and rebuilt as a self-contained tmp_path git
+repo — every frozen session directory present as a sibling, so the Step 3
+other-session-claims scan still exercises real cross-session shapes rather
+than a single session in isolation. Never re-point this test at the LIVE
+``.git/`` corpus again — that is exactly the bug being fixed.
+
+Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
+recipe-t4a-coordinator-session-hub.md § scope.py
+Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.session import core, scope
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_repo(tmp_path):
+    # Review: staff-eng F12 — check=True on every fixture-setup git call: a
+    # silent fixture-setup failure (e.g. a misconfigured test-runner git)
+    # must not masquerade as a passing test exercising an empty/unstaged
+    # repo; fail loud at setup instead.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def _sdir(repo, sid):
+    return Path(repo) / ".git" / "coordinator-sessions" / sid
+
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+_FROZEN_CORPUS_FIXTURE = (
+    _FIXTURES_DIR / "frozen_coordinator_sessions_corpus_2026-07-22.json"
+)
+# Kept in lockstep with test_core.py's constant of the same name — both read
+# the same frozen fixture file. A re-freeze that narrows either corpus fails
+# loud here rather than silently shrinking this golden-diff.
+_EXPECTED_CORPUS_SIZE = 53
+
+_FROZEN_CORPUS_ENTRIES = json.loads(
+    _FROZEN_CORPUS_FIXTURE.read_text(encoding="utf-8")
+)["entries"]
+# Collection-time (not test-time) non-empty + size guard — see module
+# docstring: a bare `@pytest.mark.parametrize` over an empty/narrowed list
+# just collects fewer tests and reports nothing wrong.
+assert len(_FROZEN_CORPUS_ENTRIES) == _EXPECTED_CORPUS_SIZE, (
+    f"frozen corpus fixture {_FROZEN_CORPUS_FIXTURE} has "
+    f"{len(_FROZEN_CORPUS_ENTRIES)} entries, expected "
+    f"{_EXPECTED_CORPUS_SIZE} -- update _EXPECTED_CORPUS_SIZE only as a "
+    "deliberate acknowledgment of a corpus re-freeze, never to silence this."
+)
+
+
+# ---------------------------------------------------------------------------
+# touch() — required args
+# ---------------------------------------------------------------------------
+
+
+def test_touch_requires_sid():
+    with pytest.raises(ValueError):
+        scope.touch("", "some/path.txt")
+
+
+def test_touch_requires_path():
+    with pytest.raises(ValueError):
+        scope.touch("sid", "")
+
+
+def test_touch_noop_outside_git_repo(tmp_path):
+    # session_dir empty -> fail-open, no raise, no file written.
+    assert scope.touch("sid", "some/path.txt", cwd=str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# touch() — relative path append + dedup + last_activity
+# ---------------------------------------------------------------------------
+
+
+class TestTouchAppend:
+    def test_appends_relative_path_and_creates_session_dir(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s1", cwd=str(repo))
+        scope.touch("s1", "src/foo.py", cwd=str(repo))
+        touched = _sdir(repo, "s1") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 1
+        verb, ts, path = scope.parse_touch_event(lines[0])
+        assert (verb, path) == ("T", "src/foo.py")
+        assert ts is not None
+
+    def test_creates_session_dir_on_first_touch_when_init_skipped(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        # No core.init first — touch() must fail-safe init the session dir.
+        scope.touch("s-lazy", "a/b.py", cwd=str(repo))
+        touched = _sdir(repo, "s-lazy") / "touched.txt"
+        assert touched.is_file()
+        paths = [
+            scope.parse_touch_event(ln)[2] for ln in touched.read_text().splitlines()
+        ]
+        assert "a/b.py" in paths
+
+    def test_backfills_meta_json_when_dir_precreated_without_meta(self, tmp_path):
+        """Regression (defect A, 2026-07-24): touch() backfills meta.json when a
+        prior bookkeeping writer created the session dir first (dir present,
+        meta.json absent). The old `if not isdir` guard skipped core.init here,
+        leaving Layer-1 liveness unwritten.
+        """
+        repo = _make_repo(tmp_path)
+        sdir = _sdir(repo, "s-precreated")
+        sdir.mkdir(parents=True, exist_ok=True)  # another writer won the create race
+        (sdir / "push-failures-cursor.txt").write_text("0")
+        assert not (sdir / "meta.json").is_file(), "precondition: no meta.json"
+
+        scope.touch("s-precreated", "src/foo.py", cwd=str(repo))
+
+        assert (sdir / "meta.json").is_file(), "meta.json must be backfilled on touch"
+        assert core.read_meta_field(str(sdir), "session_id") == "s-precreated"
+
+    def test_line_exact_dedup(self, tmp_path):
+        """A path whose last event is already T is skipped on re-touch —
+        the event-aware counterpart of the old line-exact dedup (AC8)."""
+        repo = _make_repo(tmp_path)
+        core.init("s2", cwd=str(repo))
+        scope.touch("s2", "src/foo.py", cwd=str(repo))
+        scope.touch("s2", "src/foo.py", cwd=str(repo))
+        touched = _sdir(repo, "s2") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 1
+        assert scope.parse_touch_event(lines[0])[2] == "src/foo.py"
+
+    def test_dedup_is_full_line_not_substring(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s3", cwd=str(repo))
+        scope.touch("s3", "src/foo.py", cwd=str(repo))
+        scope.touch("s3", "src/foo", cwd=str(repo))  # substring — NOT a dup
+        touched = _sdir(repo, "s3") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        paths = [scope.parse_touch_event(ln)[2] for ln in lines]
+        assert paths == ["src/foo.py", "src/foo"]
+
+    def test_updates_last_activity(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s4", cwd=str(repo))
+        sdir = _sdir(repo, "s4")
+        core.update_meta_field(str(sdir), "last_activity", "2000-01-01T00:00:00Z")
+        scope.touch("s4", "x.py", cwd=str(repo))
+        assert core.read_meta_field(str(sdir), "last_activity") != "2000-01-01T00:00:00Z"
+
+
+class TestTouchEventAware:
+    """P2 — touch()'s last-event dedup (AC8): a path whose last event is
+    already T is skipped; a path with no event at all, or whose last event
+    is R (released), gets a fresh T. A bare legacy line (no verb/timestamp)
+    parses as T (`parse_touch_event`'s fail-safe) and is treated the same as
+    a real T for dedup purposes."""
+
+    def test_fresh_path_gets_a_t_event(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s-fresh", cwd=str(repo))
+        scope.touch("s-fresh", "src/new.py", cwd=str(repo))
+        touched = _sdir(repo, "s-fresh") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 1
+        verb, ts, path = scope.parse_touch_event(lines[0])
+        assert (verb, path) == ("T", "src/new.py")
+        assert ts is not None
+
+    def test_last_event_t_is_skipped(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s-t", cwd=str(repo))
+        touched = _sdir(repo, "s-t") / "touched.txt"
+        touched.write_text(scope.format_touch_event("T", "src/foo.py") + "\n")
+        scope.touch("s-t", "src/foo.py", cwd=str(repo))
+        assert len(touched.read_text().splitlines()) == 1
+
+    def test_last_event_r_gets_a_new_t(self, tmp_path):
+        """AC8's falsifying case: an edit after a release must not be
+        silently unclaimed."""
+        repo = _make_repo(tmp_path)
+        core.init("s-r", cwd=str(repo))
+        touched = _sdir(repo, "s-r") / "touched.txt"
+        touched.write_text(scope.format_touch_event("R", "src/foo.py") + "\n")
+        scope.touch("s-r", "src/foo.py", cwd=str(repo))
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 2
+        verb2, _ts2, path2 = scope.parse_touch_event(lines[1])
+        assert (verb2, path2) == ("T", "src/foo.py")
+
+    def test_bare_legacy_line_counts_as_t_and_is_skipped(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s-legacy", cwd=str(repo))
+        touched = _sdir(repo, "s-legacy") / "touched.txt"
+        touched.write_text("src/foo.py\n")  # bare legacy line, no verb/timestamp
+        scope.touch("s-legacy", "src/foo.py", cwd=str(repo))
+        lines = touched.read_text().splitlines()
+        assert lines == ["src/foo.py"]  # unchanged — no new T appended
+
+
+# ---------------------------------------------------------------------------
+# touch() — absolute-path normalization + still-absolute skip
+# ---------------------------------------------------------------------------
+
+
+class TestTouchNormalization:
+    def test_absolute_path_inside_repo_normalized_to_relative(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s5", cwd=str(repo))
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")  # untracked -> relpath branch
+        scope.touch("s5", str(target), cwd=str(repo))
+        touched = _sdir(repo, "s5") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        paths = [scope.parse_touch_event(ln)[2] for ln in lines]
+        assert paths == ["src/new.py"]
+        # crucially, NOT the absolute form
+        assert not any(scope._is_absolute(p) for p in paths)
+
+    def test_absolute_tracked_path_normalized_via_git_ls_files(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s6", cwd=str(repo))
+        # README.md is tracked -> git ls-files --full-name branch
+        target = repo / "README.md"
+        scope.touch("s6", str(target), cwd=str(repo))
+        touched = _sdir(repo, "s6") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert [scope.parse_touch_event(ln)[2] for ln in lines] == ["README.md"]
+
+    def test_still_absolute_path_skipped_when_normalization_fails(self, tmp_path, monkeypatch):
+        """Guard: if the path is STILL absolute after the
+        normalization attempt (git ls-files miss + relpath failure), SKIP it.
+        On POSIX ``os.path.relpath`` almost always yields a ``../`` relative
+        form, so we simulate the normalization miss the bash guard is written
+        for (Python unavailable / cross-drive on Windows) by forcing relpath
+        to raise — the path then stays absolute and must be skipped."""
+        repo = _make_repo(tmp_path)
+        core.init("s7", cwd=str(repo))
+
+        def _boom(*a, **k):
+            raise ValueError("simulated relpath failure")
+
+        monkeypatch.setattr(scope.os.path, "relpath", _boom)
+        outside = "/totally/outside/xyz.py"  # git ls-files will miss this
+        assert scope.touch("s7", outside, cwd=str(repo)) is None
+        touched = _sdir(repo, "s7") / "touched.txt"
+        # touched.txt may be created by init, but the absolute path must NOT
+        # have been appended.
+        lines = touched.read_text().splitlines() if touched.is_file() else []
+        assert outside not in lines
+        assert not any(scope._is_absolute(l) for l in lines)
+
+    def test_normalize_touch_path_relative_passthrough(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert scope.normalize_touch_path("src/foo.py", cwd=str(repo)) == "src/foo.py"
+
+    def test_normalize_touch_path_absolute_tracked_via_git_ls_files(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        assert scope.normalize_touch_path(str(target), cwd=str(repo)) == "README.md"
+
+    def test_normalize_touch_path_absolute_untracked_via_relpath(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        assert (
+            scope.normalize_touch_path(str(target), cwd=str(repo)) == "src/new.py"
+        )
+
+    def test_normalize_touch_path_still_absolute_returns_none(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+
+        def _boom(*a, **k):
+            raise ValueError("simulated relpath failure")
+
+        monkeypatch.setattr(scope.os.path, "relpath", _boom)
+        outside = "/totally/outside/xyz.py"
+        assert scope.normalize_touch_path(outside, cwd=str(repo)) is None
+
+    def test_is_absolute_predicate(self):
+        assert scope._is_absolute("/etc/passwd") is True
+        assert scope._is_absolute("C:/Users/x") is True  # abs-path-ok: synthetic drive-letter literal exercising the predicate, not a real machine path
+        assert scope._is_absolute("src/foo.py") is False
+        assert scope._is_absolute("") is False
+
+
+class TestNormalizeDiagnostic:
+    """C3/AC5: normalize_touch_path's one-shot, deduped-per-process stderr
+    diagnostic on its fail-open path (git ls-files / relpath failure) —
+    without changing touch()'s or normalize_touch_path's fail-open return
+    contract."""
+
+    def _reset_latch(self, monkeypatch):
+        monkeypatch.setattr(scope, "_normalize_diag_fired", False)
+
+    def test_diagnostic_fires_once_on_induced_ls_files_failure(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._reset_latch(monkeypatch)
+        repo = _make_repo(tmp_path)
+        # `None` from `_git_run` is git-could-not-be-EXECUTED — operational by
+        # construction, never reclassifiable as the benign out-of-repo case.
+        monkeypatch.setattr(scope, "_git_run", lambda args, cwd=None: None)
+
+        target = repo / "README.md"
+        result1 = scope.normalize_touch_path(str(target), cwd=str(repo))
+        err1 = capsys.readouterr().err
+        assert "normalize_touch_path" in err1
+        assert "git ls-files" in err1
+
+        # Second induced failure in the same process: silent.
+        result2 = scope.normalize_touch_path(str(target), cwd=str(repo))
+        err2 = capsys.readouterr().err
+        assert err2 == ""
+
+        # Return value unchanged by the diagnostic: still resolves via the
+        # relpath fallback either way.
+        assert result1 == result2 == "README.md"
+
+    def test_diagnostic_fires_once_on_induced_relpath_failure(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._reset_latch(monkeypatch)
+        repo = _make_repo(tmp_path)
+        # Succeed with no match (empty stdout), NOT a git-command failure —
+        # isolates the relpath failure path from the ls-files failure path
+        # (which fires its own, separately-tested diagnostic reason).
+        monkeypatch.setattr(
+            scope, "_git_run", lambda args, cwd=None: scope.GitRun(0, "", "")
+        )
+
+        def _boom(*a, **k):
+            raise ValueError("simulated relpath failure")
+
+        monkeypatch.setattr(scope.os.path, "relpath", _boom)
+        outside = "/totally/outside/xyz.py"  # git ls-files misses this
+
+        result1 = scope.normalize_touch_path(outside, cwd=str(repo))
+        err1 = capsys.readouterr().err
+        assert "normalize_touch_path" in err1
+        assert "relpath" in err1
+        assert result1 is None  # unchanged fail-open skip signal
+
+        result2 = scope.normalize_touch_path(outside, cwd=str(repo))
+        err2 = capsys.readouterr().err
+        assert err2 == ""
+        assert result2 is None
+
+
+class TestNormalizeDiagnosticBenignVsOperational:
+    """The latch discriminates a path that is simply NOT IN THIS REPO (routine,
+    handled by the relpath fallback, must stay silent) from an operational
+    ``git ls-files`` failure (systemic, must surface).
+
+    Defect being pinned: `git ls-files -- <abs path outside the repo>` exits
+    128, `_git_output` collapsed that into `None`, and the latch fired for
+    every session that touched a sibling repo, a settings home, or a scratch
+    dir — most sessions in this fleet — while claiming corruption that had not
+    happened. Once `safe_commit_offer._render_report` began LEADING with the
+    latch (eb1e8b5d76c8), that mis-calibration became a false DEGRADED INPUT
+    banner at the head of most reports.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_latch(self, monkeypatch):
+        """The latch is a module global and one-shot per process — reset it
+        around EVERY test here so neither a real fail-open earlier in the
+        process nor a sibling test leaks a verdict into this one."""
+        monkeypatch.setattr(scope, "_normalize_diag_fired", False)
+
+    def test_outside_repo_absolute_path_is_silent_and_still_normalizes(
+        self, tmp_path, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        sibling = tmp_path / "sibling-repo"
+        sibling.mkdir()
+        target = sibling / "note.md"
+        target.write_text("x")
+
+        result = scope.normalize_touch_path(str(target), cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is False, (
+            "a path outside this repo is the routine case, not a degradation"
+        )
+        assert capsys.readouterr().err == ""
+        assert result is not None and not scope._is_absolute(result), (
+            "the relpath fallback still resolves it — the silence must come "
+            "from classification, not from skipping the work"
+        )
+
+    def test_operational_failure_for_an_in_repo_path_fires(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        # Shape of a real lock/ref race: non-zero exit, a stderr that is NOT
+        # the out-of-repo fatal, on a path that IS inside the worktree.
+        monkeypatch.setattr(
+            scope,
+            "_git_run",
+            lambda args, cwd=None: scope.GitRun(
+                128, "", "fatal: Unable to create '.git/index.lock': File exists.\n"
+            ),
+        )
+
+        result = scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is True
+        assert "normalize_touch_path" in capsys.readouterr().err
+        assert result == "README.md"  # fail-open contract unchanged
+
+    def test_unclassifiable_failure_fires(self, tmp_path, monkeypatch, capsys):
+        """Fail TOWARD surfacing: a failure shape this code cannot positively
+        attribute to "not in this repo" — here a signal death, empty stderr,
+        no recognisable fatal at all — arms the latch. Benignity is a positive
+        verdict; the absence of evidence either way is not it."""
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(
+            scope, "_git_run", lambda args, cwd=None: scope.GitRun(-9, "", "")
+        )
+
+        scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is True
+        assert "normalize_touch_path" in capsys.readouterr().err
+
+    def test_git_unexecutable_is_never_benign(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(scope, "_git_run", lambda args, cwd=None: None)
+        outside = tmp_path / "elsewhere.md"
+        outside.write_text("x")
+
+        scope.normalize_touch_path(str(outside), cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is True, (
+            "a missing/unexecutable git is systemic by definition — the "
+            "containment check must not launder it into the benign class"
+        )
+        assert "normalize_touch_path" in capsys.readouterr().err
+
+    def test_unresolvable_root_is_not_benign(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(
+            scope,
+            "_git_run",
+            lambda args, cwd=None: scope.GitRun(128, "", "fatal: something odd\n"),
+        )
+        monkeypatch.setattr(scope.core, "git_root", lambda cwd=None: None)
+
+        scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is True
+        assert "normalize_touch_path" in capsys.readouterr().err
+
+    def test_message_does_not_assert_corruption(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(scope, "_git_run", lambda args, cwd=None: None)
+
+        scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
+        err = capsys.readouterr().err
+
+        assert "may be corrupted" not in err, (
+            "the relpath fallback may well have produced the right path — the "
+            "message must not claim more than the code knows"
+        )
+        assert "mis-normalized or missing" in err
+
+    def test_git_output_semantics_unchanged_for_other_callers(self, tmp_path):
+        """`_git_output` keeps collapsing every failure shape into None — the
+        discrimination lives at the one call site that needs it, not in the
+        shared seam every other caller reads."""
+        repo = _make_repo(tmp_path)
+
+        assert scope._git_output(["ls-files", "--", "README.md"], str(repo)) == (
+            "README.md\n"
+        )
+        assert scope._git_output(["ls-files", "--", "/etc/hosts"], str(repo)) is None
+        assert scope._git_output(["not-a-git-subcommand"], str(repo)) is None
+
+
+# ---------------------------------------------------------------------------
+# compute_scope() — required arg + out-of-repo
+# ---------------------------------------------------------------------------
+
+
+def test_compute_scope_requires_sid():
+    with pytest.raises(ValueError):
+        scope.compute_scope("")
+
+
+def test_compute_scope_out_of_repo_returns_empty(tmp_path):
+    result = scope.compute_scope("sid", cwd=str(tmp_path))
+    assert result == scope.ScopeResult([], [], [])
+
+
+# ---------------------------------------------------------------------------
+# compute_scope() — set math (golden-diff against a real tmp git repo)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeScope:
+    def test_touched_files_are_my_scope(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s1", cwd=str(repo))
+        scope.touch("s1", "a.py", cwd=str(repo))
+        scope.touch("s1", "b.py", cwd=str(repo))
+        result = scope.compute_scope("s1", cwd=str(repo))
+        assert set(result.my_scope) == {"a.py", "b.py"}
+        assert result.skipped == []
+
+    def test_extra_candidates_union_into_my_scope(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s1x", cwd=str(repo))
+        scope.touch("s1x", "a.py", cwd=str(repo))
+        result = scope.compute_scope(
+            "s1x", cwd=str(repo), extra_candidates=["fanout.py"]
+        )
+        assert set(result.my_scope) == {"a.py", "fanout.py"}
+
+    def test_extra_candidates_still_subject_to_other_session_ownership(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s1y", cwd=str(repo))
+        core.init("owner", cwd=str(repo))
+        (repo / "shared.py").write_text("z")  # dirty — post-C2 claims require this
+        scope.touch("owner", "shared.py", cwd=str(repo))
+        result = scope.compute_scope(
+            "s1y", cwd=str(repo), extra_candidates=["shared.py"]
+        )
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "owner") in result.skipped
+
+    def test_dirty_untracked_file_after_start_is_mtime_only_not_my_scope(self, tmp_path):
+        """Updated 2026-07-31 for the post-C1a/C8 disposition: an
+        uncontested mtime-only candidate (dirty, mtime >= started_at, but
+        claimed by no session's touched.txt) no longer enters my_scope —
+        see test_unclaimed_dirty_after_start_becomes_orphan_not_my_scope."""
+        repo = _make_repo(tmp_path)
+        # started_at in the past so a freshly-created dirty file qualifies.
+        core.init("s2", cwd=str(repo))
+        sdir = _sdir(repo, "s2")
+        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+        (repo / "untracked.py").write_text("z")  # dirty, mtime now >> start
+        result = scope.compute_scope("s2", cwd=str(repo))
+        assert "untracked.py" not in result.my_scope
+        assert "untracked.py" in result.orphans
+
+    def test_dirty_file_modified_before_start_excluded_by_mtime(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "old.py").write_text("z")
+        old_mtime = time.time() - 10_000
+        os.utime(repo / "old.py", (old_mtime, old_mtime))
+        core.init("s3", cwd=str(repo))
+        sdir = _sdir(repo, "s3")
+        # started_at AFTER the file's mtime -> file must be excluded.
+        (sdir / "started_at").write_text(core.now_iso())
+        result = scope.compute_scope("s3", cwd=str(repo))
+        assert "old.py" not in result.my_scope
+        # but it IS dirty and unclaimed -> orphan
+        assert "old.py" in result.orphans
+
+    def test_other_session_claim_is_subtracted(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        (repo / "shared.py").write_text("z")  # dirty — post-C2 claims require this
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("other", "shared.py", cwd=str(repo))
+        result = scope.compute_scope("mine", cwd=str(repo))
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "other") in result.skipped
+
+    def test_unclaimed_dirty_after_start_becomes_orphan_not_my_scope(self, tmp_path):
+        """INVERTED 2026-07-31 (plan docs/plans/2026-07-31-unclaimed-dirty-
+        file-adoption.md, DR-246): this test used to assert the OPPOSITE —
+        that a dirty file modified after started_at, claimed by no one, was
+        added to the candidate set by the mtime fallback (step 2) and,
+        being unowned, landed in my_scope (step 4). That was the unclaimed-
+        adoption defect: an mtime-only candidate silently entered the
+        committer's allow-list on no stronger evidence than "somebody
+        dirtied this file after I started" — indistinguishable from a
+        Bash/script/engine-written file nobody's touched.txt claims. Post
+        C1a/C8, an uncontested mtime-only candidate is dropped from
+        my_scope in Step 4(c) and falls through to Step 5's orphan
+        detection instead."""
+        repo = _make_repo(tmp_path)
+        core.init("s4", cwd=str(repo))
+        sdir = _sdir(repo, "s4")
+        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+        (repo / "orphan.py").write_text("o")  # dirty, never touched, mtime now
+        result = scope.compute_scope("s4", cwd=str(repo))
+        assert "orphan.py" not in result.my_scope
+        assert "orphan.py" in result.orphans
+
+    def test_dirty_file_owned_by_other_is_not_orphan(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s5", cwd=str(repo))
+        core.init("owner", cwd=str(repo))
+        sdir = _sdir(repo, "s5")
+        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+        (repo / "claimed.py").write_text("c")  # dirty
+        scope.touch("owner", "claimed.py", cwd=str(repo))
+        result = scope.compute_scope("s5", cwd=str(repo))
+        # The mtime fallback adds the dirty file to MY candidate set, but the
+        # cross-session subtraction removes it (owned by "owner") -> skipped,
+        # and it is NOT an orphan (owned).
+        assert "claimed.py" not in result.my_scope
+        assert "claimed.py" not in result.orphans  # owned, so silent
+        assert ("claimed.py", "owner") in result.skipped
+
+    def test_first_writer_wins_on_owner_scan(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        # two other sessions both claim the same path; lexically-first owner
+        # (aaa < bbb) wins the first-writer-wins scan.
+        core.init("aaa", cwd=str(repo))
+        core.init("bbb", cwd=str(repo))
+        (repo / "dup.py").write_text("z")  # dirty — post-C2 claims require this
+        scope.touch("mine", "dup.py", cwd=str(repo))
+        scope.touch("aaa", "dup.py", cwd=str(repo))
+        scope.touch("bbb", "dup.py", cwd=str(repo))
+        result = scope.compute_scope("mine", cwd=str(repo))
+        assert ("dup.py", "aaa") in result.skipped
+
+    def test_archive_and_agents_dirs_skipped_in_owner_scan(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        # A .archive dir containing a touched.txt claiming my path must be
+        # ignored (bash */ glob excludes dot-entries).
+        (base / ".archive" / "old-sid").mkdir(parents=True)
+        (base / ".archive" / "old-sid" / "touched.txt").write_text("mine.py\n")
+        scope.touch("mine", "mine.py", cwd=str(repo))
+        result = scope.compute_scope("mine", cwd=str(repo))
+        assert "mine.py" in result.my_scope  # NOT subtracted by .archive
+
+    # -----------------------------------------------------------------
+    # Fail-closed regression tests (Tier 2 fix): a read failure inside
+    # compute_scope must never WIDEN my_scope, only narrow it.
+    # -----------------------------------------------------------------
+
+    def test_unreadable_started_at_does_not_widen_scope(self, tmp_path, monkeypatch):
+        """If started_at is unreadable, iso_to_epoch("") == 0 must NOT be
+        allowed to make every dirty file's mtime pass the
+        `>= started_at_epoch` gate (the pre-fix widening bug). The
+        mtime-fallback augmentation must be skipped entirely, so an
+        unrelated dirty file that would otherwise qualify stays OUT of
+        my_scope."""
+        repo = _make_repo(tmp_path)
+        core.init("s8", cwd=str(repo))
+        scope.touch("s8", "a.py", cwd=str(repo))
+        (repo / "unrelated_dirty.py").write_text("z")  # dirty, mtime "now"
+
+        started_at_path = _sdir(repo, "s8") / "started_at"
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == started_at_path:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        result = scope.compute_scope("s8", cwd=str(repo))
+
+        assert "a.py" in result.my_scope
+        assert "unrelated_dirty.py" not in result.my_scope
+
+    def test_unreadable_started_at_scope_never_wider_than_readable(self, tmp_path, monkeypatch):
+        """Pin the invariant directly: computing scope with an unreadable
+        started_at must never yield a WIDER my_scope than computing it with
+        a readable (old) started_at in the same situation.
+
+        AC5 pin (rebuilt 2026-07-31): the sanity fixture is now a
+        touched.txt-CLAIMED file, not a bare mtime-only candidate — post
+        C1a/C8, dirty.py being merely dirty-after-started_at no longer
+        lands it in my_scope at all (see
+        test_unclaimed_dirty_after_start_becomes_orphan_not_my_scope), which
+        would have made the "sanity: mtime fallback works" assertion below
+        false regardless of whether the read-failure narrowing this test
+        actually exists to pin is present or not. Claiming dirty.py via
+        touch() keeps it a real my_scope member on the readable side. ONLY
+        "readable" touches dirty.py (not "unreadable") — a shared claim by
+        both would make each see the other as a foreign owner via Step 3's
+        cross-session scan, which is a different assertion than the one
+        this test pins. dirty.py never enters "unreadable"'s own candidate
+        set at all (untouched by it, and the mtime augmentation that would
+        otherwise add it is exactly what this test's read-failure disables)
+        — the subset comparison below still exercises the narrowing
+        invariant this test is named for."""
+        repo = _make_repo(tmp_path)
+        core.init("readable", cwd=str(repo))
+        core.init("unreadable", cwd=str(repo))
+        (_sdir(repo, "readable") / "started_at").write_text("2000-01-01T00:00:00Z")
+        (_sdir(repo, "unreadable") / "started_at").write_text("2000-01-01T00:00:00Z")
+        (repo / "dirty.py").write_text("z")  # dirty, mtime "now" >> 2000
+        scope.touch("readable", "dirty.py", cwd=str(repo))
+
+        readable_result = scope.compute_scope("readable", cwd=str(repo))
+        assert "dirty.py" in readable_result.my_scope  # sanity: mtime fallback works
+
+        started_at_path = _sdir(repo, "unreadable") / "started_at"
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == started_at_path:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        unreadable_result = scope.compute_scope("unreadable", cwd=str(repo))
+
+        assert set(unreadable_result.my_scope) <= set(readable_result.my_scope)
+        assert "dirty.py" not in unreadable_result.my_scope
+
+    def test_unreadable_other_session_claims_withholds_uncontested_candidate(
+        self, tmp_path, monkeypatch
+    ):
+        """If another session's touched.txt cannot be read, its claims are
+        indeterminate. The pre-fix behaviour treated the read failure as
+        "that session claims nothing" (lines = []), which WIDENS my_scope
+        by letting an actually-foreign candidate pass through uncontested.
+        Fail-closed: an uncontested candidate must be withheld from
+        my_scope (moved to skipped) while any sibling claim set is
+        unreadable — the caller-visible outcome is refusal, not silent
+        inclusion."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        scope.touch("mine", "maybe-foreign.py", cwd=str(repo))
+
+        other_touched = _sdir(repo, "other") / "touched.txt"
+        other_touched.write_text("maybe-foreign.py\n")  # "other" actually owns it
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == other_touched:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "maybe-foreign.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "maybe-foreign.py" in skipped_paths
+
+    def test_unreadable_other_session_claims_never_widens_scope(self, tmp_path, monkeypatch):
+        """Pin the invariant directly: computing scope while a sibling's
+        touched.txt is unreadable must never yield a WIDER my_scope than
+        computing it with that same sibling's touched.txt readable (and
+        empty, the most permissive possible content)."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        scope.touch("mine", "candidate.py", cwd=str(repo))
+
+        readable_result = scope.compute_scope("mine", cwd=str(repo))
+        assert "candidate.py" in readable_result.my_scope  # sanity
+
+        other_touched = _sdir(repo, "other") / "touched.txt"
+        other_touched.write_text("")  # exists, so the read path is taken
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == other_touched:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        unreadable_result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert set(unreadable_result.my_scope) <= set(readable_result.my_scope)
+        assert "candidate.py" not in unreadable_result.my_scope
+
+    # -----------------------------------------------------------------
+    # Unclaimed-dirty-file adoption (docs/plans/2026-07-31-unclaimed-
+    # dirty-file-adoption.md, DR-246): a dirty file claimed by no
+    # session's touched.txt (own OR foreign) is never silently adopted
+    # into my_scope on mtime alone.
+    # -----------------------------------------------------------------
+
+    def test_dirty_file_in_no_sessions_touched_txt_is_orphan_not_my_scope(
+        self, tmp_path
+    ):
+        """AC1/AC3: a dirty file present in NO session's touched.txt — the
+        shape a Bash script, a raw engine write, or any writer that bypasses
+        the touch() hot path leaves behind — must be ABSENT from another
+        session's my_scope and PRESENT in its orphans. This is the exact
+        adoption defect: session B must not silently claim a file it never
+        recorded touching, on mtime evidence alone."""
+        repo = _make_repo(tmp_path)
+        core.init("b", cwd=str(repo))
+        sdir = _sdir(repo, "b")
+        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+        # Written by something that is not any session's touch() call —
+        # nobody's touched.txt records it.
+        (repo / "bash_written.py").write_text("bash-written")
+
+        result = scope.compute_scope("b", cwd=str(repo))
+
+        assert "bash_written.py" not in result.my_scope
+        assert "bash_written.py" in result.orphans
+
+    def test_crashed_sessions_own_touched_file_stays_in_its_own_my_scope(
+        self, tmp_path
+    ):
+        """AC2: a file recorded in crashed session A's touched.txt is still
+        in A's OWN my_scope after the crash — and is not adopted by any
+        other, live session.
+
+        Empirical basis (probe 1, 12 SIGKILL runs): ``locked_rmw`` is
+        mkstemp + os.replace under an flock the kernel releases
+        automatically on process death (SIGKILL never runs Python
+        finally/atexit cleanup) — so touched.txt is either the fully-
+        replaced new file or the untouched prior file, NEVER a half-written
+        file, across all 12 kill runs. A's touched.txt survives its death
+        fully intact; A's own claim to its own recorded files is unaffected
+        by the crash."""
+        repo = _make_repo(tmp_path)
+        core.init("a-crashed", cwd=str(repo))
+        core.init("b-live", cwd=str(repo))
+        (repo / "crash_owned.py").write_text("owned-by-a")
+        scope.touch("a-crashed", "crash_owned.py", cwd=str(repo))
+
+        # A "crashed" -- nothing further happens to its session dir; its
+        # touched.txt is exactly as locked_rmw left it (see docstring).
+        a_result = scope.compute_scope("a-crashed", cwd=str(repo))
+        assert "crash_owned.py" in a_result.my_scope
+
+        b_result = scope.compute_scope("b-live", cwd=str(repo))
+        assert "crash_owned.py" not in b_result.my_scope
+        assert ("crash_owned.py", "a-crashed") in b_result.skipped
+
+    def test_other_sessions_touched_txt_claim_still_skips_with_owner(
+        self, tmp_path
+    ):
+        """AC4: a path claimed by another session's touched.txt is still
+        skipped with that owner attributed — the pre-existing cross-session
+        exclusion (Step 3/4) is untouched by the C1a/C8 mtime-only change.
+        This test FAILS if that exclusion is weakened (e.g. if a claimed
+        path were ever allowed through to my_scope, or reported as an
+        orphan instead of skipped with its real owner)."""
+        repo = _make_repo(tmp_path)
+        core.init("claimant", cwd=str(repo))
+        core.init("victim", cwd=str(repo))
+        (repo / "owned_elsewhere.py").write_text("z")
+        scope.touch("claimant", "owned_elsewhere.py", cwd=str(repo))
+
+        result = scope.compute_scope("victim", cwd=str(repo))
+
+        assert "owned_elsewhere.py" not in result.my_scope
+        assert "owned_elsewhere.py" not in result.orphans
+        assert ("owned_elsewhere.py", "claimant") in result.skipped
+
+    def test_peer_agent_dot_agents_claim_skips_with_owning_em_session(
+        self, tmp_path
+    ):
+        """AC13/C8: a dirty file claimed ONLY via a peer session's
+        ``.agents/<aid>/touched.txt`` (NOT that session's own top-level
+        touched.txt) resolves to ``skipped`` with the OWNING EM SESSION
+        attributed as owner — not to orphans, and not to my_scope.
+
+        Path dialect: post-C2, ``.agents`` entries are CLEAN
+        repo-root-relative paths -- same dialect as a session's own
+        ``touched.txt`` -- because ``track_touched_files`` now normalizes
+        against the worktree root, not ``<repo>/.git``, and
+        ``coordinator_core.ops.session.safe_commit_offer._normalize_agent_touched_entry``
+        no longer re-joins a ``coordinator/`` plugin-dir prefix onto it
+        (that join existed only to cancel out the writer's old ``../``
+        poisoning). The fixture below writes the raw agent entry as
+        ``coordinator/agent_owned.py`` -- the SAME repo-relative path the
+        on-disk dirty file lives at.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        # Clean repo-relative entry, post-C2 dialect.
+        (agent_dir / "touched.txt").write_text(
+            "coordinator/agent_owned.py\n", encoding="utf-8"
+        )
+
+        # The dirty file itself lives at that same repo-relative path.
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "coordinator/agent_owned.py" not in result.my_scope
+        assert "coordinator/agent_owned.py" not in result.orphans
+        assert ("coordinator/agent_owned.py", "em-owner") in result.skipped
+
+    def test_unreadable_agent_touched_txt_withholds_uncontested_candidate(
+        self, tmp_path, monkeypatch
+    ):
+        """Finding 3 (C8 fail-closed regression): an unreadable INDIVIDUAL
+        agent touched.txt under .agents/<aid>/ must withhold the otherwise-
+        uncontested candidate from my_scope, mirroring the per-session
+        unreadable-touched.txt tests above."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-unreadable"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        agent_touched = agent_dir / "touched.txt"
+        agent_touched.write_text("maybe_foreign.py\n", encoding="utf-8")
+
+        scope.touch("bystander", "maybe_foreign.py", cwd=str(repo))
+
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == agent_touched:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "maybe_foreign.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "maybe_foreign.py" in skipped_paths
+
+    def test_unreadable_em_session_id_txt_fails_closed_not_soft_skip(
+        self, tmp_path, monkeypatch
+    ):
+        """Finding 1/3: an unreadable em-session-id.txt back-pointer must
+        NOT silently degrade to "this agent claims nothing" (the widening
+        direction) -- it must be treated with the same fail-closed
+        discipline as an unreadable touched.txt, withholding the otherwise-
+        uncontested candidate from my_scope."""
+        repo = _make_repo(tmp_path)
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-backptr-unreadable"
+        agent_dir.mkdir(parents=True)
+        backptr = agent_dir / "em-session-id.txt"
+        backptr.write_text("em-owner\n", encoding="utf-8")
+        (agent_dir / "touched.txt").write_text(
+            "maybe_foreign.py\n", encoding="utf-8"
+        )
+
+        scope.touch("bystander", "maybe_foreign.py", cwd=str(repo))
+
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == backptr:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "maybe_foreign.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "maybe_foreign.py" in skipped_paths
+
+    def test_peer_agent_dot_agents_directory_entry_expands_to_owning_em_session(
+        self, tmp_path
+    ):
+        """Finding 4: a directory entry (trailing "/") in a peer agent's
+        touched.txt must expand via _dirty_files_under and resolve a dirty
+        file under that directory to skipped with the owning em-session-id
+        -- pinned at THIS call site (Step 3b), not just safe_commit_offer's
+        own suite. Post-C2, the entry is a clean repo-root-relative
+        directory path -- same dialect as a session's own touched.txt."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-dir-owner"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        # Clean repo-relative directory entry (trailing slash), post-C2 dialect.
+        (agent_dir / "touched.txt").write_text(
+            "coordinator/agent_dir_owned/\n", encoding="utf-8"
+        )
+
+        (repo / "coordinator" / "agent_dir_owned").mkdir(parents=True)
+        (repo / "coordinator" / "agent_dir_owned" / "inner.py").write_text("z")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "coordinator/agent_dir_owned/inner.py" not in result.my_scope
+        assert "coordinator/agent_dir_owned/inner.py" not in result.orphans
+        assert (
+            "coordinator/agent_dir_owned/inner.py",
+            "em-owner",
+        ) in result.skipped
+
+    def test_missing_backptr_with_recent_agent_activity_fails_closed_not_swept(
+        self, tmp_path
+    ):
+        """36ed64f58 mis-attribution incident regression: a dispatched
+        sub-agent writes its OWN ``.agents/<aid>/touched.txt`` entry
+        synchronously on every edit (``track_touched_files``), but the
+        ``em-session-id.txt`` back-pointer is only written once the ENTIRE
+        subagent turn returns to the dispatching session
+        (``track_dispatched_agents``, a PostToolUse hook on the Agent/Task
+        tool call — for a FOREGROUND dispatch, the common case, that means
+        the whole agent lifetime). A peer session ("sweeper") computing its
+        own scope DURING that window must never treat the in-flight,
+        genuinely-claimed path as uncontested-mine just because the
+        back-pointer has not landed yet — that silent fall-through is
+        exactly the mechanism that landed a stranger's file into an
+        unrelated commit.
+
+        Also pins OVERLAP-SCOPING: an unrelated candidate the sweeper itself
+        legitimately touched, with no overlap into the race agent's claims,
+        must be UNAFFECTED — the withhold is bounded to the contested path,
+        not global.
+
+        No session dir for the eventual owning EM session even exists here
+        (liveness is never consulted — the owner is never resolved at all),
+        pinning that the fix does not depend on being able to evaluate the
+        owning session's liveness."""
+        repo = _make_repo(tmp_path)
+        core.init("sweeper", cwd=str(repo))
+        scope.touch("sweeper", "sweeper_own_unrelated.py", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-inflight"
+        agent_dir.mkdir(parents=True)
+        # Real, synchronously-written activity — no em-session-id.txt yet.
+        # Freshly written -> mtime is "now", well inside the recency window.
+        (agent_dir / "touched.txt").write_text(
+            "test_handoff_author_fork.py\n", encoding="utf-8"
+        )
+
+        (repo / "test_handoff_author_fork.py").write_text("z")
+        (repo / "sweeper_own_unrelated.py").write_text("z")
+
+        result = scope.compute_scope("sweeper", cwd=str(repo))
+
+        assert "test_handoff_author_fork.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "test_handoff_author_fork.py" in skipped_paths
+        # Overlap-scoping: the sweeper's own unrelated candidate is untouched.
+        assert "sweeper_own_unrelated.py" in result.my_scope
+
+    def test_race_window_non_candidate_path_lands_in_orphans_not_skipped(
+        self, tmp_path
+    ):
+        """Staff-eng R1/R2 (2026-08-03, pass 2) -- reverts the earlier Step 5
+        `agent_race_paths` surgery (this now supersedes it via
+        `ScopeResult.indeterminate`, set below). A race-window path that
+        this call never adopted as a CANDIDATE at all (``started_at`` pushed
+        into the future, so Step 2's mtime fallback never adds it to
+        ``touched_set``) must NOT appear in `result.skipped` -- putting it
+        there widened `skipped`'s documented meaning ("candidates of mine
+        that were withheld") to include a path that was never a candidate,
+        and example-doctrine-repo's coordinator-safe-commit renders `skipped` as "skipping
+        <path> — owned by session <owner>", which would show an operator a
+        skipping line for a file they never touched. Instead it surfaces in
+        `result.orphans` (Step 5's plain my_scope/other_owner check, with no
+        `agent_race_paths` special-case), and `result.indeterminate` is
+        `True` -- the call-level signal a caller must read before treating
+        `orphans` as an adoption allow-list (see
+        `coordinator_core.ops.session.safe_commit_offer.compute_offer`)."""
+        repo = _make_repo(tmp_path)
+        core.init("sweeper", cwd=str(repo))
+        sdir = Path(core.session_dir("sweeper", cwd=str(repo)))
+        future = datetime.now(timezone.utc).timestamp() + 3600
+        (sdir / "started_at").write_text(
+            datetime.fromtimestamp(future, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            encoding="utf-8",
+        )
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-inflight"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "touched.txt").write_text(
+            "race_window_file.py\n", encoding="utf-8"
+        )
+        (repo / "race_window_file.py").write_text("z")
+
+        result = scope.compute_scope("sweeper", cwd=str(repo))
+
+        assert "race_window_file.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "race_window_file.py" not in skipped_paths
+        assert "race_window_file.py" in result.orphans
+        assert result.indeterminate is True
+
+    def test_stale_agent_dir_old_mtime_no_backptr_does_not_withhold(
+        self, tmp_path
+    ):
+        """RECENCY guard regression (found via a real sweep of this repo's
+        own ``.git/coordinator-sessions/.agents/`` corpus, 2026-08: 261 of
+        2011 agent dirs are permanently in this exact shape — non-empty
+        ``touched.txt``, no ``em-session-id.txt``, all long-dead residue,
+        not live races). A ``touched.txt`` last modified well outside
+        ``liveness._THIRTY_MIN`` must NOT withhold anything -- treating
+        every such dir as a live race would make EVERY future scope
+        computation return an empty allow-list, permanently, converting the
+        occasional mis-attribution into a silent total commit outage."""
+        repo = _make_repo(tmp_path)
+        core.init("sweeper3", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-long-dead"
+        agent_dir.mkdir(parents=True)
+        stale_touched = agent_dir / "touched.txt"
+        stale_touched.write_text("dead_agent_file.py\n", encoding="utf-8")
+        # Push the mtime well past the 30-minute recency window.
+        old = time.time() - (2 * 3600)
+        os.utime(stale_touched, (old, old))
+
+        (repo / "dead_agent_file.py").write_text("z")
+
+        result = scope.compute_scope("sweeper3", cwd=str(repo))
+
+        assert result.skipped == []
+        # Uncontested + dirty + no session claims it at all -> orphan, same
+        # disposition as any other unclaimed dirty file (Step 5) -- NOT
+        # withheld, and NOT silently owned either.
+        assert "dead_agent_file.py" in result.orphans
+        assert "dead_agent_file.py" not in result.my_scope
+
+    def test_own_background_agent_backptr_already_present_unaffected(
+        self, tmp_path
+    ):
+        """Corrected understanding (2026-08): a BACKGROUND dispatch's
+        Agent/Task tool call returns immediately, so its PostToolUse
+        back-pointer write fires almost at once -- the earlier draft of this
+        fix had this inverted (claimed background was the exposed case; it
+        is foreground). Pin the now-common case explicitly: a solo
+        session's own background agent, back-pointer already resolved to
+        itself, must be completely unaffected by the missing-backptr
+        machinery -- no entry in ``skipped``, file lands in the session's
+        own ``my_scope`` via the real ``extra_candidates`` union path."""
+        repo = _make_repo(tmp_path)
+        core.init("solo-bg", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-background-done"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("solo-bg\n", encoding="utf-8")
+        (agent_dir / "touched.txt").write_text(
+            "background_agent_authored.py\n", encoding="utf-8"
+        )
+
+        (repo / "background_agent_authored.py").write_text("z")
+
+        result = scope.compute_scope(
+            "solo-bg",
+            cwd=str(repo),
+            extra_candidates=["background_agent_authored.py"],
+        )
+
+        assert "background_agent_authored.py" in result.my_scope
+        assert result.skipped == []
+
+    def test_empty_new_agent_dir_missing_backptr_is_silently_skipped(
+        self, tmp_path
+    ):
+        """Companion to the regression above: a genuinely empty/new agent
+        dir (dispatched but with no recorded activity yet, and no
+        back-pointer yet) has nothing to protect — it must NOT trip the
+        fail-closed withholding, or every ordinary dispatch-in-progress
+        would poison an unrelated session's scope computation for no
+        reason."""
+        repo = _make_repo(tmp_path)
+        core.init("sweeper2", cwd=str(repo))
+        scope.touch("sweeper2", "mine.py", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-brand-new"
+        agent_dir.mkdir(parents=True)
+        # No touched.txt at all yet — nothing has happened in this agent dir.
+
+        result = scope.compute_scope("sweeper2", cwd=str(repo))
+
+        assert "mine.py" in result.my_scope
+        assert result.skipped == []
+
+    def test_own_subagent_backptr_resolved_still_lands_in_my_own_scope(
+        self, tmp_path
+    ):
+        """Negative pin: a solo session's OWN dispatched sub-agent, once its
+        back-pointer HAS resolved to that same session, must not be treated
+        as a foreign claim -- the fan-out path (``extra_candidates``, the
+        real ``safe_commit_offer`` union mechanism) still lands the
+        sub-agent-authored file in the dispatching session's own
+        ``my_scope``. Confirms the missing-backptr fail-closed branch above
+        is scoped to the ABSENT-backptr window only and does not regress the
+        already-resolved self-fan-out path."""
+        repo = _make_repo(tmp_path)
+        core.init("solo", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-mine"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("solo\n", encoding="utf-8")
+        (agent_dir / "touched.txt").write_text(
+            "subagent_authored.py\n", encoding="utf-8"
+        )
+
+        (repo / "subagent_authored.py").write_text("z")
+
+        result = scope.compute_scope(
+            "solo", cwd=str(repo), extra_candidates=["subagent_authored.py"]
+        )
+
+        assert "subagent_authored.py" in result.my_scope
+        assert result.skipped == []
+
+
+# ---------------------------------------------------------------------------
+# compute_scope() — liveness-gated exclusion (release path, dead-holder
+# claims no longer contest forever) + clean-path pruning of stale claims.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeScopeLiveness:
+    def test_dead_peer_claim_on_dirty_path_lands_in_my_scope(self, tmp_path, monkeypatch):
+        """The memo's exact reported case: a dead peer's touched.txt claim
+        on a path THIS session also touched must not contest -- the path
+        lands in my_scope, not skipped."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("dead-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("dead-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "shared.py" not in skipped_paths
+
+    def test_live_peer_claim_still_skips_no_regression(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("live-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "live-peer") in result.skipped
+
+    def test_dead_peer_subagent_claim_not_contested_live_still_contested(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        # Clean repo-relative entry, post-C2 dialect (matches the on-disk
+        # dirty file's own path -- see test_peer_agent_dot_agents_claim_...).
+        (agent_dir / "touched.txt").write_text(
+            "coordinator/agent_owned.py\n", encoding="utf-8"
+        )
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        # em-owner is DEAD -> not contested.
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"bystander"}),
+        )
+        dead_result = scope.compute_scope("bystander", cwd=str(repo))
+        # Review: staff-eng F3 — pin the SPECIFIC disposition rather than
+        # the my_scope-or-orphans disjunction that used to stand in here.
+        # "bystander" never touched this path (it is not in bystander's own
+        # touched.txt), so once the dead em-owner's claim stops contesting
+        # it, it is an uncontested mtime-only candidate (Step 2/4(c)) — it
+        # is dirty, and it is not this session's demonstrable claim, so it
+        # is dropped from my_scope and surfaces as an orphan (Step 5), NOT
+        # silently adopted into my_scope. See F6's docstring note on this
+        # same disposition shift for the untouched-dead-peer-claim case.
+        assert "coordinator/agent_owned.py" in dead_result.orphans
+        assert "coordinator/agent_owned.py" not in dead_result.my_scope
+        skipped_paths = {p for p, _owner in dead_result.skipped}
+        assert "coordinator/agent_owned.py" not in skipped_paths
+
+        # em-owner is LIVE -> still contested.
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"bystander", "em-owner"}),
+        )
+        live_result = scope.compute_scope("bystander", cwd=str(repo))
+        assert "coordinator/agent_owned.py" not in live_result.my_scope
+        assert (
+            "coordinator/agent_owned.py",
+            "em-owner",
+        ) in live_result.skipped
+
+    def test_indeterminate_empty_live_set_falls_back_to_unconditional(
+        self, tmp_path, monkeypatch
+    ):
+        """live_session_ids() returning an empty frozenset while a peer
+        session dir genuinely exists on disk is indeterminate (same shape
+        as "everyone is dead") -- gating disables for this call and the
+        pre-existing unconditional exclusion applies (still skipped)."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset()
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "peer") in result.skipped
+
+    def test_live_session_ids_raising_disables_gating(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        def _boom(cwd=None):
+            raise RuntimeError("simulated liveness enumeration failure")
+
+        monkeypatch.setattr(scope.liveness, "live_session_ids", _boom)
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "peer") in result.skipped
+
+    def test_clean_path_claim_is_pruned_dirty_path_claim_survives(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+
+        # clean.py: committed, no uncommitted content -> claim is stale.
+        (repo / "clean.py").write_text("z")
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True
+        )
+        scope.touch("mine", "clean.py", cwd=str(repo))
+        scope.touch("peer", "clean.py", cwd=str(repo))
+
+        # dirty.py: peer claims it and it IS dirty -> claim survives.
+        (repo / "dirty.py").write_text("z")
+        scope.touch("peer", "dirty.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "clean.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "clean.py" not in skipped_paths
+        assert "dirty.py" not in result.my_scope
+        assert ("dirty.py", "peer") in result.skipped
+
+    def test_unreadable_peer_touched_txt_still_fails_closed_regardless_of_liveness(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("dead-peer", cwd=str(repo))
+        (repo / "maybe-foreign.py").write_text("z")
+        scope.touch("mine", "maybe-foreign.py", cwd=str(repo))
+
+        other_touched = _sdir(repo, "dead-peer") / "touched.txt"
+        other_touched.write_text("maybe-foreign.py\n")
+        orig_read_text = Path.read_text
+
+        def _read_boom(self, *a, **k):
+            if self == other_touched:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _read_boom)
+        # dead-peer is DEAD, yet the unreadable-claims fail-closed arm must
+        # still fire -- unreadable is never assumed dead.
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "maybe-foreign.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "maybe-foreign.py" in skipped_paths
+
+    def test_git_dirty_scan_failure_disables_prune_and_liveness_live_peer_still_skips(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: staff-eng F0 regression test. Both `_git_output` calls
+        that populate `dirty_files_set` return None on failure and are
+        swallowed by `or ""` -- an empty dirty set previously read as
+        "every peer claim is stale", pruning EVERY peer claim including a
+        LIVE peer's, so it fell through Step 4(d) into my_scope. That is a
+        WIDENING regression against this function's own fail-closed
+        invariant. `dirty_scan_ok` must gate both the clean-path prune AND
+        the liveness gate -- a live peer's claim on a shared path must
+        still skip even when the git dirty scan itself fails."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("live-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+        monkeypatch.setattr(scope, "_git_output", lambda args, cwd=None: None)
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "live-peer") in result.skipped
+
+    def test_self_liveness_canary_disables_gating_when_own_sid_missing(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: staff-eng F1 regression test. `live_ids` non-empty but
+        missing THIS session's own sid, while this session's own dir
+        exists on disk, is treated as an unreliable enumeration (not "I am
+        dead") -- gating disables and the pre-existing unconditional
+        exclusion applies, so a peer's claim still skips."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        # live_ids is non-empty (not the total-failure shape the empty-set
+        # guard catches) but omits "mine" itself -- the partial-under-report
+        # shape only the canary catches.
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"peer"})
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "peer") in result.skipped
+
+    def test_dead_peer_untouched_dirty_file_becomes_orphan_not_silently_owned(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: staff-eng F6 regression test, pinning the orphan-
+        disposition change referenced by compute_scope's own docstring: a
+        dirty path claimed ONLY by a now-dead peer, and never touched by
+        THIS session, used to read as "owned" (excluded from orphans)
+        unconditionally. Post-liveness-gate, the dead peer's claim is
+        skipped wholesale, so the path is neither claimed nor mine, and
+        must surface as an orphan instead of silently vanishing."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("dead-peer", cwd=str(repo))
+        (repo / "untouched_by_mine.py").write_text("z")
+        scope.touch("dead-peer", "untouched_by_mine.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "untouched_by_mine.py" in result.orphans
+        assert "untouched_by_mine.py" not in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "untouched_by_mine.py" not in skipped_paths
+
+    def test_real_live_session_ids_no_monkeypatch_dead_peer_claim_releases(
+        self, tmp_path
+    ):
+        """Review: staff-eng F3 — one no-monkeypatch integration test
+        routing through the REAL `liveness.live_session_ids`, per
+        `state/lessons/2026-07-12-mock-the-bridge-tests-can-t-catch-vacuou-
+        5146e5a025e5.yaml`: every other test in this class stubs
+        `live_session_ids`, which cannot catch a total delegation no-op.
+        Forces one session dead via an old `last_activity` and no
+        `stable_pid` in its meta.json (Layer-2 recency, unmocked)."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("dead-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("dead-peer", "shared.py", cwd=str(repo))
+
+        # Force "dead-peer" dead via real Layer-2 recency: no stable_pid,
+        # last_activity far in the past (> 30 min idle threshold).
+        core.update_meta_field(
+            str(_sdir(repo, "dead-peer")),
+            "last_activity",
+            "2000-01-01T00:00:00Z",
+        )
+
+        # "mine" stays live via the real path: core.init just set its own
+        # last_activity to now, so live_session_ids() (unmocked) sees it as
+        # recently active under the same Layer-2 recency check.
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "shared.py" not in skipped_paths
+
+
+class TestAttribution:
+    """C2: pin C1's ``ScopeResult.attribution`` sidecar (``dict[str,
+    OwnerFact]``) against the live-peer, dead-peer, peer-agent, and
+    indeterminate-liveness cases named in the plan (AC1/AC1a/AC3/AC4/AC5/
+    AC7/AC12 at this layer).
+
+    The whole point of the attribution/subtraction split (see
+    ``scope.OwnerFact``'s own docstring): ``other_owner`` (and therefore
+    ``skipped``/``my_scope``) drops a dead peer's claim entirely (the
+    release path), but ``attribution`` must STILL name that peer — it is an
+    ungated, reporting-only record of every claim the Step 3/3b loop read,
+    never a projection of what survived the liveness/clean-path gates.
+    """
+
+    def test_attribution_live_peer_recorded_as_live_session_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """Live peer: attribution names the peer with liveness "live" and
+        claim_source "session" — matching the ordinary skipped/other_owner
+        disposition for a live, contesting claim."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("live-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "live-peer") in result.skipped
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "live-peer", "live", "session"
+        )
+
+    def test_attribution_dead_peer_still_names_the_peer(
+        self, tmp_path, monkeypatch
+    ):
+        """AC1a — the whole point of the attribution/subtraction split: a
+        dead peer's claim is RELEASED from other_owner/skipped (the path
+        lands in my_scope, uncontested), but attribution must still name
+        the dead peer, with liveness "dead" — never silently dropped just
+        because the ownership gate released the path."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("dead-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("dead-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        # Subtraction side: released, uncontested -- lands in my_scope.
+        assert "shared.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "shared.py" not in skipped_paths
+
+        # Attribution side: STILL names the dead peer -- this is the whole
+        # point of the split (AC1a).
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "dead-peer", "dead", "session"
+        )
+
+    def test_attribution_peer_agent_via_dot_agents_backpointer(
+        self, tmp_path, monkeypatch
+    ):
+        """Peer's dispatched agent via the ``.agents`` back-pointer:
+        attribution is keyed to the BACK-POINTED owning em-session-id, not
+        the raw agent-directory id, with claim_source "agent"."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        (agent_dir / "touched.txt").write_text(
+            "coordinator/agent_owned.py\n", encoding="utf-8"
+        )
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"bystander", "em-owner"}),
+        )
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "coordinator/agent_owned.py" not in result.my_scope
+        assert (
+            "coordinator/agent_owned.py",
+            "em-owner",
+        ) in result.skipped
+        assert result.attribution["coordinator/agent_owned.py"] == scope.OwnerFact(
+            "em-owner", "live", "agent"
+        )
+
+    def test_attribution_indeterminate_liveness_renders_undetermined_not_live(
+        self, tmp_path, monkeypatch
+    ):
+        """AC7 — an unresolvable liveness verdict (``live_ids = None``: here
+        via the empty-live-set-with-peer-evidence-on-disk indeterminacy
+        fallback) must resolve attribution toward the CONTESTED rendering
+        ("undetermined" liveness), NEVER toward an assertion of liveness
+        ("live"). ``live_session_ids`` returning an empty frozenset while a
+        real peer session directory exists on disk is the indeterminate
+        shape (same as "everyone is dead") that disables liveness gating
+        for this call entirely -- ``_peer_liveness_str`` reads
+        ``live_ids is None`` as "undetermined", not "live"."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset()
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        # Subtraction side: gating disabled -> pre-existing unconditional
+        # exclusion still applies (still skipped, not released).
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "peer") in result.skipped
+
+        # Attribution side: liveness renders "undetermined" -- NOT "live" --
+        # the CONTESTED rendering the indeterminate verdict must resolve
+        # toward, never an assertion of liveness.
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "peer", "undetermined", "session"
+        )
+        assert result.attribution["shared.py"].liveness != "live"
+
+    def test_attribution_survives_clean_path_release_from_subtraction(
+        self, tmp_path, monkeypatch
+    ):
+        """AC12: releasing a peer claim from the SUBTRACTION (the clean-path
+        prune -- ``state/handoffs/2026-08-03-scope-guard-peer-claim-
+        release.md`` -- a live peer's claim on a now-committed, no-longer-
+        dirty path drops out of ``other_owner``/``skipped``) must NOT remove
+        that peer from the ATTRIBUTION map. Same fixture shape as
+        ``test_clean_path_claim_is_pruned_dirty_path_claim_survives`` (the
+        peer is live and the path is clean, so the release fires), but
+        asserted at the attribution layer that sibling test never touches:
+        attribution is recorded (Step 3/3b) BEFORE the clean-path prune
+        runs, so it must still name the peer here."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+
+        (repo / "clean.py").write_text("z")
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True
+        )
+        scope.touch("mine", "clean.py", cwd=str(repo))
+        scope.touch("peer", "clean.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        # Subtraction side: released -- clean.py lands in my_scope, not
+        # skipped (mirrors test_clean_path_claim_is_pruned_dirty_path_
+        # claim_survives).
+        assert "clean.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "clean.py" not in skipped_paths
+
+        # Attribution side: STILL names the peer, with liveness "live" --
+        # this is the property AC12 pins.
+        assert result.attribution["clean.py"] == scope.OwnerFact(
+            "peer", "live", "session"
+        )
+
+    def test_attribution_runtime_type_is_uniform_across_code_paths(
+        self, tmp_path
+    ):
+        """Staff-eng P2 (2026-08-03, pass 3) — the regression a divergent-
+        type fix would let through. `ScopeResult.attribution`'s default (the
+        out-of-repo/no-sessions-dir early-return path) and the REAL
+        attribution dict `compute_scope` builds (the normal path) must be
+        the SAME runtime type, ``types.MappingProxyType``, not a
+        ``mappingproxy`` on one path and a plain ``dict`` on the other — a
+        divergence that would only surface on the rarely-exercised
+        early-return path (see that field's own docstring for why this is
+        the worse shape than the shared-mutable-default hazard the
+        original fix closed)."""
+        import types as types_module
+
+        out_of_repo_dir = tmp_path / "not_a_repo"
+        out_of_repo_dir.mkdir()
+        out_of_repo = scope.compute_scope("sid", cwd=str(out_of_repo_dir))
+        assert type(out_of_repo.attribution) is types_module.MappingProxyType
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        repo = _make_repo(repo_dir)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        normal = scope.compute_scope("mine", cwd=str(repo))
+        assert type(normal.attribution) is types_module.MappingProxyType
+        assert type(normal.attribution) is type(out_of_repo.attribution)
+        # And genuinely read-only on the normal path too, not merely typed
+        # that way -- an in-place mutation attempt must raise.
+        with pytest.raises(TypeError):
+            normal.attribution["shared.py"] = None  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# compute_scope() — real on-disk session registry corpus (no-raise + type)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def frozen_corpus_repo(tmp_path_factory):
+    """A self-contained git repo seeded with every frozen session directory
+    (touched.txt + started_at, verbatim from the snapshot) as a sibling —
+    built once per module so the Step 3 other-session-claims scan exercises
+    real cross-session shapes, not a single session in isolation."""
+    repo = tmp_path_factory.mktemp("frozen-corpus-repo")
+    _make_repo(repo)
+    for entry in _FROZEN_CORPUS_ENTRIES:
+        sid = entry["sid"]
+        core.init(sid, cwd=str(repo))
+        touched_text = "".join(line + "\n" for line in entry["touched_lines"])
+        (_sdir(repo, sid) / "touched.txt").write_text(touched_text, encoding="utf-8")
+        if entry["started_at"] is not None:
+            (_sdir(repo, sid) / "started_at").write_text(
+                entry["started_at"], encoding="utf-8"
+            )
+    return repo
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _FROZEN_CORPUS_ENTRIES,
+    ids=lambda e: e["sid"],
+)
+def test_compute_scope_over_real_registry_corpus(entry, frozen_corpus_repo):
+    """Golden-diff against a FROZEN copy of reality (see module docstring):
+    compute_scope must never raise and must return a well-typed ScopeResult
+    for every real session id in the frozen registry snapshot (exercises the
+    real git diff/ls-files + mtime path, with every other frozen session
+    present as a sibling claim-set)."""
+    result = scope.compute_scope(entry["sid"], cwd=str(frozen_corpus_repo))
+    assert isinstance(result, scope.ScopeResult)
+    assert isinstance(result.my_scope, list)
+    assert all(isinstance(p, str) for p in result.my_scope)
+    assert all(
+        isinstance(t, tuple) and len(t) == 2 for t in result.skipped
+    )
+    assert all(isinstance(p, str) for p in result.orphans)
+
+
+# ---------------------------------------------------------------------------
+# AC8 — defensive read-side normalization (C7): compute_scope's Step 1
+# candidates AND Step 3/3b other_owner key space are BOTH run through the
+# SAME strip-one-'../'-then-verify-containment transform C6 applies to the
+# historical corpus. Belt-and-braces behind C6, not a substitute for it —
+# these tests inject already-poisoned entries DIRECTLY into touched.txt
+# (bypassing touch()'s own on-write normalization) to simulate a future
+# writer regression reintroducing the poisoned dialect.
+# ---------------------------------------------------------------------------
+
+
+class TestAC8DefensiveHistoricalNormalization:
+    def test_poisoned_own_and_peer_touched_txt_degrades_to_clean_equivalent_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        """The degradation property AC8 exists for: a single-leading-'../'
+        poisoned entry naming the SAME real file, injected into both this
+        session's touched.txt and a LIVE peer's touched.txt, must produce
+        the EXACT SAME ownership verdict (skipped, owned by the peer) that
+        the clean-entry equivalent produces — no false ownership, no
+        dropped claim."""
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "peer"}),
+        )
+
+        poisoned_dir = tmp_path / "poisoned"
+        poisoned_dir.mkdir()
+        poisoned_repo = _make_repo(poisoned_dir)
+        core.init("mine", cwd=str(poisoned_repo))
+        core.init("peer", cwd=str(poisoned_repo))
+        (poisoned_repo / "shared.py").write_text("z")
+        (_sdir(poisoned_repo, "mine") / "touched.txt").write_text("../shared.py\n")
+        (_sdir(poisoned_repo, "peer") / "touched.txt").write_text("../shared.py\n")
+        poisoned_result = scope.compute_scope("mine", cwd=str(poisoned_repo))
+
+        clean_dir = tmp_path / "clean-control"
+        clean_dir.mkdir()
+        clean_repo = _make_repo(clean_dir)
+        core.init("mine", cwd=str(clean_repo))
+        core.init("peer", cwd=str(clean_repo))
+        (clean_repo / "shared.py").write_text("z")
+        (_sdir(clean_repo, "mine") / "touched.txt").write_text("shared.py\n")
+        (_sdir(clean_repo, "peer") / "touched.txt").write_text("shared.py\n")
+        clean_result = scope.compute_scope("mine", cwd=str(clean_repo))
+
+        assert poisoned_result.my_scope == clean_result.my_scope
+        assert poisoned_result.skipped == clean_result.skipped
+        assert poisoned_result.orphans == clean_result.orphans
+        assert "shared.py" not in poisoned_result.my_scope
+        assert ("shared.py", "peer") in poisoned_result.skipped
+
+    def test_poisoned_own_touched_txt_uncontested_becomes_mtime_orphan_not_my_scope(
+        self, tmp_path, monkeypatch
+    ):
+        """Reversed under C1 (docs/plans/2026-08-05-touched-sibling-escape-
+        and-suppressed-trailer.md), same posture as this file's
+        TestClassifyTouchEntry pins. This test used to assert an
+        uncontested single-level-poisoned entry still rescues into
+        my_scope under its normalized form — that was C1's OLD (pre-C1)
+        contract. C1 replaces the depth-based rescue with a uniform
+        containment drop: the entry is dropped from the Step 1 candidate
+        set regardless of contest. It is NOT silently lost, though — the
+        Key-decision section names this exact narrowing case as visible,
+        not invisible: the file is still dirty on disk, so compute_scope
+        Step 2 re-adds it as an `mtime_only` orphan, and it is reported
+        there rather than auto-committed. Assert the new, narrower
+        contract: absent from my_scope, present in orphans."""
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+        )
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "mine_only.py").write_text("z")
+        (_sdir(repo, "mine") / "touched.txt").write_text("../mine_only.py\n")
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "mine_only.py" not in result.my_scope
+        assert "mine_only.py" in result.orphans
+        assert not any(p.startswith("../") for p in result.my_scope)
+
+    def test_multi_level_poisoned_entry_not_fabricated_into_in_repo_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A `../../…` entry cannot be resolved by a single strip without
+        escaping the worktree — it must be DROPPED from both the Step 1
+        candidate set and the Step 3 other_owner key space, never
+        fabricated into an in-repo path (the non-negotiable invariant: an
+        out-of-worktree entry must never become a fabricated in-repo one)."""
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "peer"}),
+        )
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (_sdir(repo, "mine") / "touched.txt").write_text("../../outside/foo.py\n")
+        (_sdir(repo, "peer") / "touched.txt").write_text("../../outside/foo.py\n")
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert result.my_scope == []
+        assert all("outside" not in p for p in result.my_scope)
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "outside/foo.py" not in skipped_paths
+        assert not any("outside" in p for p in skipped_paths)
+
+    def test_asymmetric_multi_level_peer_poisoning_does_not_silently_drop_live_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: code-reviewer Finding 1 (sidecar
+        coordinatorcode-reviewer-359b224b.md) — the asymmetric case the
+        symmetric-drop argument missed: THIS session's own candidate for a
+        real in-tree file is clean, while a LIVE peer's entry for the SAME
+        real file is poisoned at a depth (2-level '../') a single strip
+        cannot resolve. A symmetric drop would silently vanish the peer's
+        claim from other_owner while the clean candidate survives, letting
+        this session sweep the peer's live file into its own scope
+        uncontested. Assert that does NOT happen: the path must be skipped
+        (owned by the peer), never land in my_scope."""
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "peer"}),
+        )
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "foo.py").write_text("z")  # dirty (untracked) — same real file
+        (_sdir(repo, "mine") / "touched.txt").write_text("foo.py\n")
+        (_sdir(repo, "peer") / "touched.txt").write_text("../../foo.py\n")
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "foo.py" not in result.my_scope
+        assert ("foo.py", "peer") in result.skipped
+
+    def test_compute_scope_idempotent_on_clean_touched_txt(self, tmp_path):
+        """The common path (today's corpus is clean) must be a true no-op:
+        running compute_scope twice against unchanged, already-clean
+        touched.txt content yields identical results."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        scope.touch("mine", "already_clean.py", cwd=str(repo))
+        (repo / "already_clean.py").write_text("z")
+
+        first = scope.compute_scope("mine", cwd=str(repo))
+        second = scope.compute_scope("mine", cwd=str(repo))
+
+        assert first == second
+        assert "already_clean.py" in first.my_scope
+
+
+class TestClassifyTouchEntry:
+    """Direct unit coverage of the canonical transform underlying AC8's
+    compute_scope normalization — see scope.classify_touch_entry's own
+    docstring for the full class taxonomy this mirrors.
+
+    C1 (docs/plans/2026-08-05-touched-sibling-escape-and-suppressed-
+    trailer.md) replaces the leading-'../'-token-depth branch split with one
+    posixpath-normalize-then-contain predicate applied uniformly to every
+    non-absolute entry. `stripped_one_level` and `multi_level` are BOTH
+    retired into a single `dropped` outcome — this class's pins below are
+    updated to match (AC4), plus new pins for the containment-escape shapes
+    the old branch structure missed entirely (AC1) and the corrected
+    `clean`-return ruling (C1's PM ruling on canonical-value return)."""
+
+    def test_clean_entry_is_idempotent_noop(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        first = scope.classify_touch_entry("clean/path.py", repo)
+        assert first.entry_class == "clean"
+        assert first.new_value == "clean/path.py"
+        second = scope.classify_touch_entry(first.new_value, repo)
+        assert second == first
+
+    def test_single_leading_dotdot_entry_is_now_dropped_not_rescued(self, tmp_path):
+        """AC4 — deliberately REVERSED from the pre-C1 pin. This test used
+        to assert `../inside.py` -> `stripped_one_level` -> `inside.py` and
+        pinned the strip-then-verify as intended behaviour, including
+        idempotence on the stripped result. That assertion was WRONG: the
+        containment check it encoded ran only inside the (now-retired)
+        `leading == 1` branch and never saw the `leading == 0` case at all
+        — i.e. the check it exercised was vacuous by construction (a
+        remainder can only still start with `../` if the original had two
+        or more leading tokens, which already returned `multi_level` on the
+        line above), so this test never actually verified containment. C1
+        replaces the whole depth-counting branch with one canonical-value
+        containment predicate applied to every non-absolute entry, under
+        which a genuine single-level `../` escape (indistinguishable at
+        read time from a common-dir-poisoned real in-repo touch) now drops
+        rather than being rescued — the fail-safe, narrowing direction."""
+        repo = _make_repo(tmp_path)
+        outcome = scope.classify_touch_entry("../inside.py", repo)
+        assert outcome.entry_class == "dropped"
+        assert outcome.new_value is None
+
+    def test_multi_level_entry_is_dropped_not_fabricated(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        outcome = scope.classify_touch_entry("../../outside/foo.py", repo)
+        assert outcome.entry_class == "dropped"
+        assert outcome.new_value is None
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "docs/../../peer/x.md",  # embedded '..' after a clean-looking prefix
+            "./../peer/x.md",  # leading './' defeats the old leading-token loop
+            "..\\peer\\x.md",  # backslash separator; the old loop matched '../' only
+            "../docs/peer.md",  # the one shape the old branch structure did cover
+        ],
+        ids=[
+            "embedded-dotdot-after-clean-prefix",
+            "leading-dot-slash",
+            "backslash-separator",
+            "leading-dotdot-original-shape",
+        ],
+    )
+    def test_containment_escape_shapes_are_dropped(self, tmp_path, entry):
+        """AC1 — four distinct containment-escape shapes C1's body names,
+        each pinned individually (not covered incidentally by one another).
+        Before C1 every one of the first three classified `clean` and
+        survived UNCHANGED — the old leading-token loop only ever ran its
+        containment check inside the `leading == 1` branch, so an entry
+        with zero leading '../' tokens (or one defeated by a './' prefix or
+        a backslash separator) never reached any containment check at all.
+        The fourth shape is the one the pre-C1 branch structure DID cover
+        (as `stripped_one_level`); it is included here so a reader working
+        from this table pins all four, not three."""
+        repo = _make_repo(tmp_path)
+        outcome = scope.classify_touch_entry(entry, repo)
+        assert outcome.entry_class == "dropped"
+        assert outcome.new_value is None
+
+    def test_leading_backslash_entry_is_dropped_via_separator_normalize(
+        self, tmp_path
+    ):
+        """A fifth escape shape, distinct from the four above: a
+        leading-backslash entry ('\\peer\\x.md') does NOT match HEAD's real
+        `_ABSOLUTE_RE` (`^(?:/|[A-Za-z]:)`) — no leading '/', no drive
+        letter — so it never reaches `classify_touch_entry`'s absolute
+        branch at all; before C1 it returned `clean` UNCHANGED. Under C1 it
+        drops only via the separator-normalize step turning it into
+        '/peer/x.md', which `posixpath.isabs` then catches — the one escape
+        shape neither branch handled before C1. Drive-letter forms
+        ('C:\\peer\\x.md', 'C:/peer/x.md' -- abs-path-ok: a test-data string
+        naming an escape SHAPE for classify_touch_entry, not a real host
+        path) already route through the
+        pre-existing absolute branch and are deliberately NOT re-pinned
+        here."""
+        repo = _make_repo(tmp_path)
+        outcome = scope.classify_touch_entry("\\peer\\x.md", repo)
+        assert outcome.entry_class == "dropped"
+        assert outcome.new_value is None
+
+    def test_non_escaping_backslash_entry_is_clean_and_returns_canonical_form(
+        self, tmp_path
+    ):
+        """THE MOST IMPORTANT TEST IN THIS SLATE. A non-escaping backslash
+        entry ('state\\x.md') is CONTAINED (its canonical form is
+        'state/x.md'), so it must classify `clean` — but per the corrected
+        `clean`-return ruling it must return the CANONICAL form
+        ('state/x.md'), NOT the raw ('state\\x.md') entry. This is the
+        shape the ruling's v1 wording silently mishandled: comparing
+        `posixpath.normpath(entry) == entry` against the RAW entry was true
+        for this exact input (posixpath does not treat '\\' as a
+        separator), so it returned the raw, un-normalized value. It failed
+        SILENTLY with no test before this pin — load-bearing, not
+        incidental coverage."""
+        repo = _make_repo(tmp_path)
+        outcome = scope.classify_touch_entry("state\\x.md", repo)
+        assert outcome.entry_class == "clean"
+        assert outcome.new_value == "state/x.md"
+
+    def test_ac12_depth1_peer_claim_key_is_byte_identical_before_and_after_c1(
+        self, tmp_path
+    ):
+        """AC12 — peer-side equivalence. C1 moves a depth-1 '../' entry's
+        peer-key resolution from `classify_touch_entry` itself (pre-C1:
+        `stripped_one_level`, whose `new_value` fed `normalize_peer_claim_
+        key` directly) to `_maximal_strip_peer_fallback` (post-C1:
+        `classify_touch_entry` now returns `dropped`, so
+        `normalize_peer_claim_key` falls through to the strip-ALL
+        fallback). For a depth-1 entry "strip all" and "strip one leading
+        token" are the IDENTICAL string, and both apply the identical
+        containment test, so `other_owner`'s returned key is byte-identical
+        either way. Assert the KEY VALUE, not which branch produced it, so
+        a future edit to either transform cannot silently break this
+        equivalence without a red test naming the break."""
+        repo = _make_repo(tmp_path)
+        key = scope.normalize_peer_claim_key("../foo.py", repo)
+        assert key == "foo.py"
+
+
+class TestClassifyTouchEntryAC1EndToEnd:
+    """AC1's P1 end-to-end assertion: a session whose touched.txt carries a
+    HAND-WRITTEN '../' entry (never routed through touch()) must not reach
+    safe_paths. Hand-writing the entry — rather than driving it through
+    touch() — is deliberate: this test must still fail if only C2 (the
+    writer fix) had landed, which is what makes it a real pin on C1 rather
+    than a restatement of C2."""
+
+    def test_hand_written_relative_escape_yields_empty_safe_paths(self, tmp_path):
+        from coordinator_core.ops.session import safe_commit_offer
+
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        # A sibling-dir collision: an in-repo top-level "docs/" dir with a
+        # real, dirty (untracked) file this session never touched, matching
+        # the exact P1 probe transcript shape.
+        (repo / "docs").mkdir()
+        (repo / "docs" / "peer_owned.md").write_text("z")
+        (_sdir(repo, "mine") / "touched.txt").write_text(
+            "../docs/peer_owned.md\n"
+        )
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
+        assert offer["safe_paths"] == []
+
+
+# ---------------------------------------------------------------------------
+# archive()
+# ---------------------------------------------------------------------------
+
+
+class TestArchive:
+    def test_requires_sid(self):
+        with pytest.raises(ValueError):
+            scope.archive("")
+
+    def test_out_of_repo_returns_false(self, tmp_path):
+        assert scope.archive("sid", cwd=str(tmp_path)) is False
+
+    def test_missing_session_dir_is_idempotent_true(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert scope.archive("never-existed", cwd=str(repo)) is True
+
+    def test_moves_session_dir_under_archive_with_date(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("done-sid", cwd=str(repo))
+        sdir = _sdir(repo, "done-sid")
+        assert sdir.is_dir()
+        assert scope.archive("done-sid", cwd=str(repo)) is True
+        assert not sdir.exists()
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        archived = list((base / ".archive").glob("done-sid-*"))
+        assert len(archived) == 1
+        # date-suffix shape YYYY-MM-DD
+        import re as _re
+
+        assert _re.search(r"done-sid-\d{4}-\d{2}-\d{2}$", str(archived[0]))
+
+    def test_archive_is_idempotent_on_second_call(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("twice", cwd=str(repo))
+        assert scope.archive("twice", cwd=str(repo)) is True
+        # second call: session dir already gone -> idempotent True
+        assert scope.archive("twice", cwd=str(repo)) is True
+
+
+# ---------------------------------------------------------------------------
+# parse_touch_event() / format_touch_event() — P1, the frozen event-record
+# format. Additive only: no existing assertion above is touched.
+# ---------------------------------------------------------------------------
+
+
+class TestParseFormatTouchEvent:
+    def test_well_formed_t_line_parses(self):
+        verb, ts, path = scope.parse_touch_event(
+            "T 2026-08-03T14:37:37.412088+00:00 coordinator_core/foo.py"
+        )
+        assert verb == "T"
+        assert ts is not None
+        assert path == "coordinator_core/foo.py"
+
+    def test_well_formed_r_line_parses(self):
+        verb, ts, path = scope.parse_touch_event(
+            "R 2026-08-03T14:37:37.412088+00:00 coordinator_core/foo.py"
+        )
+        assert verb == "R"
+        assert ts is not None
+        assert path == "coordinator_core/foo.py"
+
+    def test_path_containing_space_survives(self):
+        verb, ts, path = scope.parse_touch_event(
+            "T 2026-08-03T14:37:37.412088+00:00 some dir/has space.py"
+        )
+        assert verb == "T"
+        assert path == "some dir/has space.py"
+
+    def test_bare_legacy_line_projects_t_unknown_time(self):
+        verb, ts, path = scope.parse_touch_event("coordinator_core/legacy.py")
+        assert verb == "T"
+        assert ts is None
+        assert path == "coordinator_core/legacy.py"
+
+    def test_truncated_line_is_fail_safe_claimed(self):
+        verb, ts, path = scope.parse_touch_event("T 2026-08-03T14:37:37.412088+00:00")
+        assert verb == "T"
+        assert ts is None
+
+    def test_unknown_verb_is_fail_safe_claimed(self):
+        verb, ts, path = scope.parse_touch_event(
+            "X 2026-08-03T14:37:37.412088+00:00 coordinator_core/foo.py"
+        )
+        assert verb == "T"
+        assert ts is None
+
+    def test_tab_bearing_line_still_parses_via_whitespace_split(self):
+        # str.split(None, 2) treats a tab as whitespace too, so a
+        # tab-delimited line parses structurally the same as a
+        # space-delimited one — the frozen format itself must never EMIT
+        # a tab (see test_format_never_emits_tab), but the parser degrades
+        # gracefully rather than choking on one it encounters.
+        line = "T\t2026-08-03T14:37:37.412088+00:00\tcoordinator_core/foo.py"
+        verb, ts, path = scope.parse_touch_event(line)
+        assert verb == "T"
+        assert ts is not None
+        assert path == "coordinator_core/foo.py"
+
+    def test_never_raises_on_garbage_input(self):
+        for garbage in ("", "   ", "\n", "T R path extra tokens here"):
+            verb, ts, path = scope.parse_touch_event(garbage)
+            assert verb in ("T", "R")
+
+    def test_unknown_time_sentinel_sorts_earlier_than_real_timestamp(self):
+        _, none_ts, _ = scope.parse_touch_event("legacy/bare/path.py")
+        _, real_ts, _ = scope.parse_touch_event(
+            "R 2026-08-03T14:37:37.412088+00:00 coordinator_core/foo.py"
+        )
+        assert scope._touch_event_sort_key(none_ts) < scope._touch_event_sort_key(real_ts)
+
+    def test_format_round_trips_through_parse(self):
+        line = scope.format_touch_event("T", "coordinator_core/foo.py")
+        verb, ts, path = scope.parse_touch_event(line)
+        assert verb == "T"
+        assert ts is not None
+        assert path == "coordinator_core/foo.py"
+
+    def test_format_rejects_bad_verb(self):
+        with pytest.raises(ValueError):
+            scope.format_touch_event("Q", "coordinator_core/foo.py")
+
+    def test_format_never_emits_tab(self):
+        line = scope.format_touch_event("R", "coordinator_core/foo bar.py")
+        assert "\t" not in line
+
+    def test_format_uses_explicit_when(self):
+        from datetime import datetime, timezone
+
+        when = datetime(2026, 8, 3, 14, 37, 37, 412088, tzinfo=timezone.utc)
+        line = scope.format_touch_event("T", "coordinator_core/foo.py", when=when)
+        assert line == "T 2026-08-03T14:37:37.412088Z coordinator_core/foo.py"
+
+    def test_format_keeps_microseconds_when_zero(self):
+        """`isoformat()` omits the microsecond field entirely when it is zero,
+        which silently drops the resolution the `>=` mtime comparison depends
+        on and breaks the exact-line schema contract example-doctrine-repo re-pins against."""
+        from datetime import datetime, timezone
+
+        when = datetime(2026, 8, 3, 14, 37, 37, 0, tzinfo=timezone.utc)
+        line = scope.format_touch_event("R", "coordinator_core/foo.py", when=when)
+        assert line == "R 2026-08-03T14:37:37.000000Z coordinator_core/foo.py"
+
+    def test_naive_timestamp_fails_safe_to_claimed(self):
+        """A tz-less timestamp must not parse into a naive datetime: every
+        consumer compares these against aware instants, and mixing the two
+        raises TypeError inside the projection, past where the never-raise
+        contract can absorb it."""
+        verb, ts, _path = scope.parse_touch_event(
+            "T 2026-08-03T14:37:37.412088 coordinator_core/foo.py"
+        )
+        assert (verb, ts) == ("T", None)
+
+
+class TestProjectSelfScope:
+    """Self-facing projection (P3) — never applies the peer-facing mtime
+    re-claim; this is the arm that must not widen `my_scope`."""
+
+    def test_last_event_t_is_claimed(self):
+        assert scope.project_self_scope(
+            ["T 2026-08-03T10:00:00+00:00 a.py"]
+        ) == {"a.py"}
+
+    def test_last_event_r_is_released_even_if_dirty(self):
+        # No mtime data is even accepted by this function's signature — the
+        # policy is unconditional: last event R means excluded, period.
+        lines = [
+            "T 2026-08-03T09:00:00+00:00 a.py",
+            "R 2026-08-03T10:00:00+00:00 a.py",
+        ]
+        assert scope.project_self_scope(lines) == set()
+
+    def test_t_after_r_reclaims_normally(self):
+        lines = [
+            "T 2026-08-03T09:00:00+00:00 a.py",
+            "R 2026-08-03T10:00:00+00:00 a.py",
+            "T 2026-08-03T11:00:00+00:00 a.py",
+        ]
+        assert scope.project_self_scope(lines) == {"a.py"}
+
+    def test_legacy_bare_line_is_claimed_at_unknown_time(self):
+        assert scope.project_self_scope(["legacy/bare/path.py"]) == {
+            "legacy/bare/path.py"
+        }
+
+    def test_blank_lines_ignored(self):
+        assert scope.project_self_scope(
+            ["", "T 2026-08-03T10:00:00+00:00 a.py", ""]
+        ) == {"a.py"}
+
+
+class TestProjectPeerClaims:
+    """Peer-facing projection (P3) — the guard's input. A released path
+    re-projects to CLAIMED under the mtime-re-claim rule UNLESS a real
+    challenger T post-dates the R (inference loses to evidence)."""
+
+    def test_last_event_t_is_claimed(self):
+        result = scope.project_peer_claims(
+            ["T 2026-08-03T10:00:00+00:00 a.py"], {}
+        )
+        assert "a.py" in result
+
+    def test_last_event_r_not_dirty_stays_released(self):
+        lines = [
+            "T 2026-08-03T09:00:00+00:00 a.py",
+            "R 2026-08-03T10:00:00+00:00 a.py",
+        ]
+        # path_mtimes has no entry for a.py -> "not currently dirty".
+        result = scope.project_peer_claims(lines, {})
+        assert "a.py" not in result
+
+    def test_last_event_r_dirty_since_reclaims_to_claimed(self):
+        from datetime import datetime, timezone
+
+        r_ts = datetime(2026, 8, 3, 10, 0, 0, tzinfo=timezone.utc)
+        lines = [scope.format_touch_event("R", "a.py", when=r_ts)]
+        path_mtimes = {"a.py": r_ts.timestamp() + 100}  # dirty AFTER the R
+        result = scope.project_peer_claims(lines, path_mtimes)
+        assert "a.py" in result
+
+    def test_last_event_r_mtime_before_r_stays_released(self):
+        from datetime import datetime, timezone
+
+        r_ts = datetime(2026, 8, 3, 10, 0, 0, tzinfo=timezone.utc)
+        lines = [scope.format_touch_event("R", "a.py", when=r_ts)]
+        path_mtimes = {"a.py": r_ts.timestamp() - 100}  # stale mtime, before R
+        result = scope.project_peer_claims(lines, path_mtimes)
+        assert "a.py" not in result
+
+    def test_challenger_t_postdating_r_blocks_reclaim(self):
+        # AC13(b): a REAL T for this path, post-dating the R, means
+        # inference (mtime re-claim) loses to evidence (the challenger T).
+        from datetime import datetime, timezone
+
+        r_ts = datetime(2026, 8, 3, 10, 0, 0, tzinfo=timezone.utc)
+        challenger_ts = datetime(2026, 8, 3, 11, 0, 0, tzinfo=timezone.utc)
+        lines = [scope.format_touch_event("R", "a.py", when=r_ts)]
+        path_mtimes = {"a.py": r_ts.timestamp() + 100}
+        result = scope.project_peer_claims(
+            lines, path_mtimes, challenger_t_events={"a.py": challenger_ts}
+        )
+        assert "a.py" not in result
+
+    def test_challenger_t_predating_r_does_not_block_reclaim(self):
+        # AC13(a): a challenger T that does NOT post-date the R is not real
+        # evidence against the reclaim — the mtime rule still fires.
+        from datetime import datetime, timezone
+
+        challenger_ts = datetime(2026, 8, 3, 9, 0, 0, tzinfo=timezone.utc)
+        r_ts = datetime(2026, 8, 3, 10, 0, 0, tzinfo=timezone.utc)
+        lines = [scope.format_touch_event("R", "a.py", when=r_ts)]
+        path_mtimes = {"a.py": r_ts.timestamp() + 100}
+        result = scope.project_peer_claims(
+            lines, path_mtimes, challenger_t_events={"a.py": challenger_ts}
+        )
+        assert "a.py" in result
+
+    def test_legacy_bare_line_is_claimed_unconditionally(self):
+        result = scope.project_peer_claims(["legacy/bare.py"], {})
+        assert "legacy/bare.py" in result
+
+    def test_blank_lines_ignored(self):
+        result = scope.project_peer_claims(
+            ["", "T 2026-08-03T10:00:00+00:00 a.py", ""], {}
+        )
+        assert "a.py" in result
+        assert "" not in result
+
+
+class TestComputeScopeEventProjectionAC13:
+    """Integration coverage for AC13 both directions, wired through
+    `compute_scope`'s Step 3 peer scan (`project_peer_claims`) — a bare-
+    line-only corpus is covered exhaustively by TestComputeScope's existing
+    (unmodified) suite; these tests exercise the event-log dialect
+    directly, since no writer in this repo emits it yet (P2 pending)."""
+
+    def test_unattributed_redirty_after_release_projects_back_to_claimed(
+        self, tmp_path
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        repo = _make_repo(tmp_path)
+        core.init("mine13a", cwd=str(repo))
+        core.init("peer13a", cwd=str(repo))
+        mine_sdir = _sdir(repo, "mine13a")
+        (mine_sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+
+        r_ts = datetime.now(timezone.utc) - timedelta(seconds=5)
+        peer_sdir = _sdir(repo, "peer13a")
+        peer_lines = [
+            scope.format_touch_event(
+                "T", "reclaim.py", when=r_ts - timedelta(seconds=10)
+            ),
+            scope.format_touch_event("R", "reclaim.py", when=r_ts),
+        ]
+        (peer_sdir / "touched.txt").write_text("\n".join(peer_lines) + "\n")
+
+        (repo / "reclaim.py").write_text("z")  # dirty NOW, after the R above
+
+        result = scope.compute_scope("mine13a", cwd=str(repo))
+        assert "reclaim.py" not in result.my_scope
+        assert ("reclaim.py", "peer13a") in result.skipped
+
+    def test_attributed_redirty_with_challenger_t_stays_released(self, tmp_path):
+        # AC13(b) worked example: peer A releases publish.py, then the
+        # CALLING session (mine) itself edits it — the reclaim must NOT
+        # fire; the path belongs uncontested to `mine`.
+        from datetime import datetime, timedelta, timezone
+
+        repo = _make_repo(tmp_path)
+        core.init("peer13b", cwd=str(repo))
+        core.init("mine13b", cwd=str(repo))
+        mine_sdir = _sdir(repo, "mine13b")
+        (mine_sdir / "started_at").write_text("2000-01-01T00:00:00Z")
+
+        r_ts = datetime.now(timezone.utc) - timedelta(seconds=10)
+        peer_sdir = _sdir(repo, "peer13b")
+        peer_lines = [
+            scope.format_touch_event(
+                "T", "publish.py", when=r_ts - timedelta(seconds=20)
+            ),
+            scope.format_touch_event("R", "publish.py", when=r_ts),
+        ]
+        (peer_sdir / "touched.txt").write_text("\n".join(peer_lines) + "\n")
+
+        challenger_ts = r_ts + timedelta(seconds=5)  # post-dates the peer's R
+        (mine_sdir / "touched.txt").write_text(
+            scope.format_touch_event("T", "publish.py", when=challenger_ts) + "\n"
+        )
+        (repo / "publish.py").write_text("z")  # dirty now
+
+        result = scope.compute_scope("mine13b", cwd=str(repo))
+        assert "publish.py" in result.my_scope
+        assert not any(p == "publish.py" for p, _owner in result.skipped)
+
+
+# ---------------------------------------------------------------------------
+# C1 :: release_committed_claims — C2 pins AC2, AC4, AC7, AC8 at the helper
+# layer, against a real git repo (not the pure-projection unit level above).
+# ---------------------------------------------------------------------------
+
+
+class TestPorcelainDirtyPaths:
+    """Review: code-reviewer Finding 3 (2026-08-03) -- `_porcelain_dirty_paths`
+    is string-parsing fail-safe code the brief itself named as a risk axis,
+    with zero direct test pressure before this class. Fail-safe is RETAIN
+    (release nothing), never merely "no crash" -- see `TestReleaseCommittedClaims`
+    below for the whole-call integration assertions of that contract."""
+
+    def test_well_formed_line_records_the_path(self):
+        assert scope._porcelain_dirty_paths(" M foo.py\n") == {"foo.py"}
+
+    def test_rename_line_records_both_old_and_new(self):
+        result = scope._porcelain_dirty_paths("R  old.py -> new.py\n")
+        assert result == {"old.py", "new.py"}
+
+    def test_copy_line_records_both_old_and_new(self):
+        result = scope._porcelain_dirty_paths("C  src.py -> copy.py\n")
+        assert result == {"src.py", "copy.py"}
+
+    def test_malformed_short_line_returns_none(self):
+        assert scope._porcelain_dirty_paths("MM\n") is None
+
+    def test_malformed_missing_separator_space_returns_none(self):
+        # Position 2 must be a space; a 4th non-space char here is malformed.
+        assert scope._porcelain_dirty_paths("MMXfoo.py\n") is None
+
+    def test_empty_lines_are_skipped_not_malformed(self):
+        assert scope._porcelain_dirty_paths(" M foo.py\n\n M bar.py\n") == {
+            "foo.py",
+            "bar.py",
+        }
+
+
+class TestReleaseCommittedClaims:
+    """Existing assertions elsewhere in this file encode incident history
+    (AC5) -- if any of THOSE fail because of this change, C1 is wrong; this
+    class only pins the NEW `release_committed_claims` helper itself."""
+
+    def test_clean_committed_path_is_released(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s-rel1", cwd=str(repo))
+        (repo / "foo.py").write_text("x")
+        scope.touch("s-rel1", "foo.py", cwd=str(repo))
+        subprocess.run(["git", "add", "foo.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit foo"], cwd=repo, check=True
+        )
+
+        scope.release_committed_claims("s-rel1", ["foo.py"], cwd=str(repo))
+
+        touched = _sdir(repo, "s-rel1") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 2
+        verb, _ts, path = scope.parse_touch_event(lines[1])
+        assert (verb, path) == ("R", "foo.py")
+        assert "foo.py" not in scope.project_self_scope(lines)
+
+    def test_still_dirty_path_is_retained(self, tmp_path):
+        """AC2: a path never committed, still dirty, is not released."""
+        repo = _make_repo(tmp_path)
+        core.init("s-rel2", cwd=str(repo))
+        (repo / "bar.py").write_text("x")
+        scope.touch("s-rel2", "bar.py", cwd=str(repo))
+        # Never committed -> git status still reports it dirty (untracked).
+
+        scope.release_committed_claims("s-rel2", ["bar.py"], cwd=str(repo))
+
+        touched = _sdir(repo, "s-rel2") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 1  # unchanged -- no R appended
+        assert "bar.py" in scope.project_self_scope(lines)
+
+    def test_ac4_committed_in_earlier_hunk_still_carries_uncommitted_edits(
+        self, tmp_path
+    ):
+        """AC4's specific shape: a path already committed once (has git
+        history) but that STILL carries a further, currently-uncommitted
+        edit at call time must be retained. Asserted directly here rather
+        than left to follow by implication from the plain-dirty case
+        above -- this path has been through a commit already, unlike
+        `bar.py` in test_still_dirty_path_is_retained."""
+        repo = _make_repo(tmp_path)
+        core.init("s-rel4", cwd=str(repo))
+        (repo / "hunked.py").write_text("v1")
+        scope.touch("s-rel4", "hunked.py", cwd=str(repo))
+        subprocess.run(["git", "add", "hunked.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "first hunk"], cwd=repo, check=True
+        )
+        # A second, uncommitted edit lands on the SAME already-committed path.
+        (repo / "hunked.py").write_text("v2")
+
+        scope.release_committed_claims("s-rel4", ["hunked.py"], cwd=str(repo))
+
+        touched = _sdir(repo, "s-rel4") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert len(lines) == 1  # unchanged -- no R appended
+        assert "hunked.py" in scope.project_self_scope(lines)
+
+    def test_ac7_unreadable_touched_txt_leaves_file_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("s-rel7a", cwd=str(repo))
+        (repo / "clean.py").write_text("x")
+        scope.touch("s-rel7a", "clean.py", cwd=str(repo))
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit clean"], cwd=repo, check=True
+        )
+
+        touched = _sdir(repo, "s-rel7a") / "touched.txt"
+        before = touched.read_bytes()
+
+        orig_read_text = Path.read_text
+
+        def _boom(self, *a, **k):
+            if self == touched:
+                raise OSError("simulated read failure")
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _boom)
+        scope.release_committed_claims("s-rel7a", ["clean.py"], cwd=str(repo))
+
+        assert touched.read_bytes() == before
+
+    def test_ac7_git_command_failure_leaves_file_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("s-rel7b", cwd=str(repo))
+        (repo / "clean2.py").write_text("x")
+        scope.touch("s-rel7b", "clean2.py", cwd=str(repo))
+        subprocess.run(["git", "add", "clean2.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit clean2"], cwd=repo, check=True
+        )
+
+        touched = _sdir(repo, "s-rel7b") / "touched.txt"
+        before = touched.read_bytes()
+
+        monkeypatch.setattr(scope, "_git_output", lambda args, cwd=None: None)
+        scope.release_committed_claims("s-rel7b", ["clean2.py"], cwd=str(repo))
+
+        assert touched.read_bytes() == before
+
+    def test_ac8_path_redirtied_between_commit_and_release_is_retained(
+        self, tmp_path
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("s-rel8", cwd=str(repo))
+        (repo / "cycle.py").write_text("v1")
+        scope.touch("s-rel8", "cycle.py", cwd=str(repo))
+        subprocess.run(["git", "add", "cycle.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit cycle"], cwd=repo, check=True
+        )
+
+        scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
+        touched = _sdir(repo, "s-rel8") / "touched.txt"
+        after_first = touched.read_text().splitlines()
+        assert len(after_first) == 2
+        assert scope.parse_touch_event(after_first[1])[0] == "R"
+
+        # Re-dirty AFTER the release, then re-claim it (mirrors touch()'s
+        # own AC8: last event R -> a fresh edit gets a new T).
+        (repo / "cycle.py").write_text("v2")
+        scope.touch("s-rel8", "cycle.py", cwd=str(repo))
+        after_touch = touched.read_text().splitlines()
+        assert len(after_touch) == 3  # fresh T appended post-release
+        assert "cycle.py" in scope.project_self_scope(after_touch)
+
+        # Try to release again while still dirty -- must retain, not
+        # re-release.
+        scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
+
+        after_second = touched.read_text().splitlines()
+        assert after_second == after_touch  # unchanged -- still dirty, retained
+        assert "cycle.py" in scope.project_self_scope(after_second)
+
+    def test_renamed_path_is_releasable(self, tmp_path):
+        """Review: code-reviewer Finding 3 -- a real `git mv` + commit must
+        release cleanly through the RENAMED (new) path; `_porcelain_dirty_paths`
+        recording both old and new names on a rename line is what keeps this
+        from spuriously appearing dirty via its old name."""
+        repo = _make_repo(tmp_path)
+        core.init("s-rename", cwd=str(repo))
+        (repo / "old_name.py").write_text("x")
+        scope.touch("s-rename", "old_name.py", cwd=str(repo))
+        subprocess.run(["git", "add", "old_name.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit old_name"], cwd=repo, check=True
+        )
+
+        subprocess.run(
+            ["git", "mv", "old_name.py", "new_name.py"], cwd=repo, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "rename to new_name"], cwd=repo, check=True
+        )
+        # Re-touch under the new name -- a rename is a fresh file identity
+        # from touched.txt's own perspective; nothing renames the entry.
+        scope.touch("s-rename", "new_name.py", cwd=str(repo))
+
+        scope.release_committed_claims("s-rename", ["new_name.py"], cwd=str(repo))
+
+        touched = _sdir(repo, "s-rename") / "touched.txt"
+        lines = touched.read_text().splitlines()
+        assert "new_name.py" not in scope.project_self_scope(lines)
+
+    def test_unparseable_porcelain_line_retains_whole_call_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: code-reviewer Finding 3 -- an unparseable porcelain line
+        must fail the WHOLE call safe to RETAIN (release nothing), mirroring
+        `test_ac7_git_command_failure_leaves_file_byte_identical`'s byte-
+        identical assertion for a git-command failure."""
+        repo = _make_repo(tmp_path)
+        core.init("s-malformed", cwd=str(repo))
+        (repo / "committed.py").write_text("x")
+        scope.touch("s-malformed", "committed.py", cwd=str(repo))
+        subprocess.run(["git", "add", "committed.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit committed"], cwd=repo, check=True
+        )
+
+        touched = _sdir(repo, "s-malformed") / "touched.txt"
+        before = touched.read_bytes()
+
+        orig_git_output = scope._git_output
+
+        def _malformed_status(args, cwd=None):
+            if args and args[-len(["--", "committed.py"]) :] == [
+                "--",
+                "committed.py",
+            ] and "status" in args:
+                return "MM\n"  # too short to fit either recognized shape
+            return orig_git_output(args, cwd)
+
+        monkeypatch.setattr(scope, "_git_output", _malformed_status)
+        scope.release_committed_claims("s-malformed", ["committed.py"], cwd=str(repo))
+
+        assert touched.read_bytes() == before
+
+    def test_peer_agent_dir_not_back_pointed_at_sid_is_untouched(self, tmp_path):
+        """The worst failure this helper could have: silently pruning a
+        peer's record. A peer's .agents dir, back-pointed at a DIFFERENT
+        session, must never be touched by a release call for this sid --
+        release_committed_claims is structurally incapable of releasing a
+        peer's claim."""
+        repo = _make_repo(tmp_path)
+        core.init("s-releaser", cwd=str(repo))
+        core.init("peer-owner", cwd=str(repo))
+
+        (repo / "shared.py").write_text("x")
+        scope.touch("s-releaser", "shared.py", cwd=str(repo))
+        subprocess.run(["git", "add", "shared.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit shared"], cwd=repo, check=True
+        )
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        peer_agent_dir = base / ".agents" / "agent-peer"
+        peer_agent_dir.mkdir(parents=True)
+        (peer_agent_dir / "em-session-id.txt").write_text(
+            "peer-owner\n", encoding="utf-8"
+        )
+        peer_touched = peer_agent_dir / "touched.txt"
+        peer_touched.write_text("shared.py\n", encoding="utf-8")
+        before = peer_touched.read_bytes()
+
+        scope.release_committed_claims("s-releaser", ["shared.py"], cwd=str(repo))
+
+        assert peer_touched.read_bytes() == before
+
+    def test_ac10_no_op_release_performs_no_write(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("s-rel10", cwd=str(repo))
+        (repo / "untouched.py").write_text("x")
+        scope.touch("s-rel10", "untouched.py", cwd=str(repo))
+        # Never committed -- stays dirty, so nothing is releasable this call.
+
+        touched = _sdir(repo, "s-rel10") / "touched.txt"
+        mtime_before = touched.stat().st_mtime_ns
+
+        scope.release_committed_claims("s-rel10", ["untouched.py"], cwd=str(repo))
+
+        assert touched.stat().st_mtime_ns == mtime_before

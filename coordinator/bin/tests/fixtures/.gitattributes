@@ -1,0 +1,3 @@
+# Review: code-reviewer — pin fixture file to LF line endings regardless of
+# core.autocrlf setting, preventing CRLF/LF fragility on Windows (Finding 6).
+brightline-gate-baseline-output.txt text eol=lf

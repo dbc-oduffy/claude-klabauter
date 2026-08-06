@@ -1,0 +1,152 @@
+{
+  "oracle": "coordinator/bin/query-records.js",
+  "consuming_suites": [
+    "coordinator_core/ops/tests/test_records_query_parity.py",
+    "coordinator_core/text/test_refresh_queries.py (live-bridge leg, per migration-hitlist.md correction)"
+  ],
+  "cases": {
+    "handoff_paths_quoted_roadmap_id": {
+      "returncode": 0,
+      "stdout": "state/handoffs/2026-07-01-consumed-lagged.md\nstate/handoffs/2026-07-01-spinoff-awaiting.md\nstate/handoffs/2026-07-01-spinoff-rtf.md\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "handoff_paths_rtf_consumed_marker": {
+      "returncode": 0,
+      "stdout": "state/handoffs/2026-07-01-spinoff-rtf.md\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04 AND deployment_state=ready_to_fire",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "handoff_paths_awaiting_gate": {
+      "returncode": 0,
+      "stdout": "state/handoffs/2026-07-01-spinoff-awaiting.md\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04 AND deployment_state=awaiting_gate",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "handoff_json_quoted_roadmap_id": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/handoffs/2026-07-01-consumed-lagged.md\",\n    \"frontmatter\": {\n      \"kind\": \"spinoff-roadmap\",\n      \"roadmap_id\": \"claude-klabauter-strangler-2026-07-04\",\n      \"deployment_state\": \"shipped\",\n      \"stub_id\": \"strang-11\",\n      \"status\": \"consumed\",\n      \"consumed_at\": \"2026-07-01\",\n      \"liveness\": \"DONE\"\n    }\n  },\n  {\n    \"path\": \"state/handoffs/2026-07-01-spinoff-awaiting.md\",\n    \"frontmatter\": {\n      \"kind\": \"spinoff-roadmap\",\n      \"roadmap_id\": \"claude-klabauter-strangler-2026-07-04\",\n      \"deployment_state\": \"awaiting_gate\",\n      \"stub_id\": \"strang-11\",\n      \"liveness\": \"BLOCKED\"\n    }\n  },\n  {\n    \"path\": \"state/handoffs/2026-07-01-spinoff-rtf.md\",\n    \"frontmatter\": {\n      \"kind\": \"spinoff-roadmap\",\n      \"roadmap_id\": \"claude-klabauter-strangler-2026-07-04\",\n      \"deployment_state\": \"ready_to_fire\",\n      \"stub_id\": \"strang-11\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04",
+        "format": "json",
+        "limit": 50
+      }
+    },
+    "handoff_archived_paths": {
+      "returncode": 0,
+      "stdout": "archive/handoffs/2026-06-01-archived-spinoff.md\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff-archived",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "handoff_archived_json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"archive/handoffs/2026-06-01-archived-spinoff.md\",\n    \"frontmatter\": {\n      \"kind\": \"spinoff-roadmap\",\n      \"roadmap_id\": \"claude-klabauter-strangler-2026-07-04\",\n      \"deployment_state\": \"awaiting_gate\",\n      \"stub_id\": \"strang-11\",\n      \"liveness\": \"BLOCKED\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "args": {
+        "type": "handoff-archived",
+        "where": "kind=spinoff-roadmap AND roadmap_id=claude-klabauter-strangler-2026-07-04",
+        "format": "json",
+        "limit": 50
+      }
+    },
+    "plan_status_implemented_limit50": {
+      "returncode": 0,
+      "stdout": "docs/plans/2026-07-01-plan-implemented-001.md\ndocs/plans/2026-07-01-plan-implemented-002.md\ndocs/plans/2026-07-01-plan-implemented-003.md\ndocs/plans/2026-07-01-plan-implemented-004.md\ndocs/plans/2026-07-01-plan-implemented-005.md\ndocs/plans/2026-07-01-plan-implemented-006.md\ndocs/plans/2026-07-01-plan-implemented-007.md\ndocs/plans/2026-07-01-plan-implemented-008.md\ndocs/plans/2026-07-01-plan-implemented-009.md\ndocs/plans/2026-07-01-plan-implemented-010.md\ndocs/plans/2026-07-01-plan-implemented-011.md\ndocs/plans/2026-07-01-plan-implemented-012.md\ndocs/plans/2026-07-01-plan-implemented-013.md\ndocs/plans/2026-07-01-plan-implemented-014.md\ndocs/plans/2026-07-01-plan-implemented-015.md\ndocs/plans/2026-07-01-plan-implemented-016.md\ndocs/plans/2026-07-01-plan-implemented-017.md\ndocs/plans/2026-07-01-plan-implemented-018.md\ndocs/plans/2026-07-01-plan-implemented-019.md\ndocs/plans/2026-07-01-plan-implemented-020.md\ndocs/plans/2026-07-01-plan-implemented-021.md\ndocs/plans/2026-07-01-plan-implemented-022.md\ndocs/plans/2026-07-01-plan-implemented-023.md\ndocs/plans/2026-07-01-plan-implemented-024.md\ndocs/plans/2026-07-01-plan-implemented-025.md\ndocs/plans/2026-07-01-plan-implemented-026.md\ndocs/plans/2026-07-01-plan-implemented-027.md\ndocs/plans/2026-07-01-plan-implemented-028.md\ndocs/plans/2026-07-01-plan-implemented-029.md\ndocs/plans/2026-07-01-plan-implemented-030.md\ndocs/plans/2026-07-01-plan-implemented-031.md\ndocs/plans/2026-07-01-plan-implemented-032.md\ndocs/plans/2026-07-01-plan-implemented-033.md\ndocs/plans/2026-07-01-plan-implemented-034.md\ndocs/plans/2026-07-01-plan-implemented-035.md\ndocs/plans/2026-07-01-plan-implemented-036.md\ndocs/plans/2026-07-01-plan-implemented-037.md\ndocs/plans/2026-07-01-plan-implemented-038.md\ndocs/plans/2026-07-01-plan-implemented-039.md\ndocs/plans/2026-07-01-plan-implemented-040.md\ndocs/plans/2026-07-01-plan-implemented-041.md\ndocs/plans/2026-07-01-plan-implemented-042.md\ndocs/plans/2026-07-01-plan-implemented-043.md\ndocs/plans/2026-07-01-plan-implemented-044.md\ndocs/plans/2026-07-01-plan-implemented-045.md\ndocs/plans/2026-07-01-plan-implemented-046.md\ndocs/plans/2026-07-01-plan-implemented-047.md\ndocs/plans/2026-07-01-plan-implemented-048.md\ndocs/plans/2026-07-01-plan-implemented-049.md\ndocs/plans/2026-07-01-plan-implemented-050.md\n",
+      "stderr": "query-records: unclassified docs/plans file 2026-07-01-foo.plan-coverage-check.2026-07-01T08-31-09Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\n",
+      "args": {
+        "type": "plan",
+        "where": "status=implemented",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "plan_status_superseded": {
+      "returncode": 0,
+      "stdout": "docs/plans/2026-07-01-plan-superseded-001.md\n",
+      "stderr": "query-records: unclassified docs/plans file 2026-07-01-foo.plan-coverage-check.2026-07-01T08-31-09Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\n",
+      "args": {
+        "type": "plan",
+        "where": "status=superseded",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "plan_status_abandoned": {
+      "returncode": 0,
+      "stdout": "docs/plans/2026-07-01-plan-abandoned-001.md\n",
+      "stderr": "query-records: unclassified docs/plans file 2026-07-01-foo.plan-coverage-check.2026-07-01T08-31-09Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\n",
+      "args": {
+        "type": "plan",
+        "where": "status=abandoned",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "plan_status_implemented_limit0": {
+      "returncode": 0,
+      "stdout": "docs/plans/2026-07-01-plan-implemented-001.md\ndocs/plans/2026-07-01-plan-implemented-002.md\ndocs/plans/2026-07-01-plan-implemented-003.md\ndocs/plans/2026-07-01-plan-implemented-004.md\ndocs/plans/2026-07-01-plan-implemented-005.md\ndocs/plans/2026-07-01-plan-implemented-006.md\ndocs/plans/2026-07-01-plan-implemented-007.md\ndocs/plans/2026-07-01-plan-implemented-008.md\ndocs/plans/2026-07-01-plan-implemented-009.md\ndocs/plans/2026-07-01-plan-implemented-010.md\ndocs/plans/2026-07-01-plan-implemented-011.md\ndocs/plans/2026-07-01-plan-implemented-012.md\ndocs/plans/2026-07-01-plan-implemented-013.md\ndocs/plans/2026-07-01-plan-implemented-014.md\ndocs/plans/2026-07-01-plan-implemented-015.md\ndocs/plans/2026-07-01-plan-implemented-016.md\ndocs/plans/2026-07-01-plan-implemented-017.md\ndocs/plans/2026-07-01-plan-implemented-018.md\ndocs/plans/2026-07-01-plan-implemented-019.md\ndocs/plans/2026-07-01-plan-implemented-020.md\ndocs/plans/2026-07-01-plan-implemented-021.md\ndocs/plans/2026-07-01-plan-implemented-022.md\ndocs/plans/2026-07-01-plan-implemented-023.md\ndocs/plans/2026-07-01-plan-implemented-024.md\ndocs/plans/2026-07-01-plan-implemented-025.md\ndocs/plans/2026-07-01-plan-implemented-026.md\ndocs/plans/2026-07-01-plan-implemented-027.md\ndocs/plans/2026-07-01-plan-implemented-028.md\ndocs/plans/2026-07-01-plan-implemented-029.md\ndocs/plans/2026-07-01-plan-implemented-030.md\ndocs/plans/2026-07-01-plan-implemented-031.md\ndocs/plans/2026-07-01-plan-implemented-032.md\ndocs/plans/2026-07-01-plan-implemented-033.md\ndocs/plans/2026-07-01-plan-implemented-034.md\ndocs/plans/2026-07-01-plan-implemented-035.md\ndocs/plans/2026-07-01-plan-implemented-036.md\ndocs/plans/2026-07-01-plan-implemented-037.md\ndocs/plans/2026-07-01-plan-implemented-038.md\ndocs/plans/2026-07-01-plan-implemented-039.md\ndocs/plans/2026-07-01-plan-implemented-040.md\ndocs/plans/2026-07-01-plan-implemented-041.md\ndocs/plans/2026-07-01-plan-implemented-042.md\ndocs/plans/2026-07-01-plan-implemented-043.md\ndocs/plans/2026-07-01-plan-implemented-044.md\ndocs/plans/2026-07-01-plan-implemented-045.md\ndocs/plans/2026-07-01-plan-implemented-046.md\ndocs/plans/2026-07-01-plan-implemented-047.md\ndocs/plans/2026-07-01-plan-implemented-048.md\ndocs/plans/2026-07-01-plan-implemented-049.md\ndocs/plans/2026-07-01-plan-implemented-050.md\ndocs/plans/2026-07-01-plan-implemented-051.md\n",
+      "stderr": "query-records: unclassified docs/plans file 2026-07-01-foo.plan-coverage-check.2026-07-01T08-31-09Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\n",
+      "args": {
+        "type": "plan",
+        "where": "status=implemented",
+        "format": "paths",
+        "limit": 0
+      }
+    },
+    "cross_repo_memo_all_paths": {
+      "returncode": 0,
+      "stdout": "cross-repo/inbox/2026-07-01-memo-actioned.md\ncross-repo/inbox/2026-07-01-memo-open-ask.md\ncross-repo/inbox/2026-07-01-memo-open-fyi.md\n",
+      "stderr": "",
+      "args": {
+        "type": "cross-repo-memo",
+        "where": "",
+        "format": "paths",
+        "limit": 50
+      }
+    },
+    "cross_repo_memo_json_status_open": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"cross-repo/inbox/2026-07-01-memo-open-ask.md\",\n    \"frontmatter\": {\n      \"title\": \"A cross-repo memo\",\n      \"from\": \"claude-klabauter\",\n      \"to\": \"example-retrieval-repo\",\n      \"status\": \"open\",\n      \"kind\": \"ask\",\n      \"created\": \"2026-07-01\",\n      \"liveness\": \"LIVE\"\n    }\n  },\n  {\n    \"path\": \"cross-repo/inbox/2026-07-01-memo-open-fyi.md\",\n    \"frontmatter\": {\n      \"title\": \"A cross-repo memo\",\n      \"from\": \"claude-klabauter\",\n      \"to\": \"example-retrieval-repo\",\n      \"status\": \"open\",\n      \"kind\": \"fyi\",\n      \"created\": \"2026-07-01\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "args": {
+        "type": "cross-repo-memo",
+        "where": "status=open",
+        "format": "json",
+        "limit": 50
+      }
+    },
+    "cross_repo_memo_paths_status_actioned": {
+      "returncode": 0,
+      "stdout": "cross-repo/inbox/2026-07-01-memo-actioned.md\n",
+      "stderr": "",
+      "args": {
+        "type": "cross-repo-memo",
+        "where": "status=actioned",
+        "format": "paths",
+        "limit": 50
+      }
+    }
+  }
+}

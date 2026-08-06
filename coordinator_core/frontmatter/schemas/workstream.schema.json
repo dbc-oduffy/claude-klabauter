@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/workstream.schema.json",
+  "x-schema-name": "workstream",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/workstreams/*.yaml",
+  "description": "Workstream definition — one per-entry file per strategic workstream in the render-from-queue project-tracker store. Rewritten atomically (write-temp + rename, single writer, low-contention assumption); status/deliverable-completion mutations are field-scoped events (see workstream-event.schema.json), never in-place definition edits. Spec backlink: docs/plans/2026-07-08-project-tracker-render-from-queue.md § Approach / § Substrate (definitions) / § Chunks C2.",
+  "type": "object",
+  "required": ["workstream_id", "title", "created", "coordinator_root_path"],
+  "properties": {
+    "workstream_id": {
+      "type": "string",
+      "description": "Stable identifier for this workstream; also the filename stem (state/workstreams/<workstream_id>.yaml). Immutable once minted."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable workstream name, as rendered in docs/project-tracker.md's numbered-list heading."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the workstream was created (YYYY-MM-DD). Part of the render-order tiebreaker: (created, workstream_id) per § Approach finding 3."
+    },
+    "coordinator_root_path": {
+      "type": "string",
+      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from claude-klabauter-em constraints memo (2026-07-08): the physical directory <claude-klabauter>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with claude-klabauter's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary claude-klabauter's trackers.py already uses (composite-natural-key component)."
+    },
+    "deliverables": {
+      "type": "array",
+      "description": "Ordered list of deliverable slots for this workstream. Completion state is NOT recorded here — it is a field-scoped event (field: 'deliverable[i].done') per the definition/event boundary (finding 6). Adding a new slot is a definition edit (rare); checking an existing one is an event (frequent). The generator's fold is union-tolerant: an event referencing a slot not yet present in a stale definition snapshot renders as a pending/orphan line rather than being silently dropped.",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Deliverable description, as rendered in the tracker's checkbox line."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "specs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Spec links associated with this workstream (paths under docs/plans/, docs/decisions/, etc.)."
+    },
+    "dependency_annotations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-text dependency notes carried forward from the hand-edited tracker format (e.g. 'blocked by X', 'depends on Y')."
+    }
+  }
+}

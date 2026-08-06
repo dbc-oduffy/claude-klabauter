@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan-coverage-check.schema.json",
+  "x-schema-name": "plan-coverage-check",
+  "x-schema-version": "1.1.0",
+  "applies_to": "state/plan-sidecars/*.plan-coverage-check.md",
+  "kinds": ["plan-coverage-check", "coverage-check"],
+  "description": "Plan-coverage-check sidecar — records whether a plan's fix slate covers its audit oracle. Lives at the plan-derivable state/plan-sidecars/<plan-stem>.plan-coverage-check.md home (moved out of docs/plans/ by docs/plans/2026-07-24-g2-plan-pipeline-sidecar-contract.md C11/D0). applies_to covers both canonical *.plan-coverage-check.md and legacy *.md.plan-coverage-check.md forms (globToRegex [^/]* spans embedded dots). verdict is NOT required — some legacy sidecars omit it.",
+  "type": "object",
+  "required": ["plan"],
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Repo-relative path to the plan this coverage check covers."
+    },
+    "author": {
+      "type": "string",
+      "description": "Agent that ran the coverage check."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this sidecar was authored (YYYY-MM-DD)."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle state. Not enumerated — values vary."
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Coverage verdict (e.g. COMPLETE, INCOMPLETE). Not required — legacy sidecars may omit."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for this coverage check sidecar."
+    }
+  }
+}

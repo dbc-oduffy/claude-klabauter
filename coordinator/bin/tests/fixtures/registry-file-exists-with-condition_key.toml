@@ -1,0 +1,16 @@
+# Test fixture: file-exists conditional that ALSO carries condition_key — must be a parse error.
+# The CLI exits non-zero and stderr names "condition_key" (or "FORBIDS").
+# Used by test-snippet-registry-malformed.bats.
+schema_version = 2
+
+[snippet.reviewer-calibration]
+sentinel_begin = "<!-- BEGIN reviewer-calibration -->"
+sentinel_end   = "<!-- END reviewer-calibration -->"
+consumers = [
+  "agents/staff-eng.md",
+]
+
+[[snippet.reviewer-calibration.conditional_consumer]]
+path           = "agents/file-exists-target.md"
+condition_type = "file-exists"
+condition_key  = "repos.example_game_workbench_repo"

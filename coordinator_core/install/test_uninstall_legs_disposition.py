@@ -1,0 +1,497 @@
+"""
+coordinator_core.install.test_uninstall_legs_disposition — tests for the
+honest uninstall disposition report (Rule 1 / Rule 2 total-function
+coverage).
+
+Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+    chunk C8
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import coordinator_core.install.uninstall_legs as uninstall_legs
+from coordinator_core.install.uninstall_legs import (
+    DISPOSITION_CANNOT_SAFELY,
+    DISPOSITION_DELIBERATE,
+    DISPOSITION_REVERSED,
+    UNINSTALL_DISPOSITIONS,
+    UninstallLegError,
+    build_disposition_report,
+    classify_entry_disposition,
+    orchestrate_uninstall,
+    render_disposition_report,
+    render_uninstall_dry_run_report,
+)
+from coordinator_core.install.receipt import InstallReceipt, ReceiptEntry, persist_receipt
+from coordinator_core.install.write_surface import (
+    ABSENT_ON_LEGACY_INSTALLS,
+    WriteSurfaceEntry,
+)
+
+
+def _entry(**kwargs) -> WriteSurfaceEntry:
+    defaults = {"kind": "file-path", "path": "/tmp/example"}
+    defaults.update(kwargs)
+    return WriteSurfaceEntry(**defaults)
+
+
+class TestClassifyEntryDisposition:
+    def test_attempted_ok_true_is_reversed(self):
+        record = classify_entry_disposition(
+            _entry(kind="git-config-key", key="gc.autoDetach"),
+            attempted_ok=True,
+            reason="git-config key unset",
+        )
+        assert record.disposition == DISPOSITION_REVERSED
+
+    def test_attempted_ok_false_is_cannot_reverse_safely(self):
+        record = classify_entry_disposition(
+            _entry(kind="file-path", path="/tmp/hand-modified"),
+            attempted_ok=False,
+            reason="hand-modified since install, fail-loud-on-ambiguity",
+            manual_command="rm -i /tmp/hand-modified",
+        )
+        assert record.disposition == DISPOSITION_CANNOT_SAFELY
+        assert record.manual_command == "rm -i /tmp/hand-modified"
+
+    def test_attempted_ok_none_is_deliberately_not_reversed(self):
+        record = classify_entry_disposition(
+            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            attempted_ok=None,
+            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+        )
+        assert record.disposition == DISPOSITION_DELIBERATE
+
+    def test_absent_on_legacy_installs_forces_cannot_reverse_safely_rc_block(self):
+        entry = _entry(
+            kind="rc-block",
+            path="~/.ssh/config",
+            begin_marker="# Added by coordinator setup-github-auth-1password",
+            end_marker=ABSENT_ON_LEGACY_INSTALLS,
+        )
+        record = classify_entry_disposition(entry, attempted_ok=True, reason="ignored")
+        assert record.disposition == DISPOSITION_CANNOT_SAFELY
+        assert record.manual_command is not None
+        assert "begin_marker" not in record.manual_command
+        assert entry.begin_marker in record.manual_command
+
+    def test_absent_on_legacy_installs_overrides_even_a_successful_attempt(self):
+        entry = _entry(
+            kind="hook-gate-region",
+            path="~/.claude/settings.json",
+            begin_marker="# gate: shell-init",
+            end_marker=ABSENT_ON_LEGACY_INSTALLS,
+        )
+        record = classify_entry_disposition(entry, attempted_ok=True, reason="claimed reversed")
+        assert record.disposition == DISPOSITION_CANNOT_SAFELY
+
+    def test_none_end_marker_on_hook_gate_region_is_not_uncertainty(self):
+        """Rule 2: `end_marker=None` on a `hook-gate-region` is the
+        structural-terminator case, distinct from `ABSENT_ON_LEGACY_INSTALLS`
+        — it routes from the caller-supplied outcome like any other kind,
+        not forced to cannot-reverse-safely."""
+        entry = _entry(
+            kind="hook-gate-region",
+            path="~/.claude/settings.json",
+            begin_marker="# gate: shell-init",
+            end_marker=None,
+        )
+        record = classify_entry_disposition(entry, attempted_ok=True, reason="gate stripped")
+        assert record.disposition == DISPOSITION_REVERSED
+
+    def test_none_end_marker_on_rc_block_is_not_forced_either(self):
+        # Review: code-reviewer (Finding 4, P3) — the prior version passed
+        # attempted_ok=False and asserted DISPOSITION_CANNOT_SAFELY, which
+        # is exactly what the ordinary (unforced) path already produces for
+        # attempted_ok=False -- it could not distinguish "not forced by
+        # Rule 2" from "would have landed there anyway." Using
+        # attempted_ok=True (matching the sibling hook-gate-region test)
+        # actually proves non-forcing: DISPOSITION_REVERSED would be
+        # impossible here if Rule 2 accidentally forced rc-block+None too.
+        entry = _entry(kind="rc-block", path="~/.bashrc", begin_marker="# begin", end_marker=None)
+        record = classify_entry_disposition(entry, attempted_ok=True, reason="stripped")
+        assert record.disposition == DISPOSITION_REVERSED
+
+    def test_non_bool_non_none_attempted_ok_raises(self):
+        entry = _entry(kind="file-path", path="/tmp/x")
+        with pytest.raises(TypeError):
+            classify_entry_disposition(entry, attempted_ok="yes", reason="bad caller")
+
+    @pytest.mark.parametrize("outcome", [True, False, None])
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            "git-config-key",
+            "machine-local-key",
+            "os-env-var",
+            "file-path",
+            "rc-block",
+            "hook-gate-region",
+            "structured-file-key",
+            "line-membership",
+        ],
+    )
+    def test_every_kind_and_outcome_lands_in_exactly_one_disposition(self, kind, outcome):
+        entry = _entry(kind=kind, key="k" if kind != "file-path" else None, path=None if kind != "file-path" else "/p")
+        record = classify_entry_disposition(entry, attempted_ok=outcome, reason="r")
+        assert record.disposition in UNINSTALL_DISPOSITIONS
+
+
+class TestBuildDispositionReportTotalCoverage:
+    def test_mixed_report_covers_every_record_exactly_once(self):
+        records = [
+            classify_entry_disposition(
+                _entry(kind="git-config-key", key="gc.autoDetach"),
+                attempted_ok=True,
+                reason="reversed",
+            ),
+            classify_entry_disposition(
+                _entry(kind="file-path", path="/example-doctrine-repo"),
+                attempted_ok=None,
+                reason="deliberate policy",
+            ),
+            classify_entry_disposition(
+                _entry(
+                    kind="hook-gate-region",
+                    path="~/.claude/settings.json",
+                    begin_marker="# gate",
+                    end_marker=ABSENT_ON_LEGACY_INSTALLS,
+                ),
+                attempted_ok=True,
+                reason="ignored",
+            ),
+        ]
+        report = build_disposition_report(records)
+        assert len(report.by_disposition(DISPOSITION_REVERSED)) == 1
+        assert len(report.by_disposition(DISPOSITION_DELIBERATE)) == 1
+        assert len(report.by_disposition(DISPOSITION_CANNOT_SAFELY)) == 1
+        report.assert_total_coverage()
+
+    def test_manually_constructed_bad_disposition_fails_total_coverage(self):
+        """A DispositionRecord's own __post_init__ rejects a bad disposition
+        value outright, so total-coverage failure is mechanically
+        unreachable via this constructor — assert that guard fires instead,
+        which is the same "no entry silently dropped" property enforced one
+        layer earlier."""
+        from coordinator_core.install.uninstall_legs import DispositionRecord
+
+        with pytest.raises(ValueError):
+            DispositionRecord(entry=_entry(), disposition="reverted-partially", reason="bad")
+
+    def test_empty_report_is_trivially_total(self):
+        report = build_disposition_report([])
+        report.assert_total_coverage()
+
+
+class TestRenderDispositionReport:
+    def test_dry_run_labels_as_preview(self):
+        report = build_disposition_report(
+            [
+                classify_entry_disposition(
+                    _entry(kind="file-path", path="/tmp/x"),
+                    attempted_ok=True,
+                    reason="removed",
+                )
+            ]
+        )
+        text = render_disposition_report(report, dry_run=True)
+        assert "DRY RUN" in text
+        assert "reversed" in text
+
+    def test_entry_label_falls_back_to_begin_marker(self):
+        """Finding 5, P3: an entry with no key/path but a begin_marker must
+        not degrade into an unidentifiable `<kind entry>` line."""
+        entry = _entry(
+            kind="hook-gate-region",
+            path=None,
+            begin_marker="# gate: shell-init",
+            end_marker=None,
+        )
+        report = build_disposition_report(
+            [classify_entry_disposition(entry, attempted_ok=True, reason="gate stripped")]
+        )
+        text = render_disposition_report(report)
+        assert "# gate: shell-init" in text
+        assert "<hook-gate-region entry>" not in text
+
+    def test_cannot_reverse_safely_prints_manual_command(self):
+        entry = _entry(
+            kind="rc-block",
+            path="~/.ssh/config",
+            begin_marker="# Added by coordinator setup-github-auth-1password",
+            end_marker=ABSENT_ON_LEGACY_INSTALLS,
+        )
+        report = build_disposition_report(
+            [classify_entry_disposition(entry, attempted_ok=True, reason="ignored")]
+        )
+        text = render_disposition_report(report)
+        assert "manual command:" in text
+        assert entry.begin_marker in text
+
+
+class TestRenderUninstallDryRunReport:
+    def test_none_receipt_is_honest_unknown(self):
+        text = render_uninstall_dry_run_report(None)
+        assert "no install receipt found" in text
+
+    def test_empty_receipt_is_honest_unknown(self):
+        text = render_uninstall_dry_run_report(InstallReceipt(entries=()))
+        assert "no install receipt found" in text
+
+    def test_populated_receipt_renders_dispositions_without_attempting(self):
+        # Review: code-reviewer (Finding 1, P1) — a plain git-config-key
+        # entry is exactly what a real run WOULD reverse, so it must land
+        # in the "reversed" bucket (with "would reverse" reason text), not
+        # "deliberately-not-reversed" — the prior assertion proved the bug
+        # this fix corrects.
+        receipt = InstallReceipt(
+            entries=(
+                ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),
+            )
+        )
+        text = render_uninstall_dry_run_report(receipt)
+        assert "DRY RUN" in text
+        assert "reversed (1):" in text
+        assert "would reverse" in text
+        assert "gc.autoDetach" in text
+        assert "deliberately-not-reversed (0):" in text
+
+    def test_would_reverse_and_genuinely_deliberate_render_distinguishably(self):
+        """render_disposition_report(dry_run=True) must render a
+        would-reverse entry (attempted_ok=True, the dry-run-preview
+        proposal) and a genuinely-deliberate entry (attempted_ok=None, a
+        named policy decision) into visibly different buckets/reasons —
+        the exact distinction Finding 1 says the prior code collapsed."""
+        would_reverse = classify_entry_disposition(
+            _entry(kind="git-config-key", key="gc.autoDetach"),
+            attempted_ok=True,
+            reason="dry-run preview — a real run would reverse this entry",
+        )
+        genuinely_deliberate = classify_entry_disposition(
+            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            attempted_ok=None,
+            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+        )
+        report = build_disposition_report([would_reverse, genuinely_deliberate])
+        text = render_disposition_report(report, dry_run=True)
+
+        assert "reversed (1):" in text
+        assert "deliberately-not-reversed (1):" in text
+        assert "gc.autoDetach" in text
+        assert "/some/example-doctrine-repo/checkout" in text
+        # the two entries land in different buckets, not the same one
+        assert would_reverse.disposition != genuinely_deliberate.disposition
+
+    def test_marker_rule_2_override_still_fires_in_preview(self):
+        receipt = InstallReceipt(
+            entries=(
+                ReceiptEntry(
+                    writer_id="w",
+                    kind="rc-block",
+                    path="~/.ssh/config",
+                    begin_marker="# Added by coordinator setup-github-auth-1password",
+                    end_marker=ABSENT_ON_LEGACY_INSTALLS,
+                ),
+            )
+        )
+        text = render_uninstall_dry_run_report(receipt)
+        assert "manual command:" in text
+
+
+class TestOrchestrateUninstallDryRunWiring:
+    def test_dry_run_with_no_receipt_prints_honest_message_and_mutates_nothing(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: None)
+        for leg_name in (
+            "uninstall_strip_settings_hooks",
+            "uninstall_remove_shim",
+            "uninstall_remove_substrate",
+            "uninstall_set_plugin_endstate",
+        ):
+
+            def _boom(*a, **kw):
+                raise AssertionError("a mutating leg was called during --dry-run")
+
+            monkeypatch.setattr(uninstall_legs, leg_name, _boom)
+
+        rc = orchestrate_uninstall(["--dry-run"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no install receipt found" in out
+
+    def test_dry_run_with_populated_receipt_prints_report_and_mutates_nothing(
+        self, monkeypatch, capsys
+    ):
+        receipt = InstallReceipt(
+            entries=(ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),)
+        )
+        monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: receipt)
+        for leg_name in (
+            "uninstall_strip_settings_hooks",
+            "uninstall_remove_shim",
+            "uninstall_remove_substrate",
+            "uninstall_set_plugin_endstate",
+        ):
+
+            def _boom(*a, **kw):
+                raise AssertionError("a mutating leg was called during --dry-run")
+
+            monkeypatch.setattr(uninstall_legs, leg_name, _boom)
+
+        rc = orchestrate_uninstall(["--dry-run"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "disposition report" in out
+        assert "gc.autoDetach" in out
+
+
+class TestLoadInstallReceiptReadSide:
+    """C3 (docs/research/2026-08-06-install-receipt-persistence-design.md)
+    — `_load_install_receipt` wired to `receipt.load_receipt` for real."""
+
+    def _isolate_settings_home(self, monkeypatch, tmp_path):
+        for var in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+        monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+
+    def test_absent_receipt_preserves_honest_unknown(self, monkeypatch, tmp_path):
+        # A machine that has never installed: no receipt file on disk at all.
+        self._isolate_settings_home(monkeypatch, tmp_path)
+        assert uninstall_legs._load_install_receipt() is None
+        text = render_uninstall_dry_run_report(uninstall_legs._load_install_receipt())
+        assert "no install receipt found" in text
+
+    def test_populated_receipt_loads_for_real(self, monkeypatch, tmp_path):
+        self._isolate_settings_home(monkeypatch, tmp_path)
+        receipt = InstallReceipt(
+            entries=(ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),),
+            reported_writer_ids=frozenset({"w"}),
+        )
+        persist_receipt(receipt)
+
+        loaded = uninstall_legs._load_install_receipt()
+        assert loaded is not None
+        assert loaded.reported("w") is True
+        assert any(e.key == "gc.autoDetach" for e in loaded.entries)
+
+    def test_malformed_receipt_still_degrades_to_honest_unknown(self, monkeypatch, tmp_path):
+        self._isolate_settings_home(monkeypatch, tmp_path)
+        settings_home = tmp_path / ".coordinator-claude-settings"
+        settings_home.mkdir(parents=True, exist_ok=True)
+        (settings_home / "install-receipt.json").write_text("not json{", encoding="utf-8")
+
+        assert uninstall_legs._load_install_receipt() is None
+        text = render_uninstall_dry_run_report(uninstall_legs._load_install_receipt())
+        assert "no install receipt found" in text
+
+
+class TestUnreportedWriterRendersAsCoverageUnknown:
+    """C3 negative spec: an unreported writer must render distinguishably
+    from a writer that reported and wrote nothing — it belongs alongside
+    'would reverse' and 'deliberately-not-reversed' as a third
+    distinguishable outcome, never collapsing into either."""
+
+    def test_unreported_writer_is_not_rendered_as_empty_or_nothing_to_remove(self):
+        receipt = InstallReceipt(
+            entries=(),
+            reported_writer_ids=frozenset(),
+            unreported_writer_ids=frozenset({"configure_git"}),
+        )
+        text = render_uninstall_dry_run_report(receipt)
+
+        assert "no install receipt found" not in text
+        assert "configure_git" in text
+        assert "did not report" in text
+        assert "coverage" in text.lower()
+
+    def test_unreported_writer_lands_in_cannot_reverse_safely_bucket(self):
+        receipt = InstallReceipt(
+            entries=(),
+            unreported_writer_ids=frozenset({"configure_git"}),
+        )
+        text = render_uninstall_dry_run_report(receipt)
+        assert "cannot-reverse-safely (1):" in text
+
+    def test_three_way_distinguishability_would_reverse_deliberate_unknown(self):
+        """The three real outcomes -- would reverse, deliberately not
+        reversed, coverage unknown for this writer -- must each render
+        distinguishably in one report."""
+        would_reverse = classify_entry_disposition(
+            _entry(kind="git-config-key", key="gc.autoDetach"),
+            attempted_ok=True,
+            reason="dry-run preview — a real run would reverse this entry",
+        )
+        genuinely_deliberate = classify_entry_disposition(
+            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            attempted_ok=None,
+            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+        )
+        coverage_unknown = classify_entry_disposition(
+            _entry(kind="file-path", path="<writer:configure_git>"),
+            attempted_ok=False,
+            reason="writer 'configure_git' did not report this run — coverage unknown",
+        )
+        report = build_disposition_report([would_reverse, genuinely_deliberate, coverage_unknown])
+        text = render_disposition_report(report, dry_run=True)
+
+        assert "reversed (1):" in text
+        assert "deliberately-not-reversed (1):" in text
+        assert "cannot-reverse-safely (1):" in text
+        assert "gc.autoDetach" in text
+        assert "/some/example-doctrine-repo/checkout" in text
+        assert "configure_git" in text
+        # all three land in genuinely different buckets
+        dispositions = {
+            would_reverse.disposition,
+            genuinely_deliberate.disposition,
+            coverage_unknown.disposition,
+        }
+        assert len(dispositions) == 3
+
+    def test_unreported_writer_placeholder_carries_synthetic_marker(self, monkeypatch):
+        """Review: code-reviewer (Finding 3, P3) -- a consumer of
+        `report.records` that inspects `.entry` directly (bypassing reason
+        text) needs a structural signal this record is a fabricated
+        stand-in, not a genuine declared surface. A hand-built real entry
+        (same kind/path shape) must NOT set the marker -- only
+        `render_uninstall_dry_run_report`'s own placeholder does."""
+        assert _entry(kind="file-path", path="<writer:configure_git>").synthetic is False
+
+        seen_entries = []
+        real_classify = uninstall_legs.classify_entry_disposition
+
+        def _spy(entry, **kwargs):
+            seen_entries.append(entry)
+            return real_classify(entry, **kwargs)
+
+        monkeypatch.setattr(uninstall_legs, "classify_entry_disposition", _spy)
+
+        receipt = InstallReceipt(
+            entries=(),
+            unreported_writer_ids=frozenset({"configure_git"}),
+        )
+        render_uninstall_dry_run_report(receipt)
+
+        placeholder_entries = [e for e in seen_entries if e.path == "<writer:configure_git>"]
+        assert len(placeholder_entries) == 1
+        assert placeholder_entries[0].synthetic is True
+
+    def test_unreported_writer_alongside_reported_entries_both_appear(self):
+        receipt = InstallReceipt(
+            entries=(ReceiptEntry(writer_id="reported_writer", kind="git-config-key", key="gc.autoDetach"),),
+            reported_writer_ids=frozenset({"reported_writer"}),
+            unreported_writer_ids=frozenset({"unreported_writer"}),
+        )
+        text = render_uninstall_dry_run_report(receipt)
+
+        assert "reversed (1):" in text
+        assert "would reverse" in text
+        assert "gc.autoDetach" in text
+        assert "cannot-reverse-safely (1):" in text
+        assert "unreported_writer" in text
+        assert "did not report" in text

@@ -1,0 +1,9 @@
+# Test fixture: invalid TOML syntax — CLI must exit non-zero with parse-error diagnostic.
+# Used by test-snippet-registry-malformed.bats.
+schema_version = 1
+
+[snippet.reviewer-calibration
+sentinel_begin = "<!-- BEGIN reviewer-calibration -->"
+# Missing closing bracket on the section header above — invalid TOML
+consumers = [
+  "agents/staff-eng.md",

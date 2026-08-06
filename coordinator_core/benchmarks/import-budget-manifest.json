@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "lazy_channel_note": "Measured 2026-08-06 at the wave boundary, macOS. Importing coordinator_core.hooks with COORDINATOR_CORE_LAZY_OPS=1 costs 5 modules against 105 eager -- that is what C1+C2 bought. A lazy import of ONE hook module still costs 83, because coordinator_core/session/core.py imports psutil at module level and the hook modules import it transitively, dragging logging/subprocess/shutil/tempfile/random in with it. That shared chain, not the per-hook code, is the next real lever; it is outside this plan's scope frontmatter and is queued rather than taken here.",
+  "note": "Sibling manifest to budget-manifest.json -- see import_budget.py's module docstring for why this is a sibling file rather than a new field on budget-manifest.json's {schema_version, min_gating_sample_count, defaults, overrides} schema.",
+  "entrypoints": {
+    "coordinator_core.hooks": {
+      "baseline_module_count": 111,
+      "baseline_elapsed_ms": 39.3,
+      "headroom": 14,
+      "module_count_ceiling": 125,
+      "measured_at": "2026-08-06",
+      "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
+      "note": "Re-baselined by the EM at the wave boundary, after C1/C9a/C9b/C2/C9c landed. This is the EAGER default path, where the import diet buys little by design: eager mode imports all 15 hook modules, so any one of them still pulling a heavy module keeps it in the count. The structural win this plan bought shows up under the lazy channel instead -- see lazy_channel_note below."
+    },
+    "coordinator_core.write_guards.engine": {
+      "baseline_module_count": 69,
+      "baseline_elapsed_ms": 20.1,
+      "headroom": 11,
+      "module_count_ceiling": 80,
+      "measured_at": "2026-08-06",
+      "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
+      "note": "Unmoved by C9b's import diet, and honestly so: engine.py imports every guard module for discovery, so the count is the union. The residual subprocess/yaml pull-ins come from validate_frontmatter_schema_deny.py and subagent_sandbox.engine, both outside that chunk's scope -- tracked in state/improvement-queue/2026-08-06-write-guards-engine-level-import-cost-st-cd99852a6a1f.yaml."
+    },
+    "coordinator_core.ipc": {
+      "baseline_module_count": 43,
+      "baseline_elapsed_ms": 15.6,
+      "headroom": 12,
+      "module_count_ceiling": 55,
+      "measured_at": "2026-08-06",
+      "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
+      "note": "Re-baselined after C9c deferred logging and tempfile on the ipc/lifecycle chain: 67 -> 43 modules. Ceiling tightened accordingly -- the old 97 would no longer catch a regrowth that undid the whole chunk."
+    }
+  }
+}

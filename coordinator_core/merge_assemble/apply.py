@@ -1,0 +1,295 @@
+"""coordinator_core.merge_assemble.apply — the MUTATING half `merge_assemble.
+brief()`'s read-only decision object hands off to (module docstring §
+"the compute/apply split").
+
+Recomputes the brief in-process, then dispatches its `directives[]` through
+`coordinator_core.contract.apply_base`'s shared directive-execution engine —
+composed, never re-derived (chunk C6 AC): the dependency ordering,
+per-directive judgment gating, session-identity propagation, in-repo path
+safety, and pathspec-scoped commit discipline all live in `apply_base`; this
+module supplies only its own closed `_CLI_DISPATCH` table (one handler per
+existing merge CLI the brief names) and the node-ceremony hard-gate's
+`--force` bypass.
+
+Every dispatch handler here shells out to an EXISTING atomic `coordinator/
+bin/*.py` script (or, for the node ceremony gate, `node --test`) via an
+explicit argv list resolved from this module's own file location — never a
+brief-derived import, never a shell string built from `directives[].args`.
+
+Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
+
+Negative-spec:
+    - Do NOT add a dispatch entry that resolves `cli` via `getattr`,
+      `importlib`, or any brief-derived string — every entry in
+      `_CLI_DISPATCH` is a literal key written by hand in this file.
+    - Do NOT build a subprocess argv via string interpolation/shell=True —
+      every handler below passes a literal list to `subprocess.run`.
+    - Do NOT special-case merge's real divergence from the `apply_base`
+      contract at this call site (the DR-092 anti-pattern) — see
+      `apply_base`'s own docstring, "PROVISIONAL through W3": feed a real
+      divergence back into `apply_base`'s parameters instead. NOTE (chunk
+      C6 handoff to the EM): the node-ceremony `--force` bypass is
+      expressed here purely via `directives[].already_satisfied` — no new
+      `apply_base` parameter was needed to preserve it. If a future
+      consumer's hard-gate bypass does NOT fit the `already_satisfied`
+      shape (e.g. needs a distinct exit code from an ordinary skip),
+      that is the concrete signal to widen `apply_base` rather than
+      re-deriving a second bypass mechanism per-consumer.
+    - Do NOT trust a caller-supplied decision object as the mutation plan —
+      `apply()` recomputes `brief()` itself.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from coordinator_core.contract import apply_base
+from coordinator_core.merge_assemble import (
+    NODE_CEREMONY_TEST_RELPATH,
+    brief,
+    normalize_decisions,
+    resolve_repo_root,
+)
+
+# ---------------------------------------------------------------------------
+# Exit-code contract — composed from apply_base, shared by every apply/
+# dispatch half. NOT inherited from `brief`'s own 0/1/2/3 contract.
+# ---------------------------------------------------------------------------
+APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
+APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
+APPLY_EXIT_TRANSPORT_FAIL = apply_base.APPLY_EXIT_TRANSPORT_FAIL
+APPLY_EXIT_PARTIAL_MUTATION = apply_base.APPLY_EXIT_PARTIAL_MUTATION
+
+UnrecognizedDirective = apply_base.UnrecognizedDirective
+OutOfRepoPath = apply_base.OutOfRepoPath
+NoResolvableSessionId = apply_base.NoResolvableSessionId
+DirectiveDependencyCycle = apply_base.DirectiveDependencyCycle
+DirectiveResult = apply_base.DirectiveResult
+
+_resolve_explicit_session_id = apply_base.resolve_explicit_session_id
+_session_identity = apply_base.session_identity
+
+#: `coordinator/bin/` — resolved from THIS module's own location, never
+#: from a target repo's `repo_root` (which may differ from the claude-klabauter
+#: install this module ships from).
+_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _run_py_script(script_name: str, args: list[str], repo_root: Path) -> subprocess.CompletedProcess:
+    """Runs an EXISTING `coordinator/bin/<script_name>.py` entrypoint via
+    `sys.executable` (the interpreter running THIS process — never a bare
+    `python`/`python3` bareword, which is not portable across platforms),
+    with a literal argv list and `cwd=repo_root`."""
+    script_path = _BIN_DIR / f"{script_name}.py"
+    return subprocess.run(
+        [sys.executable, str(script_path), *args],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        creationflags=_NO_WINDOW,
+    )
+
+
+def _dispatch_result(cli: str, proc: subprocess.CompletedProcess) -> dict[str, Any]:
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"{cli}: exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip() or '<no output>'}"
+        )
+    return {"cli": cli, "returncode": proc.returncode, "stdout": proc.stdout.strip()}
+
+
+def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """`d0` — the node ceremony hard-gate (chunk C6 AC). `--force` never
+    reaches this handler: a forced run marks `d0.already_satisfied = True`
+    (see `_apply_force_bypass`) so `apply_base.execute_directives` skips
+    dispatch entirely, exactly like any other `already_satisfied`
+    directive. When this handler DOES run and the suite fails, it raises —
+    `apply_base.execute_directives` aborts the whole run immediately
+    (`d0` orders first, per `build_directives`), so no later directive
+    ever dispatches on a failed ceremony gate."""
+    test_path = Path(*NODE_CEREMONY_TEST_RELPATH)
+    proc = subprocess.run(
+        ["node", "--test", str(test_path)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        creationflags=_NO_WINDOW,
+    )
+    return _dispatch_result("node-ceremony-gate", proc)
+
+
+def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("merge-recovery-and-tag-cut", args, repo_root)
+    return _dispatch_result("merge-recovery-and-tag-cut", proc)
+
+
+def _dispatch_merge_gate_and_pr(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("merge-gate-and-pr", args, repo_root)
+    return _dispatch_result("merge-gate-and-pr", proc)
+
+
+def _dispatch_portability_sweep(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("portability-sweep", args, repo_root)
+    return _dispatch_result("portability-sweep", proc)
+
+
+def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("check-no-illegal-paths", args, repo_root)
+    return _dispatch_result("check-no-illegal-paths", proc)
+
+
+def _dispatch_merge_release_notes_derive(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("merge-release-notes-derive", args, repo_root)
+    return _dispatch_result("merge-release-notes-derive", proc)
+
+
+def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str, Any]:
+    proc = _run_py_script("orphan-branch-sweep", args, repo_root)
+    return _dispatch_result("orphan-branch-sweep", proc)
+
+
+#: THE closed dispatch table — every key is a literal string written here
+#: by hand, matching `merge_assemble.build_directives`'s `cli` values.
+_CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
+    "node-ceremony-gate": _dispatch_node_ceremony_gate,
+    "merge-recovery-and-tag-cut": _dispatch_merge_recovery_and_tag_cut,
+    "merge-gate-and-pr": _dispatch_merge_gate_and_pr,
+    "portability-sweep": _dispatch_portability_sweep,
+    "check-no-illegal-paths": _dispatch_check_no_illegal_paths,
+    "merge-release-notes-derive": _dispatch_merge_release_notes_derive,
+    "orphan-branch-sweep": _dispatch_orphan_branch_sweep,
+}
+
+
+def _apply_force_bypass(directives: list[dict[str, Any]], force: bool) -> list[dict[str, Any]]:
+    """`--force` bypass (chunk C6 AC): marks the node ceremony gate (`d0`)
+    `already_satisfied` so it is reported landed without ever dispatching
+    its handler — the same mechanism `apply_base` already gives every
+    OTHER `already_satisfied` directive, not a bespoke skip path. Every
+    other directive is returned unchanged."""
+    if not force:
+        return directives
+    out = []
+    for directive in directives:
+        if directive["id"] == "d0":
+            out.append({**directive, "already_satisfied": True})
+        else:
+            out.append(directive)
+    return out
+
+
+def apply(
+    *,
+    session_id: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+    decisions: Optional[dict[str, Any]] = None,
+    force: bool = False,
+    tag_prefix: str = "v",
+) -> tuple[int, dict[str, Any]]:
+    """`apply [--session-id <id>] [--force] [--decisions <json>]` —
+    recomputes the brief in-process and executes its `directives[]` through
+    `apply_base.execute_directives` against this module's closed dispatch
+    table. Returns `(exit_code, report)`; `report["landed"]` names exactly
+    which directive ids ran (or were skipped `already_satisfied`, including
+    a forced `d0`)."""
+    root = repo_root or resolve_repo_root()
+    if root is None:
+        return APPLY_EXIT_TRANSPORT_FAIL, {"error": "could not resolve a git worktree root"}
+
+    resolved_sid = _resolve_explicit_session_id(session_id)
+    if resolved_sid is None:
+        return APPLY_EXIT_TRANSPORT_FAIL, {
+            "error": (
+                "no session id resolvable via --session-id or "
+                f"{'/'.join(apply_base.SESSION_ENV_READ_ORDER)} — refusing the "
+                "ambient tier-4 sentinel"
+            ),
+        }
+
+    # Normalized exactly once here — `brief()` re-normalizes idempotently
+    # on its own input, so this SAME map is what both `brief()`'s internal
+    # override resolution and `execute_directives`'s `disposition_resolves_
+    # directive` gate see; they must never be allowed to disagree about
+    # what a bare-string `version_bump_final` entry means.
+    effective_decisions = normalize_decisions(decisions)
+
+    with _session_identity(resolved_sid, env_vars=apply_base.SESSION_ENV_VARS):
+        brief_result = brief(decisions=effective_decisions, repo_root=root, tag_prefix=tag_prefix)
+        if brief_result.exit_code != 0:
+            return APPLY_EXIT_TRANSPORT_FAIL, {
+                "error": brief_result.decision_object.get("error", "brief did not resolve a plan"),
+                "landed": [],
+            }
+
+        decision = brief_result.decision_object
+        directives = _apply_force_bypass(decision.get("directives", []), force)
+        judgment_points = decision.get("judgment_points", [])
+
+        exit_code, report = apply_base.execute_directives(
+            directives,
+            judgment_points,
+            root,
+            _CLI_DISPATCH,
+            decisions=effective_decisions,
+        )
+        # branch_state/release_tag_cut moved into the canonical envelope's
+        # `artifact` key (Review: code-reviewer — Finding 1) — no longer
+        # top-level siblings of directives/judgment_points.
+        artifact = decision.get("artifact") or {}
+        report["branch_state"] = artifact.get("branch_state")
+        report["release_tag_cut"] = artifact.get("release_tag_cut")
+        return exit_code, report
+
+
+def _usage(prog: str) -> int:
+    print(
+        f"usage: {prog} apply [--session-id <id>] [--force] [--decisions <json>] [--tag-prefix <prefix>]",
+        file=sys.stderr,
+    )
+    return APPLY_EXIT_TRANSPORT_FAIL
+
+
+def main_apply(argv: list[str]) -> int:
+    session_id: Optional[str] = None
+    decisions: Optional[dict[str, Any]] = None
+    force = False
+    tag_prefix = "v"
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--session-id":
+            if i + 1 >= len(argv):
+                return _usage("merge-assemble")
+            session_id = argv[i + 1]
+            i += 2
+        elif tok == "--force":
+            force = True
+            i += 1
+        elif tok == "--tag-prefix":
+            if i + 1 >= len(argv):
+                return _usage("merge-assemble")
+            tag_prefix = argv[i + 1]
+            i += 2
+        elif tok == "--decisions":
+            if i + 1 >= len(argv):
+                return _usage("merge-assemble")
+            try:
+                decisions = json.loads(argv[i + 1])
+            except json.JSONDecodeError as exc:
+                print(f"merge-assemble apply: malformed --decisions JSON: {exc}", file=sys.stderr)
+                return _usage("merge-assemble")
+            i += 2
+        else:
+            print(f"merge-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
+            return _usage("merge-assemble")
+
+    exit_code, report = apply(session_id=session_id, decisions=decisions, force=force, tag_prefix=tag_prefix)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return exit_code

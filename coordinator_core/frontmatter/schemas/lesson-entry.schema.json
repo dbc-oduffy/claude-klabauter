@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/lesson-entry.schema.json",
+  "x-schema-name": "lesson-entry",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/lessons/*.yaml",
+  "match_mode": "whole-document-yaml",
+  "description": "Lesson-entry artifact — STORED per-entry YAML grammar, Decision-0 reversal (PM-ratified 2026-06-30). Each lesson lives in a separate file: state/lessons/<date>-<slug>.yaml, written atomically by coordinator-queue-append --schema lessons (or coordinator-lesson-add), validated by validateFrontmatter() in bin/lib/schema.js via this schema. Spec backlink: docs/plans/2026-06-30-lessons-md-to-queryable-yaml-queue.md § C1. This is the FOURTH queue on the shared base field-set (improvement-queue / bug-backlog / debt-backlog / lessons). Pattern: required base fields + domain required fields + domain optional fields. See docs/wiki/lessons-schema.md for the full field table and lifecycle. Negative-spec: Do NOT add an `id:` field — filename is the canonical identity key (D2 convention). Do NOT add a stored `lifecycle:` or `live:` field — liveness is derived from status. Do NOT write entries to state/lessons.md — that path is superseded.",
+  "type": "object",
+  "required": ["created", "title", "body", "status", "scope", "from_repo"],
+  "properties": {
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this lesson entry was authored (YYYY-MM-DD)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable one-line title for this lesson."
+    },
+    "body": {
+      "type": "string",
+      "description": "Prose body of the lesson — the pattern observed and its implication."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["applied", "triaged", "open", "closed", "deferred", "resolved"],
+      "description": "Lesson lifecycle status. resolved is a back-compat alias for applied — prefer applied for new entries; liveness() maps resolved to DONE (C3b)."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["universal", "project", "wiki-only"],
+      "description": "Scope classification for this lesson — universal applies across all coordinator-pipeline projects, project is scoped to the originating repo, wiki-only is a doc-only fold with no code/behavior change."
+    },
+    "from_repo": {
+      "type": "string",
+      "description": "Repository this lesson was captured from."
+    },
+    "target_wiki": {
+      "type": "string",
+      "description": "Wiki doc this lesson should fold into, when known at capture time."
+    },
+    "proposed_target": {
+      "type": "string",
+      "description": "Proposed doctrine/prompt/hook/wiki target for this lesson's fix, when not yet a confirmed target_wiki."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Evidence supporting this lesson — file:line reference, log excerpt, or observed failure."
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this lesson entry was closed (YYYY-MM-DD)."
+    },
+    "closed_by": {
+      "type": "string",
+      "description": "Session or agent identifier that closed this lesson entry."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form tags for categorization and retrieval."
+    },
+    "queue_scope": {
+      "type": "string",
+      "enum": ["central", "project"],
+      "description": "Which queue this lesson entry lives in — central (cross-project, claude-klabauter-resident post-migration) or project (per-repo)."
+    },
+    "trigger": {
+      "type": "string",
+      "description": "What triggered capture of this lesson — the event or observation that prompted it."
+    },
+    "why": {
+      "type": "string",
+      "description": "Why this pattern matters — the underlying rationale."
+    },
+    "how_to_apply": {
+      "type": "string",
+      "description": "Concrete guidance on how to apply this lesson going forward."
+    },
+    "system": {
+      "type": "object",
+      "description": "Provenance metadata for this lesson entry — which session/agent captured it and what it's linked to.",
+      "properties": {
+        "created_by_session": {
+          "type": "string",
+          "description": "Session identifier that created this lesson entry."
+        },
+        "created_by_agent": {
+          "type": "string",
+          "description": "Agent identifier that created this lesson entry."
+        },
+        "linked_sessions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Session identifiers linked to this lesson entry."
+        },
+        "linked_commits": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Commit SHAs linked to this lesson entry."
+        },
+        "provenance_completeness": {
+          "type": "string",
+          "enum": ["complete", "unknown"],
+          "description": "Whether the provenance metadata for this entry is complete or unknown."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,437 @@
+"""Tests for coordinator_core.bash_guards.guard_plumbing_and_loops (BX-8).
+
+Coverage:
+  - HEAD_TAIL_PLUMBING: a genuine `find | head` / `grep ... | tail -n N`
+    two-stage pipeline DENIES on Windows (`host_is_windows=True`) and
+    ADVISES on macOS (`host_is_windows=False`), since
+    `check_head_tail_plumbing_rewrite` confirms a concrete outlet for both.
+  - FOR_LOOP wrapping a literal `find ... -exec rm {} \\;`: stays
+    advisory-only on BOTH platforms, even with `host_is_windows=True`
+    forced. UPDATED (BX-12 audit, same day as this guard's own authoring):
+    `check_find_exec_rewrite` no longer treats a `find -exec` segment that
+    is NOT the command's only segment as a confirmed rewrite target -- its
+    prior behavior silently replaced the ENTIRE command (dropping the
+    for-loop's own body) via `updatedInput.command`, a corrupting
+    auto-rewrite, not merely a misdescribing message (see
+    `dispatch_checks.check_find_exec_rewrite`'s own inline
+    "LATENT-BUG FIX" comment and `tests/test_deny_message_accuracy.py`'s
+    `TestFindExecRewriteMessageAccuracy`). `_seam_confirmed_rewrite` now
+    correctly sees no `updatedInput` for this shape and this guard degrades
+    to its own generic "no confirmed outlet" advisory, identically to the
+    bare-glob case below.
+  - FOR_LOOP over a bare glob (`for f in *.txt; do rm "$f"; done`): stays
+    advisory-only on BOTH platforms (even with `host_is_windows=True`
+    forced) -- `check_find_exec_rewrite` has no outlet for it (the narrow
+    seam only recognizes a `find -exec` wrapper).
+  - AC-7 precedence correctness: a command that is simultaneously
+    grep-via-Bash and head/tail-plumbing (or a multi-probe banner and a
+    for-loop) leaves this guard silent (`None`), since GREP_VIA_BASH /
+    MULTI_PROBE_BANNER outrank this guard's two shapes in
+    `_shape_classifier.SHAPE_PRECEDENCE`.
+  - non-Bash tool, empty command, malformed tool_input, and a plain command
+    all allow silently (`None`).
+  - `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS=1` suppresses every verdict
+    this guard would otherwise return, on both shapes.
+  - a seam check returning a BARE ADVISORY (no `updatedInput`, i.e. no
+    confirmed rewrite -- an unrecognized head/tail upstream generator, a
+    pipeline longer than two segments, or a `find -exec` verb outside
+    rm/cat/wc -l) never denies, even under a forced Windows host --
+    adversarial-review regression coverage: an earlier revision of this
+    guard treated ANY non-``None`` seam return as a confirmed outlet and
+    denied common benign commands (`docker ps | head`, `git log --oneline
+    | head`) toward an "Example" that was just the seam's own disclaimer
+    prose.
+  - the escape hatch's own name is present in every advisory/deny message
+    (self-describing, per the standing "every guard names its own escape
+    hatch" rule).
+  - no deny message ever fires without `host_is_windows=True` forced or the
+    real host being Windows -- pinned by re-asserting the same commands
+    under `host_is_windows=False`.
+
+Pure Python -- no shell spawns, no git repo required, EXCEPT
+`TestVerbatimHeadTailAlternativeIsRealAndEquivalent` below, which spawns both
+the original command and `_verbatim_head_tail_alternative`'s emitted `python3
+-c` replacement and diffs their stdout byte-for-byte -- the one thing that
+must be checked by actual execution, not by inspecting the generated source.
+
+Spec backlink: coordinator_core/bash_guards/guard_plumbing_and_loops.py
+Spec backlink (verbatim-alternative promotion): docs/plans/2026-07-29-bash-guard-merged-execution-shape.md M3
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+
+from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
+
+
+def _payload(command):
+    return {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "session_id": "sess1",
+        "cwd": "/repo",
+    }
+
+
+# `find . -type f | head -n 5` -- a two-stage `find | head` pipeline
+# `check_head_tail_plumbing_rewrite` translates outright (find census +
+# head slice, both recognized forms).
+_HEAD_TAIL_CMD = "find . -type f | head -n 5"
+
+# A genuine for-loop (FOR_LOOP is the shape-classifier's primary match)
+# immediately followed by a literal top-level `find ... -exec rm {} \;`
+# segment -- the narrow case `check_find_exec_rewrite`'s own segment scan
+# recognizes and translates (rm is a translatable verb), confirmed against
+# the real seam function rather than assumed: `_shape_classifier` matches
+# FOR_LOOP on the leading `for ... do ... done` and `check_find_exec_rewrite`
+# separately finds the trailing `find -exec` as its own top-level segment
+# (segment scanning is command-wide, not scoped to the loop body).
+_FOR_LOOP_FIND_EXEC_CMD = (
+    'for i in 1 2 3; do echo $i; done; find . -name "*.tmp" -exec rm {} \\;'
+)
+
+# A bare glob for-loop -- FOR_LOOP-shaped per `_shape_classifier`, but no
+# `find -exec` anywhere, so `check_find_exec_rewrite` returns `None`.
+_FOR_LOOP_BARE_GLOB_CMD = 'for f in *.txt; do rm "$f"; done'
+
+# `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped (a
+# two-segment `generator | head` pipeline), but `docker` is not one of
+# `check_head_tail_plumbing_rewrite`'s recognized upstream generators
+# (find/ls/grep), so that seam returns a BARE ADVISORY (no `updatedInput`)
+# saying the rewrite is "not offered automatically" -- NOT a confirmed
+# outlet. This is a common, entirely benign command that must never deny.
+_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD = "docker ps | head -n 20"
+
+# A three-segment pipeline into `tail` -- HEAD_TAIL_PLUMBING-shaped, but
+# `check_head_tail_plumbing_rewrite`'s own two-segment-only shape means this
+# gets a bare advisory ("longer chain than this rewrite... covers"), not a
+# rewrite.
+_HEAD_TAIL_LONG_CHAIN_CMD = "cat file.txt | tail -n +2 | sort | uniq -c"
+
+# FOR_LOOP wrapping a literal `find -exec chmod ...` -- `chmod` is outside
+# `check_find_exec_rewrite`'s translatable-verb set (rm/cat/wc -l), so that
+# seam returns a bare advisory, not a rewrite.
+_FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD = (
+    'for i in 1 2 3; do echo $i; done; find . -name "*.log" -exec chmod 644 {} \\;'
+)
+
+
+def _deny_reason(out):
+    assert out is not None, "expected a deny envelope, got None"
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
+
+
+def _advisory_context(out):
+    assert out is not None, "expected an allow_advisory envelope, got None"
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "permissionDecisionReason" not in hso
+    return hso["additionalContext"]
+
+
+class TestNonBashOrEmpty:
+    def test_non_bash_tool_allows(self):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
+        assert guard.check(payload) is None
+
+    def test_empty_command_allows(self):
+        assert guard.check(_payload("")) is None
+
+    def test_malformed_tool_input_allows(self):
+        payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
+        assert guard.check(payload) is None
+
+    def test_plain_command_allows(self):
+        assert guard.check(_payload("git status")) is None
+
+
+class TestHeadTailPlumbing:
+    def test_denies_on_windows(self):
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        reason = _deny_reason(out)
+        assert "head-tail-plumbing" in reason
+        assert "python3" in reason
+
+    def test_advises_on_macos(self):
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
+        ctx = _advisory_context(out)
+        assert "head-tail-plumbing" in ctx
+        assert "python3" in ctx
+
+    def test_deny_message_names_its_escape_hatch(self):
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        reason = _deny_reason(out)
+        assert "COORDINATOR_" in reason
+
+
+class TestSeamConfirmedOutletMessageShape:
+    """Review: code-reviewer -- Finding 1 (C19b): pins the two message-
+    accuracy claims for the seam-confirmed leg (`_outlet_from_seam_result`)
+    that had no regression coverage -- a refactor of that function could
+    silently reintroduce either defect with nothing to catch it.
+    """
+
+    def test_summary_is_self_contained_not_a_dangling_placeholder(self):
+        # The summary must read sensibly on its own -- the old "below."
+        # placeholder produced "consider below. here too" in the advisory
+        # phrasing, which both misdescribes the outlet and drags the
+        # override note out of the deny template's "Use instead:" sentence.
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        reason = _deny_reason(out)
+        assert "Use instead: the seam-confirmed single-process rewrite" in reason
+        assert "below." not in reason.split("Use instead:")[1].split("\n")[0]
+
+    def test_override_note_lands_in_example_cue_window_not_use_instead_sentence(self):
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        reason = _deny_reason(out)
+        use_instead_line = next(
+            line for line in reason.splitlines() if line.startswith("Use instead:")
+        )
+        assert "COORDINATOR_" not in use_instead_line
+        example_idx = reason.index("Example:")
+        override_idx = reason.index("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS")
+        assert override_idx > example_idx
+
+    def test_advisory_summary_reads_sensibly_on_macos_too(self):
+        out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
+        ctx = _advisory_context(out)
+        assert "consider the seam-confirmed single-process rewrite here too" in ctx
+
+
+class TestForLoopWrappingFindExec:
+    """UPDATED (BX-12 audit): a for-loop followed by a top-level trailing
+    `find -exec` is no longer denied on Windows. `check_find_exec_rewrite`'s
+    fix (see this file's own docstring and `dispatch_checks.py`'s inline
+    "LATENT-BUG FIX" comment) means this shape's seam call no longer returns
+    a confirmed `updatedInput` for a multi-segment match, so
+    `_seam_confirmed_rewrite` is `False` and this guard falls back to its
+    own generic advisory on BOTH platforms -- the same outcome as the
+    bare-glob for-loop case, and for the identical reason: no BX-16 seam
+    confirms a full-command outlet, so no deny points at one.
+    """
+
+    def test_stays_advisory_on_windows_no_confirmed_outlet(self):
+        out = guard.check(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=True)
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+        ctx = hso["additionalContext"]
+        assert "for-loop" in ctx
+        assert "subprocess per iteration" in ctx
+
+    def test_advises_on_macos_too(self):
+        out = guard.check(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=False)
+        ctx = _advisory_context(out)
+        assert "for-loop" in ctx
+        assert "subprocess per iteration" in ctx
+
+
+class TestForLoopBareGlobStaysAdvisoryOnly:
+    def test_advises_even_when_windows_is_forced(self):
+        # No `find -exec` anywhere in this command -- `check_find_exec_rewrite`
+        # returns None, so this guard must NEVER deny it, even under a forced
+        # Windows host.
+        out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+
+    def test_advisory_names_no_confirmed_outlet(self):
+        out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert "for-loop" in ctx
+        assert "subprocess per iteration" in ctx
+
+    def test_advises_on_macos_too(self):
+        out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=False)
+        assert out is not None
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    def test_generic_example_stays_a_skeleton_not_a_fabricated_translation(self):
+        """Worklist Row P4: the bare-glob for-loop fallback is
+        architecturally capped at a generic skeleton, decided explicitly
+        (see `_FOR_LOOP_GENERIC_SUMMARY`'s own comment block) rather than
+        promoted -- this pins that the example still names itself as a
+        template ("do the per-item work") and never claims a concrete,
+        command-specific translation exists for the actual glob/body in
+        front of it."""
+        out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert "glob.glob" in ctx
+        assert "do the per-item work in-process" in ctx
+        # The example itself is a bare `...` body -- it must not claim this
+        # specific command's OWN body (`rm "$f"`) was translated into the
+        # python3 example; only a generic enumeration skeleton is offered.
+        example_line = next(line for line in ctx.splitlines() if "glob.glob" in line)
+        assert 'rm "$f"' not in example_line
+        assert "..." in example_line or "'..." in ctx
+
+
+class TestBareSeamAdvisoryNeverDenies:
+    """Adversarial-review regression coverage: a seam check returning a
+    bare `_advisory` (no `updatedInput` -- no confirmed rewrite) must be
+    treated identically to a `None` return, never as a licensed deny
+    target, on EITHER shape."""
+
+    def test_head_tail_unrecognized_upstream_never_denies(self):
+        out = guard.check(
+            _payload(_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD), host_is_windows=True
+        )
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+        assert "head-tail-plumbing" in hso["additionalContext"]
+
+    def test_head_tail_long_chain_never_denies(self):
+        out = guard.check(_payload(_HEAD_TAIL_LONG_CHAIN_CMD), host_is_windows=True)
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+
+    def test_for_loop_untranslatable_exec_verb_never_denies(self):
+        out = guard.check(
+            _payload(_FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD), host_is_windows=True
+        )
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+        assert "for-loop" in hso["additionalContext"]
+
+    def test_head_tail_unrecognized_upstream_advises_on_macos_too(self):
+        out = guard.check(
+            _payload(_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD), host_is_windows=False
+        )
+        assert out is not None
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+class TestPrecedence:
+    def test_grep_via_bash_precedence_stays_silent(self):
+        # Simultaneously grep-via-Bash and head/tail-plumbing:
+        # GREP_VIA_BASH outranks HEAD_TAIL_PLUMBING in SHAPE_PRECEDENCE, so
+        # this guard must not fire (AC-7).
+        cmd = "grep -rn TODO src/ | head -n 5"
+        assert guard.check(_payload(cmd), host_is_windows=True) is None
+
+    def test_multi_probe_banner_precedence_stays_silent_for_for_loop(self):
+        # A banner-echoed command followed by several probes, immediately
+        # followed by a for-loop -- MULTI_PROBE_BANNER outranks FOR_LOOP.
+        cmd = (
+            'echo "=== probes ==="; pwd; whoami; '
+            'for f in *.txt; do rm "$f"; done'
+        )
+        assert guard.check(_payload(cmd), host_is_windows=True) is None
+
+
+class TestCrashPropagatesForFailClosed:
+    """Review: code-reviewer -- Finding 3: this guard is registered in
+    `dispatch.py`'s `guard_chain` with `fail_closed=True`, whose whole
+    contract is that an internal bug reaches `dispatch._crash_deny` rather
+    than being swallowed as a silent allow. Before this fix, `check()`
+    wrapped its entire body in a catch-all that returned `None` on ANY
+    exception -- defeating that registration. Pins that a crash inside
+    `check()` now propagates all the way out (uncaught), the same as
+    `guard_grep_via_bash.check`."""
+
+    def test_classify_command_crash_propagates(self, monkeypatch):
+        def _boom(cmd):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(guard, "classify_command", _boom)
+        try:
+            guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
+        except RuntimeError as exc:
+            assert str(exc) == "boom"
+        else:
+            raise AssertionError("expected the guard to propagate the crash")
+
+
+class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
+    """`_verbatim_head_tail_alternative` (M3, `docs/plans/2026-07-29-bash-
+    guard-merged-execution-shape.md`) promotes the unrecognized-upstream-
+    generator case from a bare "no confirmed outlet" advisory to a genuine
+    runnable single-`python3 -c` replacement, by piping the upstream
+    VERBATIM into an in-process slicer instead of trying to recognize what
+    it is. Verified DIFFERENTIALLY here -- both the original pipeline and
+    the emitted alternative are actually EXECUTED and their stdout diffed
+    byte-for-byte, never asserted equivalent by inspection alone (the exact
+    shortcut this workstream's own source plans call out as insufficient).
+    """
+
+    def _run(self, cmd):
+        return subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, check=True
+        ).stdout
+
+    def _alternative_stdout(self, original_cmd):
+        alt_cmd = guard._verbatim_head_tail_alternative(original_cmd)
+        assert alt_cmd is not None, "expected a concrete alternative, got None"
+        assert alt_cmd.count("|") == 0, (
+            "the alternative must be a single interpreter invocation, not a "
+            "shell pipeline that reintroduces a fork"
+        )
+        return self._run(alt_cmd)
+
+    def test_unrecognized_generator_head(self, tmp_path):
+        # `cat` is not one of `check_head_tail_plumbing_rewrite`'s recognized
+        # upstream generators (find/ls/grep) -- the whole point of this
+        # chunk is that the verbatim alternative does not need it to be.
+        f = tmp_path / "lines.txt"
+        f.write_text("a\nb\nc\nd\ne\n")
+        cmd = "cat %s | head -n 3" % f
+        assert self._run(cmd) == self._alternative_stdout(cmd)
+
+    def test_unrecognized_generator_tail(self, tmp_path):
+        f = tmp_path / "lines2.txt"
+        f.write_text("1\n2\n3\n4\n5\n6\n")
+        cmd = "cat %s | tail -n 2" % f
+        assert self._run(cmd) == self._alternative_stdout(cmd)
+
+    def test_quoting_hazard_apostrophe_in_filename(self, tmp_path):
+        # A literal apostrophe in the filename -- the exact shape of
+        # quoting hazard the seam's own `find`/`ls` census parsers had a
+        # dedicated regression for (see `_bt_parse_ls_segment`'s docstring).
+        # The upstream token here re-quotes via `shlex.quote`, not
+        # string-splicing, so this must survive intact.
+        f = tmp_path / "it's a file.txt"
+        f.write_text("alpha\nbeta\ngamma\ndelta\n")
+        cmd = 'cat "%s" | tail -n 2' % f
+        assert self._run(cmd) == self._alternative_stdout(cmd)
+
+    def test_no_alternative_for_long_chain(self):
+        # A three-segment pipeline stays out of scope for this function too
+        # (same conservative two-segment-only shape as the seam's own
+        # check) -- must return None, not guess.
+        assert (
+            guard._verbatim_head_tail_alternative(_HEAD_TAIL_LONG_CHAIN_CMD)
+            is None
+        )
+
+    def test_no_alternative_for_unparseable_count(self):
+        # `head -c 100` (byte-count mode) is not one of
+        # `_bt_head_tail_count`'s recognized line-count forms.
+        assert (
+            guard._verbatim_head_tail_alternative("cat file.txt | head -c 100")
+            is None
+        )
+
+
+class TestOverrideEscapeHatch:
+    def test_override_env_suppresses_head_tail_deny(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
+        assert guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True) is None
+
+    def test_override_env_suppresses_for_loop_deny(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
+        assert (
+            guard.check(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=True)
+            is None
+        )
+
+    def test_override_env_suppresses_bare_glob_advisory(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
+        assert guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD)) is None

@@ -1,0 +1,41 @@
+Vendoring provenance and licence — cockpit-contract schemas
+================================================================
+
+Scope: every JSON Schema file under `schema/` in this directory (the vendored
+Cockpit-contract bundle). This LICENSE file itself is not part of the
+vendored bundle and is not covered by it — it is the provenance record
+describing it.
+
+What this is
+------------
+The schemas under `schema/` are vendored (copied, not generated in this
+repository) from a private upstream repository, where they are frozen and
+versioned independently. They are not independently authored or maintained
+in this repository.
+
+The rights-holder on both the upstream repository and this one is the same
+party. Because the rights-holder on both sides is identical, this file
+constitutes a self-issued licence grant covering the vendored bundle's
+inclusion here — not a grant obtained from an unaffiliated third party.
+
+Licence terms
+-------------
+The vendored schema files are licensed under: **Apache License 2.0, modified
+by the Commons Clause**.
+
+This is a SOURCE-AVAILABLE licence, not an open-source licence — the Commons
+Clause restricts the right to "Sell" the software as defined in that clause.
+This published release carries this same combined licence at its own
+repository root, naming this vendored bundle's inclusion under identical
+terms. Nothing in this file grants broader rights over the vendored schemas
+than that combined licence grants over the rest of this release.
+
+Regenerating this bundle
+-------------------------
+The files under `schema/` here are a vendored, frozen copy consumed by this
+engine's own validators; they are not independently authored or maintained
+in this repository. The canonical generator for this bundle is an equivalent
+of this engine's own `contract.cockpit_schema.emit_schema` (see
+`coordinator_core/contract/cockpit_schema.py` for the consuming side) —
+upstream, that generator is the single process that produces these schemas'
+bytes.

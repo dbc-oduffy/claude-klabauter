@@ -1,0 +1,116 @@
+# DR-276 baseline — operator-CLI entrypoints that import coordinator_core.ops
+# in-process WITHOUT routing through coordinator_core.cli_entry.run_op_main.
+#
+# These began as the trampolines the 2026-08-06 triage classified as bucket (c)
+# (`state/audits/operator-cli-triage/`): a shared, near-byte-identical template,
+# not independent decisions — a KNOWN backlog. Converting one means deleting its
+# line here.
+#
+# 2026-08-06, end of the conversion sweep: 110 of the original 155 were
+# converted (see git log for DR-276). **The 45 that remain are no longer an
+# undifferentiated backlog** — every one was individually classified during that
+# sweep, with per-file evidence in `state/subagent-share/`. They fall in four
+# kinds, and the practical consequence is that this list is now mostly
+# PERMANENT, not pending:
+#
+#   1. Structurally read-only — the op has no write site to declare, so routing
+#      buys an import hop and a permanently-empty declaration list.
+#   2. Already on the wire path — reaches the engine via `cc_invoke.route` /
+#      `route_mutation` / `dispatch_message`, the very chokepoint this seam
+#      backfills for in-process importers. Converting would fork a second
+#      recording path, which is the harm, not the fix.
+#   3. Mutates git refs or the index, never file content (branch renames,
+#      `git config`, worktree reaping) — nothing a scope-touch claim models.
+#   4. Genuinely deferred, and only these: `publish.py` (owns a 4716-line
+#      `main()`; its writes land in sibling repos across dozens-to-hundreds of
+#      files per target, so whether cross-repo publish output belongs in the
+#      calling session's claim is a design question, not a mechanical one) and
+#      `archive-stamp-cli` (every subcommand's write lands 2+ layers down in
+#      ~15 handler-owned op modules; a partial pass would silently miss some).
+#
+# Do not re-attempt kinds 1-3 as if they were backlog. Kind 4 is the only real
+# residual.
+#
+# The gate in test_operator_cli_engine_contact.py fails only on entries NOT in
+# this file, so regrowth is caught while conversion stays incremental.
+#
+# Adding a line to this file is a carve-out. Say why, inline, or it will be
+# deleted by the next reader as unexplained.
+#
+# SANCTIONED CARVE-OUTS — the entries below are NOT backlog. Each imports
+# coordinator_core.ops in-process for a reason the seam does not address, and
+# each is classified bucket (a), correct as-is. They are permanent; do not
+# "convert" them.
+#
+# `update-docs-probes.py` (triaged 2026-08-06, was UNTRIAGED): imports gate
+# FUNCTIONS from coordinator_core/ops/updatedocs_gates.py, which is a library
+# of `_gate_*` predicates with no `main(argv)` for run_op_main to route to. The
+# CLI's actual job is per-subcommand exit-code translation — the same
+# GateVerdict maps to 0 in one subcommand and 1 in another — which is CLI-
+# boundary logic the op deliberately leaves to its callers. It writes nothing
+# itself; its one mutating path shells out to prune-resolved-queue-entries.py,
+# which declares the write at the real write site.
+#
+# `cartography.py` (triaged 2026-08-06): its only coordinator_core.ops import
+# is `_registry_map.OP_MODULE_MAP`, a static data map read at call time — not
+# an op invocation. It writes nothing (results go to stdout as JSON), so there
+# is no write to declare, and there is no op module behind it to route to.
+#
+# `check-auto-reconcile.py` (triaged 2026-08-06): already reaches the engine
+# through `coordinator_core.invoke.dispatch.dispatch_message` — the very
+# chokepoint this seam exists to reach. Routing it through run_op_main would be
+# a cosmetic no-op over an already-compliant path.
+#
+# `orphan-branch-sweep.py` and `day-coverage-sweep.py` (triaged 2026-08-06):
+# both structurally read-only — they enumerate and report to stdout, and
+# neither op has a write site to declare. Routing them through the seam buys an
+# import hop and a permanently-empty declaration list. NOTE: orphan-branch-
+# sweep.py briefly LOOKED converted because it carries a comment mentioning
+# run_op_main, and the gate's seam check was a substring scan; that hole is
+# fixed (the check is AST-based on both sides now, requiring a real call), and
+# this pair is the reason the fixture for it exists.
+coordinator/bin/cartography.py
+coordinator/bin/archive-stamp-cli
+coordinator/bin/audit-enabled-plugins.py
+coordinator/bin/baton-drift-sweep.py
+coordinator/bin/check-auto-memory-drained.py
+coordinator/bin/check-auto-reconcile.py
+coordinator/bin/check-description-length.py
+coordinator/bin/check-harvest-debt.py
+coordinator/bin/check-shipped-on-main.py
+coordinator/bin/check-surface-inline-budget.py
+coordinator/bin/coordinator-fold-execution-record
+coordinator/bin/coordinator-prepare-commit-msg
+coordinator/bin/coordinator-safe-commit
+coordinator/bin/day-coverage-sweep.py
+coordinator/bin/detect-staged-rollback.py
+coordinator/bin/dirty-tree-gate.py
+coordinator/bin/emit-goal-from-artifact.py
+coordinator/bin/generate-repomap.py
+coordinator/bin/handoff-archive-transition.py
+coordinator/bin/handoff-deliverable-carry.py
+coordinator/bin/lessons-outbox-drain.py
+coordinator/bin/list-orphaned-plans.py
+coordinator/bin/migrate-branch-canonical-case.py
+coordinator/bin/orphan-branch-sweep.py
+coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
+coordinator/bin/probe-onboarding-currency.py
+coordinator/bin/prune-closed-improvements.py
+coordinator/bin/publish.py
+coordinator/bin/query-records.py
+coordinator/bin/review-brightline-gate.py
+coordinator/bin/safe-commit-offer.py
+coordinator/bin/spinoff-deliverable-and-commit.py
+coordinator/bin/sweep-actioned-memos.py
+coordinator/bin/sweep-boot.py
+coordinator/bin/sweep-consumed-handoffs.py
+coordinator/bin/sweep-terminal-plans.py
+coordinator/bin/sync-main.py
+coordinator/bin/update-docs-probes.py
+coordinator/bin/verify-orientation-cache-sync.py
+coordinator/bin/verify-parallel-review-lens-orthogonality.py
+coordinator/bin/workday-complete-backfill-scan.py
+coordinator/bin/workday-start-advisory-counters.py
+coordinator/bin/workweek-complete-advisories.py
+coordinator/bin/workweek-complete-doc-staleness.py
+coordinator/bin/wsc-coverage-gate-runner.py

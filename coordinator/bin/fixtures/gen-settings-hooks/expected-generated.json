@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/py-example-hook.py\" ] && exec python3 \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/py-example-hook.py\" || exit 127",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/plan-persistence-check.py\" ] && exec python3 \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/plan-persistence-check.py\" || exit 127",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/block-some-write.sh\" ] && exec bash \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/block-some-write.sh\" || exit 127",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/session-guard.sh\" ] && exec bash \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/session-guard.sh\" || exit 127",
+            "timeout": 5,
+            "async": false
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/bootstrap-substrate.py\" ] && exec python3 \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/bootstrap-substrate.py\" || exit 127",
+            "timeout": 120,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

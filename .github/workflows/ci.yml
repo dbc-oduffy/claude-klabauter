@@ -1,0 +1,72 @@
+name: CI
+
+# The `checks` job runs the same entrypoint the publish gate runs
+# (.github/scripts/run-all-checks.py). Keeping them identical is the point: a
+# leak that CI would catch must not be able to reach the mirror in the first
+# place, and a gate that has drifted from CI catches nothing anyone trusts.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Validation checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # jsonschema lets validate-json-schemas.py meta-validate schema documents
+      # instead of reporting them SKIPPED. It is a declared runtime dependency,
+      # installed here on its own so the checks job stays fast.
+      - name: Install check dependencies
+        run: python -m pip install --upgrade "jsonschema>=4"
+
+      - name: Run all checks
+        run: python .github/scripts/run-all-checks.py
+
+  tests:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is a first-class target for this engine, not an afterthought:
+        # the session-liveness and path-resolution paths differ there, and a
+        # POSIX-only matrix would let those regress silently.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade ".[test]"
+
+      # Worker count is derived inside the script from the runner's measured
+      # cores and memory. Do not add `-n auto` here — see run-tests.py's header
+      # for why that is unbounded and what it cost.
+      #
+      # --require-tests: DR-262 rules CI is a hard rail — an empty or absent
+      # test tree must be a FAILURE, never a silent green (the same
+      # green-over-nothing class as the zero-count guard at 3ae2e949d).
+      - name: Run fast test tier
+        run: python .github/scripts/run-tests.py --require-tests

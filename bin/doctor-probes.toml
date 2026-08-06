@@ -1,0 +1,367 @@
+# bin/doctor-probes.toml
+#
+# Declarative probe manifest — SSOT for per-probe metadata consumed by the
+# static diagnostic probe engine (bin/claude-klabauter-doctor-probe.py).
+#
+# Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C5
+# Doctrine: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/doctor-probe-design.md
+#
+# REQUIRED / OPTIONAL split (PM-directed, the Staff Engineer F2):
+#   required = true  — core probes; SKIP/BROKEN counts in worst-of reduction.
+#                      An all-SKIP on required probes yields DEGRADED (never PASS).
+#   required = false — coordinator-dependent probes; when coordinator-claude is absent,
+#                      these SKIP-as-advisory (surface in data.missing_optional /
+#                      warnings), NOT DEGRADED. DEGRADED is reserved for genuine
+#                      failures when coordinator IS present.
+#
+# Field definitions (host field names adopted verbatim for cross-repo parity;
+# severity_if_fail / remediation / restart_gated are additive claude-klabauter fields
+# mirroring coordinator's bin/doctor-probes.toml):
+#   id               — Probe id; join key to bin/claude-klabauter-doctor-probe.py probe names.
+#   cluster          — Symptom group (claude-klabauter-domain enum):
+#                        registry = CLAUDE_KLABAUTER_ROOT resolution and machine-local key health
+#                        install  = coordinator_core import, engine bootstrap, and
+#                                   command-type health (version, coverage seam, debris)
+#                        dispatch = command-type entrypoint smoke (spawn-per-call path)
+#   weight           — Resource cost (NOT latency):
+#                        cheap    = file reads / env checks; no subprocess, no network
+#                        standard = short-lived subprocess (python -c, CLI, process scan)
+#                        heavy    = live MCP handshake / server spawn / live HTTP
+#   interactivity    — Agent interaction model:
+#                        silent = runs silently, no user prompt
+#                        assert = asserts a condition, surfaces finding
+#                        prompt = consent-gated; requires user confirmation before fix
+#   fix              — "none" (all fixes are handled via the skill's Branch B
+#                      single-entry-point; no numbered recover-step catalog yet) or
+#                      a terse description of the deterministic fix step available.
+#   symptom_keywords — Free-text tags for triage / symptom matching.
+#   triage           — true iff this probe runs on a `--triage` run of the probe script.
+#                      INVARIANT: triage=true ==> weight in {"cheap", "standard"}
+#                      (never "heavy" — no live MCP calls in the cheap first-pass).
+#   body             — Module:callable reference.
+#                        bin/<script>:<fn> — static probe script entry point
+#                      Informational join-key only; the skill invokes via subprocess,
+#                      not by direct import.
+#   required         — (bool) true = core probe; false = coordinator-dependent optional.
+#                      See REQUIRED / OPTIONAL split above.
+#   severity_if_fail — {error, degraded} — claude-klabauter-local; drives RED/AMBER verdict.
+#                        error    = BROKEN verdict on failure; fleet-wide symptom.
+#                        degraded = DEGRADED verdict on failure; capability unavailable.
+#   remediation      — One-line operator next-step on failure.
+#   restart_gated    — (optional bool, default false) true iff this probe tests a surface
+#                      that only materializes AFTER a Claude Code restart. A restart-gated
+#                      probe failing PRE-restart is expected, not a configuration error;
+#                      the same probe failing POST-restart is a real DEGRADED finding.
+#
+# Triage invariant: triage=true probe MUST be weight in {cheap, standard}.
+# Restart-gated probes may be triage=true, but a restart_gated=true probe CANNOT
+# serve as the sole functional-headline probe in the triage set.
+# The dispatch-smoke (claude-klabauter.invoke.smoke) is the functional-headline triage probe:
+# it exercises the real production path (spawn-per-call + registry resolve + dispatch)
+# and surfaces bootstrap failures invisible to pure import checks. When
+# claude-klabauter.invoke.smoke is absent or skipped (required=false), claude-klabauter.core.import
+# serves as the static-headline triage probe.
+
+# ---------------------------------------------------------------------------
+# Cluster: registry — CLAUDE_KLABAUTER_ROOT resolution and machine-local key health
+# ---------------------------------------------------------------------------
+
+[[probe]]
+id = "claude-klabauter.root.resolve"
+cluster = "registry"
+weight = "standard"
+interactivity = "assert"
+fix = "machine-local set repos.claude_klabauter <path> (or export CLAUDE_KLABAUTER_ROOT=<path>)"
+symptom_keywords = ["CLAUDE_KLABAUTER_ROOT unresolvable", "machine-local key missing", "repos.claude_klabauter absent", "path not found", "coordinator_core dir missing"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_claude_klabauter_root"
+required = true
+severity_if_fail = "error"
+remediation = "Run python3 scripts/setup.py to register repos.claude_klabauter, or: export CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter"
+
+[[probe]]
+id = "claude-klabauter.root.pointer"
+cluster = "registry"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (run the install-time pointer writer gen-claude-klabauter-root-pointer.py to populate the pointer file)"
+symptom_keywords = ["claude-klabauter-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py"]
+# triage=true: file-read-only presence/content check (no subprocess, no network) is
+# cheap enough for every bare invocation, and surfaces the dominant Windows per-invoke
+# latency cause (bash-fallback CLAUDE_KLABAUTER_ROOT resolution) as early as possible.
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-root with the resolved CLAUDE_KLABAUTER_ROOT path"
+
+[[probe]]
+id = "claude-klabauter.registry.key"
+cluster = "registry"
+weight = "standard"
+interactivity = "assert"
+fix = "machine-local set repos.claude_klabauter <resolved-root>"
+symptom_keywords = ["repos.claude_klabauter not registered", "machine-local key absent", "CLAUDE_KLABAUTER_ROOT unresolved", "cc_invoke dispatch fails to resolve CLAUDE_KLABAUTER_ROOT"]
+# triage=false: this probe checks the machine-local registry key, which is a
+# coordinator-soft-dep surface. On coordinator-absent installs the key is not
+# needed and the probe SKIPs-as-advisory. Running it in triage on those machines
+# would surface an advisory every time — noise without signal.
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_registry_key"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run python3 scripts/setup.py (authoritative standalone path) to register repos.claude_klabauter; if coordinator-claude is absent, no key is required"
+
+# ---------------------------------------------------------------------------
+# Cluster: install — coordinator_core import, engine bootstrap, and
+#                    command-type health (version, coverage seam, debris)
+# ---------------------------------------------------------------------------
+
+[[probe]]
+id = "claude-klabauter.core.import"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT; Python 3.11+ required)"
+symptom_keywords = ["coordinator_core import error", "ImportError", "engine not importable", "stdlib only"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_core_import"
+required = true
+severity_if_fail = "error"
+remediation = "Verify coordinator_core/ directory exists in CLAUDE_KLABAUTER_ROOT (run: python3 -c 'import coordinator_core' from CLAUDE_KLABAUTER_ROOT); re-clone if missing"
+
+[[probe]]
+id = "claude-klabauter.coverage.seam"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (verify state/coverage/ is writable; if gate-result.json is present and malformed, remove it and re-run the coverage gate)"
+symptom_keywords = ["coverage seam unwritable", "gate-result.json malformed", "coverage artifact invalid", "state/coverage missing", "coverage seam schema error"]
+# triage=false: the coverage seam is an output artifact seam, not a prerequisite for
+# basic engine health. Running it on every `--triage` run of the probe script would surface
+# advisory noise on machines that have not yet executed the coverage gate.
+# PASS when absent — no coverage artifact yet is not a fault.
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_coverage_seam"
+required = true
+severity_if_fail = "degraded"
+remediation = "Check state/coverage/ directory is writable; if gate-result.json is present and schema-invalid, remove it and re-run the coverage gate (python3 -m coordinator_core.invoke coverage_gate '{}')"
+
+[[probe]]
+id = "claude-klabauter.resident.debris"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (debris is harmless; remove stale sentinel/socket paths via the advised cleanup command)"
+symptom_keywords = ["stale coordinator debris", "retired daemon sentinel", "socket dir stale", "coordinator-service sentinel", "orphaned tmp socket", "retired resident debris"]
+# triage=true: debris detection is cheap (file path checks only) and surfaces a
+# cleanup advisory when stale paths are present. The probe always returns INFO on
+# debris-found (never BROKEN/DEGRADED) — it does NOT drag overall verdict below PASS.
+# Surfaces in data.warnings, not data.red_probes or data.amber_probes.
+# NOT DEGRADED: stale resident debris is harmless (no running process attaches to it
+# post-DR-215); INFO class matches the analogous version-drift advisory treatment.
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_resident_debris"
+# Review: code-reviewer (F4) — changed required=true → required=false to match INFO-only semantics.
+# This probe emits INFO on debris-found, never BROKEN/DEGRADED. With required=true, a probe-itself
+# crash (not debris-found but the probe code erroring) would drag verdict to DEGRADED via
+# severity_if_fail=degraded — inconsistent with purely-advisory purpose. required=false ensures:
+# (a) probe crash → treated as advisory SKIP, not DEGRADED; (b) probe is excluded from the
+# all-SKIP-required-probes → DEGRADED rule; (c) aligned with wiki's INFO-only classification.
+required = false
+# severity_if_fail is notional: this probe emits INFO on debris-found (not FAIL), so
+# the verdict reduction never reaches severity_if_fail. Kept for schema completeness.
+# If the probe itself errors (probe-crash, not debris-found), it emits a SKIP/advisory
+# envelope — severity_if_fail does not apply because required=false treats SKIP as advisory.
+severity_if_fail = "degraded"
+remediation = "Stale resident debris is harmless but can be cleaned: remove .git/coordinator-service/ sentinels and /tmp/coordinator-svc-<uid>/ sockets (uid is your numeric user id)"
+
+[[probe]]
+id = "claude-klabauter.worktree.bloat"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (inspect flagged files and rm if confirmed junk — operator judgment, not a deterministic auto-fix)"
+symptom_keywords = ["runaway file", "disk bloat", "large untracked file", "worktree bloat", "365GB", "mis-quoted redirect"]
+# triage=true: a metadata-only filesystem walk (os.walk + stat, no subprocess/network)
+# is cheap enough to run on every `--triage` run of the probe script. Defense-in-depth
+# against untracked runaway/junk files (motivating incident: a 365 GB untracked file
+# named `correct?*` sat in the repo root for days from a mis-quoted shell redirect).
+# The probe always returns INFO on large-file-found (never BROKEN/DEGRADED) — it does
+# NOT drag overall verdict below PASS. Surfaces in data.warnings, not data.red_probes
+# or data.amber_probes.
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_worktree_bloat"
+required = true
+# severity_if_fail is notional: this probe emits INFO on large-file-found (not FAIL), so
+# the verdict reduction never reaches severity_if_fail. Kept for schema completeness,
+# matching the analogous claude-klabauter.resident.debris entry.
+severity_if_fail = "degraded"
+remediation = "Inspect each flagged large file and rm it if confirmed junk (e.g. output from a mis-quoted shell redirect)"
+
+[[probe]]
+id = "claude-klabauter.version.sanity"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (verify coordinator_core/ is not partially stripped; re-clone if retired submodules are dangling-imported)"
+symptom_keywords = ["version resolution failed", "retired submodule imported", "coordinator_core.client dangling", "module strip incomplete", "half-stripped engine", "stale pyc from retired submodule"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_version_sanity"
+required = true
+severity_if_fail = "error"
+remediation = "A retired coordinator_core submodule is still importable (e.g. coordinator_core.client); re-clone or run git clean to remove stale .pyc/__init__ artifacts from the retired submodule path"
+
+# ---------------------------------------------------------------------------
+# Cluster: dispatch — command-type entrypoint smoke (spawn-per-call path)
+# ---------------------------------------------------------------------------
+
+# FUNCTIONAL HEADLINE PROBE (triage-invariant):
+# This probe exercises the real production dispatch path: python3 -m coordinator_core.invoke
+# runs the spawn-per-call command-type engine, resolves repo_root, populates the registry,
+# and dispatches the cheapest registered COMPUTE_ONLY op (ping). A GREEN result proves the
+# entrypoint CAN dispatch — NOT that a live session IS connected (post-DR-215 there is no
+# resident process; session-binding is not a concept here). A SKIP or BROKEN result emits
+# a parseable verdict envelope; it never produces a bare crash.
+# required=false: optional probe; a purely-static run (spawn skipped or failed) degrades
+# gracefully — the overall verdict is not held to BROKEN on this probe alone.
+[[probe]]
+id = "claude-klabauter.invoke.smoke"
+cluster = "dispatch"
+weight = "standard"
+interactivity = "assert"
+fix = "none (spawn failure surfaces as SKIP/BROKEN envelope; verify python3 -m coordinator_core.invoke ping '{}' manually from CLAUDE_KLABAUTER_ROOT)"
+symptom_keywords = ["invoke entrypoint failed", "spawn-per-call dispatch failed", "coordinator_core.invoke crash", "registry unpopulated", "dispatch smoke failed", "ping op dispatch error"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_invoke_smoke"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run: python3 -m coordinator_core.invoke ping '{}' from CLAUDE_KLABAUTER_ROOT; verify claude-klabauter.core.import passes and the op registry is populated"
+
+[[probe]]
+id = "claude-klabauter.invoke.latency"
+cluster = "dispatch"
+weight = "standard"
+interactivity = "assert"
+fix = "none (ensure the claude-klabauter-root pointer is present so per-invoke resolution avoids the bash-fallback subprocess; see claude-klabauter.root.pointer)"
+symptom_keywords = ["invoke round-trip slow", "per-invoke latency over budget", "bash-fallback subprocess hang", "hook budget exceeded", "Windows per-invoke latency", "invoke timeout"]
+# triage=true: a single bounded (5 s timeout) subprocess round-trip is cheap enough
+# for the bare-invocation triage set and surfaces the dominant Windows per-invoke
+# latency regression directly as a measurement, not just a static presence check.
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_invoke_latency"
+required = false
+severity_if_fail = "degraded"
+remediation = "Ensure the claude-klabauter-root pointer is present (see claude-klabauter.root.pointer probe) so per-invoke resolution avoids the bash-fallback subprocess; see docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
+
+# ---------------------------------------------------------------------------
+# Cluster: install — draft-staleness nudge (strategic.generate consumer seam)
+# ---------------------------------------------------------------------------
+
+# OPTIONAL, NEVER-FATAL probe (DEC-5 nudge, not a scheduler): checks whether
+# state/strategic/self-description.draft.yaml exists and, if it does, whether it
+# is older than the newest state/week-changelog/*.md entry (stale). A MISSING
+# draft is NOT a fault — the draft is not required for a healthy install; it is
+# only produced on demand by strategic.generate. This probe surfaces a one-line
+# nudge, it never drags the overall verdict below PASS.
+[[probe]]
+id = "claude-klabauter.strategic.draft_staleness"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (nudge only — run strategic.generate to refresh the draft, or the example-doctrine-repo refresh ceremony to reconcile it)"
+symptom_keywords = ["strategic draft stale", "self-description draft out of date", "strategic.generate not run recently", "week-changelog newer than draft"]
+# triage=false: this is a nudge surfaced on full runs and /workday-start, not part
+# of the bare-invocation triage set (no functional-headline signal here).
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_strategic_draft_staleness"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run strategic.generate to refresh state/strategic/self-description.draft.yaml, then invoke the example-doctrine-repo refresh ceremony to reconcile it against the canonical self-description.yaml"
+
+# ---------------------------------------------------------------------------
+# Cluster: install — vendored-schema drift watch (example-doctrine-repo pin currency)
+# ---------------------------------------------------------------------------
+
+# OPTIONAL, NEVER-GATING probe: compares every schema vendored under
+# coordinator_core/frontmatter/schemas/ against example-doctrine-repo HEAD via the non-gating
+# check_schema_drift_advisory (aggregated by
+# coordinator_core.frontmatter.schema_drift_watch). Closes the 2026-07-22 class
+# defect where that advisory had ZERO callers and a vendored improvement-queue
+# schema sat ~12h behind example-doctrine-repo until a sibling repo's CLI rejected a value that was
+# valid on their surface.
+#
+# THIS PROBE IS THE CADENCE. It is triage=true precisely because /workday-start's
+# consumer (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
+# state/doctor-last-run.json, and ONLY --triage and full runs write that sentinel —
+# a triage=false drift watch would never reach the daily surface, i.e. would be
+# wiring in name only. Weight is "standard": one short-lived `git show` per vendored
+# schema (12 today), no network, honouring the triage invariant (cheap|standard).
+#
+# Verdict shape: DRIFT -> DEGRADED (AMBER + re-vendor hint); example-doctrine-repo clone present but
+# unreadable -> DEGRADED worded as INDETERMINATE (never a false drift claim, never a
+# silent green); no example-doctrine-repo clone on this machine at all -> SKIP-as-advisory (not
+# applicable, e.g. fresh install or CI without the sibling checked out).
+#
+# TWO-ORACLE WARNING — why the remediation names a script and not `cp`. This probe
+# compares against example-doctrine-repo HEAD; the GATING tamper-check (check_schema_drift(..., ref=...)
+# in coordinator_core/frontmatter/tests/test_schema_validate.py) compares against a
+# per-schema pinned SHA in _QUEUE_SCHEMA_PINS. Copying example-doctrine-repo's file in by hand satisfies
+# this probe and BREAKS that gate. That is not hypothetical: on 2026-07-28 an installing
+# agent followed the previous `cp`-shaped remediation verbatim, watched this probe go
+# green at 13/13, and simultaneously turned check_schema_drift red
+# (state/audits/2026-07-28-windows-install-dogfood-friction.md § F3). The remediation
+# below names bin/claude-klabauter-revendor-schema.py, which re-vendors the bytes AND moves the
+# pin in one verified, rolled-back-on-failure operation — CLAUDE.md's discharge test
+# ("for every rule, what artifact discharges it?"). Do NOT reduce it back to a copy
+# instruction: prose that hands the operator half the job discharges nothing.
+[[probe]]
+id = "claude-klabauter.schema.vendor_drift"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (run bin/claude-klabauter-revendor-schema.py <name> — it re-vendors the bytes AND moves the gating pin together; never hand-copy)"
+symptom_keywords = ["vendored schema drift", "schema out of date with example-doctrine-repo", "re-vendor schema", "sibling repo rejects valid value", "improvement-queue.schema.json stale", "schema pin behind example-doctrine-repo HEAD", "SchemaDriftError after re-vendor", "_QUEUE_SCHEMA_PINS out of date"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_vendored_schema_drift"
+required = false
+severity_if_fail = "degraded"
+remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install; action it on its own cadence. To fix: python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run, then re-run without --dry-run (add --reason '<why>' if it reports a pin move, and --ack-major if it reports a MAJOR advance). That entrypoint writes the vendored bytes AND updates the gating pin in coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS in one verified operation, then re-checks both. Do NOT cp the schema in by hand — this probe compares against example-doctrine-repo HEAD but the gating tamper-check compares against that pinned SHA, so a hand copy turns this probe green while breaking check_schema_drift."
+
+# ---------------------------------------------------------------------------
+# Cluster: install — cross-repo-commitments ledger re-resolution (C12b)
+# ---------------------------------------------------------------------------
+
+# OPTIONAL, NEVER-GATING probe: re-resolves every state/cross-repo-commitments/
+# record's evidence: string live against its committing sibling's disk via
+# coordinator_core.reconcile.commitments_recheck. Closes the exact staleness
+# named in docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C12b:
+# a structured ledger record whose own title read "(now satisfied)" beside
+# status: open, thirteen days on, because nothing ever re-checked it.
+#
+# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift
+# immediately above: triage=true because /workday-start's consumer
+# (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
+# state/doctor-last-run.json, and only --triage and full runs write that
+# sentinel — a triage=false re-resolver would never reach the daily surface.
+# Deliberately NOT wired to handoff.reconcile_open/gate-recheck (C4/C8): those
+# are hand-invoked verbs, and wiring re-resolution to one would reproduce the
+# exact "nothing re-resolves on its own" pathology this probe exists to close.
+#
+# Verdict shape: any record's evidence resolves truthy while its own status is
+# still "open" -> DEGRADED (AMBER, actionable mismatch named); everything else
+# (including "no evidence yet", "sibling unreadable", "already fulfilled") ->
+# PASS — this probe never auto-flips a record's status (D5), so a mismatch is
+# a nudge, not a failure to remediate on its own.
+[[probe]]
+id = "claude-klabauter.commitments.recheck"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (a human reviews the named record(s) and applies the status flip — this probe never auto-mutates status:)"
+symptom_keywords = ["cross-repo commitment stale", "commitment ledger out of date", "now satisfied but still open", "commitment evidence resolved", "sibling commitment re-resolve"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_commitments_recheck"
+required = false
+severity_if_fail = "degraded"
+remediation = "Review the named state/cross-repo-commitments/<entry>.yaml record(s) — evidence: now resolves truthy while status: is still open; if genuinely satisfied, flip status: by hand (this probe never auto-mutates it)."

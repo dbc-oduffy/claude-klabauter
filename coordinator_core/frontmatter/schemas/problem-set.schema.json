@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/problem-set.schema.json",
+  "x-schema-name": "problem-set",
+  "x-schema-version": "1.0.0",
+  "applies_to": "docs/problems/*.md",
+  "kinds": ["problem-set"],
+  "description": "Problem-set — ratified problem statement authored via /shape before any solution; plans cite these as the external coverage oracle.",
+  "type": "object",
+  "required": ["title", "status"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for the problem set."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle state (e.g. draft, ratified)."
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the problem set was authored (YYYY-MM-DD)."
+    },
+    "ratified_by": {
+      "type": "string",
+      "description": "Agent or human who ratified the problem statement."
+    },
+    "ratified_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the problem set was ratified (YYYY-MM-DD)."
+    },
+    "estimated_horizon": {
+      "enum": ["session", "week", "initiative"],
+      "description": "Work horizon estimated at ratification time. session=one or two sessions; week=roughly a week of work; initiative=weeks-to-quarters, multi-goal scope. Set by /shape at convergence; read by the altitude-router to select the correct downstream ceremony (plan | roadmap-planning | goal-setting). Note: cross-field routing from horizon to ceremony type is enforced by the /shape skill logic, NOT by this schema validator — no cross-field rule is present here and that is intentional."
+    }
+  }
+}

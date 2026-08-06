@@ -1,0 +1,22 @@
+# Test fixture: schema_version above the loader's known ceiling → exit 3.
+# Used by coordinator/tests/test_snippet_registry_malformed.py.
+#
+# The version here must stay ABOVE `_SUPPORTED_SCHEMA_VERSIONS` in
+# coordinator_core/snippet_sync/registry.py — it was `3` until that tuple grew
+# to (1, 2, 3), at which point this fixture became valid-but-incomplete and
+# tripped the v3 `delivery` requirement instead of the over-ceiling path, then
+# `4` until the tuple grew again to (1, 2, 3, 4) for example-doctrine-repo's v4 excluded_consumer
+# / eligible_glob bump. The snippet row below therefore carries every field
+# required at v3 too, so the next ceiling bump surfaces as a plain rc mismatch
+# rather than a silently relocated diagnostic.
+#
+# v4's two additions are both OPTIONAL, so no row field needs adding here.
+schema_version = 5
+
+[snippet.reviewer-calibration]
+sentinel_begin = "<!-- BEGIN reviewer-calibration -->"
+sentinel_end   = "<!-- END reviewer-calibration -->"
+delivery       = "paste"
+consumers = [
+  "agents/staff-eng.md",
+]

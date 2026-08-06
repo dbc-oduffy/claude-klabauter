@@ -1,0 +1,938 @@
+"""Tests for coordinator_core.bash_guards.bump_foreign_repo_write -- the
+Bash-surface CROSS-REPO write-confinement speed bump (C4).
+
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+repo], chunk C4 "Cross-repo detection and registration". Re-founded on the
+real anchor path by
+docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md, chunk
+C3 (example-doctrine-repo finding #5): applicability here is established via a real
+`write_session_start_record` settings-home anchor, not `CLAUDE_PROJECT_DIR`
+-- see `_set_anchor`'s own docstring for why. `CLAUDE_PROJECT_DIR` is left
+unset throughout this file; it is not this guard's primary anchor (see
+`_write_bump_applicability` module docstring, "TWO ANCHORS") and no test
+here has the fallback itself as its subject.
+
+THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY -- see the plan's "Design
+posture -- passable by construction". These tests verify the bump FIRES on
+the shapes AC1 names, that reads and same-repo writes never fire, that the
+AC5 `cross-repo-memo` carve-out is unconditional and matched by invoked-
+executable identity (never a destination-path shape), that the marker
+clears the bump, that AC19's registration attributes are pinned, and (AC6)
+that the bump still fires when the live payload `cwd` has drifted across a
+repo boundary since the session's own SessionStart.
+
+Covers: AC1 (`git -C`, `cd ... && git`, and plain-bash write-sink shapes
+targeting a different git root all bump), AC5 (the `cross-repo-memo`
+carve-out, unconditional, plus its negative case), AC6 (cross-repo `cwd`
+drift), AC13 (registered as a `GuardEntry` in `dispatch.py`, not a call-site
+patch), AC19 (this guard's `fail_closed`/`band`/`advisory_value` are
+pinned), and the "reads never bump" carve-out.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards import _write_bump_session_start as session_start
+from coordinator_core.bash_guards._write_bump_marker import (
+    marker_basename,
+    resolve_gitdir,
+)
+from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
+    _clean_bump_env,  # noqa: F401 -- reused fixture (C4 owns the fix; AC13/finding #6).
+)
+
+
+def _git(root: str, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _init_repo(tmp_path: Path, name: str) -> Path:
+    root = tmp_path / name
+    root.mkdir()
+    _git(str(root), "init", "-q")
+    _git(str(root), "config", "user.email", "t@example.com")
+    _git(str(root), "config", "user.name", "Test")
+    (root / "README.md").write_text("init\n", encoding="utf-8")
+    _git(str(root), "add", "README.md")
+    _git(str(root), "commit", "-q", "-m", "init")
+    return root
+
+
+@pytest.fixture()
+def repos(tmp_path):
+    """Anchor repo (the session's own), a foreign sibling repo, and an
+    unregistered fake HOME (so `~/.claude` never accidentally matches and
+    the applicability hatch never fires) -- the shared setup every test
+    below builds on."""
+    anchor = _init_repo(tmp_path, "anchor")
+    foreign = _init_repo(tmp_path, "foreign")
+    home = tmp_path / "home"
+    home.mkdir()
+    return {"anchor": anchor, "foreign": foreign, "home": home}
+
+
+def _set_anchor(monkeypatch, repos, session_id: str, extra: dict | None = None) -> None:
+    """Establishes applicability the same way a real session does -- a
+    settings-home `write_session_start_record`, not `CLAUDE_PROJECT_DIR`
+    (example-doctrine-repo finding #5 / AC5): `CLAUDE_PROJECT_DIR` is known-absent from a live
+    confined Bash-tool subprocess (`_write_bump_session_start.
+    CLAUDE_PROJECT_DIR_LIVE_IN_HOOK_ENV`), so a suite anchored on it
+    exclusively never exercises the real settings-home read path this
+    plan's C1/C2 built and this chunk re-founds the suite on. `HOME` is
+    still set (to an unrelated scratch dir, never `CLAUDE_PROJECT_DIR`) so
+    the `~/.claude` fleet-recovery hatch (`_anchor_is_under_claude_home`)
+    resolves to "not under" rather than fail-opening on an unresolvable
+    home."""
+    monkeypatch.setenv("HOME", str(repos["home"]))
+    for k, v in (extra or {}).items():
+        monkeypatch.setenv(k, v)
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+
+
+# ---------------------------------------------------------------------------
+# AC1 -- git -C / cd&&git / plain-bash write sinks targeting a foreign repo
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_git_dash_c_write_subcommand_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-1")
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-1", str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_ac1_cd_and_git_write_subcommand_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-2")
+    cmd = f"cd {repos['foreign']} && git commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-2", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_ac1_plain_bash_write_sink_cp_to_new_file_bumps(repos, monkeypatch):
+    """The write-sink TARGET does not exist yet -- the realistic incident
+    shape (`echo x > /repo/new-file.txt`) and the exact case the
+    nearest-existing-ancestor fix covers."""
+    _set_anchor(monkeypatch, repos, "sess-3")
+    src = repos["anchor"] / "src.txt"
+    src.write_text("x\n", encoding="utf-8")
+    dest = repos["foreign"] / "newfile.txt"
+    assert not dest.exists()
+    cmd = f"cp {src} {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-3", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_ac1_output_redirection_write_sink_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-4")
+    dest = repos["foreign"] / "redir.txt"
+    cmd = f"echo hi > {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-4", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_ac1_mkdir_write_sink_to_not_yet_existing_dir_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-5")
+    new_dir = repos["foreign"] / "brand-new-subdir"
+    assert not new_dir.exists()
+    cmd = f"mkdir -p {new_dir}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-5", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/--git-dir/--work-tree evasion --
+# 2026-08-06 live incident: a command that never `cd`s and never passes
+# `-C` still reaches a foreign repo's WRITE surface through these, since
+# `git` itself honours them independent of `cwd`. `-C`/`cd` were the only
+# shapes this guard's candidate-target resolution tracked before this fix.
+# ---------------------------------------------------------------------------
+
+
+def test_evasion_env_git_dir_write_subcommand_bumps(repos, monkeypatch):
+    cmd = f"GIT_DIR={repos['foreign']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-1")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-1", str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_evasion_env_git_common_dir_write_subcommand_bumps(repos, monkeypatch):
+    cmd = f"GIT_COMMON_DIR={repos['foreign']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-2")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-2", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_env_git_work_tree_write_subcommand_bumps(repos, monkeypatch):
+    """`GIT_WORK_TREE` alone (no `GIT_DIR`) redirects where `git` operates
+    from, same as `-C`/`cd` -- a work tree pointed at the foreign repo's
+    checkout must bump exactly as `-C <foreign>` already does."""
+    cmd = f"GIT_WORK_TREE={repos['foreign']} git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-3")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-3", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_cli_git_dir_flag_write_subcommand_bumps(repos, monkeypatch):
+    cmd = f"git --git-dir={repos['foreign']}/.git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-4")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-4", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_cli_git_dir_flag_separate_token_write_subcommand_bumps(repos, monkeypatch):
+    cmd = f"git --git-dir {repos['foreign']}/.git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-5")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-5", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_env_wrapper_git_dir_write_subcommand_bumps(repos, monkeypatch):
+    """The `env NAME=value cmd` wrapper spelling, not only the bare
+    `NAME=value cmd` prefix form -- both peel through
+    `_command_tokenizer._peel_command_position`'s `env` branch."""
+    cmd = f"env GIT_DIR={repos['foreign']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-6")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-6", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_non_regression_env_git_dir_pointing_at_own_repo_does_not_bump(repos, monkeypatch):
+    """Non-regression: an ordinary in-repo command using `GIT_DIR` (or the
+    other overrides) against the SESSION'S OWN repo must stay allowed --
+    a guard that starts denying legitimate in-repo `GIT_DIR` usage is the
+    same failure by another route (module docstring, "FAIL CLOSED, BUT DO
+    NOT OVER-BLOCK")."""
+    cmd = f"GIT_DIR={repos['anchor']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-7")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-7", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_non_regression_cli_git_dir_flag_pointing_at_own_repo_does_not_bump(repos, monkeypatch):
+    cmd = f"git --git-dir={repos['anchor']}/.git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-8")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-8", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_non_regression_git_dir_readonly_allowlisted_subcommand_still_never_bumps(repos, monkeypatch):
+    """Reads never bump regardless of how the target repo is named -- the
+    `GIT_DIR` fix only changes candidate-target RESOLUTION, never the
+    reads-never-bump carve-out itself. `log` is in `_GIT_READONLY_
+    SUBCOMMANDS`; see `test_evasion_env_git_dir_cat_file_reproduces_live_
+    incident_bumps` below for `cat-file`, which is NOT in that allowlist and
+    so is the actual live-incident shape, not this negative case."""
+    cmd = f"GIT_DIR={repos['foreign']}/.git git log"
+    _set_anchor(monkeypatch, repos, "sess-evasion-9")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-9", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_evasion_env_git_dir_cat_file_reproduces_live_incident_bumps(repos, monkeypatch):
+    """The EXACT live-incident shape: `git cat-file` is not a member of
+    `_GIT_READONLY_SUBCOMMANDS` (that allowlist is `show`/`diff`/`log`/
+    `status`/`blame`/`ls-files`/`rev-parse`/`describe` only -- `cat-file` was
+    never added), so this guard's own fail-toward-bump-on-unknown-subcommand
+    direction (`_git_subcommand_and_target_cwd`'s own docstring) already
+    treats it as a candidate write needing target resolution. Before this
+    fix, that resolution used `cwd` alone (the session's own anchor) and
+    silently allowed; after this fix it resolves through `GIT_DIR` to the
+    real (foreign) target and bumps."""
+    cmd = f"GIT_DIR={repos['foreign']}/.git git cat-file -t HEAD"
+    _set_anchor(monkeypatch, repos, "sess-evasion-10")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-10", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_dash_c_core_worktree_write_subcommand_bumps(repos, monkeypatch):
+    """Review finding (2026-08-06, P1): `git -c core.worktree=<foreign> ...`
+    is the identical evasion class `GIT_WORK_TREE`/`--work-tree` already
+    close, just via git's generic `-c` config-override mechanism. Before the
+    fix, `-c` fell into the generic flag-skip branch, never consumed its
+    required `name=value` token, and the payload was misread as the git
+    SUBCOMMAND while `target_cwd` stayed at the anchor -- silently allowing
+    the write."""
+    cmd = f"git -c core.worktree={repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-1")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-1", str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_evasion_dash_c_core_worktree_separate_token_write_subcommand_bumps(repos, monkeypatch):
+    """Same as above, `-c <name>=<value>` two-token spelling -- the common
+    one, not the attached `-c<name>=<value>` form."""
+    cmd = f"git -c core.worktree={repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-2")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-2", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_evasion_dash_c_core_worktree_attached_form_write_subcommand_bumps(repos, monkeypatch):
+    """`-c<name>=<value>`, attached (no space) -- the other spelling real
+    `git` accepts for short options."""
+    cmd = f"git -ccore.worktree={repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-3")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-3", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_non_regression_dash_c_core_worktree_pointing_at_own_repo_does_not_bump(repos, monkeypatch):
+    cmd = f"git -c core.worktree={repos['anchor']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-4")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-4", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_non_regression_ordinary_dash_c_unrelated_config_key_still_bumps_correctly(repos, monkeypatch):
+    """Review finding (P1, second-order effect): an ordinary `git -c
+    name=value <verb>` (an unrelated config key, no target relocation)
+    must not have its real subcommand swallowed into the bogus first-
+    positional read -- `-c color.ui=always commit` must still resolve
+    `commit` as the subcommand and bump against the foreign target named by
+    `-C`, not silently allow because `color.ui=always` was misread as the
+    subcommand and never matched `_GIT_READONLY_SUBCOMMANDS`."""
+    cmd = f"git -c color.ui=always -C {repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-5")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-5", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_non_regression_ordinary_dash_c_unrelated_config_key_read_still_allowed(repos, monkeypatch):
+    """The over-block half of the same second-order effect: `git -c
+    color.ui=always log` on a foreign repo must stay allowed (a read), not
+    bump because `color.ui=always` was misread as the subcommand and failed
+    to match the readonly allowlist."""
+    cmd = f"git -c color.ui=always -C {repos['foreign']} log"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-6")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-6", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_non_regression_dash_config_env_flag_does_not_swallow_subcommand(repos, monkeypatch):
+    """`--config-env=<name>=<envvar>` is a mandatory-value global flag with
+    the identical two-token-skip requirement as `-c` -- must not swallow
+    `commit` into the bogus positional read either."""
+    cmd = f"git --config-env=core.editor=EDITOR -C {repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-7")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-7", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_non_regression_dash_namespace_separate_token_does_not_swallow_subcommand(repos, monkeypatch):
+    """`--namespace <ns>` (separate-token, mandatory value) -- same
+    two-token-skip requirement."""
+    cmd = f"git --namespace foo -C {repos['foreign']} commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-evasion-dashc-8")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-8", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_p3_git_dir_and_git_common_dir_both_set_last_token_order_wins(repos, monkeypatch):
+    """P3 -- `GIT_DIR`/`GIT_COMMON_DIR` share one override slot with
+    last-write-wins RAW TOKEN ORDER scanning (`_env_repo_overrides`
+    docstring). Named test for the module's own documented behaviour:
+    `GIT_COMMON_DIR=<foreign> GIT_DIR=<anchor>` -- `GIT_DIR` is later in
+    raw-token order, so it wins and the write is classified against the
+    anchor (own repo, does not bump). This pins the CURRENT documented
+    scan-order semantics, not a claim that it matches real git's own
+    `GIT_DIR`-vs-`GIT_COMMON_DIR` resolution for every combination (P3,
+    accepted narrow-edge-case limitation per the module's own "passable
+    speed bump, not a security boundary" posture)."""
+    cmd = f"GIT_COMMON_DIR={repos['foreign']}/.git GIT_DIR={repos['anchor']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-p3-lastwins-1")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-p3-lastwins-1", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_p3_git_dir_last_write_wins_pinned_by_docstring(repos, monkeypatch):
+    """Nit finding: `GIT_DIR=a GIT_DIR=b` -- the module's own docstring
+    claims "last assignment of a given name wins" but no test exercised it
+    before this one."""
+    cmd = f"GIT_DIR={repos['anchor']}/.git GIT_DIR={repos['foreign']}/.git git commit --allow-empty -m x"
+    _set_anchor(monkeypatch, repos, "sess-p3-lastwins-2")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-p3-lastwins-2", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_same_repo_write_does_not_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-6")
+    src = repos["anchor"] / "src.txt"
+    src.write_text("x\n", encoding="utf-8")
+    dest = repos["anchor"] / "dest.txt"
+    cmd = f"cp {src} {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-6", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Reads never bump.
+# ---------------------------------------------------------------------------
+
+
+def test_read_carve_out_git_log_on_foreign_repo_does_not_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-7")
+    cmd = f"git -C {repos['foreign']} log"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-7", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_read_carve_out_git_status_on_foreign_repo_does_not_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-8")
+    cmd = f"git -C {repos['foreign']} status"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-8", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# AC5 -- the cross-repo-memo carve-out is unconditional.
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_cross_repo_memo(home: Path) -> Path:
+    settings_home = home / ".coordinator-claude-settings"
+    bin_dir = settings_home / "bin"
+    bin_dir.mkdir(parents=True)
+    crm = bin_dir / "cross-repo-memo"
+    crm.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    crm.chmod(0o755)
+    return crm
+
+
+def test_ac5_bare_word_cross_repo_memo_invocation_never_bumps(repos, monkeypatch):
+    _install_fake_cross_repo_memo(repos["home"])
+    _set_anchor(monkeypatch, repos, "sess-9")
+    cmd = f"cross-repo-memo --repo foreign --note '{repos['foreign']}/some/path'"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-9", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_ac5_canonical_path_carrying_cross_repo_memo_invocation_never_bumps(repos, monkeypatch):
+    crm = _install_fake_cross_repo_memo(repos["home"])
+    _set_anchor(monkeypatch, repos, "sess-10")
+    cmd = f"{crm} --repo foreign"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-10", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_ac5_carve_out_is_unconditional_even_with_no_marker_and_bump_applying(repos, monkeypatch):
+    """"Unconditional -- it bypasses even the marker" (plan body): no marker
+    is created anywhere in this test, and the session's own repo genuinely
+    differs from the target, yet the carve-out still exempts it."""
+    crm = _install_fake_cross_repo_memo(repos["home"])
+    _set_anchor(monkeypatch, repos, "sess-11")
+    assert not (resolve_gitdir(str(repos["anchor"])) / marker_basename("sess-11")).exists()
+    cmd = f"{crm} --repo foreign --target {repos['foreign']}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-11", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_ac5_negative_hand_rolled_write_into_a_sibling_cross_repo_directory_still_bumps(
+    repos, monkeypatch
+):
+    """The carve-out is matched by INVOKED EXECUTABLE identity, never a
+    destination-path shape -- a `*/cross-repo/`-style path match would be a
+    hole any write could drive through by choosing that directory name."""
+    _set_anchor(monkeypatch, repos, "sess-12")
+    cross_repo_dir = repos["foreign"] / "cross-repo"
+    cross_repo_dir.mkdir()
+    src = repos["anchor"] / "note-src.md"
+    src.write_text("x\n", encoding="utf-8")
+    dest = cross_repo_dir / "note.md"
+    cmd = f"cp {src} {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-12", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_ac5_same_named_decoy_script_elsewhere_does_not_get_the_carve_out(repos, monkeypatch):
+    """A same-basename script living somewhere OTHER than the canonical
+    settings-home location is not exempted -- only the resolved canonical
+    executable, or a bare (PATH-trusted) invocation, gets AC5's carve-out."""
+    _install_fake_cross_repo_memo(repos["home"])
+    _set_anchor(monkeypatch, repos, "sess-13")
+    decoy_dir = repos["anchor"] / "decoy"
+    decoy_dir.mkdir()
+    decoy = decoy_dir / "cross-repo-memo"
+    decoy.write_text("#!/bin/sh\necho decoy\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    src = repos["anchor"] / "src.txt"
+    src.write_text("x\n", encoding="utf-8")
+    dest = repos["foreign"] / "other.txt"
+    cmd = f"{decoy} && cp {src} {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-13", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# The marker clears the bump.
+# ---------------------------------------------------------------------------
+
+
+def test_marker_present_for_session_clears_the_bump(repos, monkeypatch):
+    """C3/AC4 -- the marker now lives at the TARGET's own gitdir, per-
+    (session, target), not the session's anchor gitdir: clearing this exact
+    target with a `touch` there stands the bump down for it."""
+    _set_anchor(monkeypatch, repos, "sess-14")
+    foreign_gitdir = resolve_gitdir(str(repos["foreign"]))
+    assert foreign_gitdir is not None
+    (foreign_gitdir / marker_basename("sess-14")).touch()
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-14", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_marker_for_a_different_session_does_not_clear_this_ones_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-15")
+    anchor_gitdir = resolve_gitdir(str(repos["anchor"]))
+    assert anchor_gitdir is not None
+    (anchor_gitdir / marker_basename("some-other-session")).touch()
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-15", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# AC6 -- cross-repo `cwd` drift: the live payload `cwd` has already crossed
+# a repo boundary (simulating an earlier Bash call's `cd <foreign>`, since
+# "Working directory persists between calls" -- harness contract) by the
+# time this guard sees a plain, no-`-C`, no-`cd` write in that SAME foreign
+# repo. This is the plan's own repro-table cell: `cd <foreign> && git
+# commit`, `CLAUDE_PROJECT_DIR` unset -- pre-C1/C2 the guard fired `False`
+# (the headline defect); this test pins the fix on the exact surface the
+# memo reproduced against. Uses a REAL `write_session_start_record` so
+# applicability is genuinely True -- a test that passes only because
+# applicability failed open proves nothing (this is exactly how the
+# original AC12 test slipped through; that one only drifted `cwd` to a
+# SUBDIRECTORY of the anchor repo, where `sessions_dir` resolves
+# identically either way -- this test drifts ACROSS a repo boundary
+# instead, which the subdirectory-only test never covered).
+# ---------------------------------------------------------------------------
+
+
+def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, monkeypatch):
+    """Session launches (SessionStart) in `repos["anchor"]`; the live
+    payload `cwd` has since drifted to `repos["foreign"]` (no `CLAUDE_
+    PROJECT_DIR` anywhere -- the production condition the plan's repro
+    table names). Pre-C1/C2, `resolve_launch_anchor`'s only anchor source
+    was the in-repo record resolved from the LIVE `cwd`
+    (`sessions_dir(cwd)`) -- once `cwd` has crossed into the foreign repo,
+    that resolves a hub where this session's record was never written, so
+    the anchor comes back `None`, `bump_applies` fails open, and this guard
+    never reaches its own cross-repo comparison for a `git commit` that is
+    plainly happening inside a foreign repo. Post-C1/C2, the settings-home
+    hub is cwd-independent and resolves the real anchor regardless of
+    where the live `cwd` has drifted to, so the bump fires correctly."""
+    monkeypatch.setenv("HOME", str(repos["home"]))
+    session_id = "sess-ac6-drift"
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+
+    cmd = "git commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["foreign"]), {})
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# AC3/AC4 -- C1's destination-class axis wired through this guard: a
+# registered publish.mirrors.* target renders publish-class copy naming the
+# owner and never "repos you don't own"; an ordinary foreign source repo
+# keeps today's copy.
+# ---------------------------------------------------------------------------
+
+
+def _write_publish_registry(reg_dir: Path, mirror_path: str, owner: str = "claude-central-em") -> None:
+    """A real `[publish.mirrors.<key>]` nested table -- the shape
+    `target_is_publish_destination`/`_all_publish_destinations` (C1) parse,
+    not the flat-string shape that silently fails to parse as a bracket
+    table."""
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    escaped = str(mirror_path).replace("\\", "\\\\")
+    lines = ["[publish.mirrors.testmirror]", f'path = "{escaped}"', f'owner = "{owner}"']
+    (reg_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(repos, monkeypatch, tmp_path):
+    reg_dir = tmp_path / "registry"
+    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    _set_anchor(
+        monkeypatch, repos, "sess-ac3-publish", extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)}
+    )
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac3-publish", str(repos["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "claude-central-em" in reason
+    assert "is publish mirror" in reason
+    assert "repos you don't own" not in reason
+    assert "check with your PM" not in reason
+    assert "cross-repo-memo" not in reason
+
+
+def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkeypatch):
+    """No publish-mirror registry entry for this target -- destination_class
+    stays DESTINATION_FOREIGN and the copy is unchanged from today's."""
+    _set_anchor(monkeypatch, repos, "sess-ac1-foreign-class")
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac1-foreign-class", str(repos["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "cross-repo-memo is the sanctioned channel" in reason
+    assert "is publish mirror" not in reason
+
+
+def test_ac9_publish_destination_verdict_asserted_only_after_bump_applies(repos, monkeypatch, tmp_path):
+    """AC9 -- non-negotiable precondition, exercised explicitly for this
+    chunk's own new classification wiring."""
+    from coordinator_core.bash_guards import _write_bump_applicability as applicability
+
+    reg_dir = tmp_path / "registry"
+    _write_publish_registry(reg_dir, str(repos["foreign"]))
+    _set_anchor(
+        monkeypatch, repos, "sess-ac9-publish", extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)}
+    )
+
+    assert applicability.bump_applies("sess-ac9-publish", cwd=str(repos["anchor"])) is True
+
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac9-publish", str(repos["anchor"]), {})
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Fail-open cases -- unresolvable inputs never bump.
+# ---------------------------------------------------------------------------
+
+
+def test_fail_open_when_session_id_empty(repos, monkeypatch):
+    # Guard short-circuits on an empty `session_id` before ever resolving
+    # an anchor -- no applicability setup needed either way.
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    assert guard.check_bump_foreign_repo_write(cmd, "", str(repos["anchor"]), {}) is None
+
+
+def test_fail_open_when_cmd_empty(repos, monkeypatch):
+    # Guard short-circuits on an empty `cmd` before ever resolving an
+    # anchor -- no applicability setup needed either way.
+    assert guard.check_bump_foreign_repo_write("", "sess-16", str(repos["anchor"]), {}) is None
+
+
+def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
+    # No CLAUDE_PROJECT_DIR / session-start record at all -- this IS the
+    # genuinely-unresolvable-anchor case, not a `CLAUDE_PROJECT_DIR`
+    # fallback test.
+    monkeypatch.setenv("HOME", str(repos["home"]))
+    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-17", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_fail_open_when_write_sink_target_has_no_existing_ancestor_at_all():
+    """`_nearest_existing_ancestor` -- a bogus path with no real filesystem
+    root resolves to `None` (never raises)."""
+    assert guard._nearest_existing_ancestor("") is None
+
+
+# ---------------------------------------------------------------------------
+# Agent memory store -- never a foreign-repo bump, even when `~/.claude`
+# itself IS a real git checkout (as it is on this fleet), which is exactly
+# the shape THIS guard (not C5's outside-repo sibling) would otherwise see.
+# ---------------------------------------------------------------------------
+
+
+def test_agent_memory_store_write_never_bumps_even_when_home_is_a_repo(repos, monkeypatch, tmp_path):
+    session_id = "sess-mem-c4-1"
+    home = _init_repo(tmp_path, "home-that-is-a-repo")
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+    memory_dir = home / ".claude" / "projects" / "-Users-example-operator-X-some-project" / "memory"
+    memory_dir.mkdir(parents=True)
+    dest = memory_dir / "note.md"
+    cmd = f"echo hi > {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_agent_memory_store_index_write_never_bumps_even_when_home_is_a_repo(repos, monkeypatch, tmp_path):
+    session_id = "sess-mem-c4-2"
+    home = _init_repo(tmp_path, "home-that-is-a-repo-2")
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+    memory_dir = home / ".claude" / "projects" / "-Users-example-operator-X-some-project" / "memory"
+    memory_dir.mkdir(parents=True)
+    dest = memory_dir / "MEMORY.md"
+    cmd = f"echo hi > {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_project_dir_write_not_under_memory_still_bumps_when_home_is_a_repo(repos, monkeypatch, tmp_path):
+    """Proves the exemption is scoped to `memory/`, not the whole
+    `<slug>/` project directory -- a write elsewhere under a project's own
+    directory (e.g. a hypothetical per-project doctrine file) still bumps
+    when `~/.claude` is a real, different git repo."""
+    session_id = "sess-mem-c4-3"
+    home = _init_repo(tmp_path, "home-that-is-a-repo-3")
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+    project_dir = home / ".claude" / "projects" / "-Users-example-operator-X-some-project"
+    project_dir.mkdir(parents=True)
+    dest = project_dir / "not-memory.md"
+    cmd = f"echo hi > {dest}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+# ---------------------------------------------------------------------------
+# AC13 / AC19 -- registered as a GuardEntry, not a call-site patch, with
+# every registration attribute pinned explicitly.
+# ---------------------------------------------------------------------------
+
+
+def test_ac13_registered_as_a_guard_entry_in_dispatch_build_guard_chain():
+    from coordinator_core.bash_guards import dispatch
+
+    chain = dispatch._build_guard_chain("echo hi", "sess-struct", "/tmp", {}, None, False)
+    entries = [e for e in chain if e.name == "bump-foreign-repo-write"]
+
+    assert len(entries) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC10/AC10b -- `offer-git-c` and this bump were both registered in
+# `GuardBand.ADVISORY_REWRITE`, and the chain returns on the first non-None
+# result: `offer-git-c` sat first, so a bare `git commit` (no pathspec) in a
+# foreign repo never reached this bump at all -- C2's destination-class
+# message axis was built for a verdict nobody ever saw. C8 moved this guard
+# (and its `bump-outside-repo-write` sibling) ahead of `offer-git-c` in
+# `_build_guard_chain`'s own registration order to close that gap. These two
+# tests exercise the REAL chain in registration order (not a single guard's
+# `check_bump_foreign_repo_write` call in isolation, as the rest of this file
+# does) so the fix is asserted at the level it actually broke at.
+# ---------------------------------------------------------------------------
+
+
+def _first_verdict(chain):
+    """Replicates `evaluate_payload_json`'s own "first non-None result
+    wins" loop, without the blanket-disarm/host-suppression machinery this
+    file's fixtures never engage -- sufficient to observe REGISTRATION
+    ORDER effects (which guard answers first), the one thing AC10/AC10b are
+    about."""
+    for entry in chain:
+        result = entry.fn()
+        if result is not None:
+            return entry.name, result
+    return None, None
+
+
+def test_ac10_bare_git_commit_no_pathspec_in_foreign_repo_now_reaches_the_bump(repos, monkeypatch):
+    from coordinator_core.bash_guards import _write_bump_applicability as applicability
+    from coordinator_core.bash_guards import dispatch
+
+    session_id = "sess-ac10-reaches-bump"
+    _set_anchor(monkeypatch, repos, session_id)
+    assert applicability.bump_applies(session_id, cwd=str(repos["anchor"])) is True
+
+    cmd = f"cd {repos['foreign']} && git commit --allow-empty -m x"
+    payload = {}
+    chain = dispatch._build_guard_chain(cmd, session_id, str(repos["anchor"]), payload, None, False)
+
+    name, result = _first_verdict(chain)
+
+    assert name == "bump-foreign-repo-write"
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_ac10b_offer_git_c_no_longer_rewrites_the_case_it_used_to(repos, monkeypatch):
+    """The coverage change to `offer-git-c` itself: called on its own (as
+    the rest of this file exercises `check_bump_foreign_repo_write` on its
+    own), `offer-git-c` still rewrites this exact command -- its own logic
+    is untouched. What changed is that it never gets the chance to, because
+    the bump now answers first in the real chain (asserted above by AC10).
+    This test pins the BEFORE half of that story so the coverage change is
+    visible, not just the bump's new reachability."""
+    from coordinator_core.bash_guards.guard_offer_git_c import check_offer_git_c
+
+    session_id = "sess-ac10b-coverage-change"
+    _set_anchor(monkeypatch, repos, session_id)
+
+    cmd = f"cd {repos['foreign']} && git commit --allow-empty -m x"
+
+    # `offer-git-c` in isolation still rewrites this shape -- confirms the
+    # guard's own behaviour is unchanged; only its chain POSITION moved.
+    solo_result = check_offer_git_c(cmd, session_id, str(repos["anchor"]))
+    assert solo_result is not None
+
+    from coordinator_core.bash_guards import dispatch
+
+    chain = dispatch._build_guard_chain(cmd, session_id, str(repos["anchor"]), {}, None, False)
+    name, _result = _first_verdict(chain)
+
+    # In the real chain, `offer-git-c` no longer gets to answer this case --
+    # the bump shadows it now. This is the case `offer-git-c` used to cover
+    # (be the first non-None answer for) and now does not.
+    assert name != "offer-git-c"
+
+
+def test_ac19_registration_attributes_pinned_not_left_to_default():
+    from coordinator_core.bash_guards import dispatch
+    from coordinator_core.bash_guards._advisory_value import AdvisoryValue
+
+    chain = dispatch._build_guard_chain("echo hi", "sess-struct", "/tmp", {}, None, False)
+    entry = next(e for e in chain if e.name == "bump-foreign-repo-write")
+
+    # `fail_closed=False` -- the OPPOSITE of every neighbouring
+    # CONFINEMENT_DENY entry: a crash in this guard must swallow to
+    # "allow", never route through the hard-deny crash path.
+    assert entry.fail_closed is False
+    # `band=ADVISORY_REWRITE`, NOT `CONFINEMENT_DENY` -- the blanket-disarm
+    # marker can suppress every band except CONFINEMENT_DENY; registering
+    # a deliberately passable bump there would make it the LEAST passable
+    # guard in the suite.
+    assert entry.band is dispatch.GuardBand.ADVISORY_REWRITE
+    # Explicit, never the UNCLASSIFIED default (dispatch.py's own
+    # registry-validation test also fails loud on this).
+    assert entry.advisory_value is not AdvisoryValue.UNCLASSIFIED
+    assert entry.advisory_value is AdvisoryValue.NOT_COST_ARGUED
+
+
+def test_ac19_guard_band_membership_and_advisory_registry_tests_also_pass():
+    """This guard's registration is additionally pinned by the package's
+    OWN pre-existing structural tests (not reimplemented here) --
+    `test_guard_band_membership.py::test_no_registered_guard_is_
+    unclassified_by_this_test` and `test_advisory_value_registry.py`'s own
+    sweep both exercise `_build_guard_chain` directly and will fail loud if
+    this guard's name is ever registered without being classified in
+    those files' own band lists."""
+    from coordinator_core.bash_guards import dispatch
+    from coordinator_core.bash_guards._advisory_value import AdvisoryValue
+
+    chain = dispatch._build_guard_chain("echo hi", "sess-struct", "/tmp", {}, None, False)
+    for entry in chain:
+        assert entry.advisory_value is not None
+        if entry.band is dispatch.GuardBand.CONFINEMENT_DENY:
+            assert entry.advisory_value is not AdvisoryValue.UNCLASSIFIED
+
+
+def test_extended_length_prefix_does_not_desync_same_repo_root(monkeypatch, tmp_path):
+    """`state/handoffs/2026-08-03-windows-extended-length-prefix-desync.md`
+    -- bash surface (C4). Simulates the exact failure shape: `os.path.
+    realpath` returns the Windows extended-length form for one operand and
+    the bare form for the other (the length-triggered asymmetry a real
+    Windows host can produce), injected via monkeypatch since this is a
+    macOS box and `realpath` never produces that form here. Before this
+    fix, `_resolve_and_casefold`'s `casefold_path` call preserved the
+    prefix, so the two operands compared unequal and `_same_repo_root`
+    wrongly reported "different repo" for the identical directory."""
+    real_dir = tmp_path / "anchor-repo"
+    real_dir.mkdir()
+    bare_form = str(real_dir)
+    prefixed_form = "\\\\?\\" + bare_form
+
+    real_realpath = guard.os.path.realpath
+
+    def fake_realpath(path, *a, **kw):
+        if path == "candidate-input":
+            return prefixed_form
+        if path == "root-input":
+            return bare_form
+        return real_realpath(path, *a, **kw)
+
+    monkeypatch.setattr(guard.os.path, "realpath", fake_realpath)
+
+    candidate_cf = guard._resolve_and_casefold("candidate-input")
+    root_cf = guard._resolve_and_casefold("root-input")
+    assert candidate_cf is not None and root_cf is not None
+    assert guard._same_repo_root(candidate_cf, root_cf) is True

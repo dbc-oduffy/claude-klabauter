@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/completion-entry.schema.json",
+  "x-schema-name": "completion-entry",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "top-level-array-additive",
+  "x-bump-note": "1.1.0 -> 1.2.0 relabeled x-bump-class from nested-field-additive to top-level-array-additive — late_commits is a plain top-level array, not a field nested inside another compound structure; taxonomy-only correction, no shape change (review finding). Prior bump 1.0.0 -> 1.1.0 added optional late_commits: — commits discovered after release, attributed for coverage-accounting; commits: remains the as-released record.",
+  "applies_to": "archive/completed/*/*.md",
+  "description": "Per-entry completion log record. Each file in archive/completed/YYYY-MM/ carries this frontmatter, authored by /workstream-complete Step 2.6 and queryable via bin/query-completions. Spec backlink: docs/plans/2026-05-19-completion-log-phase1-foundational-loop.md § Cross-phase frontmatter schema.",
+  "type": "object",
+  "required": [
+    "title",
+    "created",
+    "nature"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "One-line past-tense description of work shipped. Authored by the EM at /workstream-complete time."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of /workstream-complete authoring (YYYY-MM-DD). Written by /workstream-complete Step 2.6."
+    },
+    "nature": {
+      "enum": [
+        "roadmap",
+        "bugfix",
+        "tech-debt",
+        "infra"
+      ],
+      "description": "PM-confirmed work category. roadmap=new capability; bugfix=defect correction; tech-debt=internal cleanup; infra=tooling/CI/schema/ceremony. No 'other' slot by design."
+    },
+    "chain": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Plan-md path | handoff-md path | workstream slug | null. Null for standalone single-session work. Used by /workday-complete for clustering."
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commit SHAs landing this work. May be empty if /workstream-complete runs before commit (uncommon but permitted)."
+    },
+    "status": {
+      "enum": [
+        "pending-release",
+        "released"
+      ],
+      "description": "Lifecycle state for release tracking. Default is pending-release on write; /merge-to-main flips to released."
+    },
+    "late_commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commit SHAs discovered after release, attributed for coverage-accounting only. commits: remains the as-released record — status: released freezes commits: as a closed historical record, so a late-discovered commit is NEVER folded into it. Written only via reconcile-completion-commits.py --allow-released (which forces the underlying completion.reconcile_commits op to dry_run and folds the delta into this separate list client-side, never touching commits:). Absent on entries with no late-discovered commits. Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § C4 pending-release escape hatch."
+    },
+    "released_in": {
+      "type": "string",
+      "description": "Version tag (e.g. v2.1.0) set by /merge-to-main on release cut."
+    },
+    "released_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of release cut (YYYY-MM-DD), set by /merge-to-main."
+    },
+    "released_sha": {
+      "type": "string",
+      "description": "Merge commit SHA on main, set by /merge-to-main."
+    },
+    "chain_terminal": {
+      "type": "boolean",
+      "description": "Phase 2 field. true if this entry is the chain-terminal aggregation entry; false/absent on mid-chain ledger entries."
+    },
+    "loe": {
+      "type": "object",
+      "properties": {
+        "agent_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Total agent dispatches for this session. null when not captured (Phase 1 entries)."
+        },
+        "opus_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Opus-model dispatches for this session. null when not captured."
+        },
+        "em_tokens": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "EM token consumption for this session. null when not captured."
+        },
+        "tshirt": {
+          "anyOf": [
+            {
+              "enum": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "T-shirt size estimate for this session's work effort."
+        }
+      },
+      "description": "Level-of-effort metrics for this session. Phase 1 entries may omit entirely or have null sub-fields. DR-118 nested-object validation: each sub-field is type-checked."
+    },
+    "chain_loe": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Count of distinct sessions in the predecessor chain."
+        },
+        "agent_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of agent_dispatches across the chain (deduped by session_id)."
+        },
+        "opus_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of opus_dispatches across the chain."
+        },
+        "em_tokens": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of em_tokens across the chain. null if any contributor is null."
+        },
+        "tshirt": {
+          "anyOf": [
+            {
+              "enum": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "T-shirt size recomputed from summed numbers via threshold table."
+        }
+      },
+      "description": "Chain-aggregate LoE metrics. Set by /workstream-complete on chain-terminal entries (chain_terminal: true) when opened via /pickup. Populated by bin/aggregate-chain-loe.py."
+    },
+    "chain_sessions_with_ledger": {
+      "type": "string",
+      "description": "'N of M' annotation: number of predecessor handoffs that carried a Session Ledger block out of total predecessors walked."
+    },
+    "chain_span_days": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Number of days spanned by the predecessor chain. null when chain has only one session or no datable predecessor."
+    },
+    "chain_starting_handoff": {
+      "type": "string",
+      "description": "Path to the chain-root handoff (the predecessor with predecessor: null/none). Forensic anchor for walking the chain."
+    },
+    "chain_walk_terminated_early": {
+      "type": "string",
+      "description": "Set ONLY when chain walk terminated abnormally. Values: 'lineage-cycle' (genuine back-edge from the walk-handoff-dag primitive's gray/black DFS; benign diamond convergence is NOT flagged) or 'missing-link'. chain_loe sum is a PARTIAL aggregate when set."
+    },
+    "narrative": {
+      "type": "string",
+      "description": "Phase 1: optional Sonnet-authored cluster summary generated by /workday-complete for chains with >= 2 entries on the same day."
+    },
+    "narrative_in": {
+      "type": "string",
+      "description": "Path to the chain lead entry that carries the narrative for this day's cluster."
+    },
+    "nature_inferred": {
+      "type": "boolean",
+      "description": "true when nature was AUTO-INFERed by the Sonnet dispatch in /workstream-complete Step 3; false/absent when declared by the EM via COMPLETION_NATURE env var."
+    },
+    "authored_by": {
+      "type": "string",
+      "description": "Session ID of the authoring EM ($em_sid), for forensic tracing only."
+    },
+    "workstream": {
+      "type": "string",
+      "description": "Free-form slug grouping cross-chain related work. Used by /workweek-complete editorial bucketing."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Durable deliverable join key inherited from the plan/handoff chain this completion records. Enables the board to link completion entries back to the deliverable spine. Null for pre-backfill entries or standalone single-session work. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml) inherited from the deliverable spine. Nullable. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2"
+    },
+    "completion_id": {
+      "type": "string",
+      "pattern": "^cmp-[a-z0-9-]+-[0-9a-f]{6}$",
+      "description": "Durable stable ID for this completion entry, path-independent (survives archival/rename). Minted via coordinator-doc-new's _mint_artifact_id(prefix=\"cmp\", slug) at scaffold time — cmp-<slug>-<6hex>. OPTIONAL, pure additive property — this schema is standalone with no CROSS_FIELD_RULES entry (unlike the handoff family), so completion_id carries no cross-field rule wiring. No migration for pre-existing entries. Spec backlink: docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C1"
+    }
+  }
+}

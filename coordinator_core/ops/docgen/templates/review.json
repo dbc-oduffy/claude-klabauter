@@ -1,0 +1,45 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "review",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "plan", "field": "plan_path", "quote": true},
+      {"kind": "literal", "line": "kind: staff-eng-review  # one of: staff-eng-review, eng-director-review, staff-ux-review, staff-game-dev-review, staff-data-sci-review, senior-front-end-review, code-review, plan-review, review"},
+      {"kind": "literal", "line": "reviewer: PLACEHOLDER"},
+      {"kind": "literal", "line": "verdict: PLACEHOLDER"},
+      {"kind": "value", "key": "created", "field": "created", "quote": false}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## Summary",
+      "",
+      "<!-- Overall verdict one-liner. -->",
+      "",
+      "## Findings",
+      "",
+      "### critical",
+      "",
+      "<!-- P0 issues that must be addressed before merge. -->",
+      "",
+      "### major",
+      "",
+      "<!-- Significant issues requiring fixes. -->",
+      "",
+      "### minor",
+      "",
+      "<!-- Suggestions and improvements. -->",
+      "",
+      "### nitpick",
+      "",
+      "<!-- Style / polish items. -->",
+      "",
+      "## Verdict",
+      "",
+      "<!-- APPROVED | APPROVED_WITH_NOTES | REQUIRES_CHANGES | REJECTED -->",
+      ""
+    ]}
+  ]
+}

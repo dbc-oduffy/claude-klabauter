@@ -1,0 +1,18 @@
+# Test fixture: file-exists conditional consumer for bin/snippet-registry.
+# Used by test-snippet-registry-conditional.bats (file-exists tests).
+# The conditional path "agents/file-exists-target.md" resolves relative to
+# $PLUGIN_ROOT (= <tmpdir> in the test tree). The test controls whether the
+# file exists by creating <tmpdir>/agents/file-exists-target.md before the run.
+schema_version = 2
+
+[snippet.reviewer-calibration]
+sentinel_begin = "<!-- BEGIN reviewer-calibration (synced from snippets/reviewer-calibration.md) -->"
+sentinel_end   = "<!-- END reviewer-calibration -->"
+consumers = [
+  "agents/staff-eng.md",
+  "agents/vp-product.md",
+]
+
+[[snippet.reviewer-calibration.conditional_consumer]]
+path           = "agents/file-exists-target.md"
+condition_type = "file-exists"

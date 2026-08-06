@@ -1,0 +1,329 @@
+"""
+coordinator_core.pickup_assemble.holder_evidence — decidable evidence about
+WHAT a claim/handoff holder is actually doing, not merely THAT it is live.
+
+Purpose: `compute_claim_grant`/`compute_competing_claim` (`pickup_assemble/
+__init__.py`) answer a boolean `holder_live` plus a raw claim age. Both are
+unfalsifiable on their own — a bare `True` plus a stale-looking age is
+exactly the shape that gets overridden by reflex (state/handoffs/
+2026-07-26_..._sizing-lobby-slate-cascade.md, the incident this module
+exists to close: a genuinely live peer read as a stale-mtime false positive
+because there was nothing to check the verdict against). This module adds
+the evidence layer: WHICH liveness layer concluded live, how fresh the
+signal actually is, and what the holder was last touching.
+
+READ-ONLY and FAIL-SOFT by construction: every field here is `None` (or an
+explicit error marker) rather than an exception or a changed verdict on any
+read failure. This module never re-derives or overrides `holder_live` —
+that stays sourced from `coordinator_core.session.liveness` exactly as
+before; `holder_evidence` only explains an existing decision, never makes
+a new one. See `liveness.py`'s own module docstring: a caught liveness
+exception is an INDETERMINATE read, never confirmed-dead, and this module
+must never launder that into a `False`.
+
+Spec backlink: docs/plans/2026-07-24-pickup-code-computed-decision-surface.md
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any, Optional
+
+from coordinator_core.ops.check_em_environment import _resolve_transcript
+from coordinator_core.session import core
+from coordinator_core.session import liveness as _liveness
+
+#: Cap on how much of a transcript's tail we ever read, regardless of file
+#: size — a multi-MB transcript must not be fully parsed just to answer
+#: "what were the last few tool calls". 256 KiB comfortably covers the
+#: ~200 most-recent jsonl records on a normal transcript.
+_TRANSCRIPT_TAIL_BYTES = 256 * 1024
+
+#: How many trailing well-formed jsonl records to actually parse once the
+#: tail bytes are decoded — bounds CPU on a transcript with many short lines
+#: inside the byte cap.
+_TRANSCRIPT_TAIL_RECORDS = 200
+
+#: Cap on the number of recent paths returned — most-recent-first.
+_RECENT_PATHS_CAP = 10
+
+#: `tool_use` input keys that name a file-ish path directly.
+_PATH_INPUT_KEYS = ("file_path", "notebook_path", "path")
+
+#: Loose path-shaped token extractor for `command` strings (Bash tool
+#: invocations) — matches a relative/absolute-looking path segment
+#: containing at least one `/` or a recognizable extension. Intentionally
+#: permissive: false positives here just add a noisy `recent_paths` entry,
+#: never a wrong verdict.
+_COMMAND_PATH_RE = re.compile(r"[./A-Za-z0-9_\-]*(?:/[./A-Za-z0-9_\-]+)+")
+
+
+def _liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
+    """Which liveness LAYER concluded live/dead for `holder_sid` — the single
+    highest-value evidence field (see module docstring). Does not repeat the
+    liveness decision itself, only names its source.
+
+    Reads the basis off `coordinator_core.session.liveness.live_session_verdicts`
+    — the ONE shared per-id liveness seam — rather than re-deriving it here.
+    This module used to call `core.stable_pid_alive` directly, which violated
+    `liveness.py`'s own D5 single-liveness-key invariant ("called from exactly
+    ONE place here — `session_live`"); reading off the seam instead restores
+    that invariant as a free side effect (Review: staff-eng second pass,
+    Finding 7).
+
+    Vocabulary (four values; see `live_session_verdicts`'s docstring for the
+    full per-arm derivation):
+      "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
+      "recency-window"        — Layer 2 recency fallback, `last_activity`
+                                 present and parseable.
+      "recency-window-mtime"  — Layer 2 recency fallback with the meta-less/
+                                 mid-write mtime-substitution recency source.
+      "unknown"               — either the underlying process-liveness check
+                                 itself raised (never launder that into a
+                                 stronger claim than can be supported), or
+                                 `holder_sid` has no verdict at all (absent
+                                 from the sessions dir enumeration, e.g. the
+                                 `no-session` sentinel) — evidence-gap, not a
+                                 stronger claim either way.
+    """
+    verdicts = _liveness.live_session_verdicts(cwd)
+    entry = verdicts.get(holder_sid)
+    if entry is None:
+        return "unknown"
+    _live, basis, _age_sec = entry
+    return basis
+
+
+def _last_activity_age_sec(sdir: str) -> Optional[int]:
+    """Seconds between now and meta.json's `last_activity`, or `None` when
+    the field is absent/unparseable — an evidence gap, not a zero age."""
+    last_iso = core.read_meta_field(sdir, "last_activity")
+    if not last_iso:
+        return None
+    last_epoch = core.iso_to_epoch(last_iso)
+    if last_epoch <= 0:
+        return None
+    age = core.now_epoch() - last_epoch
+    return age if age >= 0 else 0
+
+
+def _meta_str_or_none(sdir: str, field: str) -> Optional[str]:
+    value = core.read_meta_field(sdir, field)
+    return value or None
+
+
+def _parse_scope_entry(entry: str) -> tuple[Optional[str], str]:
+    """Local re-derivation of `pickup_assemble._parse_scope_entry`'s split
+    of one `scope:` entry into `(repo_id, path)` — kept as a private copy
+    rather than an upward import (this module sits below `pickup_assemble`'s
+    `__init__`, which is the one importing THIS module, not the reverse)."""
+    match = re.match(r"^([A-Za-z0-9_-]+):\s*(.+)$", entry.strip())
+    if match is None:
+        return None, entry.strip()
+    return match.group(1), match.group(2).strip()
+
+
+def _scope_path_overlaps(scope: list[str], candidate_path: str) -> bool:
+    """True iff `candidate_path` (a repo-relative path pulled from recent
+    tool-use activity) falls under, or matches, any bare-local entry in
+    `scope`. Sibling-repo-qualified scope entries (`<repo-id>: <path>`) are
+    skipped here — `recent_paths` is always local-repo-relative, so a
+    cross-repo scope entry cannot be evaluated against it."""
+    cand = candidate_path.strip().rstrip("/")
+    if not cand:
+        return False
+    for entry in scope:
+        repo_id, path = _parse_scope_entry(entry)
+        if repo_id is not None:
+            continue
+        path = path.rstrip("/")
+        if not path:
+            continue
+        if cand == path or cand.startswith(path + "/") or path.startswith(cand + "/"):
+            return True
+    return False
+
+
+def _extract_paths_from_tool_use(tool_input: dict, repo_root: Path) -> list[str]:
+    """Pull file-ish paths out of one `tool_use` block's `input` dict,
+    normalized to repo-relative when they resolve under `repo_root`."""
+    found: list[str] = []
+
+    for key in _PATH_INPUT_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            found.append(value)
+
+    command = tool_input.get("command")
+    if isinstance(command, str) and command:
+        found.extend(_COMMAND_PATH_RE.findall(command))
+
+    normalized: list[str] = []
+    for raw in found:
+        try:
+            p = Path(raw)
+            if p.is_absolute():
+                p = p.resolve()
+                try:
+                    rel = p.relative_to(repo_root.resolve())
+                    normalized.append(str(rel))
+                    continue
+                except ValueError:
+                    continue
+            normalized.append(raw)
+        except (OSError, ValueError):
+            continue
+    return normalized
+
+
+def _read_transcript_tail_records(transcript_path: str) -> list[dict]:
+    """Read at most the trailing `_TRANSCRIPT_TAIL_BYTES` of `transcript_path`,
+    discard the first (possibly partial) line, and parse up to the last
+    `_TRANSCRIPT_TAIL_RECORDS` well-formed jsonl records. Never raises —
+    any I/O or decode failure yields an empty list."""
+    try:
+        size = Path(transcript_path).stat().st_size
+        truncated = size > _TRANSCRIPT_TAIL_BYTES
+        with open(transcript_path, "rb") as fh:
+            if truncated:
+                fh.seek(size - _TRANSCRIPT_TAIL_BYTES)
+            raw = fh.read()
+    except OSError:
+        return []
+
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if truncated and len(lines) > 1:
+        # Only the truncated-read case can start mid-line; a read from byte
+        # 0 has no partial first line to discard.
+        lines = lines[1:]
+
+    records: list[dict] = []
+    for line in lines[-_TRANSCRIPT_TAIL_RECORDS:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            records.append(obj)
+    return records
+
+
+def _recent_paths_from_transcript(transcript_path: str, repo_root: Path) -> list[str]:
+    """Most-recent-first, de-duplicated, capped at `_RECENT_PATHS_CAP` list
+    of file-ish paths touched by `tool_use` blocks in the transcript tail."""
+    records = _read_transcript_tail_records(transcript_path)
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    for record in reversed(records):
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            tool_input = block.get("input")
+            if not isinstance(tool_input, dict):
+                continue
+            for path in _extract_paths_from_tool_use(tool_input, repo_root):
+                if path in seen:
+                    continue
+                seen.add(path)
+                paths.append(path)
+                if len(paths) >= _RECENT_PATHS_CAP:
+                    return paths
+    return paths
+
+
+def holder_evidence(
+    holder_sid: str,
+    repo_root: Path,
+    *,
+    scope: Optional[list[str]] = None,
+    want_activity: bool = False,
+) -> dict[str, Any]:
+    """Decidable evidence about what `holder_sid` is actually doing, to
+    accompany (never replace) the `holder_live` boolean `compute_claim_grant`
+    / `compute_competing_claim` already resolve via
+    `coordinator_core.session.liveness`.
+
+    Always returns a dict with these keys (each `None` when unknown):
+      liveness_basis        - "stable-pid" | "recency-window" | "unknown"
+      last_activity_age_sec  - int seconds since meta.json's last_activity
+      holder_goal            - meta.json's "goal" field
+      holder_branch          - meta.json's "branch" field
+      recent_paths            - list[str], most-recent-first, deduplicated,
+                                 <= 10 entries; only populated when
+                                 `want_activity=True`
+      recent_paths_source    - "transcript" | "unavailable"
+      scope_overlap           - True/False/None; None when either
+                                 `recent_paths` or `scope` is empty (unknown
+                                 reads as unknown here — NOT the "either-side-
+                                 empty counts as overlap" convention
+                                 `_scopes_intersect` uses for blocking
+                                 decisions; this is evidence, not a gate)
+
+    Fail-soft (module contract): any exception during evidence-gathering
+    yields `evidence_error` plus `None`s for every field above, and NEVER
+    raises, changes a verdict, or hangs. This applies ONLY to the evidence
+    fields — it never touches `holder_live`/`verdict`, which the caller
+    already resolved via `session_live`/`claim_holder_live` before ever
+    calling this function.
+    """
+    result: dict[str, Any] = {
+        "liveness_basis": None,
+        "last_activity_age_sec": None,
+        "holder_goal": None,
+        "holder_branch": None,
+        "recent_paths": [],
+        "recent_paths_source": "unavailable",
+        "scope_overlap": None,
+    }
+
+    try:
+        sdir = core.session_dir(holder_sid, str(repo_root))
+        if not sdir or not Path(sdir).is_dir():
+            return result
+
+        result["liveness_basis"] = _liveness_basis(holder_sid, str(repo_root))
+        result["last_activity_age_sec"] = _last_activity_age_sec(sdir)
+        result["holder_goal"] = _meta_str_or_none(sdir, "goal")
+        result["holder_branch"] = _meta_str_or_none(sdir, "branch")
+
+        if not want_activity:
+            return result
+
+        home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
+        user_claude = Path(home) / ".claude" if home else Path(".claude")
+        transcript = _resolve_transcript("", user_claude, holder_sid)
+        if not transcript:
+            return result
+
+        recent_paths = _recent_paths_from_transcript(transcript, repo_root)
+        result["recent_paths"] = recent_paths
+        result["recent_paths_source"] = "transcript"
+
+        scope = scope or []
+        if recent_paths and scope:
+            result["scope_overlap"] = any(
+                _scope_path_overlaps(scope, path) for path in recent_paths
+            )
+        return result
+    except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
+        result["evidence_error"] = f"{type(exc).__name__}: {exc}"
+        result["liveness_basis"] = None
+        result["last_activity_age_sec"] = None
+        result["holder_goal"] = None
+        result["holder_branch"] = None
+        result["recent_paths"] = []
+        result["recent_paths_source"] = "unavailable"
+        result["scope_overlap"] = None
+        return result

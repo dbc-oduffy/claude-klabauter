@@ -1,0 +1,55 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "audit-record",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "run_id", "field": "run_id_placeholder", "quote": false, "suffix": "  # replace with actual run timestamp (YYYY-MM-DD-HHhMM)"},
+      {"kind": "value", "key": "system", "field": "system", "quote": true},
+      {"kind": "literal", "line": "grade: TODO  # fill: A | B | C | D | E | F"},
+      {"kind": "literal", "line": "health_status: TODO  # fill: HEALTHY | WATCH | ACTION | CRITICAL"},
+      {"kind": "literal", "line": "reviewer: PLACEHOLDER  # replace with reviewer identity"},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "# mode: RESEARCH_ONLY | FULL | REMEDIATION  # optional — uncomment and fill if relevant"}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "# {title}",
+      "",
+      "## 1. System Health Grade",
+      "",
+      "<!-- Overall grade + one-line rationale. The reviewer fills this first. -->",
+      "",
+      "## 2. Convergent Findings",
+      "",
+      "<!-- Findings that emerged from multiple independent signal sources. -->",
+      "",
+      "### Diagram (ASCII)",
+      "",
+      "<!-- Format and ≤100-char line rule: canonical-artifact-shapes.md § Diagram (ASCII) Rule (:301) -->",
+      "```",
+      "(ASCII diagram — reviewer fills this per canonical-artifact-shapes.md § Diagram (ASCII) Rule)",
+      "```",
+      "",
+      "## Verified Findings Slate",
+      "",
+      "| # | Finding | Severity | Evidence | Spinoff candidate? |",
+      "|----|---------|----------|----------|--------------------|",
+      "",
+      "## Grade Rationale",
+      "",
+      "<!-- Rationale for the grade: what moved it up or down from a B baseline. -->",
+      "",
+      "## Suggested Spinoff Groupings",
+      "",
+      "<!-- Cluster findings into candidate spinoffs for follow-on work. -->",
+      "",
+      "## Ambition Check",
+      "",
+      "<!-- Is the audit scope well-matched to the system's current risk and complexity? -->",
+      ""
+    ]}
+  ]
+}

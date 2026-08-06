@@ -1,0 +1,29 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "goal",
+  "frontmatter": {
+    "style": "whole_document",
+    "fields": [
+      {"kind": "literal", "line": "schema: goal"},
+      {"kind": "value", "key": "id", "field": "goal_id", "quote": true},
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "literal", "line": "status: active"},
+      {"kind": "literal", "line": "objective: \"PLACEHOLDER — replace with one-sentence statement of what this goal achieves\""},
+      {"kind": "literal", "line": "key_results:"},
+      {"kind": "literal", "line": "  - id: kr-1"},
+      {"kind": "literal", "line": "    text: \"PLACEHOLDER — describe the first measurable key result\""},
+      {"kind": "literal", "line": "    kind: outcome  # output | outcome"},
+      {"kind": "literal", "line": "    status: not-started  # not-started | in-progress | met | at-risk"},
+      {"kind": "literal", "line": "    weekly_perceptible: true"},
+      {"kind": "literal", "line": "    evidence_source: null"},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "# owner: PLACEHOLDER  # optional — EM or workstream identifier"},
+      {"kind": "literal", "line": "period: week  # required by emitter — day | week | repo | quarter | year"},
+      {"kind": "literal", "line": "period_value: \"PLACEHOLDER\"  # required: e.g. 2026-W28 (week), 2026-07-07 (day), example-doctrine-repo-2026 (repo), Q3-2026 (quarter), 2026 (year)"},
+      {"kind": "literal", "line": "# weekly_perceptible: true  # optional — TOP-LEVEL goal-scope flag, distinct from the per-KR field above"},
+      {"kind": "literal", "line": "# parent_goal_id: null  # optional — FK to a parent quarter/repo OKR goal_id, or null"},
+      {"kind": "literal", "line": "# goal_id: {goal_id_quoted}  # optional — deterministic sha1(repo|root|period|period_value|text); this is the structured-records (C15) facet key, DISTINCT from the wire goal_id (append-goal-event.py derives its own hash from id-prefixed text and currently ignores --goal-id); populate once period/period_value/objective are final"}
+    ]
+  },
+  "body": null
+}

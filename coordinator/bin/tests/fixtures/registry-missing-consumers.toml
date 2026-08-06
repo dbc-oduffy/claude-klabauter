@@ -1,0 +1,9 @@
+# Test fixture: snippet entry missing required 'consumers' field.
+# CLI must exit non-zero (schema reader should catch this).
+# Used by test-snippet-registry-malformed.bats.
+schema_version = 1
+
+[snippet.reviewer-calibration]
+sentinel_begin = "<!-- BEGIN reviewer-calibration -->"
+sentinel_end   = "<!-- END reviewer-calibration -->"
+# consumers field intentionally omitted to test required-field validation

@@ -1,0 +1,182 @@
+{
+  "oracle": "coordinator/bin/memo-transition.js",
+  "consuming_suite": "coordinator_core/frontmatter/tests/test_parity_memo_ops.py",
+  "cases": {
+    "claim_basic": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: claimed /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmp5vmnsqx_/repo/cross-repo/inbox/memo.md (picked_up_by session-parity-memo-test)\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_idempotent_noop": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpucl1gujg/repo/cross-repo/inbox/memo.md already in_progress (picked_up_by session-parity-memo-test) \u2014 no-op\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_collision": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo is already in_progress (held by other-session-holder); release it first or use a different session\n",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-01T09:00:00Z'\npicked_up_by: other-session-holder\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_preamble_preserved": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: claimed /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpg_12gj5r/repo/cross-repo/inbox/memo.md (picked_up_by session-parity-memo-test)\n",
+      "stderr": "",
+      "resulting_file_content": "<!-- example_retrieval_repo_setup baton v2 -->\n<!-- generated: 2026-01-01 -->\n---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A preamble memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_reject_overcap_summary": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo summary is 121 chars; cap is 120 \u2014 trim by 1 char and re-submit\n",
+      "resulting_file_content": "---\nkind: fyi\nstatus: open\nfrom: sender-session\nsummary: \"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\"\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_reject_invalid_kind": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo cross-field validation failed:\n  kind: invalid enum value \"ack\" for kind (kind must be one of: ask, consult, fyi, proposal. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind \u2014 acknowledgement is receipt-state.)\n",
+      "resulting_file_content": "---\nkind: ack\nstatus: open\nfrom: sender-session\nsummary: A test memo.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_reject_central_only_missing_to": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo cross-field validation failed:\n  to: required when delivery_mode=central-only (Specify the receiver EM identifier in \"to:\" even for central-only delivery. Used for workday-start surfacing and audit trail.)\n",
+      "resulting_file_content": "---\nkind: fyi\ndelivery_mode: central-only\nstatus: open\nfrom: sender-session\nsummary: A test memo.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_reject_in_progress_without_picked_up_by": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo is already in_progress (held by (empty)); release it first or use a different session\n",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "claim_grandfather_skip_pre_cutoff_overcap": {
+      "verb": "claim",
+      "args": {
+        "session_id": "session-parity-memo-test",
+        "at": "2026-01-02T10:00:00Z"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: claimed /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpfp2yuv3_/repo/cross-repo/inbox/memo.md (picked_up_by session-parity-memo-test)\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\ncreated: 2026-05-01\n---\n"
+    },
+    "action_basic": {
+      "verb": "action",
+      "args": {
+        "decision": "accepted",
+        "realized_by": "docs/plans/test.md"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: actioned /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpgl_9mp7c/repo/cross-repo/inbox/memo.md\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: actioned\ndecision: accepted\nrealized_by: docs/plans/test.md\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "action_idempotent_noop": {
+      "verb": "action",
+      "args": {
+        "decision": "accepted",
+        "realized_by": "docs/plans/test.md"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpo0y99qnh/repo/cross-repo/inbox/memo.md already actioned at target disposition \u2014 no-op\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: actioned\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\ndecision: accepted\nrealized_by: docs/plans/test.md\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "action_collision": {
+      "verb": "action",
+      "args": {
+        "decision": "declined"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: memo is already actioned with a different disposition \u2014 cannot re-action\n",
+      "resulting_file_content": "---\nkind: fyi\nstatus: actioned\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\ndecision: accepted\nrealized_by: docs/plans/test.md\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "action_all_digit_realized_by_quoted": {
+      "verb": "action",
+      "args": {
+        "decision": "accepted",
+        "realized_by": "12345678"
+      },
+      "returncode": 0,
+      "stdout": "memo-transition: actioned /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpp2uo8puv/repo/cross-repo/inbox/memo.md\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: actioned\ndecision: accepted\nrealized_by: '12345678'\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "action_reject_accepted_missing_realized_by": {
+      "verb": "action",
+      "args": {
+        "decision": "accepted"
+      },
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "memo-transition: action: --realized-by is required when --decision is accepted\n",
+      "resulting_file_content": "---\nkind: fyi\nstatus: in_progress\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "release_basic": {
+      "verb": "release",
+      "args": {},
+      "returncode": 0,
+      "stdout": "memo-transition: released /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpqanng33_/repo/cross-repo/inbox/memo.md (status reset to open, claim cleared)\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: open\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "release_idempotent_noop": {
+      "verb": "release",
+      "args": {},
+      "returncode": 0,
+      "stdout": "memo-transition: /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpzn0ahs8q/repo/cross-repo/inbox/memo.md already open \u2014 no-op\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: open\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    },
+    "release_collision": {
+      "verb": "release",
+      "args": {},
+      "returncode": 0,
+      "stdout": "memo-transition: released /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpk_zsfhco/repo/cross-repo/inbox/memo.md (status reset to open, claim cleared)\n",
+      "stderr": "",
+      "resulting_file_content": "---\nkind: fyi\nstatus: open\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n"
+    }
+  }
+}

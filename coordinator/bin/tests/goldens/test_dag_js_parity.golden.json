@@ -1,0 +1,41 @@
+{
+  "oracle": "coordinator/bin/lib/walk-handoff-dag.js",
+  "consuming_suite": "coordinator_core/tests/test_dag_js_parity.py",
+  "cases": {
+    "linear_chain_paths_format": {
+      "returncode": 0,
+      "stdout": "<TMP>/chain/state/handoffs/c.md\n<TMP>/chain/state/handoffs/b.md\n<TMP>/chain/state/handoffs/a.md\nterminatedEarly=\n",
+      "stderr": ""
+    },
+    "linear_chain_json_format": {
+      "returncode": 0,
+      "stdout": "{\n  \"nodes\": {\n    \"<TMP>/chain/state/handoffs/c.md\": {\n      \"slug\": \"c\",\n      \"status\": \"active\",\n      \"predecessor\": \"b.md\"\n    },\n    \"<TMP>/chain/state/handoffs/b.md\": {\n      \"slug\": \"b\",\n      \"status\": \"active\",\n      \"predecessor\": \"a.md\"\n    },\n    \"<TMP>/chain/state/handoffs/a.md\": {\n      \"slug\": \"a\",\n      \"status\": \"active\",\n      \"predecessor\": \"none\"\n    }\n  },\n  \"orderedPaths\": [\n    \"<TMP>/chain/state/handoffs/c.md\",\n    \"<TMP>/chain/state/handoffs/b.md\",\n    \"<TMP>/chain/state/handoffs/a.md\"\n  ],\n  \"terminatedEarly\": \"\"\n}\n",
+      "stderr": ""
+    },
+    "diamond_convergence": {
+      "returncode": 0,
+      "stdout": "{\n  \"nodes\": {\n    \"<TMP>/diamond/state/handoffs/d.md\": {\n      \"slug\": \"d\",\n      \"status\": \"active\",\n      \"predecessor\": \"b.md\",\n      \"additional_predecessors\": [\n        \"c.md\"\n      ]\n    },\n    \"<TMP>/diamond/state/handoffs/b.md\": {\n      \"slug\": \"b\",\n      \"status\": \"active\",\n      \"predecessor\": \"a.md\"\n    },\n    \"<TMP>/diamond/state/handoffs/a.md\": {\n      \"slug\": \"a\",\n      \"status\": \"active\",\n      \"predecessor\": \"none\"\n    },\n    \"<TMP>/diamond/state/handoffs/c.md\": {\n      \"slug\": \"c\",\n      \"status\": \"active\",\n      \"predecessor\": \"a.md\"\n    }\n  },\n  \"orderedPaths\": [\n    \"<TMP>/diamond/state/handoffs/d.md\",\n    \"<TMP>/diamond/state/handoffs/b.md\",\n    \"<TMP>/diamond/state/handoffs/a.md\",\n    \"<TMP>/diamond/state/handoffs/c.md\"\n  ],\n  \"terminatedEarly\": \"\"\n}\n",
+      "stderr": ""
+    },
+    "lineage_cycle_detected": {
+      "returncode": 0,
+      "stdout": "{\n  \"nodes\": {\n    \"<TMP>/cycle/state/handoffs/x.md\": {\n      \"slug\": \"x\",\n      \"status\": \"active\",\n      \"predecessor\": \"y.md\"\n    },\n    \"<TMP>/cycle/state/handoffs/y.md\": {\n      \"slug\": \"y\",\n      \"status\": \"active\",\n      \"predecessor\": \"x.md\"\n    }\n  },\n  \"orderedPaths\": [\n    \"<TMP>/cycle/state/handoffs/x.md\",\n    \"<TMP>/cycle/state/handoffs/y.md\"\n  ],\n  \"terminatedEarly\": \"lineage-cycle\"\n}\n",
+      "stderr": ""
+    },
+    "missing_link_detected": {
+      "returncode": 0,
+      "stdout": "{\n  \"nodes\": {\n    \"<TMP>/missing_link/state/handoffs/z.md\": {\n      \"slug\": \"z\",\n      \"status\": \"active\",\n      \"predecessor\": \"never-existed.md\"\n    }\n  },\n  \"orderedPaths\": [\n    \"<TMP>/missing_link/state/handoffs/z.md\"\n  ],\n  \"terminatedEarly\": \"missing-link\"\n}\n",
+      "stderr": ""
+    },
+    "referenced_by_direct_membership": {
+      "returncode": 0,
+      "stdout": "{\n  \"referenced\": true,\n  \"referencedBy\": [\n    \"<TMP>/chain/state/handoffs/b.md\"\n  ]\n}\n",
+      "stderr": ""
+    },
+    "referenced_by_exclude_drops_referencer": {
+      "returncode": 0,
+      "stdout": "{\n  \"referenced\": false,\n  \"referencedBy\": []\n}\n",
+      "stderr": ""
+    }
+  }
+}

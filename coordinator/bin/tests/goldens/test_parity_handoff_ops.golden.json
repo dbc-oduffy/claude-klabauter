@@ -1,0 +1,177 @@
+{
+  "oracles": {
+    "handoff-transition.js": "coordinator/bin/handoff-transition.js",
+    "stamp-shipped-in.js": "coordinator/bin/stamp-shipped-in.js",
+    "lint-frontmatter.js": "coordinator/bin/lint-frontmatter.js"
+  },
+  "consuming_suite": "coordinator_core/frontmatter/tests/test_parity_handoff_ops.py",
+  "note": "normalize-handoff-frontmatter.js legacy path is NOT captured \u2014 its claude-klabauter-side parity class (TestNormalizeParity) is permanently @pytest.mark.skip'd there ('legacy path was intentionally removed in the finish-strangler collapse; there is no JS side left to compare against'). Capturing a golden for a retired comparison target is dead weight.",
+  "cases": {
+    "consume_basic": {
+      "verb": "consume",
+      "returncode": 0,
+      "stdout": "handoff-transition: consumed /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmp3ttvlz9u/repo/state/handoffs/h.md (consumed_by session-parity-test-abc)\n",
+      "stderr": "",
+      "resulting_file_content": "---\ntitle: Parity Test Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\ndeployment_state: in_flight\nconsumed_at: '2026-01-02T10:00:00Z'\nconsumed_by: session-parity-test-abc\npredecessor: none\n---\n\n# Parity Test Handoff\n\nBody text for parity testing.\n"
+    },
+    "consume_preamble": {
+      "verb": "consume",
+      "returncode": 0,
+      "stdout": "handoff-transition: consumed /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpyv1jof_w/repo/state/handoffs/h.md (consumed_by session-parity-test-abc)\n",
+      "stderr": "",
+      "resulting_file_content": "<!-- example_retrieval_repo_setup baton v2 -->\n<!-- generated: 2026-01-01 -->\n---\ntitle: Parity Preamble Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\ndeployment_state: in_flight\nconsumed_at: '2026-01-02T10:00:00Z'\nconsumed_by: session-parity-test-abc\npredecessor: none\n---\n\n# Parity Preamble Handoff\n\nBody text.\n"
+    },
+    "consume_overcap_summary_rejected": {
+      "verb": "consume",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "handoff-transition: handoff frontmatter validation failed:\n  summary: summary exceeds 140 characters (got 141) (Keep summary to one concise line of 140 characters or fewer)\n  (add missing fields to the handoff frontmatter, then retry)\n",
+      "resulting_file_content": "---\ntitle: Parity Overcap Handoff\ncreated: 2026-06-01\nbranch: work/test/2026-06-01\nstatus: active\npredecessor: none\ncategory: infra\nsummary: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n---\n\n# Parity Overcap Handoff\n\nBody text.\n"
+    },
+    "consume_empty_session_id_rejected": {
+      "verb": "consume",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "handoff-transition: consume requires a non-empty --session-id (empty consumed_by would corrupt the claim gate)\n",
+      "resulting_file_content": "---\ntitle: Parity Test Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: active\npredecessor: none\n---\n\n# Parity Test Handoff\n\nBody text for parity testing.\n"
+    },
+    "consume_whitespace_session_id_rejected": {
+      "verb": "consume",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "handoff-transition: consume requires a non-empty --session-id (empty consumed_by would corrupt the claim gate)\n",
+      "resulting_file_content": "---\ntitle: Parity Test Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: active\npredecessor: none\n---\n\n# Parity Test Handoff\n\nBody text for parity testing.\n"
+    },
+    "supersede_basic": {
+      "verb": "supersede",
+      "returncode": 0,
+      "stdout": "handoff-transition: superseded /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpgsyfl9q6/repo/state/handoffs/h.md (status: consumed, deployment_state: abandoned)\n",
+      "stderr": "",
+      "resulting_file_content": "---\ntitle: Parity Test Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\ndeployment_state: abandoned\npredecessor: none\n---\n\n# Parity Test Handoff\n\nBody text for parity testing.\n"
+    },
+    "supersede_preamble": {
+      "verb": "supersede",
+      "returncode": 0,
+      "stdout": "handoff-transition: superseded /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpp9jugbzh/repo/state/handoffs/h.md (status: consumed, deployment_state: abandoned)\n",
+      "stderr": "",
+      "resulting_file_content": "<!-- example_retrieval_repo_setup baton v2 -->\n<!-- generated: 2026-01-01 -->\n---\ntitle: Parity Preamble Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\ndeployment_state: abandoned\npredecessor: none\n---\n\n# Parity Preamble Handoff\n\nBody text.\n"
+    },
+    "supersede_overcap_summary_rejected": {
+      "verb": "supersede",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "handoff-transition: handoff frontmatter validation failed:\n  summary: summary exceeds 140 characters (got 141) (Keep summary to one concise line of 140 characters or fewer)\n  (add missing fields to the handoff frontmatter, then retry)\n",
+      "resulting_file_content": "---\ntitle: Parity Overcap Handoff\ncreated: 2026-06-01\nbranch: work/test/2026-06-01\nstatus: active\npredecessor: none\ncategory: infra\nsummary: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n---\n\n# Parity Overcap Handoff\n\nBody text.\n"
+    },
+    "ship_basic": {
+      "verb": "ship",
+      "returncode": 0,
+      "stdout": "handoff-transition: shipped /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpzp5gbglb/repo/state/handoffs/h.md (deployment_state: shipped)\n",
+      "stderr": "",
+      "resulting_file_content": "---\ntitle: Parity Test Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: active\ndeployment_state: shipped\npredecessor: none\n---\n\n# Parity Test Handoff\n\nBody text for parity testing.\n"
+    },
+    "ship_preamble": {
+      "verb": "ship",
+      "returncode": 0,
+      "stdout": "handoff-transition: shipped /var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmppw6g9zr1/repo/state/handoffs/h.md (deployment_state: shipped)\n",
+      "stderr": "",
+      "resulting_file_content": "<!-- example_retrieval_repo_setup baton v2 -->\n<!-- generated: 2026-01-01 -->\n---\ntitle: Parity Preamble Handoff\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: active\ndeployment_state: shipped\npredecessor: none\n---\n\n# Parity Preamble Handoff\n\nBody text.\n"
+    },
+    "stamp_hash_in_sha": {
+      "sha": "abc#def123",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "stamp-shipped-in: stamped shipped_in: abc#def123 into \"/var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpdeu1rlpr/repo/state/handoffs/stamp.md\".\n",
+      "resulting_file_content": "---\ntitle: Parity Stamp Test\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\nconsumed_at: '2026-01-02T10:00:00Z'\nshipped_in: 'abc#def123'\nconsumed_by: session-stamp-test\npredecessor: none\n---\n\n# Parity Stamp Test\n\nBody text.\n"
+    },
+    "stamp_all_numeric_sha": {
+      "sha": "274671833",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "stamp-shipped-in: stamped shipped_in: 274671833 into \"/var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpbqpkn5rb/repo/state/handoffs/stamp.md\".\n",
+      "resulting_file_content": "---\ntitle: Parity Stamp Test\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\nconsumed_at: '2026-01-02T10:00:00Z'\nshipped_in: '274671833'\nconsumed_by: session-stamp-test\npredecessor: none\n---\n\n# Parity Stamp Test\n\nBody text.\n"
+    },
+    "stamp_scientific_sha": {
+      "sha": "1958e194",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "stamp-shipped-in: stamped shipped_in: 1958e194 into \"/var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpsvn6_js1/repo/state/handoffs/stamp.md\".\n",
+      "resulting_file_content": "---\ntitle: Parity Stamp Test\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\nconsumed_at: '2026-01-02T10:00:00Z'\nshipped_in: '1958e194'\nconsumed_by: session-stamp-test\npredecessor: none\n---\n\n# Parity Stamp Test\n\nBody text.\n"
+    },
+    "stamp_normal_hex_sha": {
+      "sha": "a1b2c3d4e5f6",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "stamp-shipped-in: stamped shipped_in: a1b2c3d4e5f6 into \"/var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmpmeiv9ic5/repo/state/handoffs/stamp.md\".\n",
+      "resulting_file_content": "---\ntitle: Parity Stamp Test\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\nconsumed_at: '2026-01-02T10:00:00Z'\nshipped_in: a1b2c3d4e5f6\nconsumed_by: session-stamp-test\npredecessor: none\n---\n\n# Parity Stamp Test\n\nBody text.\n"
+    },
+    "stamp_preamble_preserved": {
+      "sha": "deadbeef",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "stamp-shipped-in: stamped shipped_in: deadbeef into \"/var/folders/fy/3lwy3jlx3yxf2d5fz8xd0hqr0000gn/T/tmp6wnfv9b_/repo/state/handoffs/stamp.md\".\n",
+      "resulting_file_content": "<!-- installer-provenance: parity-test -->\n---\ntitle: Parity Stamp Test\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: consumed\nconsumed_at: '2026-01-02T10:00:00Z'\nshipped_in: deadbeef\nconsumed_by: session-stamp-test\npredecessor: none\n---\n\n# Parity Stamp Test\n\nBody text.\n"
+    },
+    "lint_cutoff_exempt_execution_no_stamp": {
+      "fm": {
+        "title": "Parity Exec Cutoff Exempt",
+        "created": "2026-06-01",
+        "branch": "work/test/2026-06-01",
+        "status": "active",
+        "predecessor": "none",
+        "kind": "session-handoff",
+        "category": "infra",
+        "summary": "Cutoff exempt execution handoff with no stamp",
+        "handoff_phase": "execution"
+      },
+      "returncode": 0,
+      "stdout": "{\n  \"ok\": true,\n  \"violations\": []\n}\n",
+      "stderr": ""
+    },
+    "lint_post_cutoff_execution_missing_stamp": {
+      "fm": {
+        "title": "Parity Exec Post Cutoff Missing Stamp",
+        "created": "2026-07-17",
+        "branch": "work/test/2026-07-17",
+        "status": "active",
+        "predecessor": "none",
+        "kind": "session-handoff",
+        "category": "infra",
+        "summary": "Post cutoff missing stamp fields",
+        "handoff_phase": "execution"
+      },
+      "returncode": 1,
+      "stdout": "{\n  \"ok\": false,\n  \"violations\": [\n    {\n      \"file\": \"state/handoffs/post-cutoff-missing-stamp.md\",\n      \"schema\": \"handoff\",\n      \"errors\": [\n        {\n          \"field\": \"execution_authorized_by, execution_authorized_at, execution_authorized_sha, execution_authorized_note\",\n          \"error\": \"required when handoff_phase=execution\",\n          \"hint\": \"Stamp the full four-field execution authorization (execution_authorized_by/_at/_sha/_note) per plan-execute-session-split.md \u00a7 Pinned conventions before marking handoff_phase: execution.\"\n        }\n      ]\n    }\n  ]\n}\n",
+      "stderr": ""
+    },
+    "lint_handoff_phase_wrong_kind": {
+      "fm": {
+        "title": "Parity Phase Wrong Kind",
+        "created": "2026-06-01",
+        "branch": "work/test/2026-06-01",
+        "status": "active",
+        "predecessor": "none",
+        "handoff_phase": "continuation"
+      },
+      "returncode": 1,
+      "stdout": "{\n  \"ok\": false,\n  \"violations\": [\n    {\n      \"file\": \"state/handoffs/phase-wrong-kind.md\",\n      \"schema\": \"handoff\",\n      \"errors\": [\n        {\n          \"field\": \"handoff_phase\",\n          \"error\": \"present but kind is \\\"unset\\\" \u2014 handoff_phase requires kind: session-handoff\",\n          \"hint\": \"handoff_phase is an axis declared on kind: session-handoff. Either set kind: session-handoff (if this is a continuation/execution baton), or remove handoff_phase (if not).\"\n        },\n        {\n          \"field\": \"category\",\n          \"error\": \"required for handoffs created on or after 2026-05-29\",\n          \"hint\": \"Set category to one of: roadmap, infra, bug, docs, research, refactor\"\n        },\n        {\n          \"field\": \"summary\",\n          \"error\": \"required for handoffs created on or after 2026-05-29\",\n          \"hint\": \"Add a one-line summary (\u2264140 chars) describing the session work\"\n        }\n      ]\n    }\n  ]\n}\n",
+      "stderr": ""
+    },
+    "lint_continuation_no_stamp": {
+      "fm": {
+        "title": "Parity Continuation No Stamp",
+        "created": "2026-06-01",
+        "branch": "work/test/2026-06-01",
+        "status": "active",
+        "predecessor": "none",
+        "kind": "session-handoff",
+        "category": "infra",
+        "summary": "Continuation handoff with no stamp",
+        "handoff_phase": "continuation"
+      },
+      "returncode": 0,
+      "stdout": "{\n  \"ok\": true,\n  \"violations\": []\n}\n",
+      "stderr": ""
+    }
+  }
+}

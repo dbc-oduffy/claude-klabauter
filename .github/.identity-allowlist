@@ -1,0 +1,22 @@
+# Identity-check allowlist — see .github/scripts/check-persona-names.py
+#
+# EMPTY BY DESIGN, AND IT SHOULD STAY THAT WAY.
+#
+# A finding from this check is almost always a defect in the publish-side
+# rename rules, and the fix belongs there. An entry here fixes the symptom in
+# one place and leaves the mechanism free to re-introduce the same leak in the
+# next file it touches. Prefer fixing the rename; reach for this only when the
+# occurrence is genuinely intentional and cannot be expressed as a rule.
+#
+# Note that the two intentional-attribution cases are ALREADY handled by the
+# check itself and need no entry here:
+#   * the Licensor's personal name in LICENSE / NOTICE / COMMERCIAL.md /
+#     pyproject.toml authors;
+#   * the public GitHub handle in URL or owner/repo slug form.
+#
+# Entry forms:
+#   <path>:<lineno>   exempt that one line's content
+#   <path>:*          exempt that file's content entirely
+#   path=<path>       exempt that file's PATH from the path scan
+#
+# One entry per line. Blank lines and #-comments are ignored.

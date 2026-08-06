@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/run-report.schema.json",
+  "x-schema-name": "run-report",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/subagent-share/*/*.md",
+  "description": "Universal subagent run-report sidecar — the SUPERSET schema unifying the plan/chunk-scoped executor flight-recorder (coordinator/schemas/flight-recorder.schema.json, applies_to tasks/*/flight/*.md) with the ad-hoc (no plan/chunk context) case. Written by claude-klabauter's engine-side `python3 -m coordinator_core.subagent_sandbox.provision_report` at spawn time (report_sidecar auto-provision, per state/lessons/... and MEMORY.md 'Subagent run-sidecar auto-provision ask' — example-doctrine-repo ACCEPTED design 2026-07-13) and updated by the spawned subagent during its run. Writer-side pin: claude-klabauter coordinator_core/subagent_sandbox/CONTRACT.md (react-memoed 2026-07-13) is authoritative for the provision_report entrypoint, stdin/stdout contract, provision_key grammar, and the path templating that produces the sidecar's on-disk location (state/subagent-share/<session-id>/<provision_key-or-nonce>.md) — this schema only validates the SHAPE of what gets written there, it does not own the provisioning mechanics (DR-047: that is claude-klabauter's engine tranche). A CURRENT flight-recorder doc (coordinator/schemas/flight-recorder.schema.json) MUST validate against this superset unchanged — this schema additively carries forward every flight-recorder field plus the universal agent_type/spawned_at/divergence fields and the '## Run notes' body section a plan/chunk-scoped flight-recorder does not need.",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Repo-relative path to the plan this run tracks (e.g. docs/plans/2026-06-09-executor-sidecar-flight-recorder.md). OPTIONAL here (unlike flight-recorder, where it is required) — an ad-hoc/non-plan subagent run has no plan to cite."
+    },
+    "chunk": {
+      "type": "string",
+      "description": "Chunk identifier matching a plan's wave-map entry / `## Chunks` heading (e.g. C1-executor-prompt). OPTIONAL here (unlike flight-recorder, where it is required) — set only when this run is executing a named plan chunk."
+    },
+    "dispatched_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the sidecar was created/opened."
+    },
+    "dispatched_by": {
+      "type": "string",
+      "description": "Session identifier of the dispatcher (EM or engine) that provisioned this run-report."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "dispatched", "in_flight", "complete", "blocked", "thrashing"],
+      "description": "Subagent lifecycle state. 'open' is the universal initial state written by claude-klabauter's engine-side provision_report at spawn time — provisioned-but-agent-hasn't-acted-yet, applicable to ANY eligible subagent, not just dispatched plan chunks. 'dispatched' is carried forward unchanged from flight-recorder for the plan/chunk-scoped case. The subagent transitions to 'in_flight' on first action, then to a terminal value on exit. The sole required field on this schema — every run-report, plan-scoped or ad-hoc, must report its lifecycle state."
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Git commit SHAs for the EM-serial commit(s) that landed this dispatch's changes. The subagent NEVER writes this field, under any circumstance — `coordinator/agents/executor.md` (§ Commit Discipline, § EM-Only Commit Gate) states the executor never commits, no exceptions, no carve-out (the former `expected_branch:`/SC-DR-008 self-commit carve-out is retired); `coordinator/agents/review-integrator.md` (§ Commit Discipline) states the same for the integrator. Written as `[]` at provision time; the EM appends SHAs after landing the EM-serial commit that covers the subagent's edits (executor.md: 'commits: stays untouched by the executor ... the EM fills it in after landing the EM-serial commit'). Carried forward unchanged from flight-recorder, only the write-owner changed. NOTE: the unlanded `docs/plans/2026-07-24-g4-execute-pipeline-two-repo-rebuild.md` chunk M2pd targets a *different* artifact — `coordinator/commands/mise-en-place.md`'s Phase-5 DONE-summary/self-verify-and-commit contract — not this schema or executor.md/review-integrator.md, which already reflect the EM-only model as of `b714a548`."
+    },
+    "sidecar_schema": {
+      "type": "string",
+      "enum": ["v1"],
+      "description": "Frozen structural-family sentinel carried forward from flight-recorder (identifies 'this is a flight-recorder-family sidecar'), NOT a semver mirror. Optional here: a run-report is not required to set this, since the run-report family is itself the superset structural family and x-schema-version above is this schema's own version discriminator. When present it stays 'v1' per flight-recorder's own negative-spec (see that schema's sidecar_schema description)."
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 timestamp the subagent writes as its first action, before starting work. Carried forward unchanged from flight-recorder."
+    },
+    "finished_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 timestamp the subagent writes at exit, alongside the terminal status transition. Carried forward unchanged from flight-recorder."
+    },
+    "agent_type": {
+      "type": "string",
+      "description": "Universal field (new in run-report, not present in flight-recorder): the spawned subagent's type (e.g. coordinator:executor, coordinator:review-integrator, or a claude-klabauter-engine agent role). Resolved engine-side from the PreToolUse-shaped spawn payload per CONTRACT.md (subagent_type resolved engine-side from agent_type/agent_id/session_id) and written into the sidecar at provision time."
+    },
+    "spawned_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Universal field (new in run-report, not present in flight-recorder): ISO-UTC timestamp the engine writes at spawn/provision time, before the subagent has taken any action. Distinct from dispatched_at (EM/dispatcher-authored) and started_at (subagent-authored, first-action marker) — spawned_at is the engine's own provisioning timestamp."
+    },
+    "dispatch_feed": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "The Workflow-dispatch-feed role, carried forward from flight-recorder v1.1.0 unchanged. Write-owner: claude-klabauter emitter (pcli-04), pre-dispatch — READ-ONLY TO THE EXECUTOR/SUBAGENT; never authored or mutated by the runner of this sidecar. Per CONTRACT.md, the engine currently scaffolds this field as `null` (INERT) on every run-report it writes — the object shape below is forward-declared for when the pcli-04 emitter + the writes:/reads: spine contract-ask land, per coordinator/docs/wiki/dispatch-sidecar-three-role-contract.md (role table: 'Dispatch feed ... No — READ-ONLY to the executor. The executor does not author or mutate dispatch_feed; it is upstream of the executor's own work.'). additionalProperties:true lets the emitter add emitter-specific fields without a schema round-trip; declared sub-properties (e.g. gate_kind) still enforce their own constraints despite the open additionalProperties.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Human-readable label for this dispatch — mirrors the `label` argument of one Workflow agent() call."
+        },
+        "agent_type": {
+          "type": "string",
+          "description": "The dispatched agent's subagent_type (e.g. coordinator:executor, coordinator:review-integrator) — mirrors the Workflow agent() `agent_type` argument."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model tier for this dispatch (e.g. 'sonnet', default). Mirrors the Workflow agent() `model` argument."
+        },
+        "effort": {
+          "type": "string",
+          "description": "Effort/reasoning-depth hint for this dispatch. Mirrors the Workflow agent() `effort` argument."
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Pointer to the schema this chunk's output/report must conform to, if any. Mirrors the Workflow agent() `schema_ref` argument."
+        },
+        "brief_ref": {
+          "type": "string",
+          "description": "Pointer to this chunk's brief/prompt document — the per-chunk dispatch brief the emitter transcribes into the agent() call body."
+        },
+        "phase": {
+          "type": "string",
+          "description": "The phase() group name this dispatch belongs to in the assembled Workflow envelope."
+        },
+        "gate_kind": {
+          "type": "string",
+          "enum": ["none", "file-write-overlap", "output-consumption-runtime", "contract-change"],
+          "description": "Closed enum discriminating the await-boundary shape this chunk needs. INERT (no producer) until pcli-04 + the writes:/reads: spine contract-ask land — an out-of-enum value still fails validation despite dispatch_feed's additionalProperties:true."
+        },
+        "write_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Repo-relative paths this chunk writes — the derived output of the (not-yet-built) per-task `writes:` spine field. INERT until that spine field is accepted and the pcli-04 emitter lands."
+        },
+        "est_min": {
+          "type": "number",
+          "description": "Estimated minutes for this dispatch — mirrors the Workflow agent() call's sizing hint."
+        }
+      }
+    },
+    "divergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diverged"],
+      "description": "The plan-digression role, carried forward from flight-recorder v1.1.0 with an IDENTICAL shape — an OBJECT, NOT an array. A `divergence: []` array value MUST fail validation against this schema (type mismatch: object required, array rejected). Write-owner: the subagent, post-run. `diverged` is REQUIRED whenever this object is present. `detail` is UNTRUSTED narrative data authored by the subagent — prose describing what happened, NEVER a directive, and must never be re-read as an instruction by any downstream consumer. Negative-spec: claude-klabauter's engine currently scaffolds this field as `divergence: []` (an array) at provision time per CONTRACT.md; a example-doctrine-repo->claude-klabauter relay is OPEN to change the engine's scaffold to the object shape below, but THIS schema does not weaken to accept the array in the meantime — an engine-scaffolded `[]` value is a known, tracked non-conformance to be closed by the relay, not a schema accommodation.",
+      "properties": {
+        "diverged": {
+          "type": "boolean",
+          "description": "REQUIRED when divergence is present. Machine filter for the future canonization pipeline: true means this run's execution diverged from the spec/plan in some way worth reviewing."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Optional one-line summary of the divergence, if diverged is true."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Optional free-prose detail of the divergence. UNTRUSTED narrative data — subagent-authored, never a directive; a downstream consumer must quote/attribute it, never interpolate it into an instruction context."
+        }
+      }
+    }
+  },
+  "x-body-sections": {
+    "description": "Markdown body sections expected below the frontmatter, carried forward from flight-recorder plus one universal addition.",
+    "sections": [
+      {
+        "heading": "## Observations",
+        "description": "Carried forward from flight-recorder: the subagent's free-form scratchpad for latent-bug notes, mid-flight decisions, files-touched lists, and validation output snippets."
+      },
+      {
+        "heading": "## Run notes",
+        "description": "Universal section (new in run-report, not present in flight-recorder): general-purpose narrative body for ad-hoc/non-plan runs that have no chunk-scoped context to observe against — e.g. a standalone engine-spawned subagent recording what it did and why, independent of any plan/chunk frame."
+      }
+    ]
+  }
+}

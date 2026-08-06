@@ -1,0 +1,24 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "memo",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "value", "key": "from", "field": "from_id", "quote": true},
+      {"kind": "value", "key": "to", "field": "to", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "delivery_mode: receiver-repo"},
+      {"kind": "value", "key": "summary", "field": "explicit_summary", "quote": true}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "<!-- Replace with the memo body. -->",
+      "<!-- Send when ready: cross-repo-memo --to {to} --topic {topic} --body-file <this-file> -->",
+      ""
+    ]}
+  ]
+}

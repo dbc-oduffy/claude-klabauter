@@ -1,0 +1,1843 @@
+"""
+coordinator_core.ops.tests.test_review_trail_write — direct-op tests for review_trail.write.
+
+Purpose: Exercise ``write_review_trail_entry`` / ``_build_json_record`` directly — JSON
+content and key order, validation rules, filename derivation, session-id/workstream
+resolution, and atomic-write semantics. This is the strangler invariant (C3 / DR-216 D3):
+if the JSON record bytes drift, the example-doctrine-repo facade routing will silently produce different
+on-disk review-trail entries.
+
+Coverage:
+  (a) AC-content-parity  — JSON record content bytes match an independently-constructed
+                            expected string, all scope_kind variants (diff/plan/integration),
+                            with and without workstream.
+  (b) AC-no-trailing-nl  — written file has no trailing newline.
+  (c) AC-filename-format — filename: ``{TIMESTAMP}-{SESSION_ID[:8]}.json``;
+                            TIMESTAMP is 17 chars (macOS) or 23 chars (Linux).
+  (d) AC-validation      — invalid enum / missing required field → ValueError;
+                            scope_kind=diff + no ".." in sha_range → ValueError.
+  (e) AC-session-env     — session_id resolved from CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID.
+  (f) AC-workstream-null — workstream=None → JSON ``null``; explicit slug → quoted string.
+  (g) AC-no-clobber      — same timestamp+session_id_short across successive calls never
+                            overwrites a prior record; each write lands in its own
+                            uniquely-suffixed file (DR-216 D2(i) last-write-wins reversed —
+                            see 2026-07-27 silent-data-loss incident below).
+
+Spec backlink: docs/plans/2026-07-06-strang-10-residual-writer-strangle-command-type.md § C3
+DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2/D3
+
+Negative-spec:
+    - The byte-parity harness against ``coordinator-write-review-trail.sh`` (the example-doctrine-repo shell
+      oracle this suite once ran as a spawned child process) was RETIRED 2026-07-22 —
+      deleted, not repointed at its ``.py`` replacement (``coordinator-write-review-trail.py``, a pure
+      ``cc_invoke.route_mutation()`` trampoline into this repo's OWN ``review_trail_write``
+      op with no ``legacy_fn`` fallback). Repointing would have silently converted
+      differential parity into claude-klabauter-vs-itself self-comparison. Its content-fidelity value
+      is folded into ``TestJsonContentStructure::test_full_record_bytes_for_all_scope_kinds``
+      below (exact full-content equality against a locally-constructed expected string,
+      parametrized over every scope_kind × workstream combination) — same assertive power,
+      no external process, no example-doctrine-repo-checkout dependency. Do NOT reintroduce an oracle path or
+      a ``pytest.skip``/``skipif`` gated on a missing example-doctrine-repo artifact; that shape is exactly the
+      hazard this retirement removes. See
+      state/review-trail/findings/2026-07-22-parity-retire-fold-plan.md § 4.2 and
+      state/review-trail/findings/2026-07-22-parity-test-circularity-audit.md § 2.6/§5.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Optional
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Import the op directly (no registration side-effect needed for these tests).
+# ---------------------------------------------------------------------------
+from coordinator_core.ops.review_trail_write import (  # noqa: E402
+    _build_json_record,
+    _compute_timestamp,
+    write_review_trail_entry,
+)
+
+# ---------------------------------------------------------------------------
+# Fixed test constants
+# ---------------------------------------------------------------------------
+
+_TEST_SESSION = "test-parity-session-abcdef01"
+_TEST_SESSION_SHORT = _TEST_SESSION[:8]           # "test-par"
+_TEST_SHA_RANGE = "abc1234567..def8901234"        # safe ASCII, contains ".."
+_TEST_WORKSTREAM = "strang-10-parity-test"
+
+
+# ---------------------------------------------------------------------------
+# Tests: no trailing newline (AC-no-trailing-nl)
+# ---------------------------------------------------------------------------
+
+
+class TestNoTrailingNewline:
+    """File bytes have no trailing newline (write path uses no ``\\n`` terminator)."""
+
+    def test_native_file_has_no_trailing_newline(self, tmp_path, monkeypatch):
+        """Native write_review_trail_entry produces a file with no trailing newline."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        raw_bytes = Path(result["out_path"]).read_bytes()
+        assert not raw_bytes.endswith(b"\n"), (
+            f"file must have no trailing newline, last byte: {raw_bytes[-1:]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: filename format (AC-filename-format)
+# ---------------------------------------------------------------------------
+
+
+class TestFilenameFormat:
+    """Filename uses ``{TIMESTAMP}-{SESSION_ID[:8]}.json`` with correct TIMESTAMP length."""
+
+    def test_filename_uses_session_id_short_and_json_extension(self, tmp_path, monkeypatch):
+        """Filename ends with ``-{SESSION_ID[:8]}.json``."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=5,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        out_path = Path(result["out_path"])
+        assert out_path.suffix == ".json", (
+            f"expected .json extension, got {out_path.suffix!r}"
+        )
+        assert out_path.name.endswith(f"-{_TEST_SESSION_SHORT}.json"), (
+            f"expected filename to end with '-{_TEST_SESSION_SHORT}.json', "
+            f"got {out_path.name!r}"
+        )
+
+    def test_timestamp_length_matches_platform(self, tmp_path, monkeypatch):
+        """TIMESTAMP length is 17 (macOS/Win) or 23 (Linux) — matches platform logic."""
+        import platform
+
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        out_path = Path(result["out_path"])
+        # filename = "{TIMESTAMP}-{SESSION_ID[:8]}.json"
+        # strip suffix and session_id_short to isolate timestamp
+        stem = out_path.stem  # "{TIMESTAMP}-{SESSION_ID[:8]}"
+        expected_ts_length = 23 if platform.system() == "Linux" else 17
+        # stem ends with "-{SESSION_ID_SHORT}" (8 chars + 1 hyphen = 9)
+        ts_part = stem[:-(len(_TEST_SESSION_SHORT) + 1)]  # strip "-{short}"
+        assert len(ts_part) == expected_ts_length, (
+            f"expected TIMESTAMP length {expected_ts_length} on {platform.system()}, "
+            f"got {len(ts_part)!r} in {ts_part!r} (full stem: {stem!r})"
+        )
+        # Validate TIMESTAMP characters: only digits and hyphens
+        assert re.match(r"^\d{4}-\d{2}-\d{2}-\d+$", ts_part), (
+            f"TIMESTAMP {ts_part!r} does not match expected YYYY-MM-DD-HHMMSS[NNNNNN] pattern"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: JSON content structure (AC-workstream-null, AC-json-structure, AC-content-parity)
+# ---------------------------------------------------------------------------
+
+
+class TestJsonContentStructure:
+    """JSON record has correct key order and value encoding.
+
+    ``test_full_record_bytes_for_all_scope_kinds`` is the fold of the retired byte-parity
+    harness (see module negative-spec): full JSON content is asserted against a
+    locally-constructed expected string for every scope_kind, with and without workstream —
+    same assertive power as the retired oracle comparison, no external process.
+    """
+
+    def test_workstream_null_emits_json_null(self, tmp_path, monkeypatch):
+        """workstream=None → JSON record contains ``"workstream":null`` (not quoted string)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="waived",
+            scope="session",
+            verdict="waived",
+            diff_loc=0,
+            scope_kind="plan",
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        assert '"workstream":null' in content, (
+            f"expected '\"workstream\":null' in JSON, got:\n{content}"
+        )
+        # Verify JSON parses correctly.
+        parsed = json.loads(content)
+        assert parsed["workstream"] is None, (
+            f"parsed workstream must be None, got: {parsed.get('workstream')!r}"
+        )
+
+    def test_workstream_slug_emits_quoted_string(self, tmp_path, monkeypatch):
+        """workstream set → JSON record contains ``"workstream":"slug"`` (quoted)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=123,
+            session_id=_TEST_SESSION,
+            workstream=_TEST_WORKSTREAM,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        assert f'"workstream":"{_TEST_WORKSTREAM}"' in content, (
+            f"expected '\"workstream\":\"{_TEST_WORKSTREAM}\"' in JSON, got:\n{content}"
+        )
+        parsed = json.loads(content)
+        assert parsed["workstream"] == _TEST_WORKSTREAM
+
+    def test_full_json_content_and_key_order(self, tmp_path, monkeypatch):
+        """JSON key order is: sha_range, reviewer, scope, scope_kind, verdict, diff_loc,
+        session_id, workstream — and, ONLY for scope_kind="diff", a 9th reviewed_paths key.
+        """
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="staff-eng",
+            scope="session",
+            verdict="warn",
+            diff_loc=7,
+            scope_kind="integration",
+            session_id=_TEST_SESSION,
+            workstream=_TEST_WORKSTREAM,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        # Review: code-reviewer — renamed from expected_prefix, which was a misnomer:
+        # this is an exact full-string equality check, not a prefix check.
+        expected = (
+            f'{{"sha_range":"{_TEST_SHA_RANGE}",'
+            f'"reviewer":"staff-eng",'
+            f'"scope":"session",'
+            f'"scope_kind":"integration",'
+            f'"verdict":"warn",'
+            f'"diff_loc":7,'
+            f'"session_id":"{_TEST_SESSION}",'
+            f'"workstream":"{_TEST_WORKSTREAM}"}}'
+        )
+        # scope_kind="integration" omits reviewed_paths entirely — not persisted as
+        # null; already covered by the exact-equality check above (no separate
+        # "reviewed_paths" not in content assertion needed — Review: code-reviewer).
+        assert content == expected, (
+            f"JSON content does not match expected key-ordered record.\n"
+            f"Expected: {expected!r}\n"
+            f"Got:      {content!r}"
+        )
+
+        # scope_kind="diff" appends reviewed_paths as a NINTH key, after workstream.
+        diff_result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="staff-eng",
+            scope="session",
+            verdict="warn",
+            diff_loc=7,
+            scope_kind="diff",
+            session_id=_TEST_SESSION,
+            workstream=_TEST_WORKSTREAM,
+            reviewed_paths=["a.py", "b/c.py"],
+        )
+        diff_content = Path(diff_result["out_path"]).read_text(encoding="utf-8")
+        expected_diff = (
+            f'{{"sha_range":"{_TEST_SHA_RANGE}",'
+            f'"reviewer":"staff-eng",'
+            f'"scope":"session",'
+            f'"scope_kind":"diff",'
+            f'"verdict":"warn",'
+            f'"diff_loc":7,'
+            f'"session_id":"{_TEST_SESSION}",'
+            f'"workstream":"{_TEST_WORKSTREAM}",'
+            f'"reviewed_paths":["a.py","b/c.py"]}}'
+        )
+        assert diff_content == expected_diff, (
+            f"JSON content does not match expected 9-key-ordered diff record.\n"
+            f"Expected: {expected_diff!r}\n"
+            f"Got:      {diff_content!r}"
+        )
+
+    @pytest.mark.parametrize("scope_kind", ["diff", "plan", "integration"])
+    @pytest.mark.parametrize("workstream", [_TEST_WORKSTREAM, None])
+    def test_full_record_bytes_for_all_scope_kinds(
+        self, scope_kind, workstream, tmp_path, monkeypatch
+    ):
+        """Full JSON record bytes match an independently-constructed expected string, for
+        every scope_kind × workstream combination.
+
+        This is the fold of the retired byte-parity harness (module negative-spec): exact
+        full-content equality, asserted against a hardcoded expected string built
+        independently of ``_build_json_record`` — a field reordering, dropped key, or
+        mis-serialized value in the production helper fails every one of these 6 cases.
+        """
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=55,
+            scope_kind=scope_kind,
+            session_id=_TEST_SESSION,
+            workstream=workstream,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        workstream_json = "null" if workstream is None else f'"{workstream}"'
+        expected = (
+            f'{{"sha_range":"{_TEST_SHA_RANGE}",'
+            f'"reviewer":"code-reviewer",'
+            f'"scope":"chain",'
+            f'"scope_kind":"{scope_kind}",'
+            f'"verdict":"ok",'
+            f'"diff_loc":55,'
+            f'"session_id":"{_TEST_SESSION}",'
+            f'"workstream":{workstream_json}}}'
+        )
+        # scope_kind="diff" appends a 9th "reviewed_paths" key (null here — not
+        # supplied by this test); plan/integration omit the key entirely.
+        if scope_kind == "diff":
+            expected = expected[:-1] + ',"reviewed_paths":null}'
+        assert content == expected, (
+            f"full JSON record bytes do not match expected content "
+            f"(scope_kind={scope_kind!r}, workstream={workstream!r}).\n"
+            f"Expected: {expected!r}\n"
+            f"Got:      {content!r}"
+        )
+
+    def test_diff_loc_is_integer_not_quoted(self, tmp_path, monkeypatch):
+        """diff_loc is emitted as JSON integer (not a quoted string)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="ubt-compile",
+            scope="chain",
+            verdict="ok",
+            diff_loc=999,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        assert '"diff_loc":999' in content, (
+            f"expected '\"diff_loc\":999' (integer, not quoted), got:\n{content}"
+        )
+        parsed = json.loads(content)
+        assert parsed["diff_loc"] == 999 and isinstance(parsed["diff_loc"], int)
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation (AC-validation)
+# ---------------------------------------------------------------------------
+
+
+class TestValidation:
+    """Invalid inputs raise ValueError with descriptive messages."""
+
+    def test_invalid_reviewer_raises_value_error(self):
+        """Unknown reviewer enum value → ValueError."""
+        with pytest.raises(ValueError, match="reviewer"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="not-a-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+
+    def test_invalid_scope_raises_value_error(self):
+        """Unknown scope enum value → ValueError."""
+        with pytest.raises(ValueError, match="scope"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="not-a-scope",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+
+    def test_invalid_verdict_raises_value_error(self):
+        """Unknown verdict enum value → ValueError."""
+        with pytest.raises(ValueError, match="verdict"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="not-a-verdict",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+
+    def test_invalid_scope_kind_raises_value_error(self):
+        """Unknown scope_kind enum value → ValueError."""
+        with pytest.raises(ValueError, match="scope_kind"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                scope_kind="not-a-kind",
+                session_id=_TEST_SESSION,
+            )
+
+    def test_diff_scope_kind_requires_dotdot_in_sha_range(self):
+        """scope_kind=diff with sha_range lacking '..' → ValueError (writer/consumer symmetry)."""
+        with pytest.raises(ValueError, match=r"\.\.|sha_range"):
+            write_review_trail_entry(
+                sha_range="abc1234567",  # no ".."
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                scope_kind="diff",
+                session_id=_TEST_SESSION,
+            )
+
+    def test_plan_scope_kind_does_not_require_dotdot(self, tmp_path, monkeypatch):
+        """scope_kind=plan with sha_range lacking '..' → valid (no ValueError)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        # Should not raise.
+        result = write_review_trail_entry(
+            sha_range="abc1234567",  # no ".." — valid for plan
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=0,
+            scope_kind="plan",
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        assert Path(result["out_path"]).exists()
+
+    def test_missing_session_id_raises_value_error(self, tmp_path, monkeypatch):
+        """No session_id from param or env → ValueError."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        with pytest.raises(ValueError, match="session_id"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                session_id=None,  # not provided
+                workstream=None,
+            )
+
+    def test_negative_diff_loc_raises_value_error(self):
+        """Negative diff_loc → ValueError."""
+        with pytest.raises(ValueError, match="diff_loc"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=-1,
+                session_id=_TEST_SESSION,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: wsc_commit auto-source sentinel round-trip (AC-auto-source-sentinels)
+# ---------------------------------------------------------------------------
+
+
+class TestWscAutoSourceSentinels:
+    """reviewer='wsc-auto-adjudication' / scope='workstream-close-auto' validate and
+    round-trip.
+
+    These are the wsc_commit.py _build_effective_review_trail machine-provenance
+    auto-source defaults (see ceremony/wsc_commit.py ~line 1946-1967), used when a
+    caller omits review_trail on a legitimate reviewed close-out. Regression guard
+    for the bug where wsc_commit emitted these sentinels but review_trail_write's
+    _VALID_REVIEWERS/_VALID_SCOPES allowlists rejected them, silently dropping the
+    trail-index record on every default-path /workstream-complete.
+    """
+
+    def test_auto_source_sentinels_validate_without_error(self, tmp_path, monkeypatch):
+        """reviewer=wsc-auto-adjudication, scope=workstream-close-auto → no ValueError."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="wsc-auto-adjudication",
+            scope="workstream-close-auto",
+            verdict="ok",
+            diff_loc=17,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        out_path = Path(result["out_path"])
+        assert out_path.exists()
+
+        content = out_path.read_text(encoding="utf-8")
+        parsed = json.loads(content)
+        assert parsed["reviewer"] == "wsc-auto-adjudication"
+        assert parsed["scope"] == "workstream-close-auto"
+
+    def test_auto_source_sentinels_build_json_record_round_trip(self):
+        """_build_json_record emits and JSON round-trips the auto-source sentinels."""
+        record = _build_json_record(
+            sha_range="a..b",
+            reviewer="wsc-auto-adjudication",
+            scope="workstream-close-auto",
+            scope_kind="diff",
+            verdict="ok",
+            diff_loc=3,
+            session_id="sess0001",
+            workstream=None,
+        )
+        parsed = json.loads(record)
+        assert parsed["reviewer"] == "wsc-auto-adjudication"
+        assert parsed["scope"] == "workstream-close-auto"
+
+
+# ---------------------------------------------------------------------------
+# Tests: session-id resolution from env (AC-session-env)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIdResolution:
+    """session_id resolved from CLAUDE_SESSION_ID or CLAUDE_CODE_SESSION_ID env vars."""
+
+    def test_claude_session_id_env_takes_precedence(self, tmp_path, monkeypatch):
+        """CLAUDE_SESSION_ID env var is used when set (highest-precedence after param)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "env-session-primary-id")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "env-session-secondary")
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id=None,  # not explicit → falls back to env
+            workstream=None,
+        )
+        assert result["session_id"] == "env-session-primary-id", (
+            f"expected CLAUDE_SESSION_ID to take precedence, got: {result['session_id']!r}"
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        assert '"session_id":"env-session-primary-id"' in content
+
+    def test_claude_code_session_id_env_used_when_primary_absent(self, tmp_path, monkeypatch):
+        """CLAUDE_CODE_SESSION_ID used when CLAUDE_SESSION_ID absent."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "platform-injected-session")
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=2,
+            session_id=None,
+            workstream=None,
+        )
+        assert result["session_id"] == "platform-injected-session"
+
+    def test_explicit_session_id_overrides_env(self, tmp_path, monkeypatch):
+        """Explicit session_id param overrides CLAUDE_SESSION_ID env var."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "env-session-should-be-ignored")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "code-session-also-ignored")
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=3,
+            session_id="explicit-param-session",  # explicit override
+            workstream=None,
+        )
+        assert result["session_id"] == "explicit-param-session", (
+            f"explicit session_id param must override env vars, got: {result['session_id']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: atomic write / idempotency (AC-atomic-write)
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicWrite:
+    """Atomic write: same timestamp+session_id_short must never clobber a prior record.
+
+    DR-216 D2(i) previously sanctioned last-write-wins on the theory that same-second
+    same-session collision was "impossible in practice" (DR-215 serial-by-construction).
+    That was falsified live 2026-07-27: 9 review_trail.write calls in a loop within the
+    same wall-clock second produced only 5 surviving files — 4 records silently destroyed,
+    each call still returning a success ``out_path`` that in fact pointed at content the
+    next call had already overwritten. This is an audit-trail surface (the coverage gate
+    reads these records to decide whether code was reviewed), so silent loss here can
+    re-open a coverage hole or mis-attribute a verdict without any error ever surfacing.
+    """
+
+    def test_same_timestamp_does_not_overwrite_previous_file(self, tmp_path, monkeypatch):
+        """Two writes with the same pinned timestamp must produce 2 distinct, readable files."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        pinned_ts = "2026-01-15-123456"
+
+        result1 = write_review_trail_entry(
+            sha_range="aaaa..bbbb",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp=pinned_ts,
+        )
+        result2 = write_review_trail_entry(
+            sha_range="cccc..dddd",
+            reviewer="staff-eng",
+            scope="session",
+            verdict="warn",
+            diff_loc=2,
+            session_id=_TEST_SESSION,
+            workstream=_TEST_WORKSTREAM,
+            _timestamp=pinned_ts,
+        )
+
+        assert result1["out_path"] != result2["out_path"], (
+            "same timestamp+session_id_short must NOT collapse to the same output path — "
+            "that is exactly the silent-clobber shape this test guards against"
+        )
+
+        trail_dir = tmp_path / "review-trail"
+        json_files = list(trail_dir.glob("*.json"))
+        assert len(json_files) == 2, (
+            f"expected exactly 2 files after 2 same-timestamp writes, got {len(json_files)}"
+        )
+
+        # Both records must be present and independently readable — neither write may
+        # have destroyed the other's content.
+        seen_sha_ranges = {
+            json.loads(p.read_text(encoding="utf-8"))["sha_range"] for p in json_files
+        }
+        assert seen_sha_ranges == {"aaaa..bbbb", "cccc..dddd"}, (
+            f"expected both records' sha_ranges to survive, got: {seen_sha_ranges!r}"
+        )
+
+    def test_nine_writes_same_second_all_survive(self, tmp_path, monkeypatch):
+        """RED-FIRST regression: N records written in the same clock second must ALL
+        survive and be independently readable — reproduces the live 2026-07-27 incident
+        (9 writes in a loop within one second produced only 5 surviving files)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        pinned_ts = "2026-01-15-140000"
+        n = 9
+        out_paths = []
+        for i in range(n):
+            result = write_review_trail_entry(
+                sha_range=f"aaa{i:04d}..bbb{i:04d}",
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=i,
+                session_id=_TEST_SESSION,
+                workstream=None,
+                _timestamp=pinned_ts,
+            )
+            out_paths.append(result["out_path"])
+
+        assert len(set(out_paths)) == n, (
+            f"expected {n} distinct out_paths for {n} same-second writes, "
+            f"got {len(set(out_paths))} distinct paths: {out_paths!r}"
+        )
+
+        trail_dir = tmp_path / "review-trail"
+        json_files = list(trail_dir.glob("*.json"))
+        assert len(json_files) == n, (
+            f"expected {n} files on disk after {n} same-second writes, got {len(json_files)} "
+            f"— missing files means records were silently destroyed by clobbering writes"
+        )
+
+        # Every out_path returned must actually name a file whose CURRENT content is the
+        # record from that call (the live bug returned success out_paths whose content had
+        # already been replaced by a later write).
+        seen_diff_locs = set()
+        for i, out_path in enumerate(out_paths):
+            parsed = json.loads(Path(out_path).read_text(encoding="utf-8"))
+            assert parsed["sha_range"] == f"aaa{i:04d}..bbb{i:04d}", (
+                f"out_path from write #{i} now contains a different write's record "
+                f"(sha_range={parsed['sha_range']!r}) — this is the mis-attribution half "
+                f"of the clobber defect"
+            )
+            seen_diff_locs.add(parsed["diff_loc"])
+        assert seen_diff_locs == set(range(n)), (
+            f"expected all {n} records' diff_loc values present on disk, got {seen_diff_locs!r}"
+        )
+
+    def test_concurrent_writers_same_candidate_all_survive(self, tmp_path, monkeypatch):
+        """Genuinely concurrent (thread) writers racing on the same candidate filename
+        must all survive — the O_EXCL retry loop (``_reserve_unique_trail_path``) is the
+        atomic test-and-set that makes this safe, not merely the sequential-call shape
+        exercised by ``test_nine_writes_same_second_all_survive`` above.
+
+        Deterministic by construction: a ``threading.Barrier`` releases every worker at
+        the same instant, and each worker's write is a single blocking ``os.open``/write
+        syscall (which releases the GIL), so the interleaving is genuinely racy rather
+        than serialized by the interpreter — while the assertions themselves (distinct
+        paths, N files on disk, no cross-contaminated content) are deterministic outcomes
+        regardless of the actual OS-level interleave order, so the test cannot flake.
+        """
+        import threading
+
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        pinned_ts = "2026-01-15-140000"
+        n = 8
+        barrier = threading.Barrier(n)
+        results: list = [None] * n
+        errors: list = []
+
+        def _worker(i: int) -> None:
+            barrier.wait()  # release all n threads at the same instant
+            try:
+                results[i] = write_review_trail_entry(
+                    sha_range=f"aaa{i:04d}..bbb{i:04d}",
+                    reviewer="code-reviewer",
+                    scope="chain",
+                    verdict="ok",
+                    diff_loc=i,
+                    session_id=_TEST_SESSION,
+                    workstream=None,
+                    _timestamp=pinned_ts,
+                )
+            except Exception as exc:  # noqa: BLE001 — surfaced via `errors` below
+                errors.append((i, exc))
+
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"concurrent writer(s) raised: {errors!r}"
+        assert all(r is not None for r in results), "not every thread produced a result"
+
+        out_paths = [r["out_path"] for r in results]
+        assert len(set(out_paths)) == n, (
+            f"expected {n} distinct out_paths from {n} concurrent writers racing on the "
+            f"same candidate filename, got {len(set(out_paths))}: {out_paths!r}"
+        )
+
+        trail_dir = tmp_path / "review-trail"
+        json_files = list(trail_dir.glob("*.json"))
+        assert len(json_files) == n, (
+            f"expected {n} files on disk after {n} concurrent writes, got {len(json_files)} "
+            f"— missing files means one writer's content was clobbered by another"
+        )
+
+        seen_diff_locs = set()
+        for i, out_path in enumerate(out_paths):
+            parsed = json.loads(Path(out_path).read_text(encoding="utf-8"))
+            assert parsed["sha_range"] == f"aaa{i:04d}..bbb{i:04d}", (
+                f"out_path from thread #{i} now contains a different writer's record "
+                f"(sha_range={parsed['sha_range']!r})"
+            )
+            seen_diff_locs.add(parsed["diff_loc"])
+        assert seen_diff_locs == set(range(n)), (
+            f"expected all {n} records' diff_loc values present on disk, got {seen_diff_locs!r}"
+        )
+
+    def test_different_timestamps_produce_separate_files(self, tmp_path, monkeypatch):
+        """Different timestamps produce separate files (additive-create)."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] != result2["out_path"], (
+            "different timestamps must produce different output paths"
+        )
+        trail_dir = tmp_path / "review-trail"
+        json_files = list(trail_dir.glob("*.json"))
+        assert len(json_files) == 2, (
+            f"expected 2 files for 2 different timestamps, got {len(json_files)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_json_record unit tests (fast, no I/O)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildJsonRecord:
+    """Unit tests for the JSON serialization helper (_build_json_record)."""
+
+    def test_workstream_null_literal(self):
+        """workstream=None → literal ``null`` in JSON output."""
+        record = _build_json_record(
+            sha_range="a..b", reviewer="waived", scope="chain",
+            scope_kind="diff", verdict="waived", diff_loc=0,
+            session_id="sess0001", workstream=None,
+        )
+        assert '"workstream":null,' in record
+        # scope_kind="diff" also appends the 9th reviewed_paths key, as null here.
+        assert record.endswith('"reviewed_paths":null}')
+        # Must parse as valid JSON.
+        parsed = json.loads(record)
+        assert parsed["workstream"] is None
+
+    def test_workstream_slug_double_quoted(self):
+        """workstream slug → double-quoted string in JSON output."""
+        record = _build_json_record(
+            sha_range="a..b", reviewer="the Staff Engineer", scope="session",
+            scope_kind="plan", verdict="ok", diff_loc=5,
+            session_id="sess0001", workstream="my-workstream",
+        )
+        assert '"workstream":"my-workstream"}' in record
+        parsed = json.loads(record)
+        assert parsed["workstream"] == "my-workstream"
+
+    def test_diff_loc_integer_not_quoted(self):
+        """diff_loc=42 → ``"diff_loc":42`` (no quotes around integer)."""
+        record = _build_json_record(
+            sha_range="a..b", reviewer="code-reviewer", scope="chain",
+            scope_kind="diff", verdict="ok", diff_loc=42,
+            session_id="sess0001", workstream=None,
+        )
+        assert '"diff_loc":42,' in record
+        parsed = json.loads(record)
+        assert parsed["diff_loc"] == 42 and isinstance(parsed["diff_loc"], int)
+
+    def test_key_order_is_canonical(self):
+        """JSON keys appear in canonical order; scope_kind="diff" appends a 9th
+        reviewed_paths key after workstream."""
+        record = _build_json_record(
+            sha_range="a..b", reviewer="code-reviewer", scope="chain",
+            scope_kind="diff", verdict="ok", diff_loc=1,
+            session_id="sess0001", workstream=None,
+        )
+        keys = list(json.loads(record).keys())
+        expected_order = [
+            "sha_range", "reviewer", "scope", "scope_kind",
+            "verdict", "diff_loc", "session_id", "workstream", "reviewed_paths",
+        ]
+        assert keys == expected_order, (
+            f"expected key order {expected_order}, got {keys}"
+        )
+
+    def test_no_trailing_newline_in_record_string(self):
+        """_build_json_record returns no trailing newline."""
+        record = _build_json_record(
+            sha_range="a..b", reviewer="code-reviewer", scope="chain",
+            scope_kind="diff", verdict="ok", diff_loc=0,
+            session_id="sess0001", workstream=None,
+        )
+        assert not record.endswith("\n"), "JSON record string must not end with newline"
+        assert record.endswith("}"), f"JSON record must end with '}}', got: {record[-5:]!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _compute_timestamp unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestComputeTimestamp:
+    """_compute_timestamp replicates oracle platform behavior."""
+
+    def test_timestamp_format_is_valid(self):
+        """Timestamp matches YYYY-MM-DD-HHMMSS[NNNNNN] pattern."""
+        ts = _compute_timestamp()
+        assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{6,}$", ts), (
+            f"timestamp {ts!r} does not match expected pattern"
+        )
+
+    def test_injectable_now_ns_for_linux_platform(self):
+        """_compute_timestamp accepts injectable _now_ns for test isolation on Linux."""
+        import platform
+
+        # 2026-01-15 10:30:00 UTC = ?
+        # date: 2026-01-15, time: 10:30:00
+        # epoch: 2026-01-15 10:30:00 UTC
+        import datetime as dt
+
+        epoch_s = int(
+            dt.datetime(2026, 1, 15, 10, 30, 0, tzinfo=dt.timezone.utc).timestamp()
+        )
+        ns_total = epoch_s * 1_000_000_000 + 123456789
+
+        ts = _compute_timestamp(_now_ns=ns_total)
+
+        if platform.system() == "Linux":
+            # Should include 6-digit nanosecond prefix: 123456
+            assert ts.endswith("123456"), (
+                f"Linux timestamp with injected ns=123456789 should end with '123456', got: {ts!r}"
+            )
+            assert len(ts) == 23, f"Linux timestamp should be 23 chars, got {len(ts)}: {ts!r}"
+        else:
+            # macOS/Windows: second-precision only (17 chars); _now_ns unused
+            assert len(ts) == 17, f"macOS/Win timestamp should be 17 chars, got {len(ts)}: {ts!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: write-time symbolic-ref concretization (sha_range false-COVERED
+# defect, write side).
+#
+# state/improvement-queue/2026-06-30-review-coverage-gate-false-covered-on-tr.yaml:
+# a record persisted with a literal symbolic ref ("HEAD" in every observed
+# case) on either side of sha_range re-resolves at coverage-gate READ time
+# against whatever that ref currently points at — a record's certified width
+# silently grows as new commits land. write_review_trail_entry must concretize
+# any symbolic ref to its current SHA before the record ever reaches disk.
+# ---------------------------------------------------------------------------
+
+import subprocess  # noqa: E402
+
+
+def _git(args, cwd):
+    return subprocess.run(
+        ["git"] + args, cwd=str(cwd), capture_output=True, encoding="utf-8", check=True,
+    )
+
+
+def _init_repo(path):
+    _git(["init", "-b", "main"], path)
+    _git(["config", "user.email", "test@example.com"], path)
+    _git(["config", "user.name", "Test"], path)
+
+
+def _make_commit(repo, message, session_id=None) -> str:
+    """Empty commit, optionally carrying a ``Session-Id:`` trailer.
+
+    An ``--allow-empty`` commit touches no paths, so the write-side scope guard's
+    touched-path signal cannot place it in any session's scope. Callers whose
+    subject-under-test is anything OTHER than the guard itself must pass
+    ``session_id`` matching the record they write, or the guard will (correctly)
+    refuse the range as ambiguous before the actual assertion is reached.
+    """
+    body = message if session_id is None else f"{message}\n\nSession-Id: {session_id}"
+    _git(["commit", "--allow-empty", "-m", body], repo)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+
+class TestWriteTimeSymbolicRefResolution:
+    """A stored sha_range must never carry a literal, still-symbolic ref."""
+
+    def test_literal_head_is_concretized_to_current_sha(self, tmp_path, monkeypatch):
+        """sha_range='<sha>..HEAD' is persisted as '<sha>..<concrete-sha>',
+        not the literal string 'HEAD'.
+
+        This is the exact defect shape observed live in example-doctrine-repo
+        (state/review-trail/*.json, 8+ records citing '..HEAD').
+        """
+        monkeypatch.delenv("REVIEW_TRAIL_OUTPUT_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id="test-session-abcdef01")
+        tip_sha = _make_commit(
+            repo,
+            "tip — this is what HEAD resolves to at write time",
+            session_id="test-session-abcdef01",
+        )
+
+        result = write_review_trail_entry(
+            sha_range=f"{base_sha}..HEAD",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id="test-session-abcdef01",
+            workstream=None,
+            caller_worktree=repo,
+        )
+
+        assert result["sha_range"] == f"{base_sha}..{tip_sha}", (
+            f"expected literal 'HEAD' concretized to the actual tip SHA "
+            f"{tip_sha!r}, got sha_range={result['sha_range']!r}"
+        )
+        assert "HEAD" not in result["sha_range"]
+
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk["sha_range"] == f"{base_sha}..{tip_sha}", (
+            "the persisted on-disk record must carry the concretized range, "
+            "not the literal 'HEAD' — a later read against a newer HEAD must "
+            "not change what this record certifies"
+        )
+
+        # The defining property: writing MORE commits after this record was
+        # written must NOT change what the persisted record says.
+        _make_commit(repo, "a later commit landed after the record was written")
+        on_disk_after_more_commits = json.loads(
+            Path(result["out_path"]).read_text(encoding="utf-8")
+        )
+        assert on_disk_after_more_commits["sha_range"] == f"{base_sha}..{tip_sha}", (
+            "a persisted record must not silently grow when new commits land "
+            "— this is the false-COVERED regression the write-side fix closes"
+        )
+
+    def test_concrete_sha_range_passes_through_unchanged(self, tmp_path, monkeypatch):
+        """A record already citing concrete SHAs is untouched (no spurious
+        git spawns / no rewrite of a value that was already correct)."""
+        monkeypatch.delenv("REVIEW_TRAIL_OUTPUT_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id="test-session-abcdef01")
+        tip_sha = _make_commit(repo, "tip", session_id="test-session-abcdef01")
+
+        result = write_review_trail_entry(
+            sha_range=f"{base_sha}..{tip_sha}",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id="test-session-abcdef01",
+            workstream=None,
+            caller_worktree=repo,
+        )
+        assert result["sha_range"] == f"{base_sha}..{tip_sha}"
+
+    def test_unresolvable_symbolic_ref_raises(self, tmp_path, monkeypatch):
+        """A symbolic ref git cannot resolve raises rather than silently
+        persisting an unresolvable/still-symbolic token."""
+        monkeypatch.delenv("REVIEW_TRAIL_OUTPUT_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+
+        with pytest.raises(ValueError, match="could not resolve ref"):
+            write_review_trail_entry(
+                sha_range=f"{base_sha}..definitely-not-a-real-branch-xyz",
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=1,
+                session_id="test-session-abcdef01",
+                workstream=None,
+                caller_worktree=repo,
+            )
+
+    def test_no_caller_worktree_leaves_range_unresolved_noop(self, tmp_path, monkeypatch):
+        """No caller_worktree (test-isolation callers) → resolution is a
+        no-op; there is no repo to resolve a symbolic ref against."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range="abc1234..HEAD",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id="test-session-abcdef01",
+            workstream=None,
+            caller_worktree=None,
+        )
+        assert result["sha_range"] == "abc1234..HEAD"
+
+
+# ---------------------------------------------------------------------------
+# Write-side foreign-session scope guard (docs/plans/2026-07-27-review-trail-
+# scope-guard.md § C2, § C9's reviewed_paths key already covered above).
+#
+# These tests exercise write_review_trail_entry end-to-end against a REAL git
+# repo (caller_worktree), so _guard_foreign_session_range's git subprocess
+# calls (trailer_foreign_shas / detect_foreign_commits / range_is_contiguous
+# _suffix) run against genuine commit history rather than a mock.
+# ---------------------------------------------------------------------------
+
+import logging  # noqa: E402
+
+from coordinator_core.session_attribution import GitLogFailed  # noqa: E402
+
+_GUARD_OWN_SESSION = "own-session-abcdef01"
+_GUARD_FOREIGN_SESSION = "peer-session-fedcba09"
+
+
+def _make_commit_touching(repo, path, message, session_id=None) -> str:
+    """Commit one file change (real, non-empty commit — required for
+    ``--name-only`` touched-path detection to see anything), optionally
+    carrying a ``Session-Id:`` trailer.
+
+    Returns the new commit's full SHA.
+    """
+    file_path = repo / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(message, encoding="utf-8")
+    _git(["add", path], repo)
+    full_message = message if session_id is None else f"{message}\n\nSession-Id: {session_id}"
+    _git(["commit", "-m", full_message], repo)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+
+def _write_guarded(
+    repo: Path,
+    sha_range: str,
+    *,
+    scope: str = "chain",
+    own_session_id: str = _GUARD_OWN_SESSION,
+) -> dict:
+    """Thin wrapper around write_review_trail_entry pinned to this test
+    section's fixed session id and a suppressed (empty-string) workstream
+    override, so the guard is the only variable under test."""
+    return write_review_trail_entry(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope=scope,
+        verdict="ok",
+        diff_loc=1,
+        scope_kind="diff",
+        session_id=own_session_id,
+        workstream="",
+        caller_worktree=repo,
+    )
+
+
+class TestForeignSessionScopeGuard:
+    """Three-way scope-guard disposition (case 1 refuse / case 2 write / case 3
+    ambiguous) — the direct regression coverage for the reported false-COVERED
+    defect: a scope="chain" record vouching for a peer session's unreviewed
+    commits."""
+
+    def test_foreign_trailer_sha_in_range_is_refused_and_named(self, tmp_path):
+        """Case 1: a commit whose OWN Session-Id trailer names a different
+        session anywhere in sha_range is a hard refusal, and the raised
+        message NAMES the offending SHA (not just "some commit is foreign")."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="session")
+
+        assert foreign_sha in str(exc_info.value), (
+            f"expected the offending SHA {foreign_sha!r} named in the error, "
+            f"got: {exc_info.value}"
+        )
+
+    def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(
+        self, tmp_path, caplog
+    ) -> None:
+        """Case 2: an untrailered commit that touches a path this session's
+        own trailer-attributed commit (in the same range) already touched,
+        and the resulting in-scope set is contiguous with HEAD, writes
+        normally — and the scoping strategy used is logged (not persisted)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "shared.py", "own edit", session_id=_GUARD_OWN_SESSION)
+        tip_sha = _make_commit_touching(repo, "shared.py", "untrailered follow-up edit")
+
+        with caplog.at_level(
+            logging.INFO, logger="coordinator_core.ops.review_trail_write"
+        ):
+            result = _write_guarded(repo, f"{base_sha}..{tip_sha}")
+
+        assert Path(result["out_path"]).is_file()
+        scoping_logs = [
+            r.message for r in caplog.records
+            if "provably scoped to session" in r.message
+        ]
+        assert scoping_logs, (
+            f"expected an INFO log naming the scoping strategy that established "
+            f"safety; got log records: {[r.message for r in caplog.records]}"
+        )
+        assert "scoping_method=" in scoping_logs[0]
+
+    def test_fully_trailerless_range_is_ambiguous_not_vacuously_safe(
+        self, tmp_path
+    ) -> None:
+        """THE MOST IMPORTANT TEST IN THIS CHUNK — regression test for the
+        vacuous-check failure mode: a sha_range containing ONLY untrailered
+        commits, with no own-session-trailered commit anywhere in range to
+        establish a known-scope-path anchor, must land in case 3 (ambiguous),
+        never case 2 (silently safe). A "no foreign trailer found" result is
+        NOT the same fact as "this range is this session's own work", and a
+        guard that conflates the two is exactly the vacuous check this plan
+        was written to close."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "x.py", "untrailered commit one")
+        tip_sha = _make_commit_touching(repo, "y.py", "untrailered commit two")
+
+        with pytest.raises(ValueError, match="genuinely ambiguous") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{tip_sha}")
+
+        # Confirm this is case 3 (ambiguous), NOT case 1 (foreign-trailer refusal) —
+        # the message text differs between the two cases.
+        assert "names a different session" not in str(exc_info.value)
+
+    def test_untrailered_commit_not_path_classifiable_is_ambiguous(
+        self, tmp_path
+    ) -> None:
+        """Case 3 (distinct scenario from the fully-trailerless test above):
+        an own-session anchor DOES exist in range, but the untrailered
+        commit touches a path the anchor never touched — the touched-path
+        signal cannot place it in scope, so this is still ambiguous, not
+        silently written."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "a.py", "own edit", session_id=_GUARD_OWN_SESSION)
+        tip_sha = _make_commit_touching(repo, "unrelated.py", "untrailered, unrelated path")
+
+        with pytest.raises(ValueError, match="genuinely ambiguous"):
+            _write_guarded(repo, f"{base_sha}..{tip_sha}")
+
+    def test_all_own_session_range_writes_normally(self, tmp_path) -> None:
+        """A sha_range whose every commit carries this session's OWN
+        Session-Id trailer writes without any guard intervention."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "one.py", "own edit one", session_id=_GUARD_OWN_SESSION)
+        tip_sha = _make_commit_touching(repo, "two.py", "own edit two", session_id=_GUARD_OWN_SESSION)
+
+        result = _write_guarded(repo, f"{base_sha}..{tip_sha}")
+        assert Path(result["out_path"]).is_file()
+
+    def test_git_failure_in_guard_fails_closed(self, tmp_path) -> None:
+        """A git failure inside the guard's own git subprocess calls (here:
+        trailer_foreign_shas's `git log` over a sha_range naming SHAs that
+        do not exist) must raise, not silently proceed to write — failing
+        closed, never open."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _make_commit(repo, "base")
+
+        # Both endpoints are hex-shaped (matches the write-side ref-concretization
+        # fast path, so no symbolic-ref resolution touches them and they reach
+        # the guard's own `git log` call unresolved) but name commits that do
+        # not exist in this repo — `git log` over this range fails non-zero.
+        with pytest.raises(GitLogFailed):
+            _write_guarded(repo, "deadbeef01..deadbeef02")
+
+    def test_workstream_resolves_null_not_a_peer_slug(self, tmp_path) -> None:
+        """A handoff claimed by a PEER session must never leak its workstream
+        slug onto this session's own record — 2026-07-27 C4 fix, exercised
+        here end-to-end through write_review_trail_entry."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit_touching(
+            repo, "own.py", "own edit", session_id=_GUARD_OWN_SESSION,
+        )
+
+        handoffs_dir = repo / "state" / "handoffs"
+        handoffs_dir.mkdir(parents=True)
+        (handoffs_dir / "2026-07-27-peer.md").write_text(
+            "---\nstatus: open\nclaimed_by: some-other-peer-session\n"
+            "workstream: peer-owned-slug\n---\nBody.\n",
+            encoding="utf-8",
+        )
+
+        result = write_review_trail_entry(
+            sha_range=f"{base_sha}..{tip_sha}",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            scope_kind="diff",
+            session_id=_GUARD_OWN_SESSION,
+            workstream=None,  # not suppressed — exercise the scan path
+            caller_worktree=repo,
+        )
+        assert result["workstream"] is None, (
+            f"expected null workstream (no handoff claimed by {_GUARD_OWN_SESSION!r}), "
+            f"got: {result['workstream']!r}"
+        )
+
+    def test_scope_chain_foreign_commit_refused_same_as_session_scope(
+        self, tmp_path
+    ) -> None:
+        """(i.1) scope="chain" grants NO exemption from the guard — a foreign-
+        attributed commit in range is refused identically to scope="session"
+        (the reported defect was specifically a scope="chain" record)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
+        assert foreign_sha in str(exc_info.value)
+
+    def test_scope_chain_own_session_range_writes_normally(self, tmp_path) -> None:
+        """(i.2) scope="chain" over only this session's own attributed
+        commits writes normally — the guard's scope-blindness cuts both
+        ways, not merely toward refusal."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit_touching(
+            repo, "one.py", "own edit", session_id=_GUARD_OWN_SESSION,
+        )
+
+        result = _write_guarded(repo, f"{base_sha}..{tip_sha}", scope="chain")
+        assert Path(result["out_path"]).is_file()
+
+    # Review: code-reviewer — Finding 2 (P2): the fail-closed branch (rc==2 on
+    # the `is-inside-work-tree` probe — the git INVOCATION itself failing,
+    # distinct from git running and confirming "not a work tree") had zero
+    # regression coverage. Both directions pinned below: rc==2 must raise,
+    # and a genuine not-a-work-tree answer must still no-op.
+    #
+    # Falsification check: the pre-fix code was `if rc != 0: return` —
+    # unconditional no-op on ANY nonzero rc, with no rc==2 discrimination.
+    # Under that old code, test_guard_fails_closed_on_git_invocation_failure's
+    # faked rc==2 response would hit `if rc != 0: return` and return silently
+    # instead of raising, so `pytest.raises(ValueError)` would find no
+    # exception and the test would FAIL — confirming this test is not vacuous
+    # against the regression it guards.
+
+    def test_guard_fails_closed_on_git_invocation_failure(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """rc==2 from `_git_runner`'s own except-clause (OSError /
+        TimeoutExpired on the `is-inside-work-tree` probe — git binary
+        missing, timeout, permission error) must raise, refusing to write
+        without running the foreign-session guard — never silently
+        skip it."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        def _fake_invocation_failure(args, cwd):
+            return 2, "", "boom: git invocation itself failed (OSError)"
+
+        monkeypatch.setattr(rtw, "_git_runner", _fake_invocation_failure)
+
+        with pytest.raises(ValueError, match="could not verify caller_worktree"):
+            rtw._guard_foreign_session_range(
+                "aaaa..bbbb", _GUARD_OWN_SESSION, tmp_path,
+            )
+
+    def test_guard_noops_on_genuine_not_a_work_tree(self, tmp_path) -> None:
+        """The complementary case: `caller_worktree` genuinely is not a git
+        work tree (real git ran and reported it — rc != 0 but rc != 2) is
+        still the documented no-op test-isolation contract, not a raise.
+        No monkeypatch: a real `git rev-parse --is-inside-work-tree` against
+        a plain (non-repo) directory genuinely fails non-zero via git itself,
+        never through `_git_runner`'s except-clause."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+
+        # Must not raise.
+        rtw._guard_foreign_session_range(
+            "aaaa..bbbb", _GUARD_OWN_SESSION, not_a_repo,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Case-1 PM-vouch relaxation (2026-07-28 amendment — archive/specs/2026-07/
+# 2026-07-27-review-trail-scope-guard.md § C7 amendment,
+# coordinator_core/session/review_trail_vouch.py). AC1/AC2/AC3/AC4 from the
+# dispatch brief.
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+
+from coordinator_core.session import review_trail_vouch as _vouch  # noqa: E402
+
+
+def _write_session_meta_live(repo: Path, sid: str) -> None:
+    import datetime as _dt
+
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "meta.json").write_text(
+        _json.dumps({"pid": "999", "last_activity": _dt.datetime.now(_dt.timezone.utc).isoformat()}),
+        encoding="utf-8",
+    )
+
+
+def _write_session_meta_dead(repo: Path, sid: str) -> None:
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "meta.json").write_text(
+        _json.dumps({"pid": "999", "last_activity": "2000-01-01T00:00:00Z"}),
+        encoding="utf-8",
+    )
+
+
+class TestForeignSessionScopePMVouchRelaxation:
+    """AC1: with no grant present, Case 1 behaviour is behaviorally
+    identical to today (same exception type, same offending SHA set; the
+    refusal message text gained a trailing PM-vouch-grant mention — see
+    `ForeignSessionRangeRefused`'s new closing sentence — so it is NOT
+    byte-identical, Review: code-reviewer — Finding 4b), pinned by
+    test_foreign_trailer_sha_in_range_is_refused_and_named above (unmodified,
+    and deliberately only asserting exception type + offending-SHA
+    membership via `match=`, not the full message text). AC2-AC4 below."""
+
+    def test_ac2_live_grant_naming_the_foreign_sha_allows_the_write(self, tmp_path):
+        """AC2: with a valid grant naming the foreign SHA, review_trail.write
+        succeeds over a range containing it."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
+        ok = _vouch.write_review_trail_vouch(
+            [foreign_sha],
+            "reviewed live during workstream-complete, found two P1 security bypasses",
+            session_id=_GUARD_OWN_SESSION,
+            cwd=str(repo),
+        )
+        assert ok is True
+
+        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
+        assert result["sha_range"] == f"{base_sha}..{foreign_sha}"
+
+        waiver = repo / "state" / "review-trail" / "pm-vouches" / f"{foreign_sha}.json"
+        assert waiver.is_file(), (
+            "AC5 precondition: a permanent waiver must be persisted so the "
+            "coverage read side can credit this commit after this session ends"
+        )
+
+    def test_ac3_grant_naming_x_does_not_authorize_range_containing_y(self, tmp_path):
+        """AC3: a grant naming SHA X does not authorize a range containing
+        foreign SHA Y."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        # A real, resolvable commit that is genuinely NOT in the range under
+        # test below — proves AC3's narrow-by-sha semantics without relying
+        # on a fabricated hex string (Finding 3: write_review_trail_vouch
+        # now resolves every sha token via `git rev-parse`, so a fabricated
+        # token would raise ValueError instead of exercising AC3 at all).
+        vouched_but_absent_sha = base_sha
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
+        _vouch.write_review_trail_vouch(
+            [vouched_but_absent_sha],
+            "vouched for a DIFFERENT sha, not the one in this range",
+            session_id=_GUARD_OWN_SESSION,
+            cwd=str(repo),
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
+        assert foreign_sha in str(exc_info.value)
+
+    def test_ac4_dead_session_grant_never_authorizes(self, tmp_path):
+        """AC4: a grant from a dead session never authorizes the current one
+        (mirrors tier-u-grant-cli's liveness semantics)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
+        _vouch.write_review_trail_vouch(
+            [foreign_sha],
+            "vouched while live, but the session crashed before writing",
+            session_id=_GUARD_OWN_SESSION,
+            cwd=str(repo),
+        )
+        _write_session_meta_dead(repo, _GUARD_OWN_SESSION)
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
+        assert foreign_sha in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Chain-ancestry waiver as a SECOND evidence source (2026-07-31, C3,
+# docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md).
+# AC1 (refusal strength unchanged for an un-waived foreign SHA) and AC1b
+# (the residual strength that must survive the new source: a foreign SHA
+# outside the gate's chain_set, and one from a chain the gate never HALTed
+# on). The full write-side matrix (waived-admits, partial-refuse, scope-
+# mismatch) is C4a's — this class stays to the two chunks this dispatch owns.
+# ---------------------------------------------------------------------------
+
+from coordinator_core import chain_ancestry_waivers as _chain_waivers  # noqa: E402
+
+# Chain identity must satisfy chain_ancestry_waivers._CHAIN_ID_RE (hex chars
+# and dashes only, first/last char hex) — a real closing session's own id is
+# a UUID and always shaped this way, unlike `_GUARD_OWN_SESSION` above (a
+# human-readable slug used elsewhere in this file for the PM-vouch tests,
+# which never key off a directory-name-safety-checked chain_id).
+_CHAIN_OWN_SESSION = "abcdef01-1111-2222-3333-444444444444"
+_CHAIN_OTHER_SESSION = "abcdef02-5555-6666-7777-888888888888"
+
+
+class TestForeignSessionScopeChainAncestryWaiver:
+    """C3: `_guard_foreign_session_range` consults the C1 chain-ancestry
+    waiver set as a second source alongside the PM-vouch set — no signature
+    change, no new parameter, no new derivation. `own_session_id` (already
+    passed to the guard) IS the chain identity looked up, mirroring the read
+    side's `_narrow_foreign_session_scope` use of `own_session_id` as
+    `reading_chain_id` (coverage.py's `_chain_ancestry_waived_shas`)."""
+
+    def test_ac1_unwaived_foreign_sha_still_refuses_exactly_as_at_head(
+        self, tmp_path
+    ) -> None:
+        """AC1: with NEITHER a PM-vouch grant NOR a chain-ancestry waiver on
+        disk anywhere, a foreign-attributed SHA refuses exactly as it did
+        before this chunk — same exception type, same offending SHA named."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
+        assert foreign_sha in str(exc_info.value)
+
+    def test_ac1b_foreign_sha_outside_chain_set_still_refuses(self, tmp_path) -> None:
+        """AC1b (case 1 of 2): a chain-ancestry waiver DOES exist for this
+        writing session's own chain identity, but not for the offending SHA
+        in this range (it was minted for some OTHER commit the gate's
+        chain_set did include) — the un-waived foreign SHA here, which is
+        outside that chain_set, must still refuse.
+
+        Load-bearing check performed manually (not asserted here): a guard
+        that intersected the waived set with `foreign_trailer_shas` only
+        loosely (or dropped the intersection and unioned the whole
+        directory's waived set unconditionally) would make this test go
+        red, because `chain_waived_but_unrelated_sha` shares this session's
+        chain identity and would otherwise leak into `waived`.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        # A waiver minted for THIS session's own chain identity, but naming a
+        # different, unrelated SHA — i.e. the gate's chain_set for this
+        # chain included some other commit, not the foreign_sha under test.
+        chain_waived_but_unrelated_sha = "f" * 40
+        _chain_waivers.record_chain_ancestry_waiver(
+            str(repo),
+            frozenset({chain_waived_but_unrelated_sha}),
+            chain_id=_CHAIN_OWN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
+        assert foreign_sha in str(exc_info.value)
+
+    def test_ac1b_foreign_sha_from_chain_never_halted_on_still_refuses(
+        self, tmp_path
+    ) -> None:
+        """AC1b (case 2 of 2): a chain-ancestry waiver exists NAMING the
+        exact offending SHA, but it was minted for a DIFFERENT chain's
+        close (a chain the gate never HALTed on when THIS session was the
+        closer) — this session's own chain identity does not match the
+        waiver's minting chain, so it must still refuse (AC3's
+        scope-mismatch discipline, exercised here from the write side).
+
+        Load-bearing check performed manually (not asserted here): a guard
+        that consulted chain waivers by PRESENCE alone (any chain,
+        anywhere — the pm-vouches shape) rather than scoped to
+        `own_session_id` would make this test go red, since the waiver
+        below exists and names `foreign_sha` exactly.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        # A waiver minted for the EXACT offending SHA, but under a chain_id
+        # that is NOT this writing session's own chain identity.
+        _chain_waivers.record_chain_ancestry_waiver(
+            str(repo),
+            frozenset({foreign_sha}),
+            chain_id=_CHAIN_OTHER_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
+        assert foreign_sha in str(exc_info.value)
+
+    def test_chain_ancestry_waiver_for_own_chain_admits_the_write(
+        self, tmp_path
+    ) -> None:
+        """Sanity companion (not AC1/AC1b, but needed to prove the two
+        residual-strength tests above are discriminating tests and not
+        vacuously refusing regardless of any waiver): a waiver minted for
+        THIS session's own chain identity, naming the exact offending SHA,
+        DOES admit the write — proving the guard's refusal above is
+        conditioned on scope/identity, not on chain-ancestry waivers being
+        inert."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _chain_waivers.record_chain_ancestry_waiver(
+            str(repo),
+            frozenset({foreign_sha}),
+            chain_id=_CHAIN_OWN_SESSION,
+        )
+
+        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
+        assert Path(result["out_path"]).is_file()
+
+    def test_partial_chain_waiver_refuses_naming_only_unwaived_remainder(
+        self, tmp_path
+    ) -> None:
+        """C4a matrix: a range with TWO foreign-attributed SHAs where only
+        ONE carries a chain-ancestry waiver for this session's own chain
+        must STILL refuse — DR-243's existing narrowness property (a range
+        only PARTIALLY covered by waived/vouched evidence still refuses)
+        must survive the new evidence source unchanged. The refusal message
+        names ONLY the un-waived remainder, never the already-waived SHA."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        waived_foreign_sha = _make_commit_touching(
+            repo, "peer-waived.py", "peer work (waived)", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        unwaived_foreign_sha = _make_commit_touching(
+            repo, "peer-unwaived.py", "peer work (unwaived)", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _chain_waivers.record_chain_ancestry_waiver(
+            str(repo),
+            frozenset({waived_foreign_sha}),
+            chain_id=_CHAIN_OWN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            _write_guarded(
+                repo, f"{base_sha}..{unwaived_foreign_sha}", scope="chain",
+                own_session_id=_CHAIN_OWN_SESSION,
+            )
+        message = str(exc_info.value)
+        assert unwaived_foreign_sha in message, (
+            f"expected the un-waived remainder {unwaived_foreign_sha!r} named "
+            f"in the refusal, got: {message}"
+        )
+        assert waived_foreign_sha not in message, (
+            f"the already-waived SHA {waived_foreign_sha!r} must NOT appear "
+            f"in the refusal — only the un-waived remainder is named, "
+            f"got: {message}"
+        )
+
+    def test_pm_vouch_and_chain_waiver_together_admit_full_range(
+        self, tmp_path
+    ) -> None:
+        """AC9: DR-243's PM-vouch path still works untouched alongside the
+        new chain-ancestry source — a range with TWO foreign SHAs, one
+        covered by a live PM-vouch grant and the other by a gate-minted
+        chain-ancestry waiver, is admitted by the UNION of both sources
+        (neither source alone names both offending SHAs)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
+        pm_vouched_sha = _make_commit_touching(
+            repo, "peer-pm.py", "peer work (pm-vouched)", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        chain_waived_sha = _make_commit_touching(
+            repo, "peer-chain.py", "peer work (chain-waived)", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _CHAIN_OWN_SESSION)
+        ok = _vouch.write_review_trail_vouch(
+            [pm_vouched_sha],
+            "reviewed live during workstream-complete, DR-243 vouch",
+            session_id=_CHAIN_OWN_SESSION,
+            cwd=str(repo),
+        )
+        assert ok is True
+
+        _chain_waivers.record_chain_ancestry_waiver(
+            str(repo),
+            frozenset({chain_waived_sha}),
+            chain_id=_CHAIN_OWN_SESSION,
+        )
+
+        result = _write_guarded(
+            repo, f"{base_sha}..{chain_waived_sha}", scope="chain",
+            own_session_id=_CHAIN_OWN_SESSION,
+        )
+        assert Path(result["out_path"]).is_file()

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/health-status.schema.json",
+  "x-schema-name": "health-status",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/health/*.md",
+  "description": "Periodic health summary/ledger. status=LIFECYCLE axis (active/archived); health=POSTURE axis (HEALTHY..CRITICAL). Do NOT conflate — liveness keys on status ONLY, never health.",
+  "type": "object",
+  "required": ["title", "created", "status", "health"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for this health record."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this record was authored (YYYY-MM-DD)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "archived"],
+      "description": "Lifecycle axis — whether this health record is active or archived. Do NOT conflate with health posture."
+    },
+    "health": {
+      "type": "string",
+      "enum": ["HEALTHY", "WATCH", "ACTION", "CRITICAL"],
+      "description": "Posture axis — current health signal for the tracked surface."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Agent or team responsible for this health surface."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Free-text narrative of the current health state."
+    }
+  }
+}

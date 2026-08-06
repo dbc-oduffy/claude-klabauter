@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/cross-repo-commitment.schema.json",
+  "x-schema-name": "cross-repo-commitment",
+  "x-schema-version": "1.1.0",
+  "applies_to": "state/cross-repo-commitments/*.yaml",
+  "match_mode": "whole-document-yaml",
+  "description": "Cross-repo commitment record — tracks a commitment made in the course of cross-repo communication (memo/ask/reply) through to fulfillment or withdrawal. Unknown fields in cross-repo-commitment records are tolerated (not rejected). Matches improvement-queue.yaml posture — forward-compatible as optional fields are added without invalidating existing records.",
+  "type": "object",
+  "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here, consistent with the handoff schema. A misspelled field will silently pass. This is intentional for forward-compatibility and matches the existing permissive pattern in other coordinator schemas (matches improvement-queue.yaml posture).",
+  "required": ["created", "title", "body", "status", "committed_by", "memo", "commitment", "observed"],
+  "properties": {
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this commitment record was authored (YYYY-MM-DD)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Business-legible display name for this commitment."
+    },
+    "body": {
+      "type": "string",
+      "description": "Prose description of the commitment content."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "fulfilled", "withdrawn"],
+      "description": "Commitment lifecycle status. open=not yet fulfilled; fulfilled=commitment satisfied; withdrawn=cancelled or superseded."
+    },
+    "committed_by": {
+      "type": "string",
+      "description": "Identifier of the party (session, agent, or repo) making the commitment."
+    },
+    "memo": {
+      "type": "string",
+      "description": "Reference to the memo (cross-repo communication artifact) this commitment originates from."
+    },
+    "commitment": {
+      "type": "string",
+      "description": "The specific thing being committed to."
+    },
+    "observed": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this commitment was observed/recorded (YYYY-MM-DD)."
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this commitment was closed (fulfilled or withdrawn). Optional — unset while status is open."
+    },
+    "closed_by": {
+      "type": "string",
+      "description": "Identifier of the party that closed this commitment. Optional — unset while status is open."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional free-form classification tags."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Optional reference to the artifact, commit, or document evidencing fulfillment."
+    },
+    "declaration": {
+      "type": "object",
+      "description": "Optional typed carrier for a sibling-notification-duty declaration (DR-097 — see docs/decisions/DR-097-sibling-notification-duty-on-terminal-events.md). Populated when this commitment records a example-doctrine-repo->sibling notification triggered by a contract bump or a spinoff-closure memo, so downstream guards can key on a structured field instead of parsing prose out of `body`/`commitment`.",
+      "properties": {
+        "consumer": {
+          "type": "string",
+          "description": "The sibling repo (or named receiver) this declaration is notifying — e.g. Claude-klabauter."
+        },
+        "artifact": {
+          "type": "string",
+          "description": "The contract or artifact whose change triggered this declaration — e.g. a schema path or spinoff deliverable."
+        },
+        "bump_class": {
+          "type": "string",
+          "description": "The nature of the change to the artifact — e.g. schema x-schema-version bump, spinoff-closure memo."
+        },
+        "tolerance": {
+          "type": "string",
+          "enum": ["structural", "version-envelope"],
+          "description": "How strictly the consumer's vendored copy must track this change. structural=the consumer's own shape/behavior depends on the new field or contract clause; version-envelope=only the version string/pin needs to move, no consumer-side shape dependency."
+        },
+        "declared_at": {
+          "type": "string",
+          "format": "date",
+          "description": "Date this declaration was recorded (YYYY-MM-DD)."
+        },
+        "source": {
+          "type": "string",
+          "description": "Reference to the originating memo, decision record, or plan that produced this declaration."
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "description": "Optional provenance metadata block for this commitment record.",
+      "properties": {
+        "created_by_session": {
+          "type": "string",
+          "description": "Session identifier that authored this record."
+        },
+        "created_by_agent": {
+          "type": "string",
+          "description": "Agent identifier that authored this record."
+        },
+        "linked_sessions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Sessions linked to this commitment's lifecycle."
+        },
+        "linked_commits": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Commits linked to this commitment's lifecycle."
+        },
+        "provenance_completeness": {
+          "type": "string",
+          "enum": ["complete", "unknown"],
+          "description": "Whether the provenance metadata for this record is complete or partially unknown."
+        }
+      }
+    }
+  }
+}

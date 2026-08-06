@@ -1,0 +1,447 @@
+{
+  "oracle": "coordinator/bin/query-records.js",
+  "consuming_suite": "coordinator_core/ops/test_verify_schema_registry_sync.py::test_golden_oracle_parity_against_live_doe_repo",
+  "note": "Live-gated leg only. Fixture source is example-doctrine-repo's OWN coordinator/schemas/ tree in place (no synthesized tree) -- see migration-hitlist.md's portability caveat: this suite is machine-path-hardcoded and cannot be blindly relocated.",
+  "cases": {
+    "archived-memo.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"cross-repo/archive/2026-07-01-refresh-queries-relative-path-bug.md\",\n    \"frontmatter\": {\n      \"title\": \"refresh-queries.js emits repo-root-relative links in STUB-INDEX blocks that break from nested files\",\n      \"from\": \"example-cockpit-repo-em\",\n      \"to\": \"claude-central-em\",\n      \"created\": \"2026-07-01\",\n      \"status\": \"actioned\",\n      \"decision\": \"accepted\",\n      \"decision_note\": \"Depth-correct links via path.relative\",\n      \"realized_by\": \"4fa6b8a\",\n      \"picked_up_at\": \"2026-07-08T14:12:18Z\",\n      \"picked_up_by\": \"6bdec27f-0f90-4514-8fac-634a8b9cdd13\",\n      \"delivery_mode\": \"receiver-repo\",\n      \"summary\": \"The query-callout regenerator (bin/refresh-queries.js) writes handoff links as repo-root-relative paths (state/handoffs\u2026\",\n      \"kind\": \"ask\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "archived-memo.schema.json",
+      "applies_to": "cross-repo/archive/*.md",
+      "query_type": "archived-memo",
+      "type_recognised": true
+    },
+    "atlas-doc.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/architecture/connectivity-matrix.md\",\n    \"frontmatter\": {\n      \"last_mapped\": \"2026-07-12\",\n      \"mode\": \"first-run-hybrid\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "atlas-doc.schema.json",
+      "applies_to": "docs/architecture/*.md",
+      "query_type": "atlas-doc",
+      "type_recognised": true
+    },
+    "atlas-system-doc.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/architecture/systems/bin-cli.md\",\n    \"frontmatter\": {\n      \"system\": \"bin-cli\",\n      \"last_mapped\": \"2026-07-12\",\n      \"last_attested\": \"2026-07-12\",\n      \"entry_points\": 60,\n      \"cross_system_connections\": 90,\n      \"dependencies\": [\n        \"lib-resolution\",\n        \"schemas-identity\",\n        \"cockpit-contract\"\n      ],\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "atlas-system-doc.schema.json",
+      "applies_to": "docs/architecture/systems/*.md",
+      "query_type": "atlas-system-doc",
+      "type_recognised": true
+    },
+    "audit-record.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "audit-record.schema.json",
+      "applies_to": "docs/architecture/audit-records/*.md",
+      "query_type": "audit-record",
+      "type_recognised": true
+    },
+    "bug-backlog.schema.json": {
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "Unknown type: bug-backlog. Valid: strategic-self-description, fleet-capability-index, capability-manifest, orientation-cache, product-changelog, pm-action-items, tracker, health-ledger, repomap, docs-roadmap, skill, review-integration-record, audit-record, cross-repo-commitment, integration-summary, plan-coverage-check, coverage-audit, review-findings, prior-art-check, workstream-event, atlas-system-doc, improvement, session-hierarchy, gap-report, lessons-outbox, research-claim, roadmap, cross-repo-memo, decision-guide, docs-check-sidecar, debt, review-trail, bug, initiative, workstream, archived-memo, atlas-doc, review-sidecar, handoff-archived, decision, handoff, goal, problem-set, research-synthesis, review, health-status, plan, run-report, completion, lesson, handoff-ledger\n",
+      "schema_file": "bug-backlog.schema.json",
+      "applies_to": "state/bug-backlog/*.yaml",
+      "query_type": "bug-backlog",
+      "type_recognised": false
+    },
+    "capability-manifest.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "capability-manifest.schema.json",
+      "applies_to": "state/capabilities/manifest.json",
+      "query_type": "capability-manifest",
+      "type_recognised": true
+    },
+    "completion-entry.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"archive/completed/2026-05/2026-05-20-plan-status-shipped-to-implemented-b7132d.md\",\n    \"frontmatter\": {\n      \"title\": \"Plan status terminal renamed shipped \u2192 implemented (decouple from main-landing)\",\n      \"created\": \"2026-05-20\",\n      \"nature\": \"infra\",\n      \"nature_inferred\": false,\n      \"chain\": null,\n      \"commits\": [\n        \"388bc1b0\",\n        \"<pending: code-reviewer P1 fixup>\"\n      ],\n      \"status\": \"released\",\n      \"released_in\": \"v2.5.0\",\n      \"released_at\": \"2026-05-24\",\n      \"released_sha\": \"019a9dc85a8c16beb086ca428f5d48302ac8b335\",\n      \"chain_terminal\": false,\n      \"authored_by\": \"6136c31c-38a8-44ea-95f9-2e2d7fb7132d\",\n      \"loe\": {\n        \"agent_dispatches\": 1,\n        \"opus_dispatches\": 0,\n        \"em_tokens\": null,\n        \"tshirt\": \"S\"\n      },\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "completion-entry.schema.json",
+      "applies_to": "archive/completed/*/*.md",
+      "query_type": "completion",
+      "type_recognised": true
+    },
+    "coverage-audit.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/research/2026-06-27-example-voice-system-coverage-audit.md\",\n    \"frontmatter\": {\n      \"audited_synthesis\": \"docs/research/2026-06-27-example-voice-system.md\",\n      \"pipeline\": \"B (repo)\",\n      \"claim_records_read\": [\n        \"docs/research/2026-06-27-07h49-example-voice-system-workdir/A-assessment.md\",\n        \"docs/research/2026-06-27-07h49-example-voice-system-workdir/B-assessment.md\",\n        \"docs/research/2026-06-27-07h49-example-voice-system-workdir/C-assessment.md\",\n        \"docs/research/2026-06-27-07h49-example-voice-system-workdir/D-assessment.md\"\n      ],\n      \"audit_date\": \"2026-06-27\",\n      \"present_count\": 82,\n      \"absent_count\": 22,\n      \"degraded\": false,\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "coverage-audit.schema.json",
+      "applies_to": "docs/research/*-coverage-audit.md",
+      "query_type": "coverage-audit",
+      "type_recognised": true
+    },
+    "cross-repo-commitment.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/cross-repo-commitments/2026-07-12-claude-klabauter-scopes-ships-the-step-3-strategic-e586aee82914.yaml\",\n    \"frontmatter\": {\n      \"created\": \"2026-07-12\",\n      \"title\": \"claude-klabauter scopes + ships the step-3 strategic feed-emission op (emit curated self-description \u2192 work-state ProvenanceEnvelope)\",\n      \"body\": \"Feed-emission ownership split adopted (DR-047 producer-contract application). Claude-klabauter owns the thin if-exists emit op: read curated state/strategic/self-description.yaml if present -> emit a ProvenanceEnvelope into the work-state feed rag ingests (example-retrieval-repo core/workstate_store/ingest.py); typed-absent no-op when the canonical is missing (no synthesize/curate/repair). Example-doctrine-repo's side already shipped/frozen (repo-setup Phase 3l scaffold + workweek Step 4i nag; strategic-self-description.schema.json v1.0.0 @ 017da24b). Claude-klabauter said it would scope the emitter as a claude-klabauter plan/spinoff on our confirm and reply to rag with the sequencing schedule. This is the last unowned seam on the example-doctrine-repo->claude-klabauter->rag strategic-self-description chain; watch for claude-klabauter's ship signal (it unblocks rag's claim-store migration). Interface claude-klabauter pins against: curated self-description.yaml at the frozen schema; provenance curated (canonical) vs generated (draft).\",\n      \"status\": \"open\",\n      \"committed_by\": \"claude-klabauter-em\",\n      \"memo\": \"cross-repo/inbox/2026-07-12-claude-klabauter-em-strategic-feed-emission-ownership-split.md\",\n      \"commitment\": \"Once you confirm (or counter) the split and pin the curated path/shape, I scope the step-3 emitter as a claude-klabauter plan/spinoff and reply to rag with the schedule.\",\n      \"observed\": \"2026-07-12\",\n      \"system\": {\n        \"created_by_session\": \"df76a088-cb8a-4d12-ac63-33eaa5878dd8\",\n        \"linked_sessions\": [\n          \"df76a088-cb8a-4d12-ac63-33eaa5878dd8\"\n        ],\n        \"provenance_completeness\": \"complete\"\n      },\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "cross-repo-commitment.schema.json",
+      "applies_to": "state/cross-repo-commitments/*.yaml",
+      "query_type": "cross-repo-commitment",
+      "type_recognised": true
+    },
+    "debt-backlog.schema.json": {
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "Unknown type: debt-backlog. Valid: strategic-self-description, fleet-capability-index, capability-manifest, orientation-cache, product-changelog, pm-action-items, tracker, health-ledger, repomap, docs-roadmap, skill, review-integration-record, audit-record, cross-repo-commitment, integration-summary, plan-coverage-check, coverage-audit, review-findings, prior-art-check, workstream-event, atlas-system-doc, improvement, session-hierarchy, gap-report, lessons-outbox, research-claim, roadmap, cross-repo-memo, decision-guide, docs-check-sidecar, debt, review-trail, bug, initiative, workstream, archived-memo, atlas-doc, review-sidecar, handoff-archived, decision, handoff, goal, problem-set, research-synthesis, review, health-status, plan, run-report, completion, lesson, handoff-ledger\n",
+      "schema_file": "debt-backlog.schema.json",
+      "applies_to": "state/debt-backlog/*.yaml",
+      "query_type": "debt-backlog",
+      "type_recognised": false
+    },
+    "decision-guide.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "decision-guide.schema.json",
+      "applies_to": "docs/guides/*-decisions.md",
+      "query_type": "decision-guide",
+      "type_recognised": true
+    },
+    "decision.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/decisions/2026-07-08-reclaim-pre-july-history-from-claude-klabauter.md\",\n    \"frontmatter\": {\n      \"title\": \"Reclaim example-doctrine-repo's pre-July history from claude-klabauter (2026-07-03 relocation over-swept)\",\n      \"created\": \"2026-07-08\",\n      \"status\": \"accepted\",\n      \"kind\": \"decision\",\n      \"deciders\": [\n        \"D\u00f3nal example-operator (PM)\"\n      ],\n      \"authority\": \"PM-directed example-doctrine-repo cross-repo boundary ruling 2026-07-08 (expands the memo's ask from 352 specs to the full pre-July cohort)\",\n      \"trigger_memo\": \"cross-repo/inbox/2026-07-08-claude-klabauter-em-reclaim-inherited-doctrine-artifacts.md\",\n      \"relates_to\": [\n        \"claude-klabauter docs/decisions/2026-07-03-tri-plane-ownership-boundary.md\"\n      ],\n      \"liveness\": \"DONE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "decision.schema.json",
+      "applies_to": "docs/decisions/*.md",
+      "query_type": "decision",
+      "type_recognised": true
+    },
+    "docs-check-sidecar.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/plans/2026-07-11-v3-cutover-retire-sibling-install-trees.docs-check.md\",\n    \"frontmatter\": {\n      \"artifact\": \"docs/plans/2026-07-11-v3-cutover-retire-sibling-install-trees.md\",\n      \"created\": \"2026-07-11\",\n      \"checker\": \"PLACEHOLDER\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "docs-check-sidecar.schema.json",
+      "applies_to": "docs/plans/*.docs-check.md",
+      "query_type": "docs-check-sidecar",
+      "type_recognised": true
+    },
+    "docs-roadmap.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "docs-roadmap.schema.json",
+      "applies_to": "docs/ROADMAP.md",
+      "query_type": "docs-roadmap",
+      "type_recognised": true
+    },
+    "fleet-capability-index.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "fleet-capability-index.schema.json",
+      "applies_to": "state/capabilities/fleet-index.json",
+      "query_type": "fleet-capability-index",
+      "type_recognised": true
+    },
+    "gap-report.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "gap-report.schema.json",
+      "applies_to": "docs/research/*-gap-report.md",
+      "query_type": "gap-report",
+      "type_recognised": true
+    },
+    "goal.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/goals/2026-07-20-kill-bash-claude-klabauter-python-owns-the-script--c2932fac.yaml\",\n    \"frontmatter\": {\n      \"schema\": \"goal\",\n      \"id\": \"goal-kill-bash-claude-klabauter-python-owns-the-script-\",\n      \"title\": \"Kill bash \u2014 claude-klabauter Python owns the script slate\",\n      \"status\": \"active\",\n      \"objective\": \"Complete the migration of the coordinator script slate off bash onto claude-klabauter Python, so no load-bearing ceremony path shells out to bash.\",\n      \"key_results\": [\n        {\n          \"id\": \"kr-1\",\n          \"text\": \"Remaining bash under coordinator/bin/ is inventoried, and each script is migrated to Python, retired, or explicitly justified as staying\",\n          \"kind\": \"output\",\n          \"status\": \"not-started\",\n          \"weekly_perceptible\": true,\n          \"evidence_source\": \"migration inventory: count of remaining bash scripts under coordinator/bin/ (no single inventory artifact exists yet \u2014 this descriptor names what is counted, not a fixed path)\"\n        },\n        {\n          \"id\": \"kr-2\",\n          \"text\": \"Ceremony hot paths (workday/workweek start and complete) invoke Python entrypoints with no bash trampoline in the chain\",\n          \"kind\": \"outcome\",\n          \"status\": \"not-started\",\n          \"weekly_perceptible\": true,\n          \"evidence_source\": \"platform-outcome records under state/platform-outcomes/ whose surface is a CEREMONY HOT PATH (workday/workweek start and complete) \u2014 a distinct derivation from the tested_platforms generator, which reads only records whose surface is a manifest-declared entry point. One record store, one schema, two derivations. KR-2 cannot read green on macos/linux hot-path records alone once windows is in present_platforms \u2014 it requires a windows hot-path record to be present and green.\"\n        }\n      ],\n      \"created\": \"2026-07-20\",\n      \"period\": \"week\",\n      \"period_value\": \"2026-W30\",\n      \"weekly_perceptible\": true,\n      \"goal_id\": \"3da844fb665e\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "goal.schema.json",
+      "applies_to": "state/goals/*.yaml",
+      "query_type": "goal",
+      "type_recognised": true
+    },
+    "handoff.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/handoffs/2026-07-06_150510_c1802f14-0927-4e40-85ac-92a5aa751618.md\",\n    \"frontmatter\": {\n      \"title\": \"Phase-2 destructive flat-tree removal \u2014 BLOCKED on install-shape spinoff + 5 consumer install-infra confirmations (preconditions verified green)\",\n      \"created\": \"2026-07-06\",\n      \"branch\": \"work/machine-b/2026-07-04\",\n      \"status\": \"active\",\n      \"predecessor\": \"state/handoffs/2026-07-05_010714_doe-maximalist-phase2-tree-removal.md\",\n      \"kind\": \"session-handoff\",\n      \"deployment_state\": \"awaiting_gate\",\n      \"gate_dependency\": \"install-shape-off-dotclaude spinoff landing AND all 5 consumer teams (example-game-repo, example-retrieval-repo, ue-addon, cockpit, claude-klabauter) confirming their install infra no longer reads/writes ~/.claude\",\n      \"category\": \"infra\",\n      \"summary\": \"Phase-2 flat-tree removal deferred: preconditions green, scope expanded \u2014 blocked on install-shape relocation + 5 consumer confirmations.\",\n      \"pickup_ready\": true,\n      \"workstream\": \"doe-maximalist-phase2-tree-removal\",\n      \"deliverable_id\": \"dlv-doe-maximalist-cutover-phase-2-destructi-0322dd\",\n      \"initiative\": \"tri-plane-relocation\",\n      \"scope\": [\n        \"state/handoffs/2026-07-06_150510_c1802f14-0927-4e40-85ac-92a5aa751618.md\"\n      ],\n      \"liveness\": \"BLOCKED\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "handoff.schema.json",
+      "applies_to": "state/handoffs/*.md",
+      "query_type": "handoff",
+      "type_recognised": true
+    },
+    "health-ledger.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "health-ledger.schema.json",
+      "applies_to": "state/health-ledger.md",
+      "query_type": "health-ledger",
+      "type_recognised": true
+    },
+    "health-status.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "health-status.schema.json",
+      "applies_to": "state/health/*.md",
+      "query_type": "health-status",
+      "type_recognised": true
+    },
+    "improvement-queue.schema.json": {
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "Unknown type: improvement-queue. Valid: strategic-self-description, fleet-capability-index, capability-manifest, orientation-cache, product-changelog, pm-action-items, tracker, health-ledger, repomap, docs-roadmap, skill, review-integration-record, audit-record, cross-repo-commitment, integration-summary, plan-coverage-check, coverage-audit, review-findings, prior-art-check, workstream-event, atlas-system-doc, improvement, session-hierarchy, gap-report, lessons-outbox, research-claim, roadmap, cross-repo-memo, decision-guide, docs-check-sidecar, debt, review-trail, bug, initiative, workstream, archived-memo, atlas-doc, review-sidecar, handoff-archived, decision, handoff, goal, problem-set, research-synthesis, review, health-status, plan, run-report, completion, lesson, handoff-ledger\n",
+      "schema_file": "improvement-queue.schema.json",
+      "applies_to": "state/improvement-queue/*.yaml",
+      "query_type": "improvement-queue",
+      "type_recognised": false
+    },
+    "initiative.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "initiative.schema.json",
+      "applies_to": "state/initiatives/*.yaml",
+      "query_type": "initiative",
+      "type_recognised": true
+    },
+    "integration-summary.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "integration-summary.schema.json",
+      "applies_to": "docs/plans/*.integration-summary.md",
+      "query_type": "integration-summary",
+      "type_recognised": true
+    },
+    "lesson-entry.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/lessons/2026-07-19-a-safe-to-drop-stash-on-a-shared-tree-ca-7cd27d453581.yaml\",\n    \"frontmatter\": {\n      \"created\": \"2026-07-19\",\n      \"title\": \"A 'safe to drop' stash on a shared tree can hold the only copy of load-bearing wiring\",\n      \"body\": \"On a shared working tree, a concurrent agent/session may git-stash your uncommitted TRACKED edits (op registrations) while leaving untracked new files, or commit your untracked op as an 'orphaned in-flight' sweep. This session: a prior executor labeled a 'wip probe' stash 'redundant, safe to drop' \u2014 it actually held the ONLY copy of the op's registration edits (ipc._OP_KEY_SCOPE + ops/__init__ eager-import + _registry_map). Dropping it blindly would have shipped the op as unreachable dead code. The op's own unit tests PASSED without the registrations because they import the module directly, never exercising the registry \u2014 green masked the gap. Recovery: git stash show -p before any drop; git checkout HEAD on the conflicted registry files revealed a sibling had ALSO committed my op at the wrong (superseded) version.\",\n      \"status\": \"open\",\n      \"scope\": \"universal\",\n      \"from_repo\": \"claude-central-em\",\n      \"proposed_target\": \"docs/wiki/concurrent-em-hazards.md\",\n      \"evidence\": \"claude-klabauter 1d8ae658 (correct), a69ef826 (sibling orphaned-in-flight sweep), example-doctrine-repo c47b0268\",\n      \"trigger\": \"Committing a cross-repo op on a shared work/* branch with sibling sessions concurrently active on the same registries\",\n      \"why\": \"Unit tests that import a module directly do not exercise its registry/dispatch wiring, so missing registration passes tests but ships dead code; a stash label from another agent is not a safety proof\",\n      \"how_to_apply\": \"git stash show -p before dropping any stash you did not create; after any stash/checkout churn on a shared tree, grep the registry/dispatch/import surfaces for the new symbol to confirm wiring survived \u2014 do not trust green tests alone\",\n      \"system\": {\n        \"created_by_session\": \"fb22e9e8-9b9b-4f79-b494-2ee9fc5d5961\",\n        \"linked_sessions\": [\n          \"fb22e9e8-9b9b-4f79-b494-2ee9fc5d5961\"\n        ],\n        \"provenance_completeness\": \"complete\"\n      },\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "lesson-entry.schema.json",
+      "applies_to": "state/lessons/*.yaml",
+      "query_type": "lesson",
+      "type_recognised": true
+    },
+    "lessons-outbox.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/lessons-outbox/2026-06-15T15-54-41-00-00-mechanical-disjoint-multi-file-work-is-n.yaml\",\n    \"frontmatter\": {\n      \"id\": \"c1b75d74-1407-4f48-a3e8-cd4f718491c3\",\n      \"created\": \"2026-06-15T15:54:41+00:00\",\n      \"from_repo\": \"claude-central-em\",\n      \"change_kind\": \"doctrine-edit\",\n      \"target_wiki\": \"plugins/coordinator-claude/coordinator/docs/wiki/agent-dispatch-economics.md\",\n      \"title\": \"Mechanical-disjoint multi-file work is not a self-execute carve-out\",\n      \"body\": \"When work is mechanical (same edit shape across N files) AND disjoint (no cross-file coupling), the right shape is a Sonnet fan-out \u2014 even when the loci are loaded in EM context and typing feels faster. The wiki's 'Sonnet burns ~\u00bc the Opus tokens' line governs; loci-loaded is necessary but not sufficient for the self-execute carve-out. Real carve-out criteria are tight cross-file coherence on a SMALL surface (\u22643 files per agent-dispatch-economics.md), heavy reasoning that doesn't decompose, or a mid-edit hazard \u2014 not 'mechanical and parallel.' The failure mode is the EM rationalizing the carve-out because typing feels faster than dispatching; same loop fires twice in the same session if the rule isn't internalized. Symmetric failure mode: applying review/integrator findings manually instead of dispatching review-integrator \u2014 'after every review, dispatch the review-integrator \u2014 do not integrate manually' (coordinator CLAUDE.md \u00a7 Review Sequencing). Both are the same shape \u2014 EM convincing itself it's cheaper inline.\",\n      \"scope_tags\": [\n        \"em-self-execute\",\n        \"fan-out\",\n        \"review-integration\",\n        \"token-economics\"\n      ],\n      \"evidence\": \"session 2026-06-15 e69d3099 (snippet-sync-consumer-registry execute-plan) \u2014 recurred twice in one session: (1) attempted manual integration of the Staff Engineer substrate-adjudication into plan body (7 Edit calls) instead of dispatching review-integrator \u2014 PM correction landed; (2) self-executed 7 disjoint snippet-body backlink Edits inline instead of dispatching Sonnet fan-out \u2014 PM correction landed. Both rationalized via 'loci loaded, mechanical, fast.'\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "lessons-outbox.schema.json",
+      "applies_to": "state/lessons-outbox/*.yaml",
+      "query_type": "lessons-outbox",
+      "type_recognised": true
+    },
+    "orientation-cache.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/orientation_cache.md\",\n    \"frontmatter\": {\n      \"generated_by\": \"workday-start\",\n      \"generated_at\": \"2026-07-21T11:00:00Z\",\n      \"git_head_at_generation\": \"0ab09edc\",\n      \"corrected_at\": \"2026-07-21T14:55:00Z\",\n      \"corrected_note\": \"\\\"Health/auto-push + PM-decision-1 corrected mid-session against disk; the\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "orientation-cache.schema.json",
+      "applies_to": "state/orientation_cache.md",
+      "query_type": "orientation-cache",
+      "type_recognised": true
+    },
+    "plan-coverage-check.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/plans/2026-06-19-snippet-registry-cross-marketplace-path-fix.plan-coverage-check.md\",\n    \"frontmatter\": {\n      \"title\": \"Plan Coverage Check \u2014 snippet-registry-cross-marketplace-path-fix\",\n      \"created\": \"2026-06-19\",\n      \"author\": \"plan-coverage-checker\",\n      \"status\": \"implemented\",\n      \"kind\": \"plan-coverage-check\",\n      \"plan\": \"docs/plans/2026-06-19-snippet-registry-cross-marketplace-path-fix.md\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "plan-coverage-check.schema.json",
+      "applies_to": "docs/plans/*.plan-coverage-check.md",
+      "query_type": "plan-coverage-check",
+      "type_recognised": true
+    },
+    "plan.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/plans/2026-05-06-state-file-orchestration.md\",\n    \"frontmatter\": {\n      \"title\": \"Borrow #4 \u2014 State-file orchestration (wiki + selective retrofit)\",\n      \"created\": \"2026-05-06\",\n      \"status\": \"deferred\",\n      \"author\": \"machine-a session 2026-05-06\",\n      \"parent_plan\": \"docs/plans/2026-05-05-bigger-borrows-from-peer-audits.md\",\n      \"research_input\": \"tasks/bigger-borrows-research/04-state-file-orchestration.md\",\n      \"borrow_disposition\": \"MODIFY (wiki + selective retrofit)\",\n      \"liveness\": \"BLOCKED\"\n    }\n  }\n]\n",
+      "stderr": "query-records: unclassified docs/plans file 2026-06-26-artifact-shape-contract-v1.2-example-repo-asks.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-26-cs-claim-plan-execution-lock.md.code-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-26-cs-claim-plan-execution-lock.md.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-26-datetime-handling-coherence.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-26-retire-superseded-handoff-status.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-1-dual-context-validator.review-code-mergegate.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-1-dual-context-validator.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-10-skill-manifest-schema.review-codereviewer-sliceA-schema.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-10-skill-manifest-schema.review-codereviewer-sliceB-tests-docs.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-10-skill-manifest-schema.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-4-agent-event-journal.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-5-session-workstream-hierarchy-record.review-code-bats.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-5-session-workstream-hierarchy-record.review-code-wiki.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-ccos-5-session-workstream-hierarchy-record.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-cockpit-emission-decision-guide-4th-type.review-codereviewer-slice1-producer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-cockpit-emission-decision-guide-4th-type.review-codereviewer-slice2-tests.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-cockpit-emission-decision-guide-4th-type.review-the Director of Engineering.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-custom-dr-harness-overconcurrency-guardrails.integration-notes-codereview.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-custom-dr-harness-overconcurrency-guardrails.integration-notes.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-custom-dr-harness-overconcurrency-guardrails.review-code.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-custom-dr-harness-overconcurrency-guardrails.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-deep-research-repo-target-and-prior-art-preflight.review-codereviewer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-deep-research-repo-target-and-prior-art-preflight.review-the Director of Engineering.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-dual-yaml-parser-consolidation-shape.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-dual-yaml-parser-retire-python-path.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-genericize-provenance-sweeper.review-codereviewer-sliceA-transform.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-genericize-provenance-sweeper.review-codereviewer-sliceB-guard.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-genericize-provenance-sweeper.review-codereviewer-sliceC-test-docs.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-genericize-provenance-sweeper.review-the Director of Engineering-r2.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-genericize-provenance-sweeper.review-the Director of Engineering.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-install-seed-skill-overrides.review-codereviewer-impl.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-install-seed-skill-overrides.review-codereviewer-test.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-install-seed-skill-overrides.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-liveness-first-claim-staleness.review-codereviewer-sliceA-lib.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-liveness-first-claim-staleness.review-codereviewer-sliceB-tests-docs.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-liveness-first-claim-staleness.review-the Staff Engineer.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-27-post-summary-completion-loop-closure.md.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-loe-dispatch-undercount-teammate-shape.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-loe-dispatch-undercount-teammate-shape.sliceA-codereview.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-loe-dispatch-undercount-teammate-shape.sliceB-codereview.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-loe-dispatch-undercount-teammate-shape.sliceC-codereview.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-machine-local-path-resolution-ladder-conformer-a.review-code-sliceA.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-machine-local-path-resolution-ladder-conformer-a.review-code-sliceB.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-machine-local-path-resolution-ladder-conformer-a.review-code-sliceC.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-registry-publish-vs-working-targets.review-slice-A.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-registry-publish-vs-working-targets.review-slice-B.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-06-30-registry-publish-vs-working-targets.review-slice-C.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-04-coordinator-maximalist-install-shape.plan-coverage-check.2026-07-04T20-30-17Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-04-deep-research-consolidation.plan-coverage-check-wave5.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-05-dr-degradation-retire-and-hook-fix.plan-coverage-check.2026-07-05T13-57-40Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-cc-root-source-guard-corpus-wide.delivery-blueprint.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-dr215-fleet-ops-ceremony-wiring.veneer-substrate-map.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-durable-substrate-to-settings-home.plan-coverage-check.2026-07-06T15-33-26Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-goal-setting-okr-legibility-system.plan-coverage-check.2026-07-06T23-18-21Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-mutation-transition-exit-code-honoring.plan-coverage-check.2026-07-06T21-30-37Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-06-mutation-transition-exit-code-honoring.plan-coverage-check.2026-07-06T21-36-29Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-08-session-specific-instruction-set-emitter.op-spec.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-09-dispatch-sidecar-executor-confinement.plan-coverage-check.2026-07-09T17-20-39Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-09-dispatch-sidecar-executor-confinement.plan-coverage-check.2026-07-09T17-22-58Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-09-dispatch-sidecar-executor-confinement.prior-art-check.2026-07-09T00-00-00Z.prev.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-09-repo-registry-machine-portable-doe-half.plan-coverage-check.2026-07-09T16-35-27Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-09-stamp-plan-status-on-ship.plan-coverage-check.2026-07-09T16-27-46Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-11-prior-art-checker-decisions-corpus.plan-coverage-check.2026-07-11T22-28-45Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-12-distill-rebuild-claude-klabauter-reliant.the Staff Engineer-review.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-12-distill-rebuild-claude-klabauter-reliant.plan-coverage-check.2026-07-12T13-07-11Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-12-spike-pipeline-skill.plan-coverage-check.2026-07-12T18-24-54Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-13-subagent-run-report-subsume.prior-art-check.2026-07-13T00-00-00Z.prev.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-13-week-changelog-frontmatter-emission.plan-coverage-check.2026-07-13T03-19-12Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-15-bash-to-naked-python-engine-migration.plan-coverage-check.2026-07-15T08-30-17Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-16-seed-marketplace-enabledplugins-at-install.plan-coverage-check.2026-07-16T11-11-53Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-16-seed-marketplace-enabledplugins-at-install.plan-coverage-check.2026-07-16T13-02-14Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-20-machine-blind-repo-identity.plan-coverage-check.2026-07-20T10-49-50Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-21-cross-repo-decision-scoping-and-peer-read-reconciliation.plan-coverage-check.2026-07-21T15-32-37Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\nquery-records: unclassified docs/plans file 2026-07-21-macos-first-class-invocation.plan-coverage-check.2026-07-21T11-20-42Z.md \u2014 excluded from --type plan; conform to canonical plan or sidecar shape\n",
+      "schema_file": "plan.schema.json",
+      "applies_to": "docs/plans/*.md",
+      "query_type": "plan",
+      "type_recognised": true
+    },
+    "pm-action-items.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "pm-action-items.schema.json",
+      "applies_to": "docs/PM-ACTION-ITEMS.md",
+      "query_type": "pm-action-items",
+      "type_recognised": true
+    },
+    "prior-art-check.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/plans/2026-06-15-ac-chunk-owner-coverage-validator.prior-art-check.md\",\n    \"frontmatter\": {\n      \"title\": \"Prior-Art Check \u2014 2026-06-15-ac-chunk-owner-coverage-validator\",\n      \"created\": \"2026-06-15\",\n      \"author\": \"prior-art-checker\",\n      \"status\": \"implemented\",\n      \"kind\": \"prior-art-check\",\n      \"plan\": \"docs/plans/2026-06-15-ac-chunk-owner-coverage-validator.md\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "prior-art-check.schema.json",
+      "applies_to": "docs/plans/*.prior-art-check.md",
+      "query_type": "prior-art-check",
+      "type_recognised": true
+    },
+    "problem-set.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/problems/2026-06-01-install-orientation-two-axis-contract.md\",\n    \"frontmatter\": {\n      \"title\": \"Install and orientation are two axes \u2014 minimum-coordinator, the reboot cliff, and a first-class orientation layer\",\n      \"date\": \"2026-06-01\",\n      \"ratified_by\": \"D\u00f3nal example-operator\",\n      \"ratified_date\": \"2026-06-01\",\n      \"status\": \"ratified\",\n      \"kind\": \"problem-set\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "problem-set.schema.json",
+      "applies_to": "docs/problems/*.md",
+      "query_type": "problem-set",
+      "type_recognised": true
+    },
+    "product-changelog.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "product-changelog.schema.json",
+      "applies_to": "docs/PRODUCT-CHANGELOG.md",
+      "query_type": "product-changelog",
+      "type_recognised": true
+    },
+    "repomap.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "repomap.schema.json",
+      "applies_to": "docs/repo-map.md",
+      "query_type": "repomap",
+      "type_recognised": true
+    },
+    "research-claim.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "research-claim.schema.json",
+      "applies_to": "docs/research/*.claims.json",
+      "query_type": "research-claim",
+      "type_recognised": true
+    },
+    "research-synthesis.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/research/2026-05-30-superpowers-skill-gap-analysis.md\",\n    \"frontmatter\": {\n      \"title\": \"Superpowers Skill Gap Analysis\",\n      \"date\": \"2026-05-30\",\n      \"type\": \"research\",\n      \"superpowers_version\": \"v5.1.0 (14 skills, as of 2026-05-29)\",\n      \"prior_audit\": \"docs/research/2026-04-02-superpowers-dependency-audit.md\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "research-synthesis.schema.json",
+      "applies_to": "docs/research/*.md",
+      "query_type": "research-synthesis",
+      "type_recognised": true
+    },
+    "review-findings.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/review-trail/findings/2026-07-06-codereview-sliceaudit-roadmap-root-sep-portability-coordinator-bin-audit-roadmap-sh-coordin.md\",\n    \"frontmatter\": {\n      \"type\": \"review-findings\",\n      \"slice\": \"audit-roadmap-root-sep-portability\",\n      \"scope\": \"coordinator/bin/audit-roadmap.sh,coordinator/bin/tests/test-audit-roadmap-dependency-order.sh\",\n      \"reviewer\": \"code-reviewer\",\n      \"verdict\": \"OK\",\n      \"created\": \"2026-07-06\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "review-findings.schema.json",
+      "applies_to": "state/review-trail/findings/*.md",
+      "query_type": "review-findings",
+      "type_recognised": true
+    },
+    "review-integration-record.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "review-integration-record.schema.json",
+      "applies_to": "state/review-trail/*-integration.json",
+      "query_type": "review-integration-record",
+      "type_recognised": true
+    },
+    "review-sidecar.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/plans/2026-06-15-shipped-in-archive-stamping.review.md\",\n    \"frontmatter\": {\n      \"title\": \"the Staff Engineer Review \u2014 shipped-in-archive-stamping\",\n      \"created\": \"2026-06-15\",\n      \"reviewer\": \"the Staff Engineer\",\n      \"author\": \"the Staff Engineer\",\n      \"plan\": \"docs/plans/2026-06-15-shipped-in-archive-stamping.md\",\n      \"status\": \"implemented\",\n      \"kind\": \"plan-review\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "review-sidecar.schema.json",
+      "applies_to": "docs/plans/*.review.md",
+      "query_type": "review-sidecar",
+      "type_recognised": true
+    },
+    "review-trail.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "review-trail.schema.json",
+      "applies_to": "state/review-trail/*.json",
+      "query_type": "review-trail",
+      "type_recognised": true
+    },
+    "review.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/reviews/2026-06-15-structured-queue-medium-rollout-sliceA.md\",\n    \"frontmatter\": {\n      \"title\": \"Code review: structured-queue-medium-rollout Slice A \u2014 CLI infrastructure\",\n      \"created\": \"2026-06-15\",\n      \"reviewer\": \"code-reviewer\",\n      \"target\": \"structured-queue-medium-rollout \u2014 slice A\",\n      \"findings_count\": 10,\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "review.schema.json",
+      "applies_to": "state/reviews/*.md",
+      "query_type": "review",
+      "type_recognised": true
+    },
+    "roadmap.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/roadmap/lifecycle-vocab/OVERVIEW.md\",\n    \"frontmatter\": {\n      \"title\": \"Lifecycle-vocab roadmap \u2014 architectural OVERVIEW (target vocabulary spec + fork resolutions)\",\n      \"run_id\": \"lifecycle-vocab\",\n      \"initiative\": null,\n      \"created\": \"2026-07-08\",\n      \"date\": \"2026-07-08\",\n      \"kind\": \"roadmap-overview\",\n      \"status\": \"active\",\n      \"research_depth\": \"internal\",\n      \"research_corpus\": [\n        \"state/roadmap/lifecycle-vocab/research-corpus/internal-prior-art.md\"\n      ],\n      \"oracle\": \"docs/problems/2026-07-08-artifact-lifecycle-vocabulary-unificatio.md\",\n      \"phase1_artifacts\": [\n        \"state/roadmap/lifecycle-vocab/inventory.md\",\n        \"state/roadmap/lifecycle-vocab/clusters.md\",\n        \"state/roadmap/lifecycle-vocab/reconciliation.md\"\n      ],\n      \"shape_approved_by\": \"PM\",\n      \"shape_approved_at\": \"2026-07-08\",\n      \"final_approved_by\": \"PM\",\n      \"final_approved_at\": \"2026-07-08\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "roadmap.schema.json",
+      "applies_to": "state/roadmap/*/OVERVIEW.md",
+      "query_type": "roadmap",
+      "type_recognised": true
+    },
+    "run-report.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/subagent-share/testsess-C5/subagent-run-report-subsume.C5.md\",\n    \"frontmatter\": {\n      \"status\": \"open\",\n      \"agent_type\": \"coordinator:executor\",\n      \"spawned_at\": \"2026-07-13T16:50:06.898141+00:00\",\n      \"divergence\": [],\n      \"commits\": [],\n      \"dispatch_feed\": null,\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "run-report.schema.json",
+      "applies_to": "state/subagent-share/*/*.md",
+      "query_type": "run-report",
+      "type_recognised": true
+    },
+    "session-hierarchy.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "session-hierarchy.schema.json",
+      "applies_to": "state/session-hierarchy.*.json",
+      "query_type": "session-hierarchy",
+      "type_recognised": true
+    },
+    "skill.schema.json": {
+      "returncode": 0,
+      "stdout": "[]\n",
+      "stderr": "",
+      "schema_file": "skill.schema.json",
+      "applies_to": "plugins/coordinator-claude/coordinator/skills/*/SKILL.md",
+      "query_type": "skill",
+      "type_recognised": true
+    },
+    "strategic-self-description.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/strategic/self-description.yaml\",\n    \"frontmatter\": {\n      \"repo_identity\": {\n        \"owner\": \"dbc-example-operator\",\n        \"repo\": \"example-doctrine-repo\",\n        \"coordinator_root_path\": null\n      },\n      \"lifecycle\": \"vertical-slice\",\n      \"vision\": {\n        \"value\": \"example-doctrine-repo is the coordinator doctrine + skills source-of-truth for\\nCoordinator-Claude \u2014 the plugin that turns Claude Code into an EM/executor\\noperating system. It carries the planning discipline, subagent dispatch\\nmachinery, review sequencing, and self-improvement loop that let a PM/EM\\npartnership run software delivery at agent speed instead of human-sprint speed.\\nThis repo is the live plugin source of truth; `~/.claude` is a thin install\\ntarget, never the canonical copy.\",\n        \"provenance\": \"curated\"\n      },\n      \"version_highlights\": [\n        {\n          \"label\": \"Kill-bash \u2014 claude-klabauter Python owns the script slate\",\n          \"date\": \"2026-07-19\",\n          \"bullets\": [\n            \"DR-059 broadened the engine-tier ruling: break-class bugs on migration-bound script surfaces route to claude-klabauter Python reimplementation rather than in-place bash repair\",\n            \"W0.5 Option B+C declared claude-klabauter a hard direct dependency of the coordinator install chain, making the contract/engine split load-bearing at install time\"\n          ],\n          \"provenance\": \"curated\"\n        },\n        {\n          \"label\": \"Windows-first-class\",\n          \"date\": \"2026-07-16\",\n          \"bullets\": [\n            \"Committed a measured benchmark corpus that retired the \\\\\\\"python is 30x slower\\\\\\\" folk claim as a measurement artifact; the real tax is spawn-count x indirection, not interpreter choice\",\n            \"DR-058 killed subagent write-sandbox confinement \u2014 a guard that vetoed EM-delegated work for no compensating safety\"\n          ],\n          \"provenance\": \"curated\"\n        },\n        {\n          \"label\": \"Fleet Producer Contract + strategic-self-description standard\",\n          \"date\": \"2026-07-11\",\n          \"bullets\": [\n            \"Ratified the Fleet Producer Contract emission topology (per-repo state/ emission, harvested read-side, never consolidated)\",\n            \"Authored the strategic-self-description standard itself \u2014 this very artifact class \u2014 as example-doctrine-repo's producer/schema leg\"\n          ],\n          \"provenance\": \"curated\"\n        },\n        {\n          \"label\": \"example-doctrine-repo/claude-klabauter boundary \u2014 contract-vs-engine split (DR-047)\",\n          \"date\": \"2026-07-10\",\n          \"bullets\": [\n            \"Ratified a ~99%-clean split: example-doctrine-repo owns the contract, claude-klabauter owns the engine as first-class Python\",\n            \"Superseded DR-020 with two example-doctrine-repo-resident carve-outs (transport seam, non-routable SessionStart hooks)\"\n          ],\n          \"provenance\": \"curated\"\n        },\n        {\n          \"label\": \"67 ratified decision records\",\n          \"date\": \"2026-07-20\",\n          \"bullets\": [\n            \"Decision-record corpus spans DR-001 through DR-068, tracking doctrine reversals, architectural splits, and ceremony calibrations under active dogfooding\"\n          ],\n          \"provenance\": \"asserted\"\n        }\n      ],\n      \"competitors\": [\n        {\n          \"name\": \"superpowers\",\n          \"relationship\": \"prior-art\",\n          \"note\": \"Prior-art we reacted against on principle \u2014 not a superiority claim. superpowers\\nis a mistrust-shaped, nag-the-agent guardrail system agents routed around\\n(an explicit anti-pattern in coordinator wiki \u2014 eager-agent-calibration.md,\\nwriting-skills.md); example-doctrine-repo's design-as-offers doctrine is the direct reaction: lead\\nwith the better alternative, not the violation. This is a philosophy stance, not\\nevidenced superiority \u2014 superpowers has a large, established install base and we\\nhold no adoption or outcome evidence we're better.\",\n          \"provenance\": \"curated\"\n        }\n      ],\n      \"call_to_action\": {\n        \"kind\": \"url\",\n        \"label\": \"View on GitHub\",\n        \"payload\": {\n          \"uri\": \"https://github.com/dbc-example-operator/example-doctrine-repo\"\n        }\n      },\n      \"hero_asset\": null,\n      \"maturity_axis\": null,\n      \"depends_on\": [],\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "strategic-self-description.schema.json",
+      "applies_to": "state/strategic/self-description.yaml",
+      "query_type": "strategic-self-description",
+      "type_recognised": true
+    },
+    "tracker.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"docs/project-tracker.md\",\n    \"frontmatter\": {\n      \"title\": \"Project Tracker\",\n      \"created\": \"2026-07-04\",\n      \"status\": \"active\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "tracker.schema.json",
+      "applies_to": "docs/project-tracker.md",
+      "query_type": "tracker",
+      "type_recognised": true
+    },
+    "workstream-event.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/workstreams/events/2026-07-08-doe-authoring-repo-build-doctrine-migration-backfill-c4-2.yaml\",\n    \"frontmatter\": {\n      \"workstream\": \"doe-authoring-repo-build-doctrine-migration\",\n      \"field\": \"deliverable[2].done\",\n      \"value\": true,\n      \"sequence\": 1,\n      \"session\": \"backfill-c4\",\n      \"coordinator_root_path\": \"/Users/example-operator/X/example-doctrine-repo\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "workstream-event.schema.json",
+      "applies_to": "state/workstreams/events/*.yaml",
+      "query_type": "workstream-event",
+      "type_recognised": true
+    },
+    "workstream.schema.json": {
+      "returncode": 0,
+      "stdout": "[\n  {\n    \"path\": \"state/workstreams/doe-authoring-repo-build-doctrine-migration.yaml\",\n    \"frontmatter\": {\n      \"workstream_id\": \"doe-authoring-repo-build-doctrine-migration\",\n      \"title\": \"example-doctrine-repo authoring repo build & doctrine migration\",\n      \"created\": \"2026-07-04\",\n      \"coordinator_root_path\": \"/Users/example-operator/X/example-doctrine-repo\",\n      \"specs\": [\n        \"~/.claude/docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md (authored in the ~/.claude meta-repo; example-doctrine-repo is the destination home)\"\n      ],\n      \"deliverables\": [\n        \"{text: \\\"Repo created + coordinator-onboarded + remote (this workstream)\\\"}\",\n        \"{text: \\\"Subject-matter seam rewire lands (coordinator_state_root routes doctrine -> example-doctrine-repo; engine -> claude-klabauter)\\\"}\",\n        \"{text: \\\"~1800 doctrine working-data files migrated claude-klabauter->example-doctrine-repo - realized 2026-07-08 via reclaim-custody (1709 files; commits c18e4bb/50e2847/522810c; claude-klabauter retains git history as canonical provenance). Mechanism inverted from the planned excision-memo: claude-klabauter's EM sent the reclaim ask; example-doctrine-repo took physical custody. DR: docs/decisions/2026-07-08-reclaim-pre-july-history-from-claude-klabauter.md.\\\"}\",\n        \"{text: \\\"Install + percolation reshaped (thin ~/.claude shim; example-doctrine-repo->OSS percolation)\\\"}\"\n      ],\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "schema_file": "workstream.schema.json",
+      "applies_to": "state/workstreams/*.yaml",
+      "query_type": "workstream",
+      "type_recognised": true
+    }
+  },
+  "summary": {
+    "schemas_checked": 48,
+    "types_not_recognised": [
+      "bug-backlog.schema.json",
+      "debt-backlog.schema.json",
+      "improvement-queue.schema.json"
+    ]
+  }
+}

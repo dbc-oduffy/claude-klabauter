@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/sizing-object.schema.json",
+  "x-schema-name": "sizing-object",
+  "x-schema-version": "1.6.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.5.0 -> 1.6.0 added TWO optional fields, both closing the same gap: a spike that discharges the `premise` object's `read` branch had no schema home for its output. `coordinator/skills/sizing/SKILL.md:68-73` prescribes routing a `read` premise to `coordinator:spike` before `coordinator:plan`, to convert the code-read premise into executed evidence ahead of planning — but the schema gave that ceremony's output nowhere to land, so an author improvised one ad hoc. This is the FOURTH occurrence of the identical failure mode this schema's own x-bump-note history documents: the 1.1.0 -> 1.2.0 note below records the first two (`surfaced_to_pm`, `pm_resolution`), and the 1.2.0 -> 1.3.0 note records the third (`superseded_note`). Motivating record: claude-klabauter/state/sizings/2026-08-06-uninstall-reverse-legs-12-14-16-17-22-24.yaml (read for shape only, not edited). Inbound memo: cross-repo/inbox/2026-08-06-claude-klabauter-em-sizing-object-schema-gaps-five-residue.md. Fields added: (1) `premise.spike_verdict`, a new optional nested string property inside the existing `premise` object, pointing to the spike-verdict record a `coordinator:spike` produced when it upgraded this sizing's premise from `read` to `executed`. NEGATIVE SPEC: it never substitutes for `evidence` — `evidence` stays required for every provenance value except `unrecorded`, and the inline citation remains the discharge per `premise`'s own house rule; `spike_verdict` is the structured pointer to the ceremony record, `evidence` is still what a reader reads. Absent when no spike ran. (2) `spike_amendments`, a new optional top-level array of objects (`scope`, `amendment`, both required strings), recording the BINDING SCOPE a `coordinator:spike` produced for the downstream plan — the routing intent the spike's executed evidence changed about how this work must be planned. `scope` names the sub-piece re-specced, or `cross-cutting`; always a string even for a numeric-looking identifier. NEGATIVE SPEC: not a substitute for the downstream plan's own scope or chunking, and not a place to record spike findings that changed nothing — an entry exists only because it re-specs something. Omit entirely when no spike ran; an empty array is not an amendment set. `system.created_by_session`/`sized_by_session`/`linked_sessions` (session provenance) was CONSIDERED AND DECLINED at this bump, not overlooked — reaffirming the 1.2.0 -> 1.3.0 note's identical ruling on `system.created_by_session`, which is recoverable from the commit's own `Session-Id:` trailer and needs no schema slot. Classified `nested-field-additive` per this schema's own vocabulary — one new optional top-level array (`spike_amendments`) plus one new optional nested string (`premise.spike_verdict`); every document valid under 1.5.0 still validates. Claude-klabauter does not vendor this schema (DOE_ONLY_SCHEMAS in coordinator/tests/test_vendored_schema_version_parity.py, re-verified at this bump), so DR-097's sibling-notification duty does not attach. Greppability: coordinator/skills/sizing/SKILL.md now names both fields as the landing surface for a spike's discharge, per CLAUDE.md § Conventions. Spec backlink: cross-repo/inbox/2026-08-06-claude-klabauter-em-sizing-object-schema-gaps-five-residue.md. ---- PRIOR NOTE (1.3.0 -> 1.5.0, squashed, single commit) BUNDLES two sub-changes that landed together rather than as staggered pins: (a) a REQUIRED top-level `premise` object (`major`-class — see below) and (b) an `enum-value-additive` widen of the `detents[]` enum with TWO new advisory values, `premise_unproven` and `premise_not_applicable`. Per this schema's own established rule from its 1.1.0 -> 1.2.0 note (\"the recorded `x-bump-class` above takes the more restrictive of the two\"), `x-bump-class` records `major` — the strictly more-restrictive of the bundled pair, holding unconditionally on every axis per docs/wiki/schema-version-gate.md, versus `enum-value-additive`'s weaker holding duty. Do not read the widen alone as having set the class: `x-bump-class` was originally recorded as `nested-field-additive` by the commit that performed this bump (dbccb35e8), then relabeled `enum-value-additive` by a follow-up commit (48c074749) that used the version-pin regenerator's `--force --reason` path to accept the resulting shape-hash move under an unmoved `x-schema-version` — neither prior value was ever `major`, despite this same note's premise-field paragraph below classifying that sub-change as `major` from the start. This entry corrects that post-hoc misclassification; `x-schema-version` stays 1.5.0 unmoved, since no new shape change is being introduced here, only the recorded class being fixed to match what actually shipped. `detents[]` widen: unblocked because claude-klabauter's `coordinator_core.sizing_assemble.DETENT_ENUM` carries both values (claude-klabauter/coordinator_core/sizing_assemble/__init__.py:160) — two values added to the existing `detents[]` enum, no field added, no field removed, no existing value's semantics changed. Deliberately does NOT fold into C1's 1.3.0 -> 1.4.0 bump: that bump landed before claude-klabauter's DETENT_ENUM widen was verified, so its own note explicitly deferred `detents` to this separate bump; giving the enum widen its own version increment keeps the parity test's pass/fail boundary aligned to the commit that actually changed `detents`, rather than backdating the change onto a bump that predates it. Both values are ADVISORY ONLY, matching the `premise` object's own house rule (DR-068's advisory-not-blocking precedent) — they mirror `premise.provenance`'s `unproven`/`not-applicable` outcomes into a queryable detent but never change the resolved `route` and never populate `xl_exit`. `coordinator/tests/test_sizing_route_enum_schema_parity.py::test_detent_enum_parity` is the coupling test this bump satisfies — it asserts SET equality (order cosmetic) between this enum and `DETENT_ENUM`; both sides now carry both values. Claude-klabauter does not vendor this schema (DOE_ONLY_SCHEMAS in test_vendored_schema_version_parity.py, re-verified at this bump), so DR-097's sibling-notification duty does not attach. Spec backlink: docs/plans/2026-08-05-premise-provenance-gate-above-m.md § C1b. ---- PRIOR NOTE (1.3.0 -> 1.4.0, folded into the same squashed commit above) added a REQUIRED top-level `premise` object (`provenance`: closed enum executed/read/not-applicable/unrecorded, plus a conditionally-required `evidence` string) recording whether this sizing's premise was ever actually verified before structure was built on top of it. Classified `major` per this schema's own x-bump-note vocabulary: adding a REQUIRED field means a document valid under 1.3.0 (lacking `premise` entirely) no longer validates — the same test a required-field add always fails, as the 1.0.0 -> 1.1.0 note below already established for `xl_exit`. Motivating incident: claude-klabauter state/lessons/2026-08-05-a-plan-larger-than-m-built-on-an-unreproduced-root-cause-is-a-spike-wearing-a-plan-s-clothes.yaml — a plan larger than M was built on a root cause nobody had reproduced, and nothing at sizing time asked where the premise underneath the plan actually came from. Deliberately does NOT touch the `detents` enum in this same change — a sibling chunk (C1b) owns widening `detents` with `premise_unproven`, held on claude-klabauter's `DETENT_ENUM` widen landing first. THIS repo's own coupling test, `coordinator/tests/test_sizing_route_enum_schema_parity.py::test_detent_enum_parity`, asserts this schema's `detents` enum stays byte-identical to claude-klabauter's `coordinator_core.sizing_assemble.DETENT_ENUM` — that parity test staying green through this bump is the proof `detents` was left alone. Practical blast radius: every existing state/sizings/*.yaml record is migrated in the same window to carry `premise: {provenance: unrecorded}` (the one provenance value that needs no `evidence`, since it exists purely to mark records that predate this field). Claude-klabauter does not vendor this schema (DOE_ONLY_SCHEMAS in test_vendored_schema_version_parity.py, re-verified at this bump), so DR-097's sibling-notification duty does not attach. Spec backlink: docs/plans/2026-08-05-premise-provenance-gate-above-m.md § C1. ---- PRIOR NOTE (1.2.0 -> 1.3.0) added ONE optional top-level property, `superseded_note` (string), recording WHY a sizing-object was superseded. The schema's `status` enum already names `superseded` as a lifecycle state but, before this bump, gave no field to record the reason — so authors improvised one, ad hoc, each time. This is the THIRD occurrence of the identical failure mode this schema's own history documents (see the 1.1.0 -> 1.2.0 note below for the first two, `surfaced_to_pm` and `pm_resolution`): state/sizings/2026-08-03-dr-100-auto-reconcile-dry-run-flip-disch.yaml was committed carrying an ad-hoc top-level `superseded_note` (plus an ad-hoc `system.created_by_session`, dropped rather than schematized — recoverable from the commit's own `Session-Id:` trailer, so it needed no schema slot) and was failing `additionalProperties: false` from the moment it landed. Deliberately NOT folded into `pm_resolution`: a supersession reason is EM-observed process history about the sizing-object itself, not a PM-owned decision reasoning record, and folding it in would misfile it under the wrong provenance. Classified `nested-field-additive` per the wiki's own discriminator (a single new optional top-level string field) — every document valid under 1.2.0 still validates. Claude-klabauter does not vendor this schema (DOE_ONLY_SCHEMAS in test_vendored_schema_version_parity.py, re-verified at this bump), so DR-097's sibling-notification duty does not attach. ---- PRIOR NOTE (1.1.0 -> 1.2.0) added TWO optional top-level properties, both recording PM-owned material the schema previously had nowhere to put: `surfaced_to_pm` (an array of direction-class items surfaced but NOT decided) and `pm_resolution` (an object holding the PM's reasoning once they HAVE decided). This bump touches two classes: `surfaced_to_pm` is `top-level-array-additive` on its own, `pm_resolution` (a new top-level object) is `nested-field-additive` per the wiki's own discriminator (type of field added, not optionality). The recorded `x-bump-class` above takes the more restrictive of the two, `nested-field-additive` — holding unconditionally on the `x-schema-version` axis per docs/wiki/schema-version-gate.md § Additive-bump holding/non-holding split, with no declared-tolerance carve-out for that class on this axis. Both fields are new and optional, so every document valid under 1.1.0 still validates — that is the backward-compat argument, distinct from (and not sufficient to determine) the class-vocabulary/holding-obligation argument above. Motivating incident (2026-08-03): a sizing carried a live direction-class item — whether a real provenance-smearing incident should reopen the 2026-07-31 PM ruling that COORDINATOR_SCOPE_STRICT stays off — and `additionalProperties: false` with no home for it forced the reasoning into a YAML comment, invisible to any query over state/sizings/. A surfaced item that cannot be queried is a forgotten item. `pm_resolution` closes the same gap from the opposite side and was NOT speculative: state/sizings/2026-08-02-hook-operator-message-size-cap.yaml (committed 8f32cbffa) already carried an ad-hoc `pm_resolution` block and had been failing test_sizing_objects_validate_against_schema against 1.1.0 ever since. Two independent sessions inventing structure for PM decisions is what promoted this from a nicety to a defect. Deliberately NOT folded into `detents` (a closed enum of lobby-computed boundary stops) nor into `fork`/`xl_exit` (the two halts the engine itself resolves), because this is EM-observed and PM-owned rather than engine-computed. Claude-klabauter does not vendor this schema (DOE_ONLY_SCHEMAS in test_vendored_schema_version_parity.py, re-verified at this bump), so DR-097's sibling-notification duty does not attach. ---- PRIOR NOTE (1.0.0 -> 1.1.0, bump-class `major`): added `xl_exit` as a REQUIRED property (the PM's recorded choice among the four XL exits when `route` is `pm-decision`), and widened two closed enums: `route` gained `spec-dispatch` and `pm-decision`, and `detents[]` gained `pm_decision_pending`. Classified `major` on the vocabulary's own terms — a required field was added, so a document valid under 1.0.0 that omits `xl_exit` no longer validates. The enum widens alone would have been additive; the required-field add is what carries the class. Practical blast radius zero: all 10 records under state/sizings/ were migrated to carry `xl_exit` in the same change. Recorded at a MINOR version increment rather than 2.0.0, matching this repo's existing practice for a major-class change with a migrated corpus (priority-intent.schema.json 1.1.0, priority-ledger.schema.json 1.1.0, roadmap.schema.json 1.2.0 all carry `x-bump-class: major` at a minor increment). Claude-klabauter does not vendor this schema (it is in test_vendored_schema_version_parity.py's DOE_ONLY_SCHEMAS), so DR-097's sibling-notification duty does not attach to this bump. Spec backlink: docs/plans/2026-07-24-sizing-lobby-core.md.",
+  "applies_to": "state/sizings/*.yaml",
+  "description": "Sizing-object artifact — the first-class routing artifact for the fleet routing lobby. Captures the PM's verbatim intent, the Shape-Up-style appetite BUDGET, a coarse provisional t-shirt routing estimate, and which room (dispatch/shape/plan/roadmap) the work should enter. Per-repo session-produced routing state, same taxonomy class as state/handoffs/ — see docs/wiki/state-placement-law.md § Taxonomy. Spec backlink: docs/plans/2026-07-24-sizing-lobby-core.md § C1 (Design D1/D2/D3).",
+  "type": "object",
+  "required": ["schema", "intent", "appetite", "estimate", "route", "detents", "fork", "xl_exit", "status", "premise"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "sizing-object",
+      "description": "Schema discriminator — always 'sizing-object'. Enables kind-first schema matching."
+    },
+    "intent": {
+      "type": "string",
+      "description": "The PM ask, verbatim. Not paraphrased or summarized — the raw framing the sizing lobby routed on."
+    },
+    "appetite": {
+      "type": "string",
+      "enum": ["small", "medium", "large"],
+      "description": "The Shape-Up BUDGET the PM sets for this work. This is a FIXED BUDGET set up front, NOT a reason to defer scope and NOT 'appetite-based OOS' (which coordinator doctrine bans — see coordinator/docs/wiki/implementation-standards-by-domain.md § Cross-cutting standards: 'OOS framing must be architectural, not appetite-based'). Appetite bounds how much time/effort is worth spending; it never justifies cutting a correctness/integrity requirement out of scope."
+    },
+    "estimate": {
+      "type": "object",
+      "required": ["tshirt", "provisional"],
+      "additionalProperties": false,
+      "description": "Coarse routing-only size estimate. Distinct from the committed plan-body LoE (two-altitude model, D1.3): this estimate exists to pick which room (route) the work enters, not to bind the eventual plan's effort accounting.",
+      "properties": {
+        "tshirt": {
+          "type": "string",
+          "enum": ["XS", "S", "M", "L", "XL"],
+          "description": "T-shirt size estimate. Reuses the existing loe.tshirt enum and weights verbatim (XS=1, S=2, M=4, L=8, XL=16) — see coordinator/schemas/completion-entry.schema.json loe.tshirt. Do not invent a parallel scale."
+        },
+        "provisional": {
+          "type": "boolean",
+          "const": true,
+          "default": true,
+          "description": "Always true. Marks this tshirt value as a COARSE, revisable ROUTING estimate (which room to enter) — never the committed plan-body LoE. A plan authored downstream re-estimates independently; this field is not inherited as authoritative effort."
+        }
+      }
+    },
+    "route": {
+      "type": "string",
+      "enum": ["dispatch", "spec-dispatch", "shape", "plan", "roadmap", "pm-decision"],
+      "description": "The room this sizing routes the work into: dispatch=small enough to execute directly, no artifact; spec-dispatch=small enough for a light plan artifact then dispatch, no Opus plan review; shape=problem not yet converged, needs /shape first; plan=decision-weight work needing coordinator:plan; roadmap=initiative-scale, needs roadmap-planning; pm-decision=initiative-scale and not a room by itself — the engine picks no room and the PM chooses among four exits (see `xl_exit`)."
+    },
+    "detents": {
+      "type": "array",
+      "description": "Boundary detents crossed or acknowledged while sizing this work — the discrete stops the sizing lobby snapped to (e.g. appetite/estimate divergence, route-boundary crossing) before landing on the final route. Empty array when no boundary was crossed. `premise_unproven` and `premise_not_applicable` are ADVISORY: they mirror the `premise.provenance` value (see the `premise` object) into a queryable detent, but never change the resolved `route` and never populate `xl_exit`.",
+      "items": {
+        "type": "string",
+        "enum": ["appetite_conform", "appetite_exceeded", "route_boundary_crossed", "scope_boundary_acknowledged", "pm_decision_pending", "premise_unproven", "premise_not_applicable"]
+      }
+    },
+    "fork": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "enum": ["cut_to_fit", "raise_appetite"]
+        }
+      ],
+      "description": "Null unless appetite and estimate diverge (estimate's implied size exceeds or undershoots the appetite budget). When set, this is UNRESOLVED BY CONSTRUCTION — the sizing skill surfaces the fork to the PM, it never auto-resolves it. cut_to_fit=trim scope to fit the existing appetite; raise_appetite=the PM increases the budget instead."
+    },
+    "xl_exit": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "enum": ["split", "shape", "roadmap", "accept_multi_session"]
+        }
+      ],
+      "description": "The PM's recorded choice among the four XL exits when `route` is `pm-decision`. The engine NEVER sets this — it always emits `null`, exactly as it does for `fork`. `null` is a legitimate open state meaning the PM has not chosen yet; it NEVER means the multi-session exit was accepted by default. Each value has a stated precondition: split=the ask decomposes into >=2 pieces that ship independently, each with its own acceptance criteria and no piece depending on an unshipped sibling's contract; shape=the job-to-be-done is not stated, or the EM cannot falsifiably restate the problem in the PM's vocabulary; roadmap=the work spans >=2 named workstreams, or carries (or needs) an initiative/goal FK — a programme of plans, not one plan; accept_multi_session=none of the other three preconditions hold and the PM has explicitly assented — writing this value IS that record."
+    },
+    "scout_evidence": {
+      "type": "array",
+      "description": "Pointers to cartography/scout output that informed this sizing (file paths, wiki citations, prior-art references). Empty array when no scout ran.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "surfaced_to_pm": {
+      "type": "array",
+      "description": "Direction-class items the sizing surfaced to the PM but deliberately did NOT decide. Distinct from `fork` and `xl_exit`, which are the two structured halts the lobby computes for itself: this array is for everything else the EM noticed while sizing that is the PM's call — a standing ruling the new evidence bears on, a product-direction question the work would force, an external-facing consequence. NEGATIVE SPEC: this is never a record of a decision. An entry stays listed until it is resolved in its own artifact (a decision record, a PM ruling, a downstream plan); resolving it by editing the sizing-object is the failure this field exists to prevent. Once resolved, the PM's reasoning moves to `pm_resolution`. Empty array when nothing was surfaced. Exists because the alternative — a YAML comment — is invisible to any query over state/sizings/, which is how a surfaced item silently becomes a forgotten one.",
+      "items": {
+        "type": "object",
+        "required": ["item", "why_not_decided"],
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "type": "string",
+            "description": "The direction-class question itself, stated so a reader who was not in the session can act on it. Not a topic label."
+          },
+          "why_not_decided": {
+            "type": "string",
+            "description": "Why the EM did not settle this while sizing — e.g. a standing PM ruling this evidence bears on but does not overturn, product direction, an irreversible/external action, or a genuine no-correct-answer tradeoff. 'Not now' is not a reason; if the only reason is cost, it is break-class work to be fixed, not a direction-class item to be surfaced."
+          },
+          "prior_ruling": {
+            "type": "string",
+            "description": "Optional pointer to the existing decision, ruling, or audit entry this item bears on (file:line, DR-id, or artifact path). Present when the item revisits settled ground rather than opening new ground — its absence means no prior ruling was found, not that none exists."
+          }
+        }
+      }
+    },
+    "pm_resolution": {
+      "type": "object",
+      "required": ["decided_on"],
+      "description": "The PM's recorded answer once they have resolved this sizing's open questions — the counterpart to `surfaced_to_pm`, which holds what is still open. Free-form string values by design: what a PM settles at a sizing varies (which fork, which XL exit, where an artifact should live), and a closed property list would push the next unanticipated decision back into an ad-hoc key or a comment. NEGATIVE SPEC: `fork` and `xl_exit` remain the AUTHORITATIVE machine-readable record of those two choices — an entry here carries the PM's REASONING, never a substitute value, and must not contradict them. Omit entirely when nothing has been resolved; an empty object is not a resolution.",
+      "properties": {
+        "decided_on": {
+          "type": "string",
+          "description": "Date the PM actually decided (YYYY-MM-DD), not the date the sizing was authored."
+        }
+      },
+      "additionalProperties": {
+        "type": "string",
+        "description": "One resolved question, keyed by what it resolved (e.g. `appetite_fork`, `xl_exit`, `wiki_home`). Value states the choice AND the reasoning, so a later reader need not reconstruct why."
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "sized", "routed", "superseded"],
+      "description": "Sizing-object lifecycle. draft=intent captured, not yet estimated; sized=estimate+appetite set, fork may be outstanding; routed=route chosen and handed off (fork, if any, resolved); superseded=replaced by a later sizing for the same intent."
+    },
+    "superseded_note": {
+      "type": "string",
+      "description": "Present only when `status` is `superseded`. Records WHY this sizing-object was superseded — the verification that invalidated it, the root cause, and where the live surface moved to. Distinct from `pm_resolution`: this is EM-observed process history about the sizing-object's own lifecycle, not the PM's decision reasoning, and must not be folded into `pm_resolution`."
+    },
+    "premise": {
+      "type": "object",
+      "description": "Whether the premise this sizing is built on was ever actually verified, before structure gets built on top of a guess. ADVISORY ONLY — the detent this can produce downstream (`sizing_assemble`'s `premise_unproven`, engine-side) NEVER blocks a route; it never changes the resolved `route` and never populates `xl_exit`. Discharge is by CITING THE EXECUTED EVIDENCE INLINE in the `evidence` field below — a file:line, test name, command output, or read location the author actually looked at — NEVER by producing a separate spike-result record; a premise question is answered in place, not spun into its own artifact. `provenance`: executed=the premise was verified by actually running/reproducing it; read=the premise rests on reading code/docs/a prior record, not on execution; not-applicable=this ask has no premise to verify (state the reason in `evidence`); unrecorded=migration-only, meaning this record predates this field and its premise provenance was never captured. DR-068 (docs/decisions/DR-068-commit-time-coverage-gate-scoped-shift-left-ambient-handoff-flat-fallback-advisory.md) is the standing precedent for this advisory-not-blocking shape — that ruling made the same call for the commit-time DAG verdict, and this field follows the same house answer rather than inventing a new one.",
+      "additionalProperties": false,
+      "required": ["provenance"],
+      "properties": {
+        "provenance": {
+          "type": "string",
+          "enum": ["executed", "read", "not-applicable", "unrecorded"],
+          "description": "executed=verified by actually running/reproducing it; read=rests on reading code/docs/a prior record, not execution; not-applicable=this ask has no premise to verify; unrecorded=migration-only, the record predates this field."
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The executed evidence cited inline (file:line, test name, command output, or read location) — or, when `provenance` is `not-applicable`, why. Required for every `provenance` value except `unrecorded`."
+        },
+        "spike_verdict": {
+          "type": "string",
+          "description": "Path to the spike-verdict record produced by `coordinator:spike` when a spike upgraded this sizing's premise from `read` to `executed`. NEGATIVE SPEC: never substitutes for `evidence` — `evidence` stays required for every provenance value except `unrecorded`, and the inline citation remains the discharge (see this object's own \"answered in place, not spun into its own artifact\" rule). `spike_verdict` is the structured pointer to the ceremony record; `evidence` is still what a reader reads. Absent when no spike ran."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "provenance": { "not": { "const": "unrecorded" } } } },
+          "then": { "required": ["evidence"] }
+        }
+      ]
+    },
+    "spike_amendments": {
+      "type": "array",
+      "description": "BINDING SCOPE for the downstream plan — the discharged routing intent a `coordinator:spike` produced, recorded where the plan-author will read it. NEGATIVE SPEC: not a substitute for the downstream plan's own scope or chunking, and not a place to record spike findings that changed nothing — an entry exists because it re-specs something. Omit entirely when no spike ran; an empty array is not an amendment set.",
+      "items": {
+        "type": "object",
+        "required": ["scope", "amendment"],
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "What this amendment binds: the named sub-piece of the ask it re-specs, or `cross-cutting` for one that binds the whole. Always a string, even when the underlying identifier is numeric."
+          },
+          "amendment": {
+            "type": "string",
+            "description": "The binding routing intent the spike produced for this scope: what the spike's executed evidence changed about how this work must be planned."
+          }
+        }
+      }
+    }
+  }
+}

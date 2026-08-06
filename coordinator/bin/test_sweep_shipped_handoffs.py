@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+"""test_sweep_shipped_handoffs.py — self-contained test suite for sweep-shipped-handoffs.py.
+
+Port of: test-sweep-shipped-handoffs.sh (example-doctrine-repo f703efad, 2026-07-21). Retargets the bash
+oracle's contract assertions onto the Python trampoline: frontmatter-driven selection (shipped /
+abandoned / superseded), the shipped-subclass SHA-resolvability gate, the mtime staleness
+WARNING, and dispatch shape via cc_invoke.route.
+
+Highest-value coverage in this file is test_repo_root_derived_from_state_root_not_git_root
+below — the Staff Engineer's coupling-regression finding. The bash oracle's invariant
+`repo_root="${_ssh_state_root%/state}"` is NOT reproducible via an independent
+`git rev-parse --show-toplevel` call once the meta-repo central-state redirect is live
+(coordinator_state_root(), which resolves to the state dir under CLAUDE_KLABAUTER_ROOT,
+diverges from the git repo root). This
+test simulates that divergence directly and asserts the trampoline still derives repo_root
+from state_root, not from git_repo_root — the exact silent-never-archive bug the review
+comment at sweep-shipped-handoffs.py:175-185 guards against.
+
+Runs bash-free: `python3 test_sweep_shipped_handoffs.py` (or via the coordinator test runner).
+Exit 0 = all tests pass; non-zero = at least one failure.
+
+Spec backlink: docs/plans/2026-07-01-shipped-handoff-archive-sweep.md
+Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
+"""
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _load_module():
+    """Import sweep-shipped-handoffs.py as a fresh module object each call."""
+    path = os.path.join(SCRIPT_DIR, "sweep-shipped-handoffs.py")
+    spec = importlib.util.spec_from_file_location("sweep_shipped_handoffs_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run_main_capturing(mod, argv=None, fake_route=None):
+    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake
+    cc_invoke.route for the duration of the call.
+
+    Negative spec: `mod.cc_invoke` is the REAL, process-shared
+    `coordinator/bin/lib/cc_invoke.py` module object — `_load_module()` gives a
+    fresh subject per call but not a fresh `cc_invoke`. A bare
+    `mod.cc_invoke.route = fake_route` at a test's call site therefore outlives
+    the test and every later test in the same worker resolves `route` to the
+    stale fake (mirrors `test_sweep_actioned_memos.py`'s save-restore). Patch
+    only through here.
+    """
+    orig_route = mod.cc_invoke.route
+    if fake_route is not None:
+        mod.cc_invoke.route = fake_route
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = mod.main(argv if argv is not None else [])
+    finally:
+        mod.cc_invoke.route = orig_route
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _write_handoff(handoffs_dir: str, name: str, deployment_state: str | None, shipped_in: str | None = None) -> str:
+    """Write a minimal frontmatter-only handoff fixture; returns the full path."""
+    lines = ["---", 'title: "test handoff"']
+    if deployment_state is not None:
+        lines.append(f"deployment_state: {deployment_state}")
+    if shipped_in is not None:
+        lines.append(f"shipped_in: {shipped_in}")
+    lines.append("---")
+    lines.append("body")
+    path = os.path.join(handoffs_dir, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+# ===========================================================================
+# the Staff Engineer's coupling regression: repo_root MUST derive from state_root, not
+# from an independently-resolved git repo root.
+# ===========================================================================
+def test_repo_root_derived_from_state_root_not_git_root():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Simulate the meta-repo central-state redirect: state_root lives under
+        # a CLAUDE-KLABAUTER-style root that is DIFFERENT from the git checkout root.
+        claude_klabauter_root = os.path.join(tmp, "central-claude-klabauter-root")
+        state_root = os.path.join(claude_klabauter_root, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+
+        git_repo_root = os.path.join(tmp, "git-checkout-root")
+        os.makedirs(git_repo_root)
+
+        # A shipped handoff with a resolvable-per-test-double SHA, plus an
+        # abandoned one (no SHA-gate applies) so candidates is non-empty.
+        _write_handoff(handoffs_dir, "a-shipped.md", "shipped", "deadbeef")
+        _write_handoff(handoffs_dir, "b-abandoned.md", "abandoned")
+
+        mod._resolve_repo_root = lambda: git_repo_root
+        mod._resolve_state_root = lambda repo_root: state_root
+        mod._git_cat_file_e = lambda sha, cwd: True  # every SHA resolves
+
+        seen = {}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            seen["op"] = op
+            seen["repo_root"] = repo_root
+            seen["candidate_ids"] = params.get("candidate_ids")
+            return {"acted": params.get("candidate_ids", [])}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"coupling regression: exit 0, got rc={rc}"
+
+        expected_repo_root = os.path.dirname(state_root)  # state_root minus "/state"
+        assert seen.get("repo_root") == expected_repo_root, (
+            f"coupling regression: repo_root derived from state_root: expected "
+            f"{expected_repo_root!r}, got {seen.get('repo_root')!r} (git_repo_root "
+            f"was {git_repo_root!r})"
+        )
+
+        candidate_ids = seen.get("candidate_ids") or []
+        expected_rel = {
+            os.path.join("state", "handoffs", "a-shipped.md"),
+            os.path.join("state", "handoffs", "b-abandoned.md"),
+        }
+        assert set(candidate_ids) == expected_rel, (
+            "coupling regression: candidate_ids relativized against "
+            f"state_root-derived repo_root: expected {expected_rel!r}, got "
+            f"{candidate_ids!r}"
+        )
+
+        assert seen.get("op") == "fleet.archive_completed_handoffs", (
+            f"dispatch: op == fleet.archive_completed_handoffs, got {seen.get('op')!r}"
+        )
+
+        assert "2 terminal handoffs archived" in out, (
+            f"coupling regression: both candidates reported archived: stdout: {out!r}"
+        )
+
+
+# ===========================================================================
+# Frontmatter selection: deployment_state classes, SHA-resolvability gate,
+# mtime staleness threshold — all in one mixed-batch sweep.
+# ===========================================================================
+def test_frontmatter_selection_and_staleness():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+
+        # a: shipped, resolvable -> candidate
+        _write_handoff(handoffs_dir, "a-shipped-ok.md", "shipped", "goodsha1")
+        # b: shipped, unresolvable, mtime recent -> retained, NOT stale
+        _write_handoff(handoffs_dir, "b-shipped-unresolvable-fresh.md", "shipped", "badsha1")
+        # c: shipped, unresolvable, mtime old -> retained AND stale
+        c_path = _write_handoff(handoffs_dir, "c-shipped-unresolvable-stale.md", "shipped", "badsha2")
+        old_time = time.time() - (20 * 86400)
+        os.utime(c_path, (old_time, old_time))
+        # d: abandoned -> candidate (no SHA-gate)
+        _write_handoff(handoffs_dir, "d-abandoned.md", "abandoned")
+        # e: closed -> candidate (no SHA-gate). NOT "superseded" -- that lives
+        # on the `status` axis (HANDOFF_TERMINAL_STATUS), deliberately absent
+        # from the `deployment_state`-keyed HANDOFF_TERMINAL_DEPLOYMENT
+        # selector this sweep reads (see this file's module docstring); a
+        # `deployment_state: superseded` fixture here would assert a shape
+        # the product code intentionally does not treat as a candidate.
+        _write_handoff(handoffs_dir, "e-closed.md", "closed")
+        # f: active -> skipped entirely, never a candidate
+        _write_handoff(handoffs_dir, "f-active.md", "active")
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+
+        def fake_git_cat_file_e(sha, cwd):
+            return sha == "goodsha1"
+
+        mod._git_cat_file_e = fake_git_cat_file_e
+
+        seen = {}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            seen["candidate_ids"] = params.get("candidate_ids")
+            return {"acted": params.get("candidate_ids", [])}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"frontmatter selection: exit 0, got rc={rc}"
+
+        candidate_ids = set(seen.get("candidate_ids") or [])
+        expected_candidates = {
+            os.path.join("state", "handoffs", "a-shipped-ok.md"),
+            os.path.join("state", "handoffs", "d-abandoned.md"),
+            os.path.join("state", "handoffs", "e-closed.md"),
+        }
+        assert candidate_ids == expected_candidates, (
+            "frontmatter selection: shipped-resolvable + abandoned + closed "
+            f"selected: expected {expected_candidates!r}, got {candidate_ids!r}"
+        )
+
+        assert "3 terminal handoffs archived" in out, (
+            f"frontmatter selection: '3 terminal handoffs archived': stdout: {out!r}"
+        )
+
+        assert "2 shipped handoffs retained (unresolvable SHA)" in out, (
+            f"frontmatter selection: 2 unresolvable shipped retained: stdout: {out!r}"
+        )
+
+        assert "WARNING: 1 shipped handoffs retained" in out, (
+            f"frontmatter selection: WARNING for the 1 stale-unresolvable: stdout: {out!r}"
+        )
+
+
+# ===========================================================================
+# Empty tree: no candidates -> route() never called, "no terminal handoffs archived"
+# ===========================================================================
+def test_empty_tree_no_dispatch():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        os.makedirs(os.path.join(state_root, "handoffs"))
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+
+        called = {"n": 0}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            called["n"] += 1
+            return {"acted": []}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"empty tree: exit 0, got rc={rc}"
+
+        assert called["n"] == 0, f"empty tree: route() never called, called {called['n']} times"
+
+        assert "no terminal handoffs archived" in out, (
+            f"empty tree: 'no terminal handoffs archived': stdout: {out!r}"
+        )
+
+
+# ===========================================================================
+# AC13 (§ S12 site (a), docs/plans/2026-07-28-handoff-close-path-fail-loud.md
+# chunk C4): route() raises RuntimeError (transport failure) -> candidates
+# retained, WARN on stderr, exit 1 — a dispatch FAILURE, not a normal
+# best-effort outcome. Renamed from the pre-C4 "exit 0 (best-effort
+# ceremony)" framing this test's own name and comment still carried; that
+# rc==0 assertion described exactly the "refusal indistinguishable from
+# success at the caller's rc" defect this chunk exists to close. Real
+# `assert`s (not the file's own non-raising _pass/_fail counters) so a
+# regression here actually fails the pytest run.
+# ===========================================================================
+def test_route_runtime_error_is_a_dispatch_failure_not_success():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+        _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            raise RuntimeError("simulated transport failure")
+
+        rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 1, f"a caught dispatch RuntimeError must return non-zero (AC13), got rc={rc}"
+        assert "no terminal handoffs archived" in out, out
+        assert "candidates retained" in err, err
+
+
+# ===========================================================================
+# AC13: route() returns exit_code=2 (op-level partial refusal) -> true acted
+# count printed + WARN on stderr + non-zero exit (not a raise; route() only
+# raises on transport failure — op-level refusals live INSIDE the returned
+# dict, but a partial dispatch is still a dispatch FAILURE at this script's
+# own rc, not a normal outcome). Renamed from test_route_partial_exit_code_
+# warns, whose rc==0 assertion pre-dated the C4/AC13 fix.
+# ===========================================================================
+def test_route_partial_exit_code_is_a_dispatch_failure_not_success():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+        _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
+        _write_handoff(handoffs_dir, "b-superseded.md", "superseded")
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            candidate_ids = params.get("candidate_ids", [])
+            return {"exit_code": 2, "acted": candidate_ids[:1], "failed": candidate_ids[1:]}
+
+        rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 1, f"an op-reported exit_code==2 (partial) must return non-zero (AC13), got rc={rc}"
+        assert "1 terminal handoffs archived" in out, out
+        assert "WARN" in err and "partial" in err, err
+
+
+# ===========================================================================
+# AC13 companion: the three LEGITIMATE-zero shapes must stay 0 after the
+# above fix — a patch that turns every non-full-success into non-zero would
+# swap a silent-failure bug for a noisy-success bug on the retention path.
+# empty-tree is already covered by test_empty_tree_no_dispatch above;
+# stale-unresolvable is covered by test_frontmatter_selection_and_staleness
+# (mixed candidates + retention, dispatch succeeds). This test isolates the
+# all-retained shape on its own: every candidate is gated out before
+# route() is ever called, so there is nothing to dispatch and nothing to
+# fail — a legitimate 0, not a masked failure.
+# ===========================================================================
+def test_all_retained_no_candidates_still_returns_zero():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+        # Both shipped, both unresolvable, neither stale — every candidate
+        # is retained before candidates ever reaches route(), so route()
+        # must never be called.
+        _write_handoff(handoffs_dir, "a-shipped-unresolvable.md", "shipped", "badsha1")
+        _write_handoff(handoffs_dir, "b-shipped-unresolvable.md", "shipped", "badsha2")
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+        mod._git_cat_file_e = lambda sha, cwd: False  # nothing resolves
+
+        called = {"n": 0}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            called["n"] += 1
+            return {"acted": []}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"all-retained (no dispatch-eligible candidates) must stay 0, got rc={rc}"
+        assert called["n"] == 0, "route() must never be called when every candidate is retained"
+        assert "2 shipped handoffs retained (unresolvable SHA)" in out, out
+
+
+# ===========================================================================
+# C9/AC15 — unresolvable-shipped_in escape hatch (Route B, corrected shape).
+#
+# Real `assert`s below (not the file's own _pass/_fail counters, which pytest
+# never inspects) so a regression here actually fails the pytest run — see
+# docs/plans/2026-07-28-handoff-close-path-fail-loud.md § C9 for the shape
+# this pins: shipped_in_kind is NEVER rewritten by the escape; the dead SHA
+# is recorded in the separate, non-discriminant shipped_in_unresolvable_sha
+# field instead.
+# ===========================================================================
+
+
+def _read_field(path: str, key: str) -> str | None:
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    split = split_frontmatter(text)
+    assert split is not None, f"no parseable frontmatter in {path}"
+    return read_fm_field_unquoted(split.fm_text, key)
+
+
+def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            ["git", "init", "-q", tmp],
+            check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+
+        dead_sha = "deadbee1"
+        path = os.path.join(handoffs_dir, "shipped-dead.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "---\n"
+                'title: "test handoff"\n'
+                "deployment_state: shipped\n"
+                f"shipped_in: {dead_sha}\n"
+                "shipped_in_kind: ship-commit\n"
+                "---\n"
+                "body\n"
+            )
+        old_time = time.time() - (20 * 86400)  # past the default 14-day threshold
+        os.utime(path, (old_time, old_time))
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+        # _git_cat_file_e runs for real here (tmp is a real, commit-less repo,
+        # so `deadbee1` never resolves) -- exercising the actual resolvability
+        # gate, not a stand-in.
+
+        seen = {}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            seen["candidate_ids"] = params.get("candidate_ids")
+            return {"acted": params.get("candidate_ids", [])}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"expected exit 0, got {rc}"
+        assert "1 shipped handoffs escaped via unresolvable-shipped_in marker" in out, out
+        candidate_ids = seen.get("candidate_ids") or []
+        assert os.path.join("state", "handoffs", "shipped-dead.md") in candidate_ids, candidate_ids
+        assert "retained" not in out, (
+            f"escaped handoff must not also be reported as retained: {out!r}"
+        )
+
+        assert _read_field(path, "shipped_in_kind") == "ship-commit", (
+            "shipped_in_kind must be UNCHANGED by the escape -- never rewritten to no-commit"
+        )
+        assert _read_field(path, "shipped_in") == dead_sha, (
+            "shipped_in itself is untouched by the escape path"
+        )
+        assert _read_field(path, "shipped_in_unresolvable_sha") == dead_sha, (
+            "the dead SHA must land in the separate non-discriminant field"
+        )
+
+        # Idempotency: re-stamping the same dead_sha is a byte-identical no-op.
+        before = open(path, "r", encoding="utf-8").read()
+        applied = mod._stamp_unresolvable_escape(path, tmp, dead_sha)
+        after = open(path, "r", encoding="utf-8").read()
+        assert applied is True
+        assert before == after, "re-stamping the same dead SHA must not rewrite the file"
+
+
+def test_c9_unresolvable_escape_stamp_failure_falls_back_to_retained():
+    """A stamp failure (here: not inside a git repo) must fall back to the
+    pre-C9 retained/stale-warning behavior, never crash the sweep or silently
+    drop the handoff from either count."""
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Deliberately NOT a git repo -- locked_rmw's git_common_dir()
+        # resolution fails, forcing _stamp_unresolvable_escape to return False.
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+
+        dead_sha = "deadbee2"
+        path = _write_handoff(handoffs_dir, "shipped-dead-nogit.md", "shipped", dead_sha)
+        old_time = time.time() - (20 * 86400)
+        os.utime(path, (old_time, old_time))
+
+        mod._resolve_repo_root = lambda: tmp
+        mod._resolve_state_root = lambda repo_root: state_root
+
+        seen = {}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            seen["candidate_ids"] = params.get("candidate_ids")
+            return {"acted": params.get("candidate_ids", [])}
+
+        rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"expected exit 0 (guard retention, not a dispatch failure), got {rc}"
+        assert "1 shipped handoffs retained (unresolvable SHA)" in out, out
+        assert "WARNING: 1 shipped handoffs retained" in out, out
+        assert "escaped" not in out
+        assert (seen.get("candidate_ids") or []) == []
+
+

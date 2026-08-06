@@ -1,0 +1,63 @@
+# command-substitution-docstring-baseline.txt — checked-in baseline for
+# test_no_bin_docstring_command_substitution.py.
+#
+# One REPO-RELATIVE path per line (POSIX-separated, as `git ls-files` emits
+# it) — not a bare basename, matching the convention
+# sh-suffix-polyglot-baseline.txt already uses in this same directory tree
+# (coordinator/bin/sh-suffix-polyglot-baseline.txt), for the same reason: a
+# basename-keyed baseline would silently allow a NEW offender that happens to
+# share a name with a baselined one from a different directory. Blank lines
+# and `#`-comment lines are ignored.
+#
+# WHAT THIS IS: every file listed here is a tracked, extensionless
+# `coordinator/` entrypoint whose line-1 shebang is `#!/usr/bin/env python3`
+# and whose module docstring carries at least one command-substitution span
+# (a backtick pair or a `$(...)` span) — the hazard `bash <file>` can execute
+# as a subshell command if the file is ever mistakenly `bash`-invoked (see
+# test_no_bin_docstring_command_substitution.py's module docstring for the
+# full mechanism and why this suite bans the syntax rather than an
+# enumerated stdin-reader allowlist).
+#
+# THIS IS A RATCHET, NOT A RETROACTIVE GATE: these 31 pre-existing offenders
+# (found 2026-07-28, when the gate was introduced) do NOT fail the suite.
+# Only a NEW offender — a python3-shebang extensionless entrypoint not listed
+# here that introduces a command-substitution span in its docstring, or a
+# baselined file that gains a NEW additional such span after being fixed and
+# removed from this list — fails. The suite ALSO fails if a listed entry no
+# longer offends (docstring rewritten to remove the span, file deleted, or
+# shebang/extension changed) — remove that line from the baseline in the same
+# commit that fixes it. A stale entry left in this file is a silent exemption,
+# not a record, so the suite treats it as a violation rather than ignoring it.
+#
+# Spec backlink: PM ruling 2026-07-21 + 2026-07-28 re-scope/ratchet-conversion
+# amendments (docs/wiki/cross-platform-invocation-parity.md, DR-076).
+coordinator/bin/claude-home
+coordinator/bin/coordinator-auto-push
+coordinator/bin/coordinator-configure-git
+coordinator/bin/coordinator-doc-new
+coordinator/bin/coordinator-fold-execution-record
+coordinator/bin/coordinator-harvest-deferrals
+coordinator/bin/coordinator-lesson-promote
+coordinator/bin/coordinator-prepare-commit-msg
+coordinator/bin/coordinator-queue-append
+coordinator/bin/coordinator-reap-stale-locks
+coordinator/bin/coordinator-renormalize-index
+coordinator/bin/coordinator-safe-commit
+coordinator/bin/coordinator-settings-home
+coordinator/bin/cross-repo-memo
+coordinator/bin/cruft-sweep
+coordinator/bin/cutover-cli
+coordinator/bin/derive-session-hierarchy
+coordinator/bin/detect-initiative-candidates
+coordinator/bin/emit-artifact-shape-contract
+coordinator/bin/generate-tested-platforms
+coordinator/bin/handoff-carry-gate
+coordinator/bin/handoff-gate-aging
+coordinator/bin/machine-local
+coordinator/bin/normalize-snippet
+coordinator/bin/publish-time-transform-py
+coordinator/bin/queue-triage
+coordinator/bin/record-platform-outcome
+coordinator/bin/regenerate-orientation-cache
+coordinator/bin/schema-drift-gate
+coordinator/bin/verify-snippet-sync

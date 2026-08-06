@@ -1,0 +1,10 @@
+{
+  "sha_range": "abc123..def456",
+  "reviewer": "sonnet",
+  "scope": "state/handoffs/",
+  "scope_kind": "path",
+  "verdict": "approved",
+  "diff_loc": "large",
+  "session_id": "test-session-001",
+  "workstream": null
+}

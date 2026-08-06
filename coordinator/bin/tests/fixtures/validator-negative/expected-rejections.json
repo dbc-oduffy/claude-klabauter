@@ -1,0 +1,638 @@
+{
+  "_comment": "expected-rejections.json — W0 negative fixture index for ccos-1 regression net.\nEach fixture in this directory is a known-bad record that the validator rejects.\nThis is the AC5b oracle: the validator MUST reject every fixture listed here.\n\nHOW TO RUN (re-ported to Python 2026-07):\n  python3 -m pytest coordinator/bin/tests/test_validator_negative_corpus.py -q\n\nThe loader is coordinator/bin/tests/test_validator_negative_corpus.py, a re-port of the\nretired testNegativeCorpus(fixturesDir, schemasDir) from example-doctrine-repo\ncoordinator/bin/lib/schema.js (deleted in 480ad8f8, \"D1: retire claude-klabauter oracle .js +\nbin/lib/*.js\", without a Python successor until this port). It drives this index against\ncoordinator_core.frontmatter.schema_validate.validate() / validate_memo_cross_fields().\nSee that module's docstring for the current known-gap list: completion-entry (c01-c05)\nhas no vendored Python schema, so those fixtures are marked xfail(strict=True) rather\nthan silently dropped.\n\nNOTE: The validator does NOT currently enforce additionalProperties/unknown-field constraints.\n  No negative fixture for that case is included — the current validator accepts unknown fields.\n  If unknown-field rejection is added, add a fixture and expected verdict here.\n\nNOTE: .json files are skipped by lint-frontmatter.js (see lint-frontmatter.js line ~217).\n  The r01-diff-loc-wrong-type.json fixture (review-trail number type) is NOT in this index\n  because lint-frontmatter.js never processes JSON files. Review-trail validation is tested\n  separately. The number type check IS covered by c05 (loe.agent_dispatches).\n\nNOTE: The bare-string \"number-or-null\" spec in completion-entry.yaml (chain_span_days) is\n  silently passed by checkType (unknown type tag passthrough). Only object-spec {type: number-or-null}\n  is enforced. c05 uses loe.agent_dispatches which uses the object-spec form.\n\nNOTE (C2, 2026-07-08): the c2-*.md fixtures in this directory are OUT OF SCOPE for this\n  index and testNegativeCorpus() — they are shape-VALID per schema.js (validateFrontmatter\n  accepts them; expect_ok would be true here, breaking this oracle's all-false invariant).\n  Their rejection is a write-time, filesystem/git-aware reachability check hosted in the\n  PreToolUse hook (coordinator/hooks/scripts/validate-frontmatter-schema.js), deliberately\n  NOT in schema.js (which stays filesystem/git-free by design). Their oracle lives in a\n  sibling index: coordinator/bin/tests/fixtures/validator-negative/c2-expected-reachability.json.\n  That hook has no Python port in this tree, so this index does not re-port c2 either.\n  Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C2",
+  "generated_at": "2026-06-27",
+  "generator": "W0 executor (ccos-1 regression net); H-CROSS-EXEC-1/-2 fixtures added by C2 (2026-07-17, docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md); H-CROSS-9 fixtures added by C2b (2026-07-27, gate_dependency path-shaped rejection)",
+  "total_fixtures": 36,
+  "rules_covered": {
+    "handoff_cross_field": [
+      "H-CROSS-1",
+      "H-CROSS-2",
+      "H-CROSS-3",
+      "H-CROSS-4",
+      "H-CROSS-5",
+      "H-CROSS-6",
+      "H-CROSS-7a",
+      "H-CROSS-7b",
+      "H-CROSS-7c",
+      "H-CROSS-8",
+      "H-CROSS-9",
+      "H-CROSS-A3a-1",
+      "H-CROSS-A3a-2",
+      "H-CROSS-A3a-3",
+      "H-CROSS-EXEC-1",
+      "H-CROSS-EXEC-2"
+    ],
+    "handoff_schema": [
+      "H-REQUIRED",
+      "H-ENUM"
+    ],
+    "handoff_type_tags": [
+      "H-TYPE-SNO"
+    ],
+    "memo_cross_field": [
+      "M-CROSS-1",
+      "M-CROSS-2",
+      "M-CROSS-2b",
+      "M-CROSS-3",
+      "M-CROSS-4",
+      "M-CROSS-5",
+      "M-CROSS-6",
+      "M-CROSS-7",
+      "M-CROSS-8"
+    ],
+    "completion_entry_type_tags": [
+      "C-TYPE-OBJ",
+      "C-TYPE-ENUM-NESTED",
+      "C-TYPE-ENUM",
+      "C-TYPE-LOS",
+      "C-TYPE-NNO"
+    ],
+    "not_covered": [
+      "additionalProperties/unknown-field (not enforced for non-skill schemas; skill schema DOES enforce it via additionalProperties:false — see bin/tests/fixtures/skill-negative-unknown-key.md for skill coverage)",
+      "iso-date type tag (functional for required fields; negative coverage implicit in h14 because missing required is caught first)"
+    ]
+  },
+  "fixtures": [
+    {
+      "fixture": "h01-awaiting-gate-no-dependency.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-1: deployment_state=awaiting_gate requires gate_dependency",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "gate_dependency",
+            "error": "required when deployment_state=awaiting_gate",
+            "hint": "Add a one-line gate_dependency naming the subsystem or condition that gates this handoff"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h02-ready-to-fire-with-dependency.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-2: deployment_state=ready_to_fire must not have gate_dependency",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "gate_dependency",
+            "error": "must be empty or omitted when deployment_state=ready_to_fire",
+            "hint": "A handoff cannot be ready_to_fire while it has a gate_dependency. Either clear gate_dependency or set deployment_state=awaiting_gate."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h03-graph-fields-on-non-roadmap.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-3: graph fields (blocks/blocked_by/roadmap_id) only on kind=spinoff-roadmap",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "blocks",
+            "error": "permitted only when kind=spinoff-roadmap (current kind: session-handoff)",
+            "hint": "Graph primitives (blocks/blocked_by/roadmap_id) are roadmap-only. Remove them, or set kind: spinoff-roadmap if this is a roadmap stub."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h04-spinoff-roadmap-missing-fields.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-4: kind=spinoff-roadmap requires roadmap_id, stub_id, wave, blocks, blocked_by",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "stub_id, wave, blocks, blocked_by",
+            "error": "required for kind=spinoff-roadmap",
+            "hint": "Roadmap stubs must declare their identifier (roadmap_id, stub_id), serialization order (wave), and graph edges (blocks, blocked_by — empty list ok). See skills/roadmap-planning/SKILL.md § Phase 2.1."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h05-roadmap-id-wrong-kind.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-5: roadmap_id implies kind=spinoff-roadmap (inverse rule)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "roadmap_id",
+            "error": "permitted only when kind=spinoff-roadmap (current kind: session-handoff)",
+            "hint": "Graph primitives (blocks/blocked_by/roadmap_id) are roadmap-only. Remove them, or set kind: spinoff-roadmap if this is a roadmap stub."
+          },
+          {
+            "field": "roadmap_id",
+            "error": "present but kind is \"session-handoff\" — roadmap_id requires kind: spinoff-roadmap",
+            "hint": "Either set kind: spinoff-roadmap (if this is a roadmap stub), or remove roadmap_id (if not)."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h06-invalid-cost-enum.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-6: cost must be one of T0, T1, T2, T3 when present",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "cost",
+            "error": "invalid cost value \"T4\"",
+            "hint": "Allowed values: T0, T1, T2, T3. T0 = trivial (minutes); T1 = small (<1h); T2 = medium (1-4h); T3 = large (multi-day)."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h07-post-cutoff-missing-category.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-7a: category required on handoffs created >= 2026-05-29",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "category",
+            "error": "required for handoffs created on or after 2026-05-29",
+            "hint": "Set category to one of: roadmap, infra, bug, docs, research, refactor"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h08-post-cutoff-missing-summary.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-7b: summary required on handoffs created >= 2026-05-29",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "summary",
+            "error": "required for handoffs created on or after 2026-05-29",
+            "hint": "Add a one-line summary (≤140 chars) describing the session work"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h09-summary-too-long.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-7c: summary must be <= 140 chars",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "summary",
+            "error": "summary exceeds 140 characters (got 163)",
+            "hint": "Keep summary to one concise line of 140 characters or fewer"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h10-supersedes-on-non-spinoff.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-8: supersedes only permitted on kind=spinoff",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "supersedes",
+            "error": "permitted only when kind=spinoff (current kind: session-handoff)",
+            "hint": "supersedes: on a baton is the conditional-live orientation-supersession field; it belongs only on a kind: spinoff install/orientation baton, not spinoff-roadmap. Distinct from the terminal memo supersedes:/superseded_by: coupling."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h11-consumed-missing-consumed-by.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-A3a-1: status=consumed + consumed_at present => consumed_by required",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "consumed_by",
+            "error": "required when status=consumed and consumed_at is present",
+            "hint": "consumed_by identifies the consuming session (from --session-id). It is written by cs_consume_handoff; absent here indicates a partial or hand-edited consume. Set consumed_by to the session id."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h12-shipped-without-shipped-in.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-A3a-2: deployment_state=shipped + post-cutoff => shipped_in required",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "shipped_in",
+            "error": "required when deployment_state=shipped (for handoffs created on or after 2026-05-29)",
+            "hint": "Set shipped_in to the commit SHA or plan path where this work landed. Written by /workstream-complete or /handoff on transition to shipped."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h13-spinoff-with-predecessor.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-A3a-3: kind=spinoff requires predecessor=none or null",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "predecessor",
+            "error": "must be \"none\" or null for kind=spinoff (got \"state/handoffs/2026-01-01-some-handoff.md\")",
+            "hint": "Spinoffs fork from the current session and have no predecessor baton to continue. Set predecessor: none (or null). If this is a continuation, use kind: session-handoff instead."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h14-missing-required-title.md",
+      "schema": "handoff",
+      "rule_covered": "H-REQUIRED: required field title missing",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "title",
+            "error": "required field missing",
+            "hint": "Add \"title:\" to frontmatter"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h15-invalid-status-enum.md",
+      "schema": "handoff",
+      "rule_covered": "H-ENUM: status must be one of active, consumed (superseded is retired)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "status",
+            "error": "invalid enum value \"superseded\"",
+            "hint": "Allowed values: active, consumed"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h16-string-or-null-wrong-type.md",
+      "schema": "handoff",
+      "rule_covered": "H-TYPE-SNO: string-or-null field predecessor given a number",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "predecessor",
+            "error": "expected string or null, got number",
+            "hint": "Set to a string or null"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h17-execution-missing-stamp-field.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-EXEC-1: handoff_phase=execution requires the full four-field execution_authorized_{by,at,sha,note} stamp (post-cutoff)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "execution_authorized_note",
+            "error": "required when handoff_phase=execution",
+            "hint": "Stamp the full four-field execution authorization (execution_authorized_by/_at/_sha/_note) per plan-execute-session-split.md § Pinned conventions before marking handoff_phase: execution."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h18-handoff-phase-execution-wrong-kind.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (execution) present requires kind=session-handoff",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "handoff_phase",
+            "error": "present but kind is \"spinoff\" — handoff_phase requires kind: session-handoff",
+            "hint": "handoff_phase is an axis declared on kind: session-handoff. Either set kind: session-handoff (if this is a continuation/execution baton), or remove handoff_phase (if not)."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h19-handoff-phase-continuation-wrong-kind.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (continuation) present requires kind=session-handoff",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "handoff_phase",
+            "error": "present but kind is \"spinoff\" — handoff_phase requires kind: session-handoff",
+            "hint": "handoff_phase is an axis declared on kind: session-handoff. Either set kind: session-handoff (if this is a continuation/execution baton), or remove handoff_phase (if not)."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h20-gate-dependency-tasks-path.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-9: gate_dependency must not be path-shaped (contains tasks/, contains archive/, or ends in .md)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "gate_dependency",
+            "error": "gate_dependency looks like a file path (\"tasks/some-feature/todo.md\"), not a gate description",
+            "hint": "gate_dependency is deprecated single-line prose, not a pointer to a file. If this names a baton/predecessor to wait on, put its slug in blocked_by. If it is advisory prose about the condition, put it in blocking_notes. Do not put tasks/, archive/, or .md paths in gate_dependency."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h21-gate-dependency-archive-path.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-9: gate_dependency must not be path-shaped (contains tasks/, contains archive/, or ends in .md)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "gate_dependency",
+            "error": "gate_dependency looks like a file path (\"archive/completed/2026-07/some-handoff.md\"), not a gate description",
+            "hint": "gate_dependency is deprecated single-line prose, not a pointer to a file. If this names a baton/predecessor to wait on, put its slug in blocked_by. If it is advisory prose about the condition, put it in blocking_notes. Do not put tasks/, archive/, or .md paths in gate_dependency."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h22-gate-dependency-md-suffix.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-9: gate_dependency must not be path-shaped (contains tasks/, contains archive/, or ends in .md)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "gate_dependency",
+            "error": "gate_dependency looks like a file path (\"state/handoffs/2026-07-27-some-handoff.md\"), not a gate description",
+            "hint": "gate_dependency is deprecated single-line prose, not a pointer to a file. If this names a baton/predecessor to wait on, put its slug in blocked_by. If it is advisory prose about the condition, put it in blocking_notes. Do not put tasks/, archive/, or .md paths in gate_dependency."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m01-in-progress-missing-picked-up-by.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-1: status=in_progress requires picked_up_by",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "picked_up_by",
+            "error": "required when status=in_progress",
+            "hint": "Set picked_up_by to the claiming session id when a memo is claimed at pickup-start (status: in_progress). Cleared on release back to open."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m02-actioned-accepted-no-realized-by.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-2: status=actioned + decision=accepted requires realized_by",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "realized_by",
+            "error": "required when status=actioned and decision=accepted",
+            "hint": "Set realized_by to where the work landed: a plan path (docs/plans/*.md or tasks/<feature>/todo.md), a commit SHA, or the sentinel \"inline\". An accepted/partial memo realizes work and must carry a claim-of-record so a peer session does not re-realize it."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m03-actioned-accepted-malformed-realized-by.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-2b: realized_by must be inline, path, or hex SHA",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "realized_by",
+            "error": "malformed realized_by \"done_somewhere\" when status=actioned and decision=accepted",
+            "hint": "realized_by must be one of: the sentinel \"inline\", a path containing \"/\" (e.g. docs/plans/2026-06-23-foo.md, tasks/<feature>/todo.md), or a hex commit SHA (7–64 hex chars). A bare word reads as authoritative but points nowhere."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m04-action-taken-missing-companions.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-3: status=action_taken requires action_taken_at and decision",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "action_taken_at, decision",
+            "error": "required when status=action_taken",
+            "hint": "Set action_taken_at and decision when marking a memo action_taken. decision must be one of: accepted, declined, partial, superseded."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m05-closed-missing-all-companions.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-4: status=closed requires closed_at, action_taken_at, and decision",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "closed_at, action_taken_at, decision",
+            "error": "required when status=closed",
+            "hint": "Set closed_at, action_taken_at, decision when closing a memo. A closed memo must have a complete action record."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m06-superseded-missing-superseded-by.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-5: status=superseded requires superseded_by",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "superseded_by",
+            "error": "required when status=superseded",
+            "hint": "Set superseded_by to the path of the memo that supersedes this one (inverse of supersedes:)."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m07-central-only-missing-to.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-6: delivery_mode=central-only requires to",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "to",
+            "error": "required when delivery_mode=central-only",
+            "hint": "Specify the receiver EM identifier in \"to:\" even for central-only delivery. Used for workday-start surfacing and audit trail."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m08-summary-too-long.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-7: summary <= 120 chars",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "summary",
+            "error": "summary exceeds 120 characters (got 161)",
+            "hint": "Keep summary to one concise line of 120 characters or fewer"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "m09-invalid-kind-enum.md",
+      "schema": "cross-repo-memo",
+      "rule_covered": "M-CROSS-8: kind must be one of ask, consult, fyi when present (ack is not valid)",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "kind",
+            "error": "invalid enum value \"ack\" for kind",
+            "hint": "kind must be one of: ask, consult, fyi. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind — acknowledgement is receipt-state."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "c01-loe-wrong-type.md",
+      "schema": "completion-entry",
+      "rule_covered": "C-TYPE-OBJ: type:object field loe given a string",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "loe",
+            "error": "expected object, got string",
+            "hint": "Use YAML nested mapping syntax"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "c02-loe-tshirt-invalid-enum.md",
+      "schema": "completion-entry",
+      "rule_covered": "C-TYPE-ENUM-NESTED: loe.tshirt must be one of XS, S, M, L, XL",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "loe.tshirt",
+            "error": "invalid enum value \"HUGE\"",
+            "hint": "Allowed values: XS, S, M, L, XL"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "c03-nature-invalid-enum.md",
+      "schema": "completion-entry",
+      "rule_covered": "C-TYPE-ENUM: nature must be one of roadmap, bugfix, tech-debt, infra",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "nature",
+            "error": "invalid enum value \"feature\"",
+            "hint": "Allowed values: roadmap, bugfix, tech-debt, infra"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "c04-list-of-string-wrong-type.md",
+      "schema": "completion-entry",
+      "rule_covered": "C-TYPE-LOS: list-of-string field commits given a scalar string",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "commits",
+            "error": "expected a list",
+            "hint": "Use YAML list syntax, e.g. [\"name\"]"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "c05-number-or-null-in-object-wrong-type.md",
+      "schema": "completion-entry",
+      "rule_covered": "C-TYPE-NNO: number-or-null (object-spec form) loe.agent_dispatches given a string",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "loe.agent_dispatches",
+            "error": "expected number or null, got string",
+            "hint": "Set to a number or null"
+          }
+        ]
+      }
+    }
+  ]
+}

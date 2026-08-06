@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan.schema.json",
+  "x-schema-name": "plan",
+  "x-schema-version": "2.1.1",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "2.1.0 -> 2.1.1 is a DESCRIPTION-ONLY bump that earns NO class, following the 1.5.0 -> 1.5.1 precedent below: `sizing_object`'s description gained the absence-checkable cutoff rule (plans created on/after 2026-08-06 must carry either a resolving path or an explicit null; explicit null is the sanctioned answer, not a bypass; pre-cutoff plans stay permanently exempt) plus a corrected on-disk count (was '315 of 332', now '152 of 170 real plans predate the convention, 18 carry a path' — the old count double-counted sidecars as plans). `sizing_object`'s `anyOf`/pattern/nullability is unchanged; no value that validated before this bump fails now, and no value that failed now validates. `x-bump-class` above therefore continues to describe the 2.0.0 bump, not this one, for the same retained-history reason the 1.5.1 entry gives. Spec backlink: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md § C5. 2.0.0 -> 2.1.0 (sizing-object) adds the top-level `sizing_object` string-or-null property, anyOf [{type: string, pattern: `^state/sizings/.+\\.yaml$`}, {type: null}] — the FK to the sizing-object that routed this plan through `coordinator:sizing`. Optional, never required: 315 of 332 on-disk plans predate the convention, and a required field would invalidate the corpus and turn the schema into a migration project. Classified nested-field-additive, NOT bare-additive: the field is ALREADY present on 17 on-disk plans as an unvalidated extension key, so this declares existing shape rather than introducing new shape — the same reasoning the 1.5.1 -> 1.6.0 and 1.4.0 -> 1.5.0 entries below applied to execution_authorized_* and grouping_approvals respectively. A consumer enumerating known plan frontmatter keys exhaustively could silently ignore `sizing_object` until updated, even though every document that validated before this bump still validates after it. This schema is bilaterally mirrored with example-doctrine-repo; example-doctrine-repo will need this same property before their side can validate a plan carrying the field. Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C1. 1.6.0 -> 2.0.0 (deliverable-id-pattern) constrains the STRING arm of `deliverable_id` with `^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$`, landed in the same commit as handoff.schema.json 5.0.0 -> 6.0.0 \u2014 see that file's x-bump-note for the full regex rationale, the fleet verification, and the CONTRACT_VERSION sequencing. The `null` arm is untouched. Classified MAJOR: constraining an existing field's value domain is 'existing semantics changed' by schema-version-gate.md's own vocabulary \u2014 the identical reasoning handoff.schema.json's 2.4.0 -> 2.5.0 entry applied to `blocked_by`'s pattern narrow. Both schemas must carry the pattern or the defect merely relocates: `deliverable_id` is the SAME join key on both entities, and a plan is frequently the EARLIEST artifact in a deliverable chain \u2014 i.e. the mint site the id originates from. PRIOR: 1.5.1 -> 1.6.0 adds the four-field execution-authorization stamp (execution_authorized_by/at/sha/note) to plan frontmatter, mirroring the identically-named/identically-shaped fields already defined on handoff.schema.json (lines ~663-680) verbatim (type/pattern/description, with 'handoff' reworded to 'plan' where the description named the artifact). Motivation: 84 on-disk plans under docs/plans/ already carry one or more of these fields (stamped by the plan-execute-session-split.md convention) with NO schema declaring them on plan.schema.json — those documents were validating with unvalidated extension keys. Additive: a plan with none of the four fields (the common case pre-stamp) still validates unchanged. Classified nested-field-additive for the same reason as the 1.4.0 -> 1.5.0 grouping_approvals bump — a consumer enumerating known plan frontmatter keys exhaustively could silently ignore the new fields until updated. On-disk value-shape survey (docs/plans/*.md, 2026-07-31): of 84 stamped plans, execution_authorized_by appears in 79, _at in 78, _sha in 72, _note in 70 — all four fields' on-disk values already conform to the copied handoff-schema shapes (by/note as free-form strings, at as an unconstrained date/date-time string, sha as 7-64 hex chars) with no mismatch found. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1. 1.5.0 -> 1.5.1 is a DESCRIPTION-ONLY bump that earns NO class: `scope_mode`'s description gained `spec-dispatch` as a named posture example (the S-lane route out of coordinator:sizing — a light plan artifact scaffolded then dispatched, skipping the Opus plan review). `scope_mode` is a free-form string with no enum, so its value domain did not change and no property was added, removed, or altered — per coordinator/docs/wiki/schema-version-gate.md § Bump-class extension key, a pure metadata/description edit is exactly the case where the key is omitted rather than forced to one of the three vocabulary terms. `x-bump-class` above therefore continues to describe the 1.4.0 -> 1.5.0 bump, not this one; it is retained rather than dropped because dropping it would also require dropping this cumulative note (test_bump_note_requires_bump_class), erasing the whole bump history of a schema claude-klabauter does not vendor and no consumer holds on. 1.4.0 -> 1.5.0 added the top-level `grouping_approvals` object (do/defer/ruled_out approval blocks) mirroring claude-klabauter's vendored plan-tasks.schema.json shape, plus its `$defs.grouping_approval_block` sub-schema. Additive: a document with no `grouping_approvals` key (the legacy case) still validates unchanged. Classified nested-field-additive because the new field itself carries the same mirrored-consumer risk shape as prior nested-field-additive bumps in this file's history — a consumer that reads plan frontmatter and enumerates known keys exhaustively could silently ignore the new field until updated, even though this schema change alone does not reject any previously-valid document. Spec backlink: docs/plans/2026-07-29-pm-approved-provenance-write-time-closure-gate.md § C1. 1.3.0 -> 1.4.0 added `landed` to the `status` enum (C8a, plan-line-item-resolution-model, D9) — a new non-terminal lifecycle value between `executing` and `implemented` marking 'all chunk code is on the branch, spine rows not yet fully dispositioned'. Additive to the value domain of an existing field (no closed-vocabulary term exists specifically for an enum-value widen; classified `nested-field-additive` because it carries the same holding/bilateral-sequencing risk shape — a mirrored consumer that enumerates the old value set exhaustively, e.g. a `Literal[...]` or a closed dict mapping, silently breaks on the new value until it is updated, exactly as `coordinator/tests/test_plan_status_enum_parity.py`'s claude-klabauter-side assertions demonstrate for this very bump). Every document that validated under 1.3.0 still validates under 1.4.0, and no existing consumer's terminal-status handling changed (see coordinator/lib/check-provisional-expiry.py, whose _TERMINAL_STATUSES deliberately does NOT include `landed`) — but downstream enumerating consumers (claude-klabauter's PlanStatus Literal, _PLAN_STATUS_ENUM, and the emit_artifact_shape_contract.py liveness mapping) require a companion update before this value is safe to emit end-to-end; that companion update is a separate chunk (C8b et al.), not bundled here. 1.2.0 -> 1.3.0 dropped the `null` arm from `suggested_priority` (was `anyOf: [enum, null]`, now a plain closed enum) — review finding: the field's own description already argues absence covers 'no suggestion', so `null` was a second, redundant representation of that state. Classified MAJOR because a document that previously set `suggested_priority: null` explicitly now fails validation; no on-disk corpus was found using that value as of this bump (grepped state/ and docs/ 2026-07-27), so the practical blast radius is believed zero, but the schema's stated domain narrowed. 1.1.0 -> 1.2.0 added an allOf cross-field rule rejecting a plan that sets both `provisional_until` and `revisit_by` (they are synonym keys; prose already said 'at most one' but nothing enforced it — review finding). Classified major because the rule is newly ENFORCED here: a document with both fields non-null previously validated and now does not. Prior bump 1.0.0 -> 1.1.0 added the optional top-level `suggested_priority` scalar (advisory EM priority signal, C2).",
+  "applies_to": "docs/plans/*.md",
+  "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
+  "type": "object",
+  "required": ["title", "created", "author", "status"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable title for the plan."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the plan was authored (YYYY-MM-DD)."
+    },
+    "author": {
+      "type": "string",
+      "description": "Agent or person who authored this plan."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "reviewed", "approved", "executing", "landed", "implemented", "deferred", "abandoned", "superseded"],
+      "description": "Lifecycle state. Common slip: active-execution value is 'executing', NOT 'execution'. 'landed' sits between 'executing' and 'implemented': every chunk's code is on the branch, but not every spine row has reached a disposition yet. It is NOT terminal — a plan in 'landed' still has outstanding row-level work to close out before it can move to 'implemented'."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Working branch this plan is being executed on."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Reviewer(s) who approved this plan."
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin reference (e.g. a handoff slug, memo path, or external prompt)."
+    },
+    "superseded_by": {
+      "type": "string",
+      "description": "Path or slug of the plan that supersedes this one."
+    },
+    "scope_mode": {
+      "type": "string",
+      "description": "Planning posture (e.g. 'architecture', 'implementation', 'spike', 'spec-dispatch' — the S-lane posture routed from coordinator:sizing: a light plan artifact scaffolded then dispatched, skipping the Opus plan review)."
+    },
+    "problem_set": {
+      "type": "string",
+      "description": "Ratified problem-set slug or inline statement (from /shape)."
+    },
+    "predecessor_handoff": {
+      "type": "string",
+      "description": "The handoff that spawned this plan (distinct from parent_plan)."
+    },
+    "prerequisite_of": {
+      "type": "string",
+      "description": "Downstream plan(s) that depend on this plan completing first."
+    },
+    "source_memo": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Cross-repo memo(s) that initiated this plan. May be a single path or a list."
+    },
+    "scope": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "In-scope items for this plan (list-of-string preferred; legacy string values accepted)."
+    },
+    "agent_sessions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sessions that executed this plan. Runtime-appended by append-plan-session.sh after a successful plan claim (execute-plan Phase 1.5 Step 0); NOT scaffolded onto new plans. Each entry is the encoded string \"<session_id>|<status>|<created_at>\": session_id is UUID-shaped (contains no '|'); status is an OPEN string ('working' at the Phase-0 fire point, not a closed enum); created_at is ISO-8601 UTC. All three fields are non-empty at write time — consumers must NOT use `IFS='|' read -ra` if a future field could be empty (read -ra silently drops trailing empty fields). Append-only: never rewrite or reorder peer entries."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string", "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"}, {"type": "null"}],
+      "description": "Durable deliverable join key. Minted once at the earliest artifact and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for standalone plan origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill plans. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
+    },
+    "plan_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Stable non-path plan identity (pln-<slug>-<6hex>). Minted by coordinator-doc-new at plan creation time. Allows the board to join on a stable key independent of file path/rename. Distinct from deliverable_id (which spans the full deliverable chain). Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D3"
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable — not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2"
+    },
+    "caption": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "One-sentence business-legible outcome line. NOT an engineering title or filename — authored for CEO-board legibility. Optional; authored at creation time."
+    },
+    "status_reason": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Free-text one-liner explaining the current plan status (e.g. 'deferred — blocked on cockpit reader-first gate'). Optional authored field; carried into the cockpit emission as a product-legibility facet."
+    },
+    "owner": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Authoring workstream or EM identifier. Nullable; carried forward from the earliest artifact for the deliverable."
+    },
+    "suggested_priority": {
+      "enum": ["urgent", "high", "medium", "low"],
+      "description": "Advisory execution-priority signal an EM may attach to this plan at authoring time. Optional (not nullable — absence already covers 'no suggestion'; a redundant null representation was reviewed out, see Finding 4 / review-integrator 2026-07-27). Enum is the priority-ledger domain (priority-ledger.schema.json's urgent|high|medium|low|none) MINUS 'none' — an EM has no reason to author an explicit clear; absence of the field already covers that case. Advisory only: the PM-owned priority ledger (state/priority-ledger/) is the authoritative tier and lives on a deliberately separate surface — this field never overrides it, and that separation (not memory) is what keeps 'advisory never overrides authoritative' structural. Do NOT add a pm_priority field to this frontmatter to compensate; the tier split is the point. NEGATIVE-SPEC: no inherited_from / priority_predecessor field is permitted on this frontmatter either — priority does not chain plan-to-plan. No backfill of pre-existing plans, consistent with the handoff schema's origin_* no-backfill policy."
+    },
+    "provisional_until": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Expiry date (YYYY-MM-DD) for a decision this plan stages but does not yet execute — e.g. a ratification, a second stage of a two-stage rollout, or a hold pending a future condition. `revisit_by` is an accepted synonym key (same semantics, same format); a plan carries one or the other, never both. Read by the outstanding-provisional-decisions ceremony check (`coordinator/docs/wiki/provisional-decision-expiry.md`) against every non-terminal-status plan (`status` not in implemented/deferred/abandoned/superseded) — a date on or before today with the plan still non-terminal is surfaced as expired. Motivating case: the 2026-07-13 adopt spec's stage-2 ratification sat unexecuted for 13 days with nothing tracking that it was owed (archive/specs/2026-07/2026-07-13-doe-auto-reconcile-adopt.md). Optional; null/absent for plans that stage no provisional decision. Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D1b."
+    },
+    "revisit_by": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Synonym key for `provisional_until` — same semantics, same format, same consumer. Use whichever name reads more naturally at the call site (`revisit_by` for a park_note-style hold; `provisional_until` for a staged-decision expiry); a plan sets at most one of the two. See `provisional_until` for the full description."
+    },
+    "sizing_object": {
+      "anyOf": [
+        { "type": "string", "pattern": "^state/sizings/.+\\.yaml$" },
+        { "type": "null" }
+      ],
+      "description": "FK to the sizing-object (state/sizings/<id>.yaml) that routed this plan through coordinator:sizing. Optional and nullable in this schema; enforcement is read-side, not here. Plans created on/after 2026-08-06 must carry either a resolving state/sizings/<id>.yaml path or an explicit null — explicit null is the sanctioned 'no sizing object' answer, a forced declaration, not a bypass, checked by coordinator_core/ops/assert_plan_sizing_citation.py. Plans created before 2026-08-06 are permanently exempt from that requirement and must NOT be backfilled: of 170 real plans under docs/plans/ (sidecars — .prior-art-check.md, .plan-coverage-check.md, .sonnet-review.md, .docs-check.md — excluded from this count), 152 predate the convention and 18 carry a path; the corpus was previously miscounted at '315 of 332' because that earlier count included sidecars as plans. When present, the referenced file is expected to resolve on disk. Frontmatter-only: this field is never read from plan BODY prose, and no check compares its value against the plan's problem restatement — see docs/plans/2026-08-06-plan-sizing-citation-gate.md's Anti-scope. Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C1; docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md § C5."
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "https://coordinator.local/schemas/plan-tasks.schema.json" },
+      "description": "NOT a frontmatter key — the ## Tasks task-spine lives BODY-RESIDENT in a single fenced ```yaml plan-tasks``` code block directly under the ## Tasks heading (parser-locate rule: exactly one such block; zero or >1 is a defined error). This 'tasks' property exists to WIRE the per-row shape (schemas/plan-tasks.schema.json) into the plan schema family for validators that parse the fenced block's YAML list and want the item schema, per the canonical body-resident-machine-block pattern (docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention, rule 4 — cf. the ## Session Ledger precedent in handoffs). Full authoring contract: docs/wiki/writing-plans.md § Machine-Parseable Task Spine. Spec backlink: docs/plans/2026-07-09-plan-full-coverage-and-deferred-harvest.md § C1."
+    },
+    "execution_authorized_by": {
+      "type": "string",
+      "description": "The PM/session that authorized execution. OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1"
+    },
+    "execution_authorized_at": {
+      "type": "string",
+      "description": "ISO 8601 date-time of authorization. OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1"
+    },
+    "execution_authorized_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$",
+      "description": "git-hash-object of the plan body at authorization (the content-binding witness /pickup recomputes; schema shape-only). OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1"
+    },
+    "execution_authorized_note": {
+      "type": "string",
+      "description": "The verbatim PM utterance that named execution. The FOURTH field of the stamp: plan-execute-session-split.md § Pinned conventions pins the stamp as a byte-identical FOUR-field contract (by/at/sha/note); note is the self-attesting field — a stamp without a note that names execution signals the write-bar may not have been met. Do NOT drop it. OPTIONAL, mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1"
+    },
+    "grouping_approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "$comment: BLOCK PRESENCE IS THE WHOLE GOVERNED/LEGACY DISCRIMINATOR. A plan's frontmatter carrying this key at all makes the plan GOVERNED; a plan with no such key is LEGACY and keeps the existing per-row `pm_approved` gate unchanged. There is deliberately NO schema_version conjunct anywhere in this discriminator — do not add one. Presence-only is not taken bare, though: a GOVERNED plan whose `grouping_approvals` block is malformed, or that lacks the grouping a closed row needs, FAILS LOUD (schema violation here, plus the hard authorization check in schema_validate.py's check_plan_tasks_grouping_approval) — it does NOT silently degrade to legacy treatment. `additionalProperties: false` and `required: [\"status\"]` on each block (below) are what make a malformed block a structural violation rather than something that reads as merely absent. Groupings are DERIVED from each task-spine row's `disposition` and never stored separately: do <- open/coded; spun_off <- spun_off; defer <- backlogged; ruled_out <- wont_do. `spun_off` was split out of `defer` and relaxed by example-doctrine-repo's 2026-08-05 five-exits ruling (state/memo-outbox/sent/plan-tasks-five-exits-ruling.md, landed in claude-klabauter at f55daf8b9): moving a row to another plan drops no work, so it needs no PM ratification, while `backlogged` and `wont_do` do drop work and stay PM-gated. Plan-level approval is the SUM of the block statuses, COMPUTED at read time — never stored as a fourth rollup field (a stored rollup would be a second home for a derivable truth, and the two would drift). Mirrors claude-klabauter's vendored shape in coordinator_core/frontmatter/schemas/plan-tasks.schema.json (`$defs.grouping_approval_block`) — do not diverge from that spelling. Spec backlink: docs/plans/2026-07-29-pm-approved-provenance-write-time-closure-gate.md § C1.",
+      "properties": {
+        "do": { "$ref": "#/$defs/grouping_approval_block" },
+        "defer": { "$ref": "#/$defs/grouping_approval_block" },
+        "ruled_out": { "$ref": "#/$defs/grouping_approval_block" }
+      }
+    }
+  },
+  "$defs": {
+    "grouping_approval_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "description": "One grouping_approvals grouping's approval state (do | defer | ruled_out). `pending` is the default, unapproved state. `approved` requires a non-empty `pm_utterance` (the PM's verbatim reasoning — testimonial, never backfilled/inferred) and a `digest` matching `sha256:<hex>` (a fresh recomputation over the CURRENT spine membership for this grouping — see schema_validate.py's compute_grouping_digest for the exact recipe). The `sha256:` prefix is load-bearing, never bare 40-hex hash: a membership digest names nothing in any git object store, so a bare-hex value would look like (and invite confusion with) a git object id, when the only valid operation on it is recompute-and-compare. `additionalProperties: false` plus `required: [\"status\"]` mean an unrecognized key or a missing `status` is a schema violation, not something that silently reads as an absent/legacy block.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved"],
+          "default": "pending"
+        },
+        "approver": {
+          "type": ["string", "null"],
+          "description": "Who approved this grouping (PM identity/handle). Null while pending."
+        },
+        "approved_at": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Date this grouping was approved (YYYY-MM-DD). Null while pending."
+        },
+        "pm_utterance": {
+          "type": ["string", "null"],
+          "description": "The PM's verbatim reasoning for approving this grouping. REQUIRED non-empty when status: approved (see allOf below). Never synthesized or backfilled — a grouping's assent is testimonial, not mechanically derivable from disk state."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256:<hex> membership digest over the sorted set of (row id, disposition) pairs for the rows currently in this grouping, and nothing else. REQUIRED when status: approved (see allOf below). Row order, row body prose, section rendering, other frontmatter fields, and whitespace/YAML-style differences are all NOT covered."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Cross-field rule: status: approved requires non-empty pm_utterance and a well-formed digest. Presence-only / non-hard-failing at THIS schema layer — the hard truthiness/freshness check (does the digest match a FRESH recomputation? is pm_utterance non-empty, not just present?) is schema_validate.py's job (check_plan_tasks_grouping_approval), not this file's.",
+          "if": {
+            "properties": { "status": { "const": "approved" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["pm_utterance", "digest"]
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["provisional_until"],
+        "properties": {
+          "provisional_until": { "not": { "type": "null" } }
+        }
+      },
+      "then": {
+        "not": {
+          "allOf": [
+            { "required": ["revisit_by"] },
+            {
+              "properties": {
+                "revisit_by": { "not": { "type": "null" } }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

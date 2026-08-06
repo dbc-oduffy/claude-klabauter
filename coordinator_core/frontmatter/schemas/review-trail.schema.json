@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/review-trail.schema.json",
+  "x-schema-name": "review-trail",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 added the optional `reviewed_paths` array — the path set a scope_kind:diff review actually covered, so a record attests coverage instead of implying it from its sha_range time window.",
+  "applies_to": "state/review-trail/*.json",
+  "match_mode": "whole-document-yaml",
+  "description": "Review-trail record — one JSON document per code-review event, written under state/review-trail/*.json (whole-document match; the record IS the whole JSON file, not frontmatter). The 8 original fields are all required; `reviewed_paths` is the sole optional property, present only on scope_kind:diff records.",
+  "type": "object",
+  "required": ["sha_range", "reviewer", "scope", "scope_kind", "verdict", "diff_loc", "session_id", "workstream"],
+  "properties": {
+    "sha_range": {
+      "type": "string",
+      "description": "Git commit SHA range covered by this review (e.g. 'abc1234..def5678')."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Identifier of the reviewer (agent persona or worker) that produced this review."
+    },
+    "scope": {
+      "type": "string",
+      "description": "Description or path set identifying what was reviewed."
+    },
+    "scope_kind": {
+      "type": "string",
+      "description": "Category of the reviewed scope (e.g. diff, plan, chunk)."
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Review outcome verdict."
+    },
+    "diff_loc": {
+      "type": "number",
+      "description": "Lines of diff covered by this review."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier of the session that produced this review record."
+    },
+    "workstream": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Workstream identifier associated with this review, or null when not attributed to a specific workstream."
+    },
+    "reviewed_paths": {
+      "anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+      "description": "Optional set of paths this record's review actually covered (e.g. from freeze-review-diff.py --paths), or null when not supplied. Present only on scope_kind:diff records; omitted on plan/integration records. Exists because sha_range is a time window, not a path set: on a shared branch a record written as <my-first-commit>^..HEAD silently confers coverage on every concurrent peer session's commit inside the window. The write-side refusal guard is the enforcement; this key is the honest attestation."
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "goal-seed",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "value", "key": "branch", "field": "branch", "quote": true},
+      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "predecessor: none"},
+      {"kind": "literal", "line": "kind: goal-seed"},
+      {"kind": "literal", "line": "deployment_state: awaiting_gate"},
+      {"kind": "literal", "line": "category: infra"},
+      {"kind": "value", "key": "summary", "field": "placeholder_summary", "quote": true},
+      {"kind": "literal", "line": "authoring_session: PLACEHOLDER"},
+      {"kind": "literal", "line": "workstream: PLACEHOLDER"},
+      {"kind": "value_or_literal_fallback", "key": "gate_dependency", "field": "gate_dependency", "quote": true, "suffix": "  # deprecated; superseded by blocked_by/blocking_notes", "fallback_line": "blocking_notes: PLACEHOLDER — name the condition gating this baton, or delete this line once blocked_by names it"},
+      {"kind": "list_emit_if_present", "key": "origin_goal_id", "field": "goals", "quote": true},
+      {"kind": "optional_omit", "key": "handoff_id", "field": "handoff_id", "quote": true}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## What this covers",
+      "",
+      "<!-- Capture the deferred vision-slice verbatim. Raw is fine — fidelity matters more than polish. -->",
+      "",
+      "## Reference materials (read first)",
+      "",
+      "<!-- List file paths the picking-up EM/goal-setting session will need. -->",
+      "",
+      "## Specification",
+      "",
+      "<!-- The vision-slice as stated by the PM. Not yet ratified into OKR form. -->",
+      "",
+      "## Acceptance criteria",
+      "",
+      "<!-- Filled at pickup, when this feeds a future goal-setting ceremony. -->",
+      "",
+      "## Recommended next steps for the picking-up EM",
+      "",
+      "<!-- Typically: re-invoke coordinator:goal-setting (pickup-from-goal-seed entry point). -->",
+      "",
+      "## Anti-scope",
+      "",
+      "<!-- This stub does NOT auto-flesh into a goal — PM re-entry via goal-setting is required. -->",
+      ""
+    ]}
+  ]
+}

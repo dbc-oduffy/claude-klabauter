@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "min_gating_sample_count": 5,
+  "_phase0_baseline": {
+    "measured_at": "2026-07-10",
+    "code_sha": "1e17a6b85b27cc4e3d237102e540b5e6cebd0e85",
+    "run_id": "e918170a-909a-4291-90ed-4e668a4d6e40",
+    "sample_count": 40,
+    "cold_start_floor_ms": 57.11,
+    "floor_cov": 0.0155,
+    "gating_statistic": "min",
+    "doc": "PHASE-0-MEASUREMENTS.md",
+    "note": "COMPUTE_ONLY default + overrides are honest budgets set from real distributions (AC6). MUTATING default remains provisional (unmeasured in wave-1 per AC7)."
+  },
+  "defaults": {
+    "COMPUTE_ONLY": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "MUTATING": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_provisional": true
+    }
+  },
+  "overrides": {
+    "ceremony.session_instructions": {
+      "target_ms": 86,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "deliverable.rollup": {
+      "target_ms": 98,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.tree": {
+      "target_ms": 105,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: whole-repo git ls-files walk + per-tracked-file read for loc count (~600+ tracked files in this repo) legitimately exceeds the 70ms COMPUTE_ONLY default; target set from measured min (~105ms, 2026-07-12 gate run). See PHASE-0-MEASUREMENTS.md 'AC8 cartography overrides' addendum."
+    },
+    "cartography.file_index": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.churn": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.symbols": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.edges": {
+      "target_ms": 89,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: AST-heavy member (per-file ast.parse import/call-graph extraction across a multi-file `files` param) legitimately exceeds the 70ms COMPUTE_ONLY default, per this op's plan-anticipated 'AST-heavy members (symbols, edges) that legitimately exceed the manifest default' carve-out. target set from measured min (~89ms over a 40-file sample, 2026-07-12 gate run). See PHASE-0-MEASUREMENTS.md 'AC8 cartography overrides' addendum."
+    },
+    "cartography.stack": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.count_references": {
+      "target_ms": 106,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: builds a full cartography.edges import/call-graph over a 40-file sample and then scans every edge for module_name matches — legitimately exceeds the 70ms COMPUTE_ONLY default (84ms band); target set from measured min (~106ms over two 8-sample runs, min=105.70/134.13ms, 2026-08-06 gate run) via coordinator_core.benchmarks.timer.time_invocation against this repo's coordinator_core/ tree."
+    },
+    "cartography.chunk_table": {
+      "target_ms": 74,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: whole-repo git ls-files walk + per-file language/artifact filter + prefix-match bucketing, compute-only call (emit=false) — legitimately exceeds the 70ms COMPUTE_ONLY default; target set from measured min (~73.5ms over an 8-sample run, 2026-08-06, single system boundary over coordinator_core/) via coordinator_core.benchmarks.timer.time_invocation against this repo."
+    },
+    "cartography.op_edges": {
+      "target_ms": 89,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: same AST-heavy member class as cartography.edges (per-file ast.parse walk across a multi-file `files` param, three call-site scans per file instead of two) — legitimately exceeds the 70ms COMPUTE_ONLY default; target set to match cartography.edges' own measured min (~89ms over a 40-file sample, 2026-07-12 gate run) pending this op's own dedicated gate run."
+    },
+    "memo.triage": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    }
+  }
+}

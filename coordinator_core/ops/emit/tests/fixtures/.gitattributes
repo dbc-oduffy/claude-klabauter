@@ -1,0 +1,21 @@
+# Force LF line endings for the frozen-fixture tree, regardless of the checking-out
+# machine's core.autocrlf setting.
+#
+# Root cause (2026-07-21 emit-parity Windows diagnosis): test_full_parity's
+# content_hash comparison (envelope._stamp_content_hash / cache.compute_stamp) hashes
+# RAW FILE BYTES (Path.read_bytes(), no newline translation) and asserts the hash is
+# byte-identical to the golden fixture captured on a non-Windows machine. With no
+# .gitattributes and core.autocrlf=true (common Windows git config), `git checkout`
+# silently rewrites the fixture tree's LF line endings to CRLF, changing the SHA256
+# of every text fixture file and breaking the "constant bytes" invariant documented in
+# envelope.py::_stamp_content_hash. This is a checkout-config gap, not a porter bug —
+# the hashing code itself is already platform-agnostic (raw bytes, no translation).
+#
+# Fix: pin the whole frozen-fixture tree to LF so `git checkout` produces byte-identical
+# content on every platform, matching how the golden was captured. Applies to every
+# tracked file under this directory (README/markdown/YAML/JSON fixtures alike) — the
+# whole tree is a byte-for-byte immutable oracle input, not just the handoff .md files
+# that happened to surface the symptom.
+#
+# Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md
+* text=auto eol=lf

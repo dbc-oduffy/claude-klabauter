@@ -1,0 +1,282 @@
+"""deliverable_carry — deliverable_id/initiative-FK carry-or-mint cascade.
+
+Purpose: implements DR-207 DD#1's carry-not-remint rule — mint a stable opaque
+`deliverable_id` once at the earliest artifact for a piece of work and carry it
+verbatim by every downstream artifact, minting fresh only when no parent id is
+discoverable from context.
+
+Relocated verbatim (behaviour byte-identical) from
+`coordinator/bin/handoff-deliverable-carry.py`, where this cascade was correct
+but unimportable from the engine — `coordinator/bin/` scripts are not an
+importable package for `coordinator_core` callers, so this logic accumulated
+ZERO production callers despite being the canonical implementation. That
+bin/-only home is exactly the defect this plan (docs/plans/2026-08-01-
+deliverable-id-carry-onto-executing-handoff.md, chunk C1b) fixes: giving the
+cascade an engine-importable home lets `/handoff` and other in-process callers
+wire to it directly instead of shelling out.
+
+Cascade (mirrors the bash oracle verbatim — see the original SKILL.md block):
+  deliverable_id — 1. active plan's frontmatter `deliverable_id`
+                   2. predecessor handoff's frontmatter `deliverable_id`
+                   3. carry (mint(deliverable_id=...)) if either hit, else
+                      mint-from-slug (mint(slug="<YYYYMMDD>-<slug_suffix>"))
+  initiative     — 1. active plan's frontmatter `initiative`
+                   2. predecessor handoff's frontmatter `initiative` (fallback
+                      only; continuation handoffs inherit the predecessor's
+                      initiative FK when the plan doesn't carry one)
+
+Spec backlink: coordinator/skills/handoff/SKILL.md § Deliverable-spine threading
+               (D1 carry-not-remint) — example-doctrine-repo, C3d
+               docs/plans/2026-08-01-deliverable-id-carry-onto-executing-handoff.md
+               (DR-207 DD#1) — chunk C1b
+               docs/decisions/DR-207-deliverable-spine-initiative-entity.md DD#1
+               (earliest-artifact tiebreak)
+               coordinator_core/contract/commit-trailer-producer-contract.md § 1.2
+               (two independent producers of the same FK, and the value-divergence
+               hazard that spelling-only enforcement missed)
+
+Negative-spec: this is the ONLY implementation of the carry-or-mint cascade in
+this repo. Do not re-implement or fork a second copy of
+`resolve_deliverable_and_initiative`, `DroppedDeliverableJoinError`, or
+`DivergentDeliverableIdError` anywhere else — `coordinator/bin/handoff-
+deliverable-carry.py` imports from this module rather than carrying its own copy.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+import sys
+
+from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
+
+# Accepted `kind` values for a genuine roadmap stub, at the session-state
+# parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
+# `spinoff-roadmap` (along with `spinoff-goal` and `spinoff-roadmap-creator`)
+# from `properties.kind.enum`, replacing it with `roadmap-baton` — the live
+# corpus and `coordinator/bin/coordinator-doc-new`'s scaffolder both emit
+# `kind: roadmap-baton` now. `spinoff-roadmap` stays accepted here because
+# `handoff-archived.schema.json` was deliberately WIDENED in the same 4.0.0
+# change to admit both vocabularies (the archived corpus permanently retains
+# the historical name), so an archived roadmap stub a session still holds a
+# claim on legitimately carries the retired spelling. Both values denote the
+# same "is this a roadmap stub" fact — accepting both preserves the AC1/AC4b
+# false-merge guard in full while matching the schema's actual accepted
+# vocabulary. Do NOT add `spinoff-goal`/`goal-seed`/`spinoff-roadmap-creator`/
+# `roadmap-seed` here — those are a different artifact class, not a roadmap
+# stub, and must keep failing the AC4b false-merge check.
+#
+# Sourced from `baton_class.kind_values_for_canonical("roadmap-baton")`
+# rather than a hand-paired literal — that accessor returns exactly
+# `["roadmap-baton", "spinoff-roadmap"]` (the only pre-rename alias whose
+# target is `roadmap-baton`), so this is the same membership, derived from
+# the single owning table instead of re-declaring the retired/successor
+# pair here. See `coordinator_core/frontmatter/baton_class.py`'s "Vocabulary
+# bridge" section and
+# `coordinator_core/tests/test_baton_class_is_the_only_membership_set.py`.
+#
+# Review: coordinatorcode-reviewer-3e4f4e1b — this coupling is intended, made
+# explicit here rather than removed: a future `_PRE_RENAME_ALIASES` entry
+# targeting `roadmap-baton` widens this set automatically with no code change
+# at this call site, so `baton_class.py`'s own review discipline is now the
+# only gate on this membership.
+_ROADMAP_STUB_KINDS = frozenset(kind_values_for_canonical("roadmap-baton"))
+
+
+class DroppedDeliverableJoinError(RuntimeError):
+    """Raised when an active plan names no `deliverable_id` (absent field, unreadable
+    file, or literal `null` — all indistinguishable at this layer) and the predecessor
+    handoff's `deliverable_id` fallback also yields nothing.
+
+    This is distinct from the benign "no active plan / no predecessor at all" case
+    (nothing to carry from), which stays a silent mint-from-slug. This case has an
+    active plan in hand that dropped the join — it must fail loud, not degrade
+    silently into a fresh mint that severs the deliverable-spine thread.
+    """
+
+
+class DivergentDeliverableIdError(RuntimeError):
+    """Raised when the active plan AND the predecessor handoff both name a non-empty
+    `deliverable_id`, and the two values disagree.
+
+    This is the disagreement sibling of `DroppedDeliverableJoinError` (which catches
+    ABSENCE — neither rung has a value). This one catches PRESENCE-but-mismatch: both
+    rungs answered, and joining on either silently drops the other. Left unchecked,
+    `close_out_and_stamp` under-counts or zero-counts chunk evidence for whichever id
+    it isn't watching, and every consumer that joins on exact string equality
+    (rag/cockpit included) forks one deliverable into two entities — silently, in
+    every direction. See docs/decisions/DR-207-deliverable-spine-initiative-entity.md
+    DD#1 and coordinator_core/contract/commit-trailer-producer-contract.md § 1.2 (the
+    two-independent-producers hazard that ruling fixed for spelling but not value).
+
+    Per DR-207 DD#1: mint once at the earliest artifact and carry it verbatim — the
+    EARLIEST artifact's id wins. That is a fact about artifact history this function
+    cannot see; the plan/predecessor arguments it receives carry no timestamp or
+    provenance that would let it apply the tiebreak itself.
+
+    Negative-spec — do NOT make this function auto-pick a winner. Both plausible
+    auto-resolutions are wrong in some real case: always preferring the plan is
+    correct on the ordinary plan -> handoff edge, but wrong when a roadmap stub
+    predates the plan and the plan wrongly re-minted (the earliest artifact is then
+    the predecessor's id, not the plan's) — a live cross-repo incident, not a
+    hypothetical. Always preferring the predecessor is correct in that case but wrong
+    on the ordinary edge. There is no context-free rule that resolves both correctly;
+    only a human applying the earliest-artifact test to the actual artifact history
+    can. A future "helpful" simplification that picks either side by default silently
+    reintroduces the exact fork-into-two-entities failure this error exists to catch —
+    resist it. The fix here is to make the divergence impossible to miss, not to guess.
+    """
+
+
+def resolve_session_state_parent_deliverable_id(
+    read_frontmatter_field,
+    held_claim_path: "str | None",
+) -> "str | None":
+    """Session-state parent tier (AC1/AC2/AC3) — carries `deliverable_id` onto a
+    plan being scaffolded from a session-HELD roadmap stub (`kind` in
+    `_ROADMAP_STUB_KINDS`: `roadmap-baton` or the retired `spinoff-roadmap`),
+    never from the file being scaffolded itself.
+
+    ``held_claim_path`` is a caller-resolved path to whatever artifact the
+    running session's SESSION STATE names as held (see
+    `coordinator_core.session.claims.list_claims_by_session_checked` — the
+    CALLER's job, not this function's, mirroring `resolve_deliverable_and_
+    initiative`'s own contract of taking already-resolved `plan_file`/
+    `predecessor` paths rather than resolving them itself). This function
+    NEVER reads `predecessor_handoff` off the file being scaffolded — that
+    field is emitted commented out and hand-filled later, so a scaffold-time
+    read of it always finds nothing (the trap this tier exists to avoid).
+
+    Gate (AC1): the held claim's OWN frontmatter `kind` must be one of
+    `_ROADMAP_STUB_KINDS` (`roadmap-baton` — the live enum value — or the
+    retired `spinoff-roadmap`, still valid per `handoff-archived.schema.json`
+    and still present on archived stubs). Holding ANY claim is not evidence a
+    plan descends from it — an ordinary handoff/memo/plan baton unrelated to
+    the work being scaffolded must never be carried onto it (the false-merge
+    case AC4b pins). A resolved claim whose `kind` is something else (e.g.
+    plain `spinoff`, `handoff`, `session-handoff`) logs the rejected
+    candidate id on stderr and falls through to `None` (AC1).
+
+    Omit-rather-than-guess (AC3): no `held_claim_path`, an unreadable file, a
+    `kind` outside `_ROADMAP_STUB_KINDS`, or an absent/`null`/blank
+    `deliverable_id` on the held stub all return `None` — the caller then
+    falls through to mint-from-slug exactly as it did before this tier
+    existed. This function NEVER raises.
+
+    Error-policy choice, stated explicitly (this tier sits at the boundary
+    between two disagreeing module conventions): `resolve_deliverable_and_
+    initiative` below is fail-loud on `DivergentDeliverableIdError` because
+    that cascade sees TWO independently-authored rungs (plan + predecessor)
+    that can genuinely DISAGREE, and silently picking one would hide a real
+    provenance conflict. This tier sees at most ONE candidate value (the
+    single held claim, if any) — there is no second rung to disagree with,
+    so there is nothing to arbitrate and nothing a raise would protect. Every
+    failure mode here is a SOURCING ambiguity (wrong kind, absent field,
+    unreadable file), which is exactly the omit-rather-than-guess class this
+    plan's own AC3 commits to, not the divergent-values class
+    `DivergentDeliverableIdError` exists for. Deliberately never raises.
+
+    Logs the accept/reject outcome on stderr per DR-207 D1 (AC2) — the
+    caller separately logs the final carry-vs-mint decision via the existing
+    stderr convention once it acts on this function's return value.
+    """
+    if not held_claim_path or not os.path.isfile(held_claim_path):
+        return None
+
+    kind = read_frontmatter_field(held_claim_path, "kind")
+    if kind not in _ROADMAP_STUB_KINDS:
+        print(
+            "deliverable_carry: session-state parent tier — held claim "
+            f"{held_claim_path!r} has kind {kind!r}, not a roadmap stub kind "
+            f"({sorted(_ROADMAP_STUB_KINDS)!r}) — holding a claim is not "
+            "evidence this plan descends from it; rejecting as parent "
+            "candidate, falling through to mint-from-slug",
+            file=sys.stderr,
+        )
+        return None
+
+    dlvr_id = read_frontmatter_field(held_claim_path, "deliverable_id")
+    if not dlvr_id:
+        print(
+            "deliverable_carry: session-state parent tier — held roadmap stub "
+            f"{held_claim_path!r} (kind {kind!r}) carries no deliverable_id "
+            "(absent/null/blank) — falling through to mint-from-slug",
+            file=sys.stderr,
+        )
+        return None
+
+    print(
+        "deliverable_carry: session-state parent tier — held roadmap stub "
+        f"{held_claim_path!r} (kind {kind!r}) carries deliverable_id {dlvr_id!r} "
+        "— carrying",
+        file=sys.stderr,
+    )
+    return dlvr_id
+
+
+def resolve_deliverable_and_initiative(
+    read_frontmatter_field,
+    mint,
+    plan_file: str | None,
+    predecessor: str | None,
+    slug_suffix: str = "handoff",
+) -> tuple[str, str]:
+    """Run the carry-or-mint cascade. Returns (deliverable_id, initiative_id).
+
+    Mirrors the bash oracle's 3-step deliverable_id discovery order (active plan ->
+    predecessor handoff -> mint) and its 2-step initiative fallback (plan -> predecessor),
+    plus the carry/mint-from-slug stderr logging the oracle's inline comment documents.
+
+    Both the plan rung and the predecessor rung are read unconditionally (whenever
+    each source exists) BEFORE any carry/mint decision is made — this is the one site
+    in the engine that can see both values at once, so it is the only place a
+    divergence between them (see `DivergentDeliverableIdError`) can be caught at all.
+    Reading both does not change which value wins when they agree or when only one is
+    present: the plan rung still takes precedence over the predecessor rung, byte-
+    identical to the prior first-hit-wins cascade in every non-divergent case.
+    """
+    plan_active = bool(plan_file and os.path.isfile(plan_file))
+    predecessor_active = bool(predecessor and os.path.isfile(predecessor))
+
+    plan_dlvr_id = read_frontmatter_field(plan_file, "deliverable_id") if plan_active else ""
+    predecessor_dlvr_id = (
+        read_frontmatter_field(predecessor, "deliverable_id") if predecessor_active else ""
+    )
+
+    if plan_dlvr_id and predecessor_dlvr_id and plan_dlvr_id != predecessor_dlvr_id:
+        raise DivergentDeliverableIdError(
+            f"plan {plan_file!r} names deliverable_id {plan_dlvr_id!r}, but predecessor "
+            f"handoff {predecessor!r} names deliverable_id {predecessor_dlvr_id!r} — the "
+            "two rungs of the carry-or-mint cascade disagree. Per DR-207 DD#1: mint once "
+            "at the earliest artifact and carry it verbatim; the EARLIEST artifact's id "
+            "wins — resolve by hand which artifact came first. This function will not "
+            "auto-pick a winner (see DivergentDeliverableIdError's own docstring)."
+        )
+
+    dlvr_id = plan_dlvr_id or predecessor_dlvr_id
+
+    if not dlvr_id and plan_active:
+        raise DroppedDeliverableJoinError(
+            f"active plan {plan_file!r} names no deliverable_id (absent field, "
+            "unreadable file, or literal `null` — all indistinguishable at this layer), "
+            "and the predecessor handoff fallback also yielded nothing — refusing to "
+            "silently mint-from-slug under an active plan"
+        )
+
+    if dlvr_id:
+        result, path_label = mint(deliverable_id=dlvr_id)
+    else:
+        today_slug = f"{datetime.date.today().strftime('%Y%m%d')}-{slug_suffix}"
+        result, path_label = mint(slug=today_slug)
+
+    label_text = {
+        "carry": f"carry path — using existing id: {result}",
+        "mint-from-slug": f"mint-from-slug path — minted: {result}",
+    }.get(path_label, f"{path_label} path — {result}")
+    print(f"handoff-deliverable-carry: {label_text}", file=sys.stderr)
+
+    initiative_id = read_frontmatter_field(plan_file or "", "initiative")
+    if not initiative_id and predecessor and os.path.isfile(predecessor):
+        initiative_id = read_frontmatter_field(predecessor, "initiative")
+
+    return result, initiative_id

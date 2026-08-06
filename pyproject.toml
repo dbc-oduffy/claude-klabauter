@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coordinator_core"
+version = "0.1.0"
+description = "Command-type, spawn-per-call control-plane engine for the coordinator tri-plane (JSON-RPC 2.0 op registry + dispatch)."
+authors = [
+    { name = "Dónal example-operator" },
+]
+requires-python = ">=3.11"
+# Licence: Apache-2.0 with a Commons Clause rider (bars resale of the software
+# itself; does not restrict internal use, modification, or redistribution of
+# derivative works). No LICENSE file exists in-tree today -- the publish-time
+# mirror carries the authoritative LICENSE text (see the plan's C10 chunk and
+# DR-248) -- so this is deliberately the free-text form, not `license-files`,
+# and deliberately NOT a bare SPDX `"Apache-2.0"` string: that would misstate
+# the licence by omitting the rider. Treat the published LICENSE as
+# authoritative over this summary if the two ever appear to disagree.
+license = { text = "Apache-2.0 WITH a Commons Clause rider (source-available, not OSI-approved) -- see the published LICENSE file for the authoritative text." }
+classifiers = [
+    # Deliberately no OSI License :: OSI Approved classifier -- the Commons
+    # Clause rider means this is source-available, never "open source" or
+    # OSI-approved, and an OSI classifier would be a false statement.
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Development Status :: 4 - Beta",
+]
+urls = { Homepage = "https://github.com/dbc-example-operator/claude-klabauter", Repository = "https://github.com/dbc-example-operator/claude-klabauter" }
+dependencies = [
+    "pydantic>=2",
+    # psutil is the load-bearing mechanism for the Windows session-liveness path:
+    # pid_exists + Process.create_time() start-time identity, replacing the
+    # POSIX-only `ps` binary that is absent on native Windows
+    # (coordinator_core/session/core.py). Without it, every stable_pid session
+    # reads DEAD on Windows -> wrongful claim takeover.
+    "psutil>=5.9",
+    # jsonschema is the load-bearing in-process validator for the vendored
+    # cockpit-contract JSON Schema bundle (coordinator_core/ops/emit/validate.py
+    # validate_array + _validate_scoped_emission_per_repo) -- a language-neutral
+    # JSON Schema check with no Node runtime prerequisite.
+    "jsonschema>=4",
+    # PyYAML is imported unconditionally across dozens of non-test modules --
+    # the reconcile policy loader, commitments recheck, LoE thresholds, the
+    # subagent-sandbox engine and percolate store among them.
+    "PyYAML>=6",
+    # referencing and typing_extensions are each imported DIRECTLY by engine
+    # code (the per-entity schema Registry builder in
+    # coordinator_core/ops/emit/validate.py; the cockpit-contract entity
+    # models' Annotated types). Declared here because they are imported, not
+    # because they are currently reachable only transitively through
+    # jsonschema/pydantic.
+    "referencing>=0.30",
+    "typing_extensions>=4.14.1",
+]
+
+[project.optional-dependencies]
+# Test tooling for this package's own unit test suite (coordinator_core/).
+# Membership is evidence-based: the only third-party imports across
+# coordinator_core's test_*.py / conftest.py modules are pytest/_pytest plus
+# the runtime deps already declared above.
+#   - pytest-xdist: the documented fast-tier command runs with `-n auto`.
+#   - pytest-asyncio / pytest-randomly / pytest-timeout are deliberately
+#     ABSENT -- no async tests, no timeout marks, no seed configuration, and
+#     each is an auto-loading plugin that changes suite behavior on import.
+test = [
+    "pytest>=9.1",
+    "pytest-xdist>=3.8",
+]
+
+[project.scripts]
+# Console-script entrypoint, not a documented "import and call" API: this is a
+# command-type, spawn-per-call engine (no resident daemon) -- a downstream
+# consumer regenerating a cockpit-contract schema should spawn a command
+# rather than resolve this package's interpreter and import its internals.
+coordinator-cockpit-emit-schema = "coordinator_core.contract.cockpit_schema.emit_schema:main"
+
+[tool.setuptools.packages.find]
+# Explicit include, scoped to the package tree only.
+include = ["coordinator_core*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+# The published tree ships only `coordinator_core/` at the top level -- unlike
+# the source repo, there is no `coordinator/tests`, `coordinator/bin`,
+# `coordinator/lib`, `bin`, or `scripts` tree here to admit.
+testpaths = [
+    "coordinator_core",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "real_home: opt out of conftest.py's home-directory quarantine (live-tree parity oracles only; read-only)",
+    "allow_environ_leak: opt out of conftest.py's os.environ leak detector (tests that deliberately assert on process-wide env mutation ONLY)",
+    "cadence: heavy suite, runs at cadence gates, not per-commit",
+    "pending_fix: subject repo, known-broken path assumption -- excluded from tiers until fixed",
+    "designed_red: red by design; failure output is a worklist; never gate on it",
+]

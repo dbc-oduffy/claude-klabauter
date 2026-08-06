@@ -1,0 +1,5 @@
+# Importing _repo.py from the check scripts leaves bytecode here. It must never
+# be committed: a stale .pyc in a published mirror is confusing at best, and the
+# identity/secrets checks would have to special-case it.
+__pycache__/
+*.py[co]
