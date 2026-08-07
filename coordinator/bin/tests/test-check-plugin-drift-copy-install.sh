@@ -9,7 +9,7 @@
 # The test builds synthetic source git repos and synthetic live dirs to cover the
 # full AC-2 / AC-3 matrix without network or live-install side effects.
 #
-# Run: bash plugins/coordinator/bin/tests/test-check-plugin-drift-copy-install.sh
+# Run: bash plugins/coordinator-claude/coordinator/bin/tests/test-check-plugin-drift-copy-install.sh
 
 set -uo pipefail
 

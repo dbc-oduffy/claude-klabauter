@@ -13,7 +13,7 @@
 #
 # Spec backlink: docs/plans/2026-05-08-roadmap-skill-and-handoff-lifecycle.md § Phase 5
 #
-# Run: bash ~/.claude/plugins/coordinator/bin/tests/test-audit-roadmap-verdict-regex.sh
+# Run: bash ~/.claude/plugins/coordinator-claude/coordinator/bin/tests/test-audit-roadmap-verdict-regex.sh
 
 set -uo pipefail
 
