@@ -15,7 +15,7 @@ meaning.
 **coordinator-claude is a hard prerequisite, stated plainly: most mutating coordinator
 operations fail without this engine present, and this engine has nothing to control without
 coordinator-claude's doctrine, skills, and artifact-shape contract.** coordinator-claude is
-public at <https://github.com/dbc-example-operator/coordinator-claude>. Installing that repo and
+public at <https://github.com/dbc-oduffy/coordinator-claude>. Installing that repo and
 installing this one is one joint installation, not two independent ones — from a Claude Code
 session with coordinator-claude present, its setup flow walks the whole install chain and
 delegates here for this leg.

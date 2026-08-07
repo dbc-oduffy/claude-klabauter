@@ -39,7 +39,7 @@ legal or procurement team can file. It does not grant the right to Sell the Soft
 is still the paid channel below.
 
 To request one, [open a GitHub
-issue](https://github.com/dbc-example-operator/claude-klabauter/issues) with the label
+issue](https://github.com/dbc-oduffy/claude-klabauter/issues) with the label
 `internal-use-grant`, stating:
 
 1. The organisation name the grant should be issued to.
@@ -52,8 +52,8 @@ and using this engine, this exists precisely to remove it.
 ## Paid commercial redistribution licence
 
 For the resale cases the rider bars, [open a GitHub
-issue](https://github.com/dbc-example-operator/claude-klabauter/issues) with the label
-`commercial-license`, or contact Dónal example-operator directly.
+issue](https://github.com/dbc-oduffy/claude-klabauter/issues) with the label
+`commercial-license`, or contact Dónal O'Duffy directly.
 
 ## Why this model
 

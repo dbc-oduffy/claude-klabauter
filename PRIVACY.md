@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **claude-klabauter** — a control-plane engine by [Dónal
-Example-operator](https://github.com/dbc-example-operator)
+O'Duffy](https://github.com/dbc-oduffy)
 
 Last updated: 2026-08-02
 
@@ -43,9 +43,9 @@ local subprocess and is not an API client.
 
 This repository is **source-available** (Apache 2.0 with a Commons Clause rider — see
 `LICENSE`). Every claim above is auditable: read the code at
-[github.com/dbc-example-operator/claude-klabauter](https://github.com/dbc-example-operator/claude-klabauter).
+[github.com/dbc-oduffy/claude-klabauter](https://github.com/dbc-oduffy/claude-klabauter).
 
 ## Contact
 
 Questions about this policy: open an issue on the [GitHub
-repository](https://github.com/dbc-example-operator/claude-klabauter/issues).
+repository](https://github.com/dbc-oduffy/claude-klabauter/issues).

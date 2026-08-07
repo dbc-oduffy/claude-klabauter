@@ -123,7 +123,7 @@ These are the ones a first PR is most likely to trip over.
 
 `main` is protected. All changes land via PR.
 
-- **Maintainer approval required.** Every PR needs an approving review from @dbc-example-operator.
+- **Maintainer approval required.** Every PR needs an approving review from @dbc-oduffy.
   Approvals are dismissed when new commits are pushed.
 - **CI must pass.** Validation runs automatically on every PR
   (`python3 .github/scripts/run-all-checks.py` runs the same checks locally).

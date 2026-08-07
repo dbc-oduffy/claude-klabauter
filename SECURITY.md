@@ -19,7 +19,7 @@ The most recent release is supported. There is no long-term-support branch.
 Report privately first, please — do not open a public issue for an exploitable finding.
 
 Use GitHub's [private vulnerability
-reporting](https://github.com/dbc-example-operator/claude-klabauter/security/advisories/new) on this
+reporting](https://github.com/dbc-oduffy/claude-klabauter/security/advisories/new) on this
 repository. If that is unavailable to you, open an issue containing only a request for a
 private channel, with no technical detail.
 

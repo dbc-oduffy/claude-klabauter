@@ -7,7 +7,7 @@ name = "coordinator_core"
 version = "0.1.0"
 description = "Command-type, spawn-per-call control-plane engine for the coordinator tri-plane (JSON-RPC 2.0 op registry + dispatch)."
 authors = [
-    { name = "Dónal example-operator" },
+    { name = "Dónal O'Duffy" },
 ]
 requires-python = ">=3.11"
 # Licence: Apache-2.0 with a Commons Clause rider (bars resale of the software
@@ -30,7 +30,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Development Status :: 4 - Beta",
 ]
-urls = { Homepage = "https://github.com/dbc-example-operator/claude-klabauter", Repository = "https://github.com/dbc-example-operator/claude-klabauter" }
+urls = { Homepage = "https://github.com/dbc-oduffy/claude-klabauter", Repository = "https://github.com/dbc-oduffy/claude-klabauter" }
 dependencies = [
     "pydantic>=2",
     # psutil is the load-bearing mechanism for the Windows session-liveness path:
