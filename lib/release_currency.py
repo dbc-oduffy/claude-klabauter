@@ -310,7 +310,7 @@ def release_currency_probe(plugin: str, owner_repo: str, install_root: str) -> s
 
     Args:
         plugin       — plugin name (e.g. "coordinator" — informational, logging only)
-        owner_repo   — "owner/repo" (e.g. "dbc-example-operator/coordinator-claude")
+        owner_repo   — "owner/repo" (e.g. "dbc-oduffy/coordinator-claude")
         install_root — e.g. "$HOME/.claude/plugins/coordinator-claude/coordinator"
     """
     if not plugin:

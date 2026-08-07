@@ -231,10 +231,23 @@ def load_targets(
     machine-local registry root is `setup_dir.parent` (its
     `dirname "$SCRIPT_DIR"`).
 
+    `target_filter` accepts either a single target name (unchanged, prior
+    behavior) or a COMMA-SEPARATED list of names (task brief "Deliverable
+    1 — one invocation, all rows": lets a caller name every row of a
+    logical target — e.g. `claude-klabauter,claude-klabauter-bin,...` — in
+    one `load_targets` call instead of one process invocation per row).
+    Whitespace around each name is stripped; an empty filter (`""`, the
+    default) means unfiltered, exactly as before.
+
     Returns the resolved rows (list[str], `name|mode|ABSsource|ABSdest[...]`
     form) in first-tier-wins-on-name-collision order. Raises `TargetsError`
     (see class docstring for the `.code` 1/2 split) on any abort path.
     """
+    target_filter_set = (
+        frozenset(n.strip() for n in target_filter.split(",") if n.strip())
+        if target_filter
+        else frozenset()
+    )
     root = setup_dir.parent
     targets_file = setup_dir / "publish-targets.sh"
 
@@ -276,7 +289,7 @@ def load_targets(
 
     def rc1_skip_or_abort(raw_row: str, src: str) -> None:
         name = raw_row.split("|", 1)[0]
-        if target_filter and name != target_filter:
+        if target_filter_set and name not in target_filter_set:
             print(
                 f"[publish.sh] target '{name}' unresolvable (unset registry key) "
                 f"in {src} — skipping; not the filtered target '{target_filter}'.",

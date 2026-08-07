@@ -67,6 +67,44 @@ def load_ignore(path: Path | None) -> IgnoreMatcher:
 # ---------------------------------------------------------------------------
 # Skip rules common to both modes
 # ---------------------------------------------------------------------------
+# Structural build-artifact exclusion — the twin of `coordinator/bin/publish.py::
+# _is_structurally_never_published`'s `__pycache__`/`.pyc`/`.pyo` handling
+# (that function's own `_STRUCTURAL_NEVER_PUBLISHED_DIR_NAMES`/`_SUFFIXES`
+# comment carries the full rationale: these are locally-generated Python
+# bytecode artifacts, recreated by anything that RUNS Python in a
+# destination clone, never present in a restricted source tree, and never
+# something any row's sync copies — treating their mere presence at the
+# destination as an orphan-sweep signal is a false positive by construction.
+# Deliberately NOT sharing one Python object with publish.py's copy: that
+# function is keyed to a `(path, repo_root)` pair walking a FULL repo tree
+# (including `.git/`, which this module never syncs to/from and which
+# `_archived_or_orphan`'s dotfile-adjacent callers already keep out of scope
+# — see `_sync_mirror_top_level_files`'s `not p.name.startswith(".")` and the
+# orphan-sweep's own `non_dot_dst` filter), while this module's callers pass
+# POSIX-relative rel_path strings (sub-plugin-relative or bare top-level
+# names) with no `repo_root` in scope. Same `__pycache__`/`.pyc`/`.pyo`
+# vocabulary, kept identical char-for-char below; `.git` is intentionally
+# absent here because it can never appear as sync input in this module.
+_STRUCTURAL_BUILD_ARTIFACT_DIR_NAMES = ("__pycache__",)
+_STRUCTURAL_BUILD_ARTIFACT_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_structural_build_artifact(rel_path: str) -> bool:
+    """True iff `rel_path` (a POSIX-relative path, or a bare top-level
+    directory/file name) is a locally-generated Python build artifact that
+    must never count as orphaned, published, or deletable content — see the
+    module-level comment above this function for the full rationale and its
+    relationship to `coordinator/bin/publish.py::
+    _is_structurally_never_published`. Matches ANY path segment equal to
+    `__pycache__` (so a nested `sub/pkg/__pycache__/foo.pyc` is caught, not
+    just a top-level one) or a bare `.pyc`/`.pyo` suffix on the final
+    segment (the rare pre-`__pycache__`-layout stray bytecode file)."""
+    parts = rel_path.split("/")
+    if any(part in _STRUCTURAL_BUILD_ARTIFACT_DIR_NAMES for part in parts):
+        return True
+    return parts[-1].endswith(_STRUCTURAL_BUILD_ARTIFACT_SUFFIXES)
+
+
 def _archived_or_orphan(rel_path: str) -> bool:
     """Defense-in-depth filters that match bash logic verbatim.
 
@@ -78,6 +116,8 @@ def _archived_or_orphan(rel_path: str) -> bool:
         return True
     if rel_path.rsplit("/", 1)[-1] == ".orphaned_at":
         return True
+    if _is_structural_build_artifact(rel_path):
+        return True
     return False
 
 
@@ -87,24 +127,27 @@ def _archived_or_orphan(rel_path: str) -> bool:
 def _needs_copy(src: Path, dst: Path) -> bool:
     """Decide whether dst needs (re)copying from src.
 
-    Copy iff: dst missing, OR size differs, OR src mtime > dst mtime, OR
-    (size-equal AND mtime tie-or-older) AND bytes differ.
+    Copy iff: dst missing, OR size differs, OR (size-equal AND) bytes
+    differ. Content-only — deliberately NOT mtime-gated (§ removed
+    "src mtime > dst mtime" branch, task brief "Deliverable 3 — honest
+    change reporting"): source rows are materialized from a committed ref
+    via `git archive` + extraction (`publish.py::_extract_git_archive`),
+    so every source file's mtime is the extraction timestamp — always
+    "now", always newer than any prior destination file regardless of
+    whether the underlying bytes changed. An mtime-newer trigger therefore
+    logged `UPDATE:`/performed a copy on EVERY materialized row, every
+    run, even when the destination's tracked git diff was empty. Dropping
+    it makes this the same byte-identical-is-unchanged contract
+    `publish.py::files_differ` now holds, and is what makes `--delta`'s
+    destination-drift detection sound: an untouched destination stays
+    byte-identical across runs.
 
-    The trailing byte-compare is the content-aware fallback for the
-    same-size + not-newer minority — the silent-skip class the prior
-    mtime-only gate missed when a dest `git reset --hard` refreshed dest
-    mtimes and a same-byte-length content change (e.g. version bump
-    `2.5.1` → `2.7.0`) would otherwise be skipped.
-
-    Perf bound on this leg differs from the bash files_differ leg:
-    filecmp.cmp is an in-process read+memcmp with NO per-file subprocess
-    fork, so the 2026-05-20 Cygwin/MSYS heap-fragmentation incident (a
-    fork-storm class) cannot return here regardless of how many files
-    fall through. Cost in the pathological all-mtime-tie case (e.g. after
-    a dest hard-reset) is RAM/IO bound — for the coordinator main mirror
-    (~800 same-size files) that is ~800 in-process memcmps, tolerable.
-    Contrast: bash files_differ DOES fork cmp per file and relies on a
-    leg-size bound (~70 manifest entries) for its perf safety."""
+    Perf bound: filecmp.cmp is an in-process read+memcmp with NO per-file
+    subprocess fork, so the 2026-05-20 Cygwin/MSYS heap-fragmentation
+    incident (a fork-storm class) cannot return here regardless of how
+    many files fall through. Cost in the all-same-size case is RAM/IO
+    bound — for the coordinator main mirror (~800 same-size files) that
+    is ~800 in-process memcmps, tolerable."""
     if not dst.is_file():
         return True
     try:
@@ -120,9 +163,7 @@ def _needs_copy(src: Path, dst: Path) -> bool:
         return True
     if s_src.st_size != s_dst.st_size:
         return True
-    if s_src.st_mtime > s_dst.st_mtime:
-        return True
-    # Size-equal + mtime tie-or-older: bounded byte compare.
+    # Size-equal: bounded byte compare.
     # Zero-byte short-circuit: two empty files are always byte-equal.
     if s_src.st_size == 0:
         return False
@@ -526,7 +567,10 @@ def sync_mirror(
     # Distinct local name (orphan_name) so the outer loop's plugin_name is never
     # shadowed if this block is ever moved inside it.
     if dst_dir.is_dir():
-        non_dot_dst = [p for p in sorted(dst_dir.iterdir()) if p.is_dir() and not p.name.startswith(".")]
+        non_dot_dst = [
+            p for p in sorted(dst_dir.iterdir())
+            if p.is_dir() and not p.name.startswith(".") and not _is_structural_build_artifact(p.name)
+        ]
         orphans = [
             p for p in non_dot_dst
             if not (src_dir / p.name).is_dir() and p.name not in renamed_dir_names

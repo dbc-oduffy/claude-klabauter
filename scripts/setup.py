@@ -44,7 +44,7 @@ Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-al
   (this file replaces scripts/setup.sh + scripts/setup.ps1 — one cross-platform
   naked-Python installer instead of a bash/PowerShell twin pair, per the
   project's pure-Python-shop mandate; DR-047/DR-059).
-Spec backlink: ~/.claude/plugins/coordinator/docs/wiki/agent-install-contract.md
+Spec backlink: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/agent-install-contract.md
 Resolver reference: coordinator/lib/coordinator-claude-klabauter-root.sh (the CLAUDE_KLABAUTER_ROOT
   ladder the example-doctrine-repo command veneers + coordinator_core.invoke entrypoint share)
 
@@ -80,9 +80,14 @@ Negative-spec:
   script.
   Does NOT hardcode CLAUDE_KLABAUTER_ROOT — resolves via flag -> env -> repo-root ladder.
   Does NOT hardcode the coordinator-claude sibling-dir — resolves via
-  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> sibling-dir default,
-  so a packaging installer (e.g. Example-os-repo) can inject the location instead of
-  relying on side-by-side git clone placement.
+  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared .doe-root
+  pointer -> engine.working_repos.example_doctrine_repo registry key -> settings-home
+  .doe-root sentinel -> sibling-dir default, so a packaging installer (e.g.
+  example-os-repo) can inject the location instead of relying on side-by-side git
+  clone placement. The sibling-dir default is the only rung that guesses, and
+  it is existence-gated: an unverified guess comes back flagged in the source
+  string, never as if it had resolved. See `_resolve_coordinator_claude_root`
+  for each rung's rationale and precedence.
   Does NOT shell out to bash/PowerShell anywhere in this file — the whole
   installer is naked Python (subprocess is used only to invoke OTHER Python
   interpreters/venvs and the `machine-local` / `pip` executables).
@@ -823,37 +828,321 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
     print(f"  Or directly:  {engine_py} -m pip install {quote_specs(specs)}")
 
 
+def _is_publish_mirror(path: Path) -> bool:
+    """True iff `path` resolves under (or equals) any registered
+    `publish.mirrors.*.path` entry in the machine-local registry — the same
+    mechanism the cross-repo write guard uses to identify the mirror
+    (`coordinator_core.bash_guards._write_bump_applicability.
+    target_is_publish_destination`), reused rather than re-derived here.
+
+    Fails open (`False`) when `coordinator_core` is not importable yet (this
+    function may run before `sys.path` carries it — see call sites), when
+    the registry has no `publish.mirrors.*` entries at all (the OSS case,
+    a pure no-op), or on any other resolution failure."""
+    try:
+        from coordinator_core.bash_guards._write_bump_applicability import (
+            target_is_publish_destination,
+        )
+    except ImportError:
+        return False
+    try:
+        return target_is_publish_destination(str(path))
+    except Exception:
+        return False
+
+
+#: Structural markers under a example-doctrine-repo dev-clone's ``coordinator/`` that identify it as
+#: a real coordinator-claude source checkout. ANY one matching is sufficient.
+#:
+#: negative-spec: do NOT narrow this back to a single path. It was
+#: ``coordinator/CLAUDE.md`` alone until example-doctrine-repo retired that file (`e8f9051db`,
+#: "finish the coordinator/CLAUDE.md retirement and re-point every citation"), at
+#: which point the real dev clone stopped being recognised as a source checkout at
+#: all, `_resolve_coordinator_claude_root` fell through to a sibling-dir guess that
+#: does not exist, and `scripts/setup.py` aborted with exit 90 on every run. A
+#: one-file probe makes a sibling repo's ordinary retirement into our outage; the
+#: any-of set is the fix, so keep it plural.
+# Review: code-reviewer 2026-08-07 Finding 5 (P3) — split into distinctive
+# vs generic markers rather than one flat `any(...)` tuple. `commands/`,
+# `hooks/`, `skills/` are common-enough directory names that any ONE of them
+# existing under an arbitrary `coordinator/` subdirectory (not necessarily a
+# coordinator-claude checkout at all) was previously sufficient on its own
+# to satisfy `has_dev_clone_shape`. The distinctive markers stay
+# sufficient alone (they don't collide with an unrelated project's
+# scaffold); the generic ones now require at least 2-of-3 co-occurring —
+# this only narrows acceptance (a real coordinator-claude dev clone still
+# has all six), never widens it.
+_DEV_CLONE_DISTINCTIVE_MARKERS = (
+    "canonical-structure.yaml",
+    "artifact-shape-contract",
+    "cockpit-contract",
+)
+_DEV_CLONE_GENERIC_MARKERS = (
+    "commands",
+    "hooks",
+    "skills",
+)
+_DEV_CLONE_GENERIC_MIN_COUNT = 2
+
+
+def _looks_like_coordinator_claude_source(path: Path) -> bool:
+    """Positive evidence `path` is an actual coordinator-claude checkout,
+    either shape: the OSS mirror/source-clone shape (`.claude-plugin/
+    plugin.json` PLUS at least one of `commands/`, `hooks/` — plugin.json
+    alone does not distinguish a real source clone from a publish mirror,
+    which also ships plugin.json), or the example-doctrine-repo dev-clone shape
+    (`coordinator/CLAUDE.md`)."""
+    has_oss_shape = (path / ".claude-plugin" / "plugin.json").is_file() and (
+        (path / "commands").is_dir() or (path / "hooks").is_dir()
+    )
+    coordinator_dir = path / "coordinator"
+    has_distinctive_marker = coordinator_dir.is_dir() and any(
+        (coordinator_dir / marker).exists()
+        for marker in _DEV_CLONE_DISTINCTIVE_MARKERS
+    )
+    generic_marker_count = sum(
+        (coordinator_dir / marker).exists()
+        for marker in _DEV_CLONE_GENERIC_MARKERS
+    ) if coordinator_dir.is_dir() else 0
+    has_dev_clone_shape = has_distinctive_marker or generic_marker_count >= _DEV_CLONE_GENERIC_MIN_COUNT
+    return has_oss_shape or has_dev_clone_shape
+
+
+def _coordinator_root_from_settings_home() -> "Path | None":
+    """Read the coordinator-claude source root recorded in the settings home.
+
+    The settings home is the standing read surface for every resolved path (it
+    is durable and Anthropic-independent, unlike `~/.claude`), and it already
+    carries `machine-local/.doe-root` naming the example-doctrine-repo dev clone. This rung reads
+    it so the resolver stops guessing a sibling directory that was never where
+    the checkout lives on this machine.
+
+    Returns None when the sentinel is absent, empty, or does not resolve to a
+    directory that still looks like a source checkout — a stale sentinel must
+    fall through to the remaining rungs, never pin the resolver to a dead path.
+
+    negative-spec: this rung deliberately does NOT read
+    `publish.mirrors.coordinator_claude.path`. That key names a generated
+    downstream publish mirror, which `_is_publish_mirror` exists to reject; the
+    hard-dep gate has to walk the SOURCE checkout. The two being different
+    places on the same machine is the normal case, not a misconfiguration.
+    """
+    # Review: code-reviewer 2026-08-07 Finding 4 (P2) — narrowed from a bare
+    # `except Exception` so a broken resolution-machinery failure (an
+    # ImportError on `coordinator_core._settings_home`, or `settings_home()`
+    # itself misconfigured) surfaces instead of looking identical to "no
+    # sentinel recorded yet." Only the stale/absent-sentinel case (a missing
+    # file or an unreadable one) is meant to fall through silently to the
+    # sibling-dir rung; a resolver-machinery failure is printed to stderr
+    # before falling through, so it is visible without being fatal.
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        sentinel = settings_home() / "machine-local" / ".doe-root"
+    except Exception as exc:
+        # Kept non-fatal (print + None, not a re-raise): letting an
+        # ImportError/misconfiguration propagate here would abort the rest
+        # of setup over a rung that is itself best-effort (falls through to
+        # a sibling-dir guess). Printed so it is visible instead of looking
+        # identical to "no sentinel recorded yet" — see finding for the
+        # narrower alternative considered (letting it surface) and why this
+        # print-and-continue was picked instead.
+        print(f"[ADVISORY] settings-home resolution failed ({exc}); cannot read .doe-root sentinel.", file=sys.stderr)
+        return None
+    try:
+        if not sentinel.is_file():
+            return None
+        recorded = sentinel.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        print(f"[ADVISORY] could not read .doe-root sentinel at {sentinel} ({exc}).", file=sys.stderr)
+        return None
+    if not recorded:
+        return None
+    candidate = Path(recorded)
+    if not candidate.is_dir() or not _looks_like_coordinator_claude_source(candidate):
+        return None
+    return candidate
+
+
+def _coordinator_root_from_doe_root_pointer() -> "Path | None":
+    """Read the shared `.doe-root` pointer file via
+    `coordinator/lib/read_doe_root_pointer.py::coordinator_read_doe_root_pointer()`
+    — the durable settings-home sentinel first
+    (`${settings-home}/machine-local/.doe-root`), then the legacy cold-readable
+    fallback (`${CLAUDE_HOME:-$HOME}/.claude/.doe-root`).
+
+    Ranked ahead of BOTH the registry rung and the settings-home-only rung
+    below (2026-08-07, C1Cc): `setup.py` is the installer — it runs before any
+    registry has necessarily been populated on a fresh box, so a
+    registry-first ladder is backwards here specifically, unlike the
+    engine-side ladder `da7cd333a` established for `coordinator_core`. This
+    does NOT reverse that commit's decision: it ranked the registry rung
+    above the settings-home SENTINEL rung; this new rung is the shared
+    pointer read (sentinel + legacy fallback) placed ahead of both, not a
+    reordering of the two `da7cd333a` already ordered.
+
+    `coordinator/lib` is a stdlib-only, dependency-free module local to this
+    repo (mirrors the `sys.path.insert` pattern C1's landed ladder uses for
+    the same helper — see `coordinator/bin/lib/coordinator_registry.py::
+    _mp_doe_root_pointer_rung`), so importing it here does not violate this
+    script's bootstrap-before-deps-provisioned discipline.
+
+    Returns None when the pointer is empty, does not resolve to a directory,
+    or does not look like a real coordinator-claude source checkout — a
+    stale/foreign pointer must fall through to the remaining rungs, never pin
+    the resolver to a dead or wrong path. Fails open (prints an advisory,
+    returns None) if the helper itself is unimportable."""
+    lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "lib"
+    added = str(lib_dir) not in sys.path
+    if added:
+        sys.path.insert(0, str(lib_dir))
+    try:
+        from read_doe_root_pointer import coordinator_read_doe_root_pointer
+    except Exception as exc:
+        print(f"[ADVISORY] could not import read_doe_root_pointer helper ({exc}); skipping .doe-root pointer rung.", file=sys.stderr)
+        return None
+    finally:
+        if added:
+            try:
+                sys.path.remove(str(lib_dir))
+            except ValueError:
+                pass
+    try:
+        recorded = coordinator_read_doe_root_pointer()
+    except Exception as exc:
+        print(f"[ADVISORY] .doe-root pointer read failed ({exc}).", file=sys.stderr)
+        return None
+    if not recorded:
+        return None
+    candidate = Path(recorded)
+    if not candidate.is_dir() or not _looks_like_coordinator_claude_source(candidate):
+        return None
+    return candidate
+
+
+def _coordinator_root_from_registry() -> "Path | None":
+    """Read `engine.working_repos.example_doctrine_repo` — the DR-132-ratified registry
+    namespace each repo's own installer writes as an identity assertion for
+    "where is a coordinator-claude WORKING checkout" — via
+    `coordinator_core.machine_resolver.registry_get` (never a `machine-local`
+    subprocess shell-out; C1b's engine-side twin in
+    `coordinator_core.ops.setup_chain_walker._resolve_coordinator_root_ladder`
+    uses the same seam).
+
+    The raw registered value is a repo root whose plugin source lives one
+    directory down (verified live: it carries no `.claude-plugin/plugin.json`,
+    no `commands/`, no `hooks/` at its own top level), so it is passed through
+    C1a's shape derivation (`_resolve_plugin_root_for_machine_local`, this
+    file's thin wrapper over `coordinator_core.coordinator_root`) before being
+    offered as a candidate — mirroring the engine-side twin exactly.
+
+    Fails open (`None`) on an absent key, an empty value, or a derivation that
+    returns `None` — the caller falls through to the next rung, never treats a
+    registry miss as an error.
+
+    Imported in-function, not at module scope: this script is the bootstrap
+    installer and runs before `coordinator_core`'s third-party deps are
+    provisioned (same discipline as `_resolve_plugin_root_for_machine_local`
+    above)."""
+    from coordinator_core.machine_resolver import registry_get
+
+    registry_val = registry_get("engine.working_repos.example_doctrine_repo")
+    if not registry_val:
+        return None
+    return _resolve_plugin_root_for_machine_local(Path(registry_val))
+
+
 def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path, str]:
     """Resolve the coordinator-claude sibling root and describe the source
-    used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> sibling-
-    dir default. Shared by `check_coordinator_claude_dep` and
-    `register_claude_klabauter_root` so both resolve the SAME candidate root
+    used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared
+    .doe-root pointer (durable + legacy) -> engine.working_repos.example_doctrine_repo
+    registry key -> settings-home .doe-root sentinel -> sibling-dir default
+    (now honesty-gated, see below). Shared by `check_coordinator_claude_dep`
+    and `register_claude_klabauter_root` so both resolve the SAME candidate root
     regardless of whether the (hard) dep-check ran (e.g. --skip-dep-check) —
     Review: code-reviewer 2026-07-21 Finding 3 (P1), extracted so
     `register_claude_klabauter_root` can resolve a plugin_root for
-    `resolve_machine_local_cli` without duplicating this ladder."""
+    `resolve_machine_local_cli` without duplicating this ladder.
+
+    Pointer rung (2026-08-07, C1Cc): `_coordinator_root_from_doe_root_pointer`
+    outranks the registry rung specifically for this installer — see that
+    function's docstring for why (setup.py runs before a registry is
+    necessarily populated). It does NOT reverse the ordering `da7cd333a`
+    established between the registry rung and the settings-home sentinel
+    rung; those two keep their relative order below it.
+
+    Registry rung (2026-08-07, DR-132): `engine.working_repos.example_doctrine_repo` is
+    the generic, cross-fleet answer to "where is a coordinator-claude WORKING
+    checkout" — each repo's own installer writes it as an identity assertion.
+    It outranks the `.doe-root` sentinel (a locally-recorded breadcrumb) and
+    the sibling-dir default (merely a directory that happens to sit next
+    door): better evidence outranks weaker evidence. Explicit operator
+    overrides (flag/env) still outrank everything, including the registry.
+    On a box where BOTH a registered working checkout and a sibling dir
+    exist, this CHANGES which one wins — that is the intended fix, not a
+    side effect. See `_coordinator_root_from_registry` for the read/derive
+    mechanics.
+
+    Defect fix 2026-08-07: the sibling-dir default is NOT accepted blind —
+    `coord_source` is suffixed ` [PUBLISH MIRROR -- REJECTED]` whenever the
+    resolved candidate (from ANY rung, including the registry rung and an
+    explicit override) is a registered `publish.mirrors.*.path` entry (a
+    generated downstream copy, never the source checkout the hard-dep gate
+    must walk). This function still returns the candidate path
+    unconditionally — callers that need to fail loud on the rejection
+    (`check_coordinator_claude_dep`) inspect the suffix; callers that merely
+    display the source (this docstring's own callers) surface the rejection
+    in their own printed diagnostics for free.
+
+    Defect fix 2026-08-07 (C1Cc): the sibling-dir default previously
+    fabricated a guess and returned it whether or not it existed on disk —
+    the ONLY rung in this ladder with no failure path at all, a silent
+    wrong-answer hazard on a clean OSS box where the guessed sibling
+    directory does not exist. It is now `os.path.isdir`-verified; when the
+    guess does not exist, `coord_source` is suffixed
+    ` [UNRESOLVED -- PATH DOES NOT EXIST]` (same signalling convention as the
+    publish-mirror rejection above) instead of being returned as if it were a
+    verified answer. The path itself is still returned unconditionally (same
+    contract as every other rung) so existing callers that print/inspect
+    `coord_path` keep working; `check_coordinator_claude_dep` already fails
+    loud with an actionable git-clone remediation whenever
+    `_looks_like_coordinator_claude_source(coord_path)` is False, which an
+    unresolved guess always is."""
+    doe_root_pointer_root = _coordinator_root_from_doe_root_pointer()
+    registry_root = _coordinator_root_from_registry()
+    settings_home_root = _coordinator_root_from_settings_home()
     if args.coordinator_root:
-        return Path(args.coordinator_root), "--coordinator-root flag"
-    if os.environ.get("COORDINATOR_CLAUDE_ROOT"):
-        return Path(os.environ["COORDINATOR_CLAUDE_ROOT"]), "COORDINATOR_CLAUDE_ROOT env"
-    return repo_root.parent / "coordinator-claude", "sibling-dir default"
+        candidate, source = Path(args.coordinator_root), "--coordinator-root flag"
+    elif os.environ.get("COORDINATOR_CLAUDE_ROOT"):
+        candidate, source = Path(os.environ["COORDINATOR_CLAUDE_ROOT"]), "COORDINATOR_CLAUDE_ROOT env"
+    elif doe_root_pointer_root is not None:
+        candidate, source = doe_root_pointer_root, "shared .doe-root pointer"
+    elif registry_root is not None:
+        candidate, source = registry_root, "engine.working_repos.example_doctrine_repo registry key"
+    elif settings_home_root is not None:
+        candidate, source = settings_home_root, "settings-home .doe-root sentinel"
+    else:
+        candidate = repo_root.parent / "coordinator-claude"
+        source = "sibling-dir default"
+        if not os.path.isdir(candidate):
+            source = f"{source} [UNRESOLVED -- PATH DOES NOT EXIST]"
+    if _is_publish_mirror(candidate):
+        source = f"{source} [PUBLISH MIRROR -- REJECTED]"
+    return candidate, source
 
 
 def _resolve_plugin_root_for_machine_local(coord_path: Path) -> Path | None:
-    """Map a resolved coordinator-claude root onto the `plugin_root` shape
-    `coordinator_core.install._shared.resolve_machine_local_cli` expects
-    (the dir directly containing `templates/bin/_machine_local.py` and
-    `bin/machine-local`) — a coordinator-claude root can be shaped two ways:
-    (a) the OSS mirror clone, plugin_root == coord_path itself, or (b) a example-doctrine-repo
-    dev-clone, where the coordinator plugin source (and its bin/) lives
-    under a `coordinator/` subdir. Returns None if neither shape matches,
-    in which case `resolve_machine_local_cli` falls back to an on-PATH
-    lookup only."""
-    if (coord_path / "coordinator" / "CLAUDE.md").is_file():
-        return coord_path / "coordinator"
-    if (coord_path / ".claude-plugin" / "plugin.json").is_file():
-        return coord_path
-    return None
+    """Thin wrapper over `coordinator_core.coordinator_root`'s implementation
+    (moved there so it's importable from a stdlib-only module — see that
+    module's docstring). Imported INSIDE the function, not at module scope:
+    this script is the bootstrap installer and runs before `coordinator_core`'s
+    third-party deps are provisioned, mirroring the established pattern at
+    this file's `_ensure_venv`-adjacent call site."""
+    from coordinator_core.coordinator_root import (
+        _resolve_plugin_root_for_machine_local as _impl,
+    )
+
+    return _impl(coord_path)
 
 
 #: repo_root/AGENTS.md's first line in a claude-klabauter clone -- the
@@ -935,14 +1224,37 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     print(f"coordinator-claude root source: {coord_source}")
     print(f"coordinator-claude candidate: {coord_path} (source: {coord_source})")
 
+    if "[PUBLISH MIRROR -- REJECTED]" in coord_source:
+        print(
+            f"ERROR [hard] coordinator-claude — {coord_path} is a registered PUBLISH MIRROR "
+            f"(publish.mirrors.*.path), not the source checkout (exit {EXIT_HARD_DEP_MISSING})",
+            file=sys.stderr,
+        )
+        print("  A publish mirror is a generated downstream copy — the hard-dep gate must walk", file=sys.stderr)
+        print("  the real coordinator-claude SOURCE checkout, never a mirror.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  Point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at the actual working checkout", file=sys.stderr)
+        print("  (an OSS source clone not registered under publish.mirrors.*.path, or a example-doctrine-repo-style", file=sys.stderr)
+        print("  dev clone with <root>/coordinator/CLAUDE.md).", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
+        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
+        print(file=sys.stderr)
+        sys.exit(EXIT_HARD_DEP_MISSING)
+
     # functional_probe: a "coordinator-claude" root can be shaped two ways —
     # (a) the OSS mirror clone, which carries .claude-plugin/plugin.json at its
-    #     root, or (b) a example-doctrine-repo dev-clone (e.g. Example-doctrine-repo), where the coordinator
-    #     plugin source lives under a coordinator/ subdir and CLAUDE.md marks it
-    #     (coordinator/CLAUDE.md). Both are valid, functioning coordinator-claude
-    #     roots -- PASS if either probe file is present. A single hardcoded probe
-    #     path here previously false-WARNed on the dev-clone shape (F9).
-    if (coord_path / ".claude-plugin" / "plugin.json").is_file() or (coord_path / "coordinator" / "CLAUDE.md").is_file():
+    #     root PLUS commands/ or hooks/ (plugin.json alone does not distinguish
+    #     a real source clone from a publish mirror, which also ships
+    #     plugin.json — the mirror-rejection check above is what actually
+    #     closes that gap; this shape check is the positive-evidence floor for
+    #     everything else), or (b) a example-doctrine-repo dev-clone (e.g. Example-doctrine-repo), where the
+    #     coordinator plugin source lives under a coordinator/ subdir and
+    #     CLAUDE.md marks it (coordinator/CLAUDE.md). Both are valid,
+    #     functioning coordinator-claude roots -- PASS if either shape
+    #     matches. A single hardcoded probe path here previously false-WARNed
+    #     on the dev-clone shape (F9).
+    if _looks_like_coordinator_claude_source(coord_path):
         print(f"PASS [hard] coordinator-claude — present at {coord_path}")
         return
 
@@ -952,7 +1264,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     print(file=sys.stderr)
     if coord_source == "sibling-dir default":
         print("  To install coordinator-claude:", file=sys.stderr)
-        print(f"    git clone https://github.com/dbc-example-operator/coordinator-claude {coord_path}", file=sys.stderr)
+        print(f"    git clone https://github.com/dbc-oduffy/coordinator-claude {coord_path}", file=sys.stderr)
     else:
         print(f"  coordinator-claude not found at the provided --coordinator-root/COORDINATOR_CLAUDE_ROOT location: {coord_path}", file=sys.stderr)
     print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
@@ -1114,7 +1426,7 @@ def register_claude_klabauter_root(
             print(f"  Tried to register: {claude_klabauter_root_resolved}", file=sys.stderr)
             print("  Remediation: run manually:", file=sys.stderr)
             print(f"    machine-local set {key} {claude_klabauter_root_resolved}", file=sys.stderr)
-            print("  Reference: ~/.claude/plugins/coordinator/lib/coordinator-claude-klabauter-root.sh", file=sys.stderr)
+            print("  Reference: ~/.claude/plugins/coordinator-claude/coordinator/lib/coordinator-claude-klabauter-root.sh", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {claude_klabauter_root_resolved}")
     return claude_klabauter_root_resolved
@@ -1292,6 +1604,127 @@ def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) ->
         )
         print(f"  Re-run manually: {engine_py} {cli} {repo_root}", file=sys.stderr)
         # Non-fatal: setup must still complete even if this step failed.
+
+
+def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: lands the `<settings-home>/bin`
+    agent-helper forwarders (`coordinator_core.install.substrate`'s
+    `_install_bin_resolvers` leg) via that module's own `--setup-only` CLI
+    mode.
+
+    Root-cause fix, 2026-08-07 (`check-auto-memory-drained` un-runnable at
+    its documented settings-home invocation): this script's Responsibilities
+    1-6 never included the bin-forwarder install at all -- Responsibility 5
+    (health probe) reads `bin/claude-klabauter-doctor-probe.py` but never WRITES the
+    forwarder set, and `_install_bin_resolvers` (substrate.py) was reached
+    ONLY by the separate `install-maximalist` chain (`/coordinator:setup`).
+    A box whose only "reinstall" has ever been `scripts/setup.py` therefore
+    never gets `coordinator/bin/*` forwarded into settings-home/bin at all --
+    any correctly-declared entry there, not just this one file. Confirmed
+    live: `check-auto-memory-drained.py` (added 2026-07-31, `4123af7d4`) was
+    absent from settings-home/bin despite `python3 scripts/setup.py
+    --i-am-agent` having been run same-day per
+    `state/audits/2026-08-07-claude-klabauter-install-dogfood-friction.md` line 14; the
+    two forwarders that WERE present (`lessons-outbox-drain`,
+    `probe-memory-headroom`) both predate that gap (added 2026-07-22 bulk
+    adoption, `8a28a6cac`) and are residue of an earlier `install-maximalist`
+    run, not evidence this script ever reached the leg.
+
+    `--setup-only` (substrate.py's own CLI flag, previously wired to nothing
+    but `install-maximalist`'s full `run(setup_only=False, ...)` call) is the
+    right-sized leg here: it lands the machine-local + bin-resolver substrate
+    (Steps 1-3, C10a venv/whoami, seed-wikis) and explicitly skips the
+    heavier fnm/Windows-machine-env steps (`_fnm_step`, `_windows_health_steps`)
+    that belong to the full maximalist chain, not this standalone installer's
+    scope (see module docstring's Negative-spec on `--with-test-deps` for the
+    same "engine, not the dev loop" boundary).
+
+    Best-effort/advisory, mirroring `install_precommit_hook`'s shape: a
+    substrate failure here must not abort the rest of setup (the same
+    reasoning as that function's own docstring), and this whole step is
+    skipped under `--register-only` (no coordinator-claude/plugin-root
+    resolution attempted in that mode, matching the other post-registration
+    steps it sits beside in `main`).
+    """
+    print()
+    print("--- Install: settings-home bin/ forwarders (coordinator/bin/*) ---")
+
+    coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
+    if "[PUBLISH MIRROR -- REJECTED]" in coord_source:
+        print("[ADVISORY] coordinator-claude root resolved to a publish mirror — skipping bin-forwarder install.", file=sys.stderr)
+        return
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    if plugin_root is None or not (plugin_root / "templates").is_dir():
+        print(
+            f"[ADVISORY] coordinator-claude plugin root not resolvable from {coord_path} "
+            "(no templates/ dir) — skipping bin-forwarder install.",
+            file=sys.stderr,
+        )
+        return
+
+    env = dict(os.environ)
+    env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
+    env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
+
+    # Review: code-reviewer 2026-08-07 Finding 2 (P2) — mirror
+    # install_precommit_hook's try/except-around-subprocess.run shape so a
+    # child-spawn failure (transient engine_py unavailability, OSError/
+    # PermissionError, a locked/broken interpreter path on Windows)
+    # downgrades to an ADVISORY like every other failure branch in this
+    # function, instead of propagating and aborting the rest of setup.
+    try:
+        proc = subprocess.run(
+            [engine_py, "-m", "coordinator_core.install.substrate", "--setup-only"],
+            cwd=str(claude_klabauter_root_resolved),
+            env=env,
+            capture_output=True, text=True,
+            **_NO_CONSOLE,
+        )
+    except OSError as exc:
+        print(
+            f"[ADVISORY] settings-home bin/ forwarder install could not even be spawned ({exc}) — "
+            "some coordinator/bin/ CLIs may be unreachable at their documented settings-home path.",
+            file=sys.stderr,
+        )
+        print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
+              f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
+        return
+    output = (proc.stdout + proc.stderr).strip()
+    if not args.agent_mode and output:
+        print(output)
+    if proc.returncode != 0:
+        print(
+            "[ADVISORY] settings-home bin/ forwarder install reported a non-zero exit — "
+            "some coordinator/bin/ CLIs may be unreachable at their documented settings-home path.",
+            file=sys.stderr,
+        )
+        print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
+              f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
+        # Non-fatal: setup must still complete even if this step failed.
+        return
+
+    # Review: code-reviewer 2026-08-07 Finding 3 (P2) — a 0 exit code alone
+    # doesn't prove a forwarder actually landed on disk (the exact
+    # "verifier reporting success while looking at nothing" shape this
+    # commit exists to fix); cheaply confirm settings-home/bin actually
+    # received at least one forwarder rather than trusting the child's exit
+    # code unconditionally.
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        bin_dir = settings_home() / "bin"
+        landed = bin_dir.is_dir() and any(bin_dir.iterdir())
+    except Exception:
+        landed = None
+    if landed is False:
+        print(
+            "[ADVISORY] settings-home bin/ forwarder install exited 0 but "
+            f"{bin_dir} is empty or missing — no coordinator/bin/ CLIs appear "
+            "to have landed.",
+            file=sys.stderr,
+        )
+        print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
+              f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
 
 
 def _derive_identity_hints(repo_root: Path) -> dict[str, str]:
@@ -1572,6 +2005,7 @@ def main(argv: list[str]) -> int:
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
 
     if not args.register_only:
+        install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)

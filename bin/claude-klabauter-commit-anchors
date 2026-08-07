@@ -10,8 +10,15 @@ malformed, or any exception fires, this script prints NOTHING and exits 0 — a 
 never be wedged by claude-klabauter being down.
 
 Inputs:
-  CLAUDE_SESSION_ID          — session id (primary); fall back to CLAUDE_CODE_SESSION_ID
-                               or the .git sentinel file.  If none resolves, exit 0 silently.
+  COORDINATOR_SESSION_ID     — session id (explicit test override, highest precedence);
+                               fall back to CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID
+                               (KS-6, 2026-08-07 — widened to match the canonical
+                               coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder;
+                               see that constant's docstring for the prior break-class
+                               defect two disagreeing copies of this ladder caused).
+                               If none resolve, exit 0 silently. (The .git sentinel-file
+                               fallback tier was REMOVED 2026-08-07, KS-1 — see
+                               _resolve_session_id's own docstring.)
   CLAUDE_KLABAUTER_COMMIT_NATURE       — optional nature string (e.g. "infra", "fix", "roadmap")
   --nature <str>             — CLI alternative to CLAUDE_KLABAUTER_COMMIT_NATURE (env wins if both set)
 
@@ -114,38 +121,40 @@ def _git_common_dir(repo_root: str) -> Optional[str]:
 
 # ---------------------------------------------------------------------------
 # Session ID resolution
-# Precedence:  CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID → sentinel file
+# Precedence:  COORDINATOR_SESSION_ID → CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID
+# (KS-6, 2026-08-07 — widened to match the canonical
+# coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder; this script
+# runs in example-doctrine-repo's git-hook context and invokes claude-klabauter only via the
+# subprocess command entrypoint, so it keeps a hand-mirrored env-var-only
+# copy rather than importing coordinator_core directly — a change to the
+# canonical ladder must be mirrored here too.)
 # ---------------------------------------------------------------------------
 
 
 def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = None) -> Optional[str]:
-    """Resolve the current session ID from env vars or the .git sentinel.
+    """Resolve the current session ID from env vars only.
 
-    The sentinel file lives in the git COMMON directory, not the worktree's .git path.
-    For a linked worktree, <worktree>/.git is a file (gitdir pointer), not a directory;
-    traversing it as a directory raises NotADirectoryError. We use common_dir (already
-    resolved by _git_common_dir) so the sentinel is always found regardless of worktree type.
-
-    Review: code-reviewer — F7: resolve sentinel via git common dir, not <worktree>/.git,
-    so linked-worktree commits are correctly stamped (silently dead before this fix).
+    The `.git/coordinator-sessions/.current-session-id` sentinel-file fallback
+    tier was REMOVED 2026-08-07 (KS-1), not merely gated. Two independent
+    reasons: (1) it is unsound by construction under this fleet's
+    concurrency — documented last-writer-wins in
+    `coordinator_core/bash_guards/guard_inprocess_search.py` ~L84 — ~18
+    concurrent sessions on one shared worktree means even a freshly-written
+    sentinel hands session A the id of whichever session wrote last; (2) its
+    writer was `session-init.py` (example-doctrine-repo SessionStart hook), deleted by
+    PM directive 2026-07-15 ("full-kill-keep-fast-orientation") — no
+    production writer survives anywhere, contrary to this module's earlier
+    "written by session-init.sh SessionStart hook" comment. `repo_root` and
+    `common_dir` are retained as parameters for call-site compatibility but
+    are unused now that the sentinel tier is gone.
     """
     sid = (
-        os.environ.get("CLAUDE_SESSION_ID", "").strip()
+        os.environ.get("COORDINATOR_SESSION_ID", "").strip()
+        or os.environ.get("CLAUDE_SESSION_ID", "").strip()
         or os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     )
     if sid:
         return sid
-    # Sentinel file fallback (written by session-init.sh SessionStart hook).
-    # Use common_dir (git common dir) — not <repo_root>/.git — so linked worktrees work.
-    sentinel_base = common_dir or (str(Path(repo_root) / ".git") if repo_root else None)
-    if sentinel_base:
-        try:
-            sentinel = Path(sentinel_base) / "coordinator-sessions" / ".current-session-id"
-            val = sentinel.read_text(encoding="utf-8").strip()
-            if val:
-                return val
-        except Exception:  # noqa: BLE001
-            pass
     return None
 
 

@@ -12,13 +12,13 @@ sourced-lib boolean primitive) paid the bash-invocation tax on every call and
 degrades Windows. This port preserves the bash original's SELF-CONTAINMENT
 deliberately: the bash oracle resolved the meta-repo root by shelling out to
 this repo's own `claude-home/claude-home dir` — a example-doctrine-repo-local resolver with no
-CLAUDE_KLABAUTER_ROOT / claude-klabauter dependency — never the claude-klabauter checkout. A
-sibling native module exists on the claude-klabauter side
+CLAUDE_KLABAUTER_ROOT / engine-repo dependency — never the engine checkout. A
+sibling native module exists on the engine side
 (`coordinator_core.meta_repo_identity.is_meta_repo`, authored explicitly as
 "the Python-native peer of example-doctrine-repo's coordinator-is-meta-repo.sh" for a future
 gated adoption wave) but importing it here would introduce a bootstrap
 coupling this primitive never had: CLAUDE_KLABAUTER_ROOT must already resolve to a
-real claude-klabauter checkout with `coordinator_core` importable just to
+real engine checkout with `coordinator_core` importable just to
 answer "is cwd the meta-repo?" — a question this file's own callers
 (coordinator_state_root's Rule 5, and coordinator_doe_root's bootstrap
 ladder) ask BEFORE CLAUDE_KLABAUTER_ROOT is necessarily known. Reusing the example-doctrine-repo-local
@@ -33,7 +33,7 @@ Design (mirrors the shell original):
     `claude-home dir` subprocess call, now an in-process import) —
     honours CLAUDE_HOME overrides for test sandboxes and CI.
   - Canonicalized: both sides go through `Path.resolve()` (realpath) before
-    comparison, to survive symlinked paths and /c/ vs C:\\ mismatches.
+    comparison, to survive symlinked paths and POSIX-vs-drive-letter mismatches.
   - Fail-loud: exits 2 + remediation message on stderr when git root is
     empty or unresolvable (detect-then-fail-loud, not detect-then-silently-
     pick).
@@ -101,9 +101,14 @@ def _resolve_git_root(git_root: Optional[str]) -> str:
             capture_output=True,
             text=True,
             check=False,
-            # popup-intentional-last-resort: git.exe is GUI-subsystem
-            # (exempt from the CREATE_NO_WINDOW discipline per the
-            # console-subprocess guidance this repo follows).
+            # The "git.exe is GUI-subsystem" premise this escape used to rest
+            # on was measured and refuted 2026-08-07 (see
+            # state/audits/2026-08-07-git-console-allocation-measurement.md,
+            # the engine repo): a console-subsystem git.exe from a
+            # console-less parent allocates a visible ConsoleWindowClass
+            # window in ~50ms, and pipe redirection does not suppress it.
+            # Applying the real fix instead of the escape.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError as exc:
         raise RuntimeError(
