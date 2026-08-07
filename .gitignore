@@ -1,0 +1,27 @@
+# .gitignore for the claude-klabauter published repo root.
+#
+# Shipped FROM `dist/klabauter-toplevel/` via the `claude-klabauter-publish-repo-toplevel`
+# flat-mirror row (publish-targets.portable) -- see the sibling `.percolate-ignore` in this
+# directory for why it moved here instead of staying an (never-authored) destination-native
+# file. Fixes the unscanned-published-check noise measured live (499 findings, all
+# `__pycache__/*.pyc`, on one real `claude-klabauter-publish-repo-toplevel` run): anything
+# that runs Python inside a fresh clone of the published repo (pytest, a stray `python -m`)
+# accumulates untracked bytecode-cache noise otherwise.
+
+# --- Python build artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# --- Editor / OS detritus ---
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+.DS_Store
+Thumbs.db
+desktop.ini

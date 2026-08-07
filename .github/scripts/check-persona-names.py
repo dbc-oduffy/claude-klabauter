@@ -18,10 +18,12 @@ published bytes, not hypothesised. Two consequences shaped the matcher below:
    token. The upstream glued-identifier rewrite only matches underscore forms,
    so a hyphenated role id passes straight through it.
 2. Token boundaries here are ALPHANUMERIC boundaries, not ``\\b``. ``\\b``
-   treats ``_`` as a word character, so ``\\bmakima\\b`` does not match
-   ``test_makima_doctor.py`` — which is exactly the shape the leak takes in file
-   NAMES once file CONTENT has been rewritten. Paths are scanned as well as
-   contents for the same reason.
+   treats ``_`` as a word character, so ``\\bcodename\\b`` does not match
+   ``test_codename_doctor.py`` — which is exactly the shape the leak takes in
+   file NAMES once file CONTENT has been rewritten. Paths are scanned as well
+   as contents for the same reason. (This paragraph deliberately uses a stand-in
+   token: spelling a real codename here would itself be the residual this file
+   exists to catch, and did ship that way until 2026-08-07.)
 
 THE IDENTITY SPLIT
 ------------------
@@ -164,12 +166,14 @@ SURNAME_RE = re.compile(r"O['’]Duffy", re.IGNORECASE)
 # Handle in URL form, or in `owner/repo` slug form (clone/badge instructions).
 # A bare handle with no slug is NOT permitted — that is the blanket-allow the
 # split exists to avoid.
-HANDLE_URL_RE = re.compile(r"github\.com/dbc-oduffy(?:/[\w.\-]+)*", re.IGNORECASE)
-# (?<!/) excludes a slug preceded by another slash — a home-directory path of
-# the shape "/<something>/dbc-oduffy/<segment>" must NOT be treated as the
+HANDLE_URL_RE = re.compile(r"github\.com/(dbc-oduffy)(?:/[\w.\-]+)*", re.IGNORECASE)
+# (?<![A-Za-z0-9/\\~]) excludes ANY home-directory-path predecessor — a
+# forward-slash form ("/<something>/dbc-oduffy/<segment>"), a backslash or
+# mixed-separator Windows form, and a
+# tilde-relative form ("~/dbc-oduffy/...") — must NOT be treated as the
 # permitted owner/repo slug form; only a slug at a non-path-internal boundary
-# qualifies.
-HANDLE_SLUG_RE = re.compile(r"(?<![A-Za-z0-9])(?<!/)dbc-oduffy/[\w.\-]+", re.IGNORECASE)
+# (start-of-line, whitespace, or `(`/`"`/`[`/`:`) qualifies.
+HANDLE_SLUG_RE = re.compile(r"(?<![A-Za-z0-9/\\~])(dbc-oduffy)/[\w.\-]+", re.IGNORECASE)
 # @-mention form, as used to name the maintainer in CONTRIBUTING.md.
 HANDLE_MENTION_RE = re.compile(r"@dbc-oduffy(?![A-Za-z0-9])", re.IGNORECASE)
 
@@ -189,8 +193,8 @@ STAGED_DIRS = ["coordinator_core", "bin", "docs"]
 
 
 def permitted_spans(text: str, path: str) -> list[tuple[int, int]]:
-    spans = [m.span() for m in HANDLE_URL_RE.finditer(text)]
-    spans += [m.span() for m in HANDLE_SLUG_RE.finditer(text)]
+    spans = [m.span(1) for m in HANDLE_URL_RE.finditer(text)]
+    spans += [m.span(1) for m in HANDLE_SLUG_RE.finditer(text)]
     spans += [m.span() for m in HANDLE_MENTION_RE.finditer(text)]
     if is_attribution_surface(path):
         spans += [m.span() for m in PERSONAL_NAME_RE.finditer(text)]
