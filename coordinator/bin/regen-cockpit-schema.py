@@ -124,10 +124,7 @@ if _LIB_DIR not in sys.path:
 
 from cli_shared import claude_klabauter_root  # noqa: E402
 from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _EMITTER_MODULE = "coordinator_core.contract.cockpit_schema.emit_schema"
 _RELEASE_TAG = "cockpit-contract-release"
@@ -209,7 +206,7 @@ def _schema_dir_dirty(doe_root: str, out_dir: str) -> bool:
             cwd=doe_root,
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"ERROR: could not check git status for {rel_out_dir}: {exc}", file=sys.stderr)
@@ -243,7 +240,7 @@ def _schema_differs_from_tag(doe_root: str, out_dir: str) -> bool:
             cwd=doe_root,
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"ERROR: could not check for tag {_RELEASE_TAG}: {exc}", file=sys.stderr)
@@ -257,7 +254,7 @@ def _schema_differs_from_tag(doe_root: str, out_dir: str) -> bool:
             cwd=doe_root,
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"ERROR: could not diff {_RELEASE_TAG}..HEAD for {rel_out_dir}: {exc}", file=sys.stderr)
@@ -330,7 +327,7 @@ def _advance_release_tag(doe_root: str, out_dir: str) -> None:
             cwd=doe_root,
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"ERROR: could not advance tag {_RELEASE_TAG}: {exc}", file=sys.stderr)
@@ -394,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
         env=trampoline_env,
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     if probe.returncode != 0:
         print(f"ERROR: emitter module {_EMITTER_MODULE} not importable", file=sys.stderr)
@@ -411,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     result = subprocess.run(
         [sys.executable, "-m", _EMITTER_MODULE],
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
         capture_output=True,
         text=True,
     )

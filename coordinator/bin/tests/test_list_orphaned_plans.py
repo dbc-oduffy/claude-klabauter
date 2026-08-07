@@ -44,14 +44,16 @@ _EMPTY_RESULT = {
 
 
 @pytest.fixture()
-def cli(monkeypatch):
+def cli(monkeypatch, tmp_path):
     module = _load_module()
-    monkeypatch.setattr(module, "_resolve_repo_root", lambda positional: "/tmp/fake-repo")
+    fake_repo_root = str(tmp_path / "fake-repo")
+    monkeypatch.setattr(module, "_resolve_repo_root", lambda positional: fake_repo_root)
     return module
 
 
-def test_threshold_days_parses_as_int_and_is_forwarded(cli, monkeypatch, capsys):
+def test_threshold_days_parses_as_int_and_is_forwarded(cli, monkeypatch, capsys, tmp_path):
     captured = {}
+    fake_repo_root = str(tmp_path / "fake-repo")
 
     def _fake_list_orphaned(repo_root, threshold_days):
         captured["repo_root"] = repo_root
@@ -64,7 +66,7 @@ def test_threshold_days_parses_as_int_and_is_forwarded(cli, monkeypatch, capsys)
 
     assert exit_code == 0
     assert captured["threshold_days"] == 21
-    assert str(captured["repo_root"]) == "/tmp/fake-repo"
+    assert str(captured["repo_root"]) == fake_repo_root
 
 
 def test_threshold_days_non_integer_is_a_usage_error(cli, monkeypatch, capsys):
@@ -91,10 +93,10 @@ def test_no_orphaned_plans_prints_the_empty_summary_branch(cli, monkeypatch, cap
     assert "no orphaned plans: 4 non-terminal plan(s), 4 owned" in out
 
 
-def test_unrecognized_extra_positional_argument_is_a_usage_error(cli, monkeypatch, capsys):
+def test_unrecognized_extra_positional_argument_is_a_usage_error(cli, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "list_orphaned", lambda repo_root, threshold_days: dict(_EMPTY_RESULT))
 
-    exit_code = cli.main(["/some/repo", "unexpected-extra-arg"])
+    exit_code = cli.main([str(tmp_path), "unexpected-extra-arg"])
 
     assert exit_code == cli._USAGE_FAIL
     err = capsys.readouterr().err

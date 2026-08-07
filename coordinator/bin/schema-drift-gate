@@ -59,7 +59,7 @@ def _resolve_repo_root() -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **cc_invoke._no_console_kw(cc_invoke.resolve_engine_root(__file__)),
         )
     except OSError:
         return None

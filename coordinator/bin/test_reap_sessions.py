@@ -69,9 +69,10 @@ def _run_main_capturing(mod, argv=None, fake_route=None):
 # Dispatch shape: session.reap with params == {}, via cc_invoke.route(),
 # never `force` in the payload.
 # ===========================================================================
-def test_dispatches_session_reap_empty_params_no_force():
+def test_dispatches_session_reap_empty_params_no_force(tmp_path):
     mod = _load_module()
     seen = {}
+    fake_repo_root = str(tmp_path)
 
     def fake_route(op, params, repo_root, legacy_fn):
         seen["op"] = op
@@ -79,7 +80,7 @@ def test_dispatches_session_reap_empty_params_no_force():
         seen["repo_root"] = repo_root
         return {"exit_code": 0}
 
-    rc, out, _err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, _err = _run_main_capturing(mod, argv=[fake_repo_root], fake_route=fake_route)
 
     if rc == 0:
         _pass("dispatch shape: exit 0")
@@ -101,7 +102,7 @@ def test_dispatches_session_reap_empty_params_no_force():
     else:
         _fail("dispatch shape: 'force' never passed", f"params: {seen.get('params')!r}")
 
-    if seen.get("repo_root") == "/tmp/fake-repo":
+    if seen.get("repo_root") == fake_repo_root:
         _pass("dispatch shape: repo_root forwarded from argv")
     else:
         _fail("dispatch shape: repo_root forwarded from argv", f"got {seen.get('repo_root')!r}")
@@ -111,13 +112,13 @@ def test_dispatches_session_reap_empty_params_no_force():
 # Negative-spec: no integer count printed to stdout on success (unlike
 # sweep-terminal-plans.py) — session-init's reaper block does not consume one.
 # ===========================================================================
-def test_no_stdout_on_success():
+def test_no_stdout_on_success(tmp_path):
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         return {"exit_code": 0}
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("no-stdout-on-success: exit 0")
@@ -139,13 +140,13 @@ def test_no_stdout_on_success():
 # Transport failure (route() raises RuntimeError) -> still exit 0, WARN to
 # stderr, no stdout. Reaper must never block session start.
 # ===========================================================================
-def test_transport_failure_exits_zero_warns_no_stdout():
+def test_transport_failure_exits_zero_warns_no_stdout(tmp_path):
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         raise RuntimeError("simulated session.reap transport failure")
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("transport failure: exit 0 (best-effort, never blocks session start)")

@@ -124,6 +124,8 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
         params_fh.close()
 
         try:
+            from coordinator_core.win_portability import no_console_creationflags
+
             proc = subprocess.run(
                 [
                     sys.executable,
@@ -140,7 +142,7 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
                 text=True,
                 timeout=timeout,
                 env=env,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(

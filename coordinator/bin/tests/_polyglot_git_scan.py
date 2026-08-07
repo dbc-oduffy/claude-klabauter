@@ -20,11 +20,12 @@ from __future__ import annotations
 import os
 import subprocess
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(_TESTS_DIR))
 )  # .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
@@ -33,7 +34,7 @@ def _git(*args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 

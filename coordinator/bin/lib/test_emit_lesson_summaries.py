@@ -34,9 +34,10 @@ import pytest
 _THIS_DIR = Path(__file__).resolve().parent
 _EMITTER = _THIS_DIR / "emit-lesson-summaries.py"
 # Locate the byte-frozen contract schema. coordinator/cockpit-contract/ lives in the
-# example-doctrine-repo repo, not claude-klabauter (DR-047: contract/data lives with example-doctrine-repo, engine with
-# claude-klabauter) — a __file__ two-up walk off this test file's own location resolves to
-# claude-klabauter's coordinator/, which has no cockpit-contract/ dir at all. Route through
+# example-doctrine-repo repo, not the engine repo (DR-047: contract/data lives with example-doctrine-repo, engine
+# with the engine repo) — a __file__ two-up walk off this test file's own location
+# resolves to the engine repo's coordinator/, which has no cockpit-contract/ dir at
+# all. Route through
 # the shared doe_root() registry helper instead (same directory as this test file,
 # no sys.path.insert needed — Python already puts the script's own dir on
 # sys.path[0] when run directly).
@@ -54,6 +55,22 @@ except _DoeUnresolvable:
 _KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
+def _no_console_kw() -> dict:
+    """Splat-ready Windows console-suppression kwarg for spawning the emitter
+    under test. This file lives inside the engine checkout itself
+    (coordinator/bin/lib/<this file>), so the engine root is this file's own
+    repo root — three levels up. ``{}`` on any resolution/import failure."""
+    try:
+        claude_klabauter_root = str(Path(__file__).resolve().parents[3])
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:
+        return {}
+
+
 def _normalize_title(title: str) -> str:
     return re.sub(r"\s+", " ", title.strip().lower())
 
@@ -68,7 +85,7 @@ def _run_emitter(tmp_root: Path) -> list[dict]:
     result = subprocess.run(
         [sys.executable, str(_EMITTER), str(tmp_root), "test-repo", "test-branch", "abc123", "2026-01-01T00:00:00Z"],
         capture_output=True, text=True, timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_no_console_kw(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"Emitter exited {result.returncode}:\nstdout={result.stdout}\nstderr={result.stderr}")
@@ -446,7 +463,7 @@ def test_f7_four_space_indent_scope_tags(tmp_path):
     result_f7 = subprocess.run(
         [sys.executable, str(_EMITTER), str(tmp2), "test-repo", "test-branch", "abc123", "2026-01-01T00:00:00Z"],
         capture_output=True, text=True, timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_no_console_kw(),
     )
     assert result_f7.returncode == 0, f"F7: emitter failed for 4-space scope_tags fixture: {result_f7.stderr}"
     recs_f7 = json.loads(result_f7.stdout)
@@ -489,7 +506,7 @@ def test_scope_outbox_block_list(tmp_path):
     result_so = subprocess.run(
         [sys.executable, str(_EMITTER), str(tmp3), "test-repo", "test-branch", "abc123", "2026-01-01T00:00:00Z"],
         capture_output=True, text=True, timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_no_console_kw(),
     )
     assert result_so.returncode == 0, f"SCOPE-OUTBOX: emitter failed: {result_so.stderr}"
     recs_so = json.loads(result_so.stdout)
@@ -545,7 +562,7 @@ def test_sentinel_date_emits_null(tmp_path):
     result_s = subprocess.run(
         [sys.executable, str(_EMITTER), str(tmp_s), "test-repo", "test-branch", "abc123", "2026-01-01T00:00:00Z"],
         capture_output=True, text=True, timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_no_console_kw(),
     )
     assert result_s.returncode == 0, f"SENTINEL: emitter failed: {result_s.stderr}"
     recs_s = json.loads(result_s.stdout)
@@ -615,7 +632,7 @@ def test_f1_overlay_dual_presence_from_repo_survives(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_no_console_kw(),
     )
     assert result_f1.returncode == 0, f"F1-OVERLAY: emitter failed: {result_f1.stderr}"
     recs_f1 = json.loads(result_f1.stdout)

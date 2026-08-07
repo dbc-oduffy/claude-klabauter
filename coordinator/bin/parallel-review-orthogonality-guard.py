@@ -75,6 +75,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _PROG = "parallel-review-orthogonality-guard.py"
 _BIN_DIR = Path(__file__).resolve().parent
 _VERIFY_CLI = _BIN_DIR / "verify-parallel-review-lens-orthogonality.py"
@@ -96,7 +98,7 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess:
         [sys.executable, *argv],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -131,7 +133,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if rev_parse.returncode != 0 or not rev_parse.stdout.strip():
             print(f"{_PROG}: snapshot: cannot resolve git repo root from cwd", file=sys.stderr)

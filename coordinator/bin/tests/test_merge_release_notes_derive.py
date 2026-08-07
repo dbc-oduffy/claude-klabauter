@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -205,7 +207,7 @@ class TestFlipTags:
             cwd=str(repo),
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         assert result.returncode == 0, result.stderr
         assert f"{entry_old}: released_in=v1.0.0" in result.stdout

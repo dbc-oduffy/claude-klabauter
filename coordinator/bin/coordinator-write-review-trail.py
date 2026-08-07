@@ -52,6 +52,36 @@ sys.path.insert(0, str(_SCRIPT_DIR / "lib"))
 
 import cc_invoke  # noqa: E402  (path insert above must precede this import)
 
+cc_invoke.ensure_engine_on_path(__file__)
+
+
+def _no_console_creationflags() -> dict:
+    """Console-suppression kwargs for a git spawn, without assuming the engine.
+
+    Only ``bin/lib`` lands on sys.path from the script dir, so on a box with no
+    editable install of ``coordinator_core`` — and under the
+    ``~/.coordinator-claude-settings/bin`` trampoline, which ``runpy.run_path``s
+    this file without touching sys.path — the two call sites below raised
+    ``ModuleNotFoundError`` from inside ``except (OSError, TimeoutExpired)``
+    blocks that do not catch it. ``_resolve_repo_root`` died outright; every
+    review-trail verdict on such a box stayed at ``verdict: pending``, which the
+    coverage gate then read back as an abandoned review round.
+
+    ``ensure_engine_on_path`` above makes the import resolve on a normal
+    checkout. This wrapper fails OPEN to an inline reproduction of the
+    primitive's contract (``{}`` off Windows, never ``{"creationflags": 0}``) for
+    the residue: a lost console-suppression nicety must not take the CLI with it.
+    The op dispatch itself still fails LOUD when the engine is genuinely absent.
+    """
+    try:
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except ImportError:
+        if os.name != "nt":
+            return {}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
 
 def _resolve_repo_root() -> str:
     """Resolve the git repo root from cwd — parity with the bash oracle's
@@ -63,7 +93,7 @@ def _resolve_repo_root() -> str:
             capture_output=True,
             text=True,
             timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         proc = None
@@ -94,7 +124,7 @@ def _diff_touched_paths(sha_range: str, repo_root: str) -> list[str] | None:
             capture_output=True,
             text=True,
             timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

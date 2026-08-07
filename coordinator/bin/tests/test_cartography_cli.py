@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _BIN_DIR = Path(__file__).parent.parent
 _REPO_ROOT = _BIN_DIR.parent.parent
 
@@ -136,29 +138,26 @@ def test_main_params_non_object_exits_1(capsys) -> None:
 # ---------------------------------------------------------------------------
 
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(repo), "config", "user.email", "t@example.com"],
         check=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "-C", str(repo), "config", "user.name", "Test"],
         check=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     (repo / "a.py").write_text("print(1)\n")
-    subprocess.run(["git", "-C", str(repo), "add", "a.py"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(repo), "add", "a.py"], check=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-q", "-m", "init"],
         check=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     return repo
 
@@ -179,7 +178,7 @@ def test_end_to_end_file_index_against_tmp_git_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -204,7 +203,7 @@ def test_end_to_end_tree_against_tmp_git_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -228,7 +227,7 @@ def test_end_to_end_unknown_op_exits_1(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 1

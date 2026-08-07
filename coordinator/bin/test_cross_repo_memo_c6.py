@@ -65,6 +65,7 @@ from coordinator_core.frontmatter.schema_validate import (  # noqa: E402
     parse_frontmatter,
     validate_frontmatter_obj,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # Test infrastructure (mirrors test_cross_repo_memo.py conventions)
@@ -259,7 +260,7 @@ def _run_surface_helper(inbox_dir: str, mock_today: str = "") -> str:
         env=env,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return result.stdout
 

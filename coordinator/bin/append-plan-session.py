@@ -59,6 +59,17 @@ Negative-spec (retired transport patterns — DO NOT reintroduce):
       below is the sole (partial, tiers-1-3-only) session-id resolver.
     - Does NOT fall back to a direct-write/legacy body on any State-1/2/3 outcome —
       legacy_append_plan_session() below only ever raises.
+    - Does NOT assume `coordinator_core` is ambiently importable. Only `bin/lib`
+      lands on sys.path from the script dir, so a box without an editable install
+      of the engine (and the `~/.coordinator-claude-settings/bin` trampoline, which
+      `runpy.run_path`s this file without touching sys.path) died at import time on
+      `ModuleNotFoundError: coordinator_core` — advisory-only at the call site, so
+      plan<->session links silently stopped being recorded. The engine root is now
+      resolved via cc_invoke.ensure_engine_on_path() before the import, and the
+      import itself fails OPEN to an inline reproduction of the primitive's
+      contract: console suppression is a nicety, and losing it must not take the
+      whole CLI down with it. The op dispatch below still fails LOUD (rc=2) when
+      the engine is genuinely absent.
 """
 from __future__ import annotations
 
@@ -73,9 +84,18 @@ if _LIB_DIR not in sys.path:
 
 import cc_invoke  # noqa: E402
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+cc_invoke.ensure_engine_on_path(__file__)
+
+try:
+    from coordinator_core.win_portability import (
+        no_console_creationflags as _no_console_creationflags,
+    )
+except ImportError:  # engine root unresolvable — see the negative-spec block above
+
+    def _no_console_creationflags() -> dict:
+        if os.name != "nt":
+            return {}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 _SESSION_ID_ENV_TIERS = (
     "COORDINATOR_SESSION_ID",
@@ -106,7 +126,7 @@ def _resolve_repo_root() -> str | None:
             ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_creationflags(),
         )
     except OSError:
         return None

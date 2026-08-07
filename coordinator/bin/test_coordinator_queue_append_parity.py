@@ -61,11 +61,8 @@ import os
 import subprocess
 import sys
 import tempfile
+from coordinator_core.win_portability import no_console_creationflags
 
-# Portable Windows CREATE_NO_WINDOW flag — resolves to the flag on Windows and
-# 0 (no-op) on macOS/Linux. Used for all subprocess invocations of python to
-# suppress console popup under the headless Claude Code Bash-tool parent.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ---------------------------------------------------------------------------
 # Test infrastructure (mirrors test_coordinator_queue_append.py)
@@ -101,7 +98,7 @@ def _run_queue_append(
         capture_output=True,
         text=True,
         cwd=cwd,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -118,7 +115,7 @@ def _run_lesson_promote(
         env=effective_env,
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -183,8 +180,8 @@ def _improvement_queue_minimal_args() -> list[str]:
         "--title", "Parity test improvement entry",
         "--body", "Body text for parity improvement test.",
         "--status", "open",
-        "--surface", "plugins/coordinator/skills/workstream-complete/SKILL.md",
-        "--proposed-action", "plugins/coordinator/skills/",
+        "--surface", "plugins/coordinator-claude/coordinator/skills/workstream-complete/SKILL.md",
+        "--proposed-action", "plugins/coordinator-claude/coordinator/skills/",
         "--change-kind", "skill-edit",
         "--from-repo", "test-repo-em",
     ]
@@ -464,7 +461,7 @@ def test_improvement_queue_missing_required_field() -> None:
                 "--title", "T",
                 "--body", "B",
                 "--status", "open",
-                "--proposed-action", "plugins/coordinator/",
+                "--proposed-action", "plugins/coordinator-claude/coordinator/",
                 "--change-kind", "skill-edit",
                 "--from-repo", "test-repo-em",
                 # --surface is intentionally omitted
@@ -497,8 +494,8 @@ def test_improvement_queue_invalid_change_kind() -> None:
                 "--title", "T",
                 "--body", "B",
                 "--status", "open",
-                "--surface", "plugins/coordinator/",
-                "--proposed-action", "plugins/coordinator/",
+                "--surface", "plugins/coordinator-claude/coordinator/",
+                "--proposed-action", "plugins/coordinator-claude/coordinator/",
                 "--change-kind", "bogus",  # not in the improvement-queue enum
                 "--from-repo", "test-repo-em",
             ],

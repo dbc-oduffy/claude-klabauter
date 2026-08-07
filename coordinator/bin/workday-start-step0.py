@@ -147,9 +147,12 @@ def contributor_slug_self_heal() -> None:
 # ---------------------------------------------------------------------------
 
 def _exec_reconcile() -> int:
+    _ensure_claude_klabauter_on_path()
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         [sys.executable, _BIN_RECONCILE],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
         capture_output=True,
         text=True,
         env=child_env(),
@@ -305,12 +308,13 @@ def main(argv: list[str]) -> int:
     from coordinator_core.daily_branch import parse_branch_span, rename_target, should_prompt_rename
     from coordinator_core.daily_day import local_day
     from coordinator_core.machine_resolver import compute_machine
+    from coordinator_core.win_portability import no_console_creationflags
 
     # Step 0.1 — Sync main
     sm = subprocess.run(
         [sys.executable, _BIN_SYNC_MAIN], stdout=sys.stderr, stderr=sys.stderr,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if sm.returncode != 0:
         _out("SYNC-MAIN-ABORT")
@@ -364,6 +368,18 @@ def main(argv: list[str]) -> int:
         _err(f"ERROR: {exc}")
         return 1
     if ensure.result == "FRESH-CUT":
+        return _exec_reconcile()
+    if ensure.result == "REFUSED-LIVE-PEERS":
+        # Settled-on-this-branch terminal, same shape as FRESH-CUT and
+        # NAMED-WORKSTREAM: the cut was declined because it would switch the
+        # shared checkout under live peers, so the tree stays where it is and
+        # we reconcile it rather than falling through to Check 3.5/4, whose
+        # span parse cannot succeed on `main` and would exit 1 on a
+        # non-EM-skippable step. session_ensure_branch has already printed the
+        # peer detail; this line names the day-level consequence.
+        _err("LIVENESS-GATE: staying on "
+             f"{current or '<detached>'} — no day branch was cut. "
+             "Branch discipline is NOT in force for this session.")
         return _exec_reconcile()
 
     # Check 3.5 — Named long-lived workstream

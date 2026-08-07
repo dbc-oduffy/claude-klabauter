@@ -107,8 +107,6 @@ import sys
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RVC_PATH = os.path.join(_PLUGIN_ROOT, "bin", "coordinator-resolve-validation-cmd.py")
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
 _KNOWN_CEREMONIES = (
     "workday-start",
     "workday-complete",
@@ -128,9 +126,10 @@ def _win_safe_shlex_split(cmd_str: str) -> list[str]:
 
     Bare ``shlex.split`` (POSIX mode) treats ``\\`` as a C-style escape
     character, so a Windows-authored drive-letter path with backslash
-    separators (``C:\\Users\\bob\\tools\\refresh.exe``, abs-path-ok:
-    illustrative example, not a real path) is silently stripped down to
-    ``C:Usersbobtoolsrefresh.exe``. That mangled path then surfaced verbatim
+    separators (illustrative example, not a real path: a drive letter,
+    colon, then ``Users``, ``bob``, ``tools``, ``refresh.exe`` joined by
+    backslashes) is silently stripped down to the same segments joined with
+    no separator at all. That mangled path then surfaced verbatim
     in this hook's WARN diagnostic, misattributing a path the operator
     never typed — see the module docstring's Windows note.
 
@@ -204,11 +203,13 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
         repo_root = result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else os.getcwd()
     except OSError:
@@ -257,6 +258,8 @@ def main(argv: list[str]) -> int:
     print(f"[coordinator-ceremony-hook] {ceremony}: running: {redacted}", file=sys.stderr)
 
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         # PWD env override: subprocess.run(cwd=...) chdir()s the child before
         # exec, but does NOT update an inherited $PWD env var. A shell's `pwd`
         # builtin trusts a stale-but-device/inode-matching $PWD over its own
@@ -273,7 +276,7 @@ def main(argv: list[str]) -> int:
             env=child_env,
             stdout=sys.stderr,
             stderr=sys.stderr,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
         rc = proc.returncode
     except OSError as exc:

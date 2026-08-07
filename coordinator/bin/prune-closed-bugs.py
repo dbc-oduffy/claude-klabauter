@@ -63,11 +63,13 @@ def _no_fallback() -> None:
 
 def _resolve_repo_root() -> str:
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         resolved = (proc.stdout or "").strip()
         if proc.returncode == 0 and resolved:

@@ -85,6 +85,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 from coordinator_core.ops.queue_family import load_family_records  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def _no_fallback() -> None:
@@ -99,7 +100,7 @@ def _resolve_repo_root() -> str:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         resolved = (proc.stdout or "").strip()
         if proc.returncode == 0 and resolved:

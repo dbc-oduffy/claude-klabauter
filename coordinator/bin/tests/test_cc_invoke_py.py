@@ -27,7 +27,17 @@ raise-on-timeout for cc_invoke(); both route_mutation() refusal shapes) is
 already covered standalone by TestRouteState2TransportFail and
 TestRouteMutation below, so no coverage was lost in the deletion.
 
+DECLARED SPAWN COUNT: this module makes exactly THREE real engine spawns, all
+in `TestDiagnosticsProbesEndToEnd` (one per `diagnostics.*` probe op), all
+function-level, none at import time. Every other test here mocks
+`subprocess.run` or calls a pure function in-process. The count is stated for a
+spawn census to check against rather than infer; if a fourth is ever added, this
+number is the thing that must change with it. The three are irreducible: they
+are the only end-to-end evidence that `cc_invoke`'s failure ladder classifies a
+REAL engine child correctly, which no in-process case can supply.
+
 Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C1 / AC1 / AC9
+Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C2 / AC3 / AC6
 """
 from __future__ import annotations
 
@@ -41,6 +51,10 @@ import unittest
 import unittest.mock
 from pathlib import Path
 from typing import Any
+
+import pytest
+
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # Path setup — locate cc_invoke.py relative to this test file
@@ -222,7 +236,7 @@ class TestRouteState1Remediation(unittest.TestCase):
         self.assertIn("CLAUDE_KLABAUTER_ROOT environment variable", msg)
         self.assertIn(".claude-klabauter-root pointer file", msg)
         self.assertIn("repos.claude_klabauter", msg)
-        self.assertIn("git clone https://github.com/dbc-example-operator/claude-klabauter", msg)
+        self.assertIn("git clone https://github.com/dbc-oduffy/claude-klabauter", msg)
         # The original legacy_fn exception is chained, not silently discarded.
         self.assertIsInstance(ctx.exception.__cause__, RuntimeError)
 
@@ -1481,7 +1495,7 @@ class TestChildEnvLeakGuard(unittest.TestCase):
              f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); import cc_invoke; "
              "import os; print(os.environ.get('COORDINATOR_CORE_LAZY_OPS'))"],
             capture_output=True, text=True, timeout=15, env=self._clean_parent_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(proc.stdout.strip(), "None", proc.stderr)
 
@@ -1497,7 +1511,7 @@ class TestChildEnvLeakGuard(unittest.TestCase):
              "import coordinator_core.ops; import coordinator_core.ipc as ipc; "
              "print(len(ipc._REGISTRY))"],
             capture_output=True, text=True, timeout=60, env=self._clean_parent_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(proc.stdout.strip(), "0", proc.stderr)
 
@@ -1517,7 +1531,7 @@ class TestChildEnvLeakGuard(unittest.TestCase):
         proc = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True, text=True, timeout=15, env=self._clean_parent_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(proc.stdout.strip(), "None", proc.stderr)
 
@@ -1652,3 +1666,317 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             sys.modules, {"coordinator_core.op_scopes": None}
         ):
             self.assertTrue(_mod._should_pass_repo("memo.list"))
+
+
+class ResolveEngineRootTest(unittest.TestCase):
+    """resolve_engine_root / ensure_engine_on_path — the override-first ladder
+    co-located coordinator/bin entrypoints use to find the engine they import.
+
+    Spec backlink: the coordinator-doc-new ModuleNotFoundError fix — engine-
+    touching seams resolved the root through the registry-only ladder (no
+    self-location rung), so an install with no repos.claude_klabauter entry and
+    no pointer file had no answer but a hand-set PYTHONPATH.
+    """
+
+    @staticmethod
+    def _make_checkout(root: Path) -> None:
+        (root / "coordinator_core").mkdir(parents=True)
+        (root / "pyproject.toml").write_text("", encoding="utf-8")
+
+    def test_env_override_outranks_self_location(self) -> None:
+        """CLAUDE_KLABAUTER_ROOT wins over the checkout the script sits in — the whole
+        point of rung 1, and the regression a naive swap onto
+        resolve_colocated_claude_klabauter_root introduces."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            other = Path(tmp) / "other"
+            self._make_checkout(own)
+            self._make_checkout(other)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            with unittest.mock.patch.dict(os.environ, {"CLAUDE_KLABAUTER_ROOT": str(other)}):
+                self.assertEqual(_mod.resolve_engine_root(str(script)), str(other))
+
+    def test_blank_and_nonexistent_env_fall_through_to_self_location(self) -> None:
+        """An empty or stale CLAUDE_KLABAUTER_ROOT is not an override — it must not
+        shadow a perfectly good co-located checkout.
+
+        Deliberate divergence from ``_resolve_claude_klabauter_root``'s rung 1, which
+        returns any non-empty env value verbatim (no isdir gate): this
+        function adds the gate because a stale CLAUDE_KLABAUTER_ROOT surviving a
+        cross-platform ~/.claude sync must fall through, not be honored.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            for bogus in ("", str(Path(tmp) / "does-not-exist")):
+                with unittest.mock.patch.dict(os.environ, {"CLAUDE_KLABAUTER_ROOT": bogus}):
+                    self.assertEqual(_mod.resolve_engine_root(str(script)), str(own))
+
+    def test_self_location_is_depth_agnostic(self) -> None:
+        """A helper under coordinator/bin/lib/ resolves its own checkout too —
+        the fixed parents[2] probe lands on coordinator/ and misses."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            self._make_checkout(own)
+            deep = own / "coordinator" / "bin" / "lib" / "helper.py"
+            deep.parent.mkdir(parents=True)
+            deep.write_text("", encoding="utf-8")
+
+            with unittest.mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                self.assertEqual(_mod.resolve_engine_root(str(deep)), str(own))
+
+    def test_falls_back_to_registry_ladder_outside_any_checkout(self) -> None:
+        """Published/vendored outside a claude-klabauter tree — rung 3 answers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            stray = Path(tmp) / "vendored" / "x.py"
+            stray.parent.mkdir(parents=True)
+            stray.write_text("", encoding="utf-8")
+
+            with unittest.mock.patch.object(
+                _mod, "_resolve_claude_klabauter_root", return_value="/from/registry"
+            ):
+                with unittest.mock.patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    self.assertEqual(
+                        _mod.resolve_engine_root(str(stray)), "/from/registry"
+                    )
+
+    def test_ensure_engine_on_path_inserts_at_front_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with unittest.mock.patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    self.assertEqual(_mod.ensure_engine_on_path(str(script)), str(own))
+                    self.assertEqual(sys.path[0], str(own))
+                    _mod.ensure_engine_on_path(str(script))
+                    self.assertEqual(sys.path.count(str(own)), 1)
+            finally:
+                sys.path[:] = saved
+
+    def test_ensure_engine_on_path_degrades_to_none_when_unresolvable(self) -> None:
+        """Callers are CLIs that must still run on an engine-less install —
+        a resolution miss returns None, it does not raise."""
+        with tempfile.TemporaryDirectory() as tmp:
+            stray = Path(tmp) / "vendored" / "x.py"
+            stray.parent.mkdir(parents=True)
+            stray.write_text("", encoding="utf-8")
+
+            with unittest.mock.patch.object(
+                _mod, "_resolve_claude_klabauter_root", side_effect=RuntimeError("no root")
+            ):
+                with unittest.mock.patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    self.assertIsNone(_mod.ensure_engine_on_path(str(stray)))
+
+
+# ---------------------------------------------------------------------------
+# Nonzero-exit diagnosis recovery — the child's STDOUT channel
+# ---------------------------------------------------------------------------
+
+
+class TestNonzeroExitStdoutDiagnosis(unittest.TestCase):
+    """`_raise_on_process_failure` must surface the engine's own failure text.
+
+    The defect this pins (reported by example-doctrine-repo-em,
+    `cross-repo/inbox/2026-08-07-example-doctrine-repo-em-windows-ceremony-cli-coordinator-core-import-break.md`,
+    item 3): `coordinator_core.invoke` writes a PRE-dispatch failure to stderr but
+    a COMPLETED-dispatch op-level error to **stdout**, exiting 1 either way. This
+    ladder read stderr only, so every op-level failure surfaced as a bare
+    `invoke process exited 1 (op=X) — op or dispatch error` with an empty
+    `stderr:` line and the reason nowhere — it was on stdout, discarded unread.
+    That is the exact string example-doctrine-repo reported for `ceremony.wsc_tail`, and the reason
+    they could not diagnose it: the transport, not the op, was withholding it.
+
+    Spawn-free by construction: `_raise_on_process_failure` is a pure function
+    over already-captured (rc, stdout, stderr), so every case below is a direct
+    in-process call — no subprocess, no mock of one (spawn ratchet, Rule 1).
+    """
+
+    OP = "ceremony.wsc_tail"
+    ROOT = "/fake/claude-klabauter"
+
+    def _raises(self, rc: int, stdout: str, stderr: str = "") -> BaseException:
+        with self.assertRaises(RuntimeError) as ctx:
+            _mod._raise_on_process_failure(rc, stdout, stderr, self.OP, self.ROOT)
+        return ctx.exception
+
+    @staticmethod
+    def _envelope(message: str, code: int = -32601) -> str:
+        return json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": message}}
+        )
+
+    def test_stdout_error_envelope_reaches_the_raised_message(self) -> None:
+        """The whole point: an operator reading `str(exc)` sees WHY it failed."""
+        exc = self._raises(1, self._envelope("Method not found: 'ceremony.wsc_tail'"))
+        text = str(exc)
+        self.assertIn("Method not found: 'ceremony.wsc_tail'", text)
+        self.assertIn("-32601", text)
+        self.assertIn("exited 1", text)
+
+    def test_stdout_borne_module_not_found_classifies_as_engine_wont_start(self) -> None:
+        """An import failure INSIDE the op arrives on stdout, not stderr — it must
+        still route to the install-remediation rung, not the generic one."""
+        exc = self._raises(
+            1,
+            self._envelope("ModuleNotFoundError: No module named 'coordinator_core'", code=-32603),
+        )
+        text = str(exc)
+        self.assertIn("engine will not import/start", text)
+        self.assertIn("CLAUDE_KLABAUTER_ROOT", text)
+        self.assertIn("No module named 'coordinator_core'", text)
+
+    def test_non_json_stdout_is_recovered_and_capped(self) -> None:
+        """A raw traceback is not a JSON envelope but is still the only diagnosis
+        there is; it is surfaced, bounded so it stays readable in a terminal."""
+        exc = self._raises(1, "Traceback (most recent call last):\n" + "x" * 9000)
+        text = str(exc)
+        self.assertIn("op stdout: Traceback", text)
+        self.assertLess(len(text), _mod._OP_ERROR_DETAIL_CAP + 1000)
+
+    def test_empty_stdout_leaves_the_message_unchanged(self) -> None:
+        """No recoverable detail must not append a dangling empty line."""
+        exc = self._raises(1, "", "some op-level error")
+        self.assertNotIn("op error:", str(exc))
+        self.assertNotIn("op stdout:", str(exc))
+
+    def test_stderr_import_error_still_outranks_everything(self) -> None:
+        """Pre-existing precedence rung 1 — unchanged, including at rc=2."""
+        exc = self._raises(
+            2,
+            self._envelope("something else entirely"),
+            "ModuleNotFoundError: No module named 'coordinator_core'",
+        )
+        self.assertNotIsInstance(exc, _mod.StructuralPinError)
+        self.assertIn("engine will not import/start", str(exc))
+
+    def test_structural_pin_outranks_the_stdout_import_token(self) -> None:
+        """Negative-spec pin: the stdout sniff is ranked BELOW rc==2 deliberately.
+
+        Reclassifying a structural-pin failure as an install failure would discard
+        the engine's own non-self-healing/will-recur-on-retry discriminator.
+        """
+        exc = self._raises(2, self._envelope("no module named 'widget' in the pinned contract"))
+        self.assertIsInstance(exc, _mod.StructuralPinError)
+        self.assertIn("structural contract-pin failure", str(exc))
+        self.assertIn("no module named 'widget'", str(exc))
+
+    def test_engine_channel_contract_op_error_exits_one(self) -> None:
+        """Pins the engine-side coupling this whole fix rests on.
+
+        `_exit_code_for_response` is the engine's own pure/testable seam (see its
+        docstring): an op-level error response exits 1, and `main()` prints that
+        response to STDOUT. If either half ever moves, the ladder above needs
+        revisiting rather than silently going blind again.
+        """
+        from coordinator_core.invoke.__main__ import _exit_code_for_response
+        from coordinator_core.ipc import STRUCTURAL_PIN_ERROR
+
+        self.assertEqual(
+            _exit_code_for_response({"error": {"code": -32601, "message": "x"}}, STRUCTURAL_PIN_ERROR),
+            1,
+        )
+        self.assertEqual(
+            _exit_code_for_response({"error": {"code": STRUCTURAL_PIN_ERROR, "message": "x"}}, STRUCTURAL_PIN_ERROR),
+            2,
+        )
+        self.assertEqual(_exit_code_for_response({"result": {}}, STRUCTURAL_PIN_ERROR), 0)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end through a REAL coordinator_core.invoke child — the two reachable
+# failure rungs, plus the positive control.
+# ---------------------------------------------------------------------------
+
+
+class TestDiagnosticsProbesEndToEnd(unittest.TestCase):
+    """`cc_invoke` classifies a real engine child's failure correctly, not just a fake one.
+
+    Everything above this class is spawn-free: `TestNonzeroExitStdoutDiagnosis`
+    exercises the ladder as a pure function over already-captured
+    `(rc, stdout, stderr)`, and the State-2 classes drive a synthetic
+    `__main__.py` written by `_make_fake_claude_klabauter_root`. Neither can catch a
+    disagreement between what the ladder expects a child to emit and what
+    `coordinator_core.invoke` actually emits — a fake oracle agrees with itself
+    by construction. These three cases close exactly that gap by firing the
+    write-free `diagnostics.*` probe family (`coordinator_core/ops/
+    diagnostics_probes.py`) at the real engine in this checkout.
+
+    THREE SPAWNS, one per test, function-level — the module docstring's declared
+    count. `_op_timeout_ceiling` is stubbed so the transport's own
+    `--dump-op-timeouts` probe cannot add a fourth process; the timeout budget is
+    not what these cases are about, and the ladder under test never reads it.
+
+    Safe against a live dirty tree by construction, which is the whole reason the
+    probe family exists: all three handlers are `COMPUTE_ONLY` and write nothing.
+
+    Negative-spec: do not add a fourth case for the three remaining rungs.
+    Stderr-borne ImportError, empty stdout, and transport-absent are unreachable
+    from a REGISTERED op (the engine has already imported and started before any
+    handler runs; `invoke.main` always prints a response; and transport-absent is
+    a CLAUDE_KLABAUTER_ROOT resolution failure with no op involved). They stay unit-level —
+    see docs/reference/transport-failure-probes.md.
+
+    Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C2
+    """
+
+    def _invoke(self, op: str) -> Any:
+        """Route `op` through `cc_invoke` to a real engine child in THIS checkout."""
+        with unittest.mock.patch.object(_mod, "_op_timeout_ceiling", return_value=120):
+            return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _claude_klabauter_root=str(_REPO_ROOT))
+
+    @pytest.mark.spawns_process
+    def test_always_succeeds_returns_its_result(self) -> None:
+        """Positive control: without it, a green failure-case could be green by
+        accident — a harness that never reached the engine at all would satisfy
+        both failure assertions below while proving nothing."""
+        result = self._invoke("diagnostics.always_succeeds")
+
+        self.assertEqual(result, {"probe": "always_succeeds", "ok": True})
+
+    @pytest.mark.spawns_process
+    def test_always_refuses_surfaces_the_stdout_borne_op_error(self) -> None:
+        """rc=1 with the error envelope on the child's STDOUT — the rung the
+        transport was blind to before 337c31a1e, now asserted through a real
+        child rather than a reconstructed `(rc, stdout, stderr)` triple."""
+        with self.assertRaises(RuntimeError) as ctx:
+            self._invoke("diagnostics.always_refuses")
+
+        exc = ctx.exception
+        text = str(exc)
+        self.assertNotIsInstance(exc, _mod.StructuralPinError)
+        self.assertIn("exited 1 (op=diagnostics.always_refuses)", text)
+        self.assertIn("op error: code=-32603", text)
+        self.assertIn("message=", text)
+        self.assertIn("DiagnosticsRefusal", text)
+        self.assertNotIn("engine will not import/start", text)
+
+    @pytest.mark.spawns_process
+    def test_always_structural_pin_raises_structural_pin_error(self) -> None:
+        """rc=2 -> `StructuralPinError`, with the handler's own message preserved
+        verbatim into the envelope, and precedence intact: the structural-pin rung
+        still outranks the stdout-borne ImportError rung below it."""
+        with self.assertRaises(_mod.StructuralPinError) as ctx:
+            self._invoke("diagnostics.always_structural_pin")
+
+        text = str(ctx.exception)
+        self.assertIn("structural contract-pin failure", text)
+        self.assertIn("op=diagnostics.always_structural_pin, rc=2", text)
+        self.assertIn("op error: code=-32001", text)
+        self.assertIn("nothing is actually wedged", text)
+        self.assertNotIn("engine will not import/start", text)

@@ -34,6 +34,7 @@ import tempfile
 import time
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -389,7 +390,7 @@ def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
         subprocess.run(
             ["git", "init", "-q", tmp],
             check=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
 
         state_root = os.path.join(tmp, "state")

@@ -124,7 +124,11 @@ class TestSessionIdResolution(unittest.TestCase):
             os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-code-session"
             self.assertEqual(wsc.resolve_session_id(repo), "claude-code-session")
 
-    def test_sentinel_file_used_when_env_vars_absent(self):
+    def test_sentinel_file_is_ignored_KS3(self):
+        """KS-3 (2026-08-07): the `.current-session-id` sentinel tier was
+        removed — a well-formed sentinel file must NOT be consulted; a
+        well-formed sentinel falls through to the (KS-5) empty-string
+        unresolved report, not a fabricated id."""
         import os
         import tempfile
 
@@ -136,9 +140,15 @@ class TestSessionIdResolution(unittest.TestCase):
             sentinel_dir = repo / ".git" / "coordinator-sessions"
             sentinel_dir.mkdir(parents=True)
             (sentinel_dir / ".current-session-id").write_text("sentinel-sid\n")
-            self.assertEqual(wsc.resolve_session_id(repo), "sentinel-sid")
+            sid = wsc.resolve_session_id(repo)
+            self.assertNotEqual(sid, "sentinel-sid")
+            self.assertEqual(sid, "")
 
-    def test_hex_timestamp_fallback_when_nothing_resolves(self):
+    def test_unresolved_reports_empty_not_fabricated_KS5(self):
+        """KS-5 (2026-08-07): the epoch-tail fabricated-id fallback was
+        removed — with no tier resolving, resolve_session_id must report the
+        unresolved state honestly (empty string), never a fabricated id
+        indistinguishable from a real one."""
         import os
         import tempfile
 
@@ -148,8 +158,26 @@ class TestSessionIdResolution(unittest.TestCase):
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             sid = wsc.resolve_session_id(repo)
-            self.assertEqual(len(sid), 6)
-            self.assertTrue(sid.isdigit())
+            self.assertEqual(sid, "")
+
+    def test_cmd_resolve_refuses_unresolved_sid_KS5(self):
+        """KS-5: `_cmd_resolve` must refuse to run the detector chain (and
+        must NOT print a single-session disposition) when the sid is
+        unresolved — that would read as a clean chain-end coverage gate
+        skip identical to the false clean the fabricated-epoch fallback
+        produced."""
+        import argparse
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            os.environ.pop("em_sid", None)
+            os.environ.pop("CLAUDE_SESSION_ID", None)
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            args = argparse.Namespace(repo_root=str(repo), format="eval")
+            rc = wsc._cmd_resolve(args)
+            self.assertEqual(rc, wsc._SESSION_ID_UNRESOLVED)
 
 
 class TestPrimaryScan(unittest.TestCase):
@@ -636,6 +664,106 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
                 }
             )
         )
+
+
+class TestLedgerFirstClaimStateMigration(unittest.TestCase):
+    """C7b (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-
+    read.md): `primary_consumed_handoff_paths`, `detector_a`, and
+    `_foreign_consumer_guard` now resolve claim holder via
+    `coordinator_core.claim_state.resolve_claim_state` (ledger-first, mirror
+    fallback) instead of a private regex read of the frontmatter mirror
+    alone. These tests exercise the case the migration exists for: a claim
+    that survives ONLY in the branch-independent ledger, with the tracked
+    frontmatter mirror desynced (`status: open`, no claimed_by/consumed_by)
+    — invisible to the old mirror-only regex, must now resolve."""
+
+    def _write_ledger_claim(self, common_dir, handoff_name: str, session_id: str, claimed_at: str = "") -> None:
+        claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+        claim_dir.mkdir(parents=True, exist_ok=True)
+        (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+        if claimed_at:
+            (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+
+    def test_detector_a_fires_for_a_desynced_baton(self):
+        """An archived handoff whose frontmatter mirror is desynced (no
+        claimed_by/consumed_by — the branch-switch-revert shape) but whose
+        ledger still holds a LIVE claim naming this session, plus a
+        `predecessor:` field, must still be found by Detector A. The old
+        mirror-only regex could not see this claim at all."""
+        import tempfile
+
+        from coordinator_core import claim_state as claim_state_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _git(repo, "init", "-q")
+            archive_dir = repo / "archive" / "handoffs"
+            archive_dir.mkdir(parents=True)
+            handoff = archive_dir / "2026-08-07_desynced.md"
+            # Desynced mirror: no claimed_by/consumed_by at all, only the
+            # predecessor field Detector A's second gate requires.
+            handoff.write_text("---\nstatus: open\npredecessor: some-sha\n---\nbody\n")
+
+            self._write_ledger_claim(repo / ".git", handoff.name, "sid-ledger-only", "2026-08-07T10:00:00Z")
+
+            with unittest.mock.patch.object(claim_state_mod, "cs_claim_holder_live", return_value=True):
+                result = wsc.detector_a(repo, "sid-ledger-only")
+
+            self.assertEqual(result, "archive/handoffs/2026-08-07_desynced.md")
+
+    def test_spoof_guard_still_catches_a_ledger_only_foreign_claim(self):
+        """The spoof-guard's first rung (claim-holder read) must still
+        reject a handoff whose claim (ledger-only, mirror desynced) names a
+        DIFFERENT live session — widening what the guard can see must not
+        weaken what it refuses."""
+        import tempfile
+
+        from coordinator_core import claim_state as claim_state_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _git(repo, "init", "-q")
+            archive_dir = repo / "archive" / "handoffs"
+            archive_dir.mkdir(parents=True)
+            handoff = archive_dir / "2026-08-07_foreign.md"
+            # Desynced mirror: names nobody. Only the ledger names the
+            # (different, live) foreign session.
+            handoff.write_text("---\nstatus: open\npredecessor: some-sha\n---\nbody\n")
+
+            self._write_ledger_claim(repo / ".git", handoff.name, "sid-foreign-live", "2026-08-07T10:00:00Z")
+
+            with unittest.mock.patch.object(claim_state_mod, "cs_claim_holder_live", return_value=True):
+                rejected, reason = wsc._foreign_consumer_guard(
+                    repo, "archive/handoffs/2026-08-07_foreign.md", "sid-restorer"
+                )
+
+            self.assertTrue(rejected)
+            self.assertIn("sid-foreign-live", reason)
+            self.assertIn("restoration-commit spoof guard", reason)
+
+    def test_spoof_guard_permits_own_ledger_only_claim(self):
+        """Regression companion: a ledger-only claim naming THIS session
+        must not be misread as foreign."""
+        import tempfile
+
+        from coordinator_core import claim_state as claim_state_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _git(repo, "init", "-q")
+            archive_dir = repo / "archive" / "handoffs"
+            archive_dir.mkdir(parents=True)
+            handoff = archive_dir / "2026-08-07_own.md"
+            handoff.write_text("---\nstatus: open\npredecessor: some-sha\n---\nbody\n")
+
+            self._write_ledger_claim(repo / ".git", handoff.name, "sid-owner", "2026-08-07T10:00:00Z")
+
+            with unittest.mock.patch.object(claim_state_mod, "cs_claim_holder_live", return_value=True):
+                rejected, reason = wsc._foreign_consumer_guard(
+                    repo, "archive/handoffs/2026-08-07_own.md", "sid-owner"
+                )
+
+            self.assertFalse(rejected)
 
 
 class TestResolveDispositionIntegration(unittest.TestCase):
@@ -1265,18 +1393,31 @@ class TestFindSessionClaimCli(unittest.TestCase):
             os.environ.pop("HOME", None)
             os.environ["USERPROFILE"] = str(userprofile_home)
             real_access = os.access
+            real_is_file = Path.is_file
+            sibling_path = _BIN_DIR / "session-claim-cli"
 
             def _fake_access(path, mode):
                 # Force the sibling-entrypoint rung (checked first) to miss --
                 # this test's real bin/ dir DOES carry a live session-claim-cli
                 # (it's the real claude-klabauter checkout), which would otherwise mask
                 # the settings-home fallback rung under test here.
-                if str(path) == str(_BIN_DIR / "session-claim-cli"):
+                if str(path) == str(sibling_path):
                     return False
                 return real_access(path, mode)
 
+            def _fake_is_file(self):
+                # `_is_executable` short-circuits to `True` without calling
+                # `os.access` on Windows (os.access(X_OK) is meaningless
+                # there), so the sibling rung's real gate on that platform is
+                # this `.is_file()` check, not the `os.access` patch above --
+                # force it to miss the same way for the same reason.
+                if str(self) == str(sibling_path):
+                    return False
+                return real_is_file(self)
+
             try:
-                with unittest.mock.patch("os.access", _fake_access):
+                with unittest.mock.patch("os.access", _fake_access), \
+                        unittest.mock.patch.object(Path, "is_file", _fake_is_file):
                     found = wsc.find_session_claim_cli()
             finally:
                 for k, v in env_backup.items():

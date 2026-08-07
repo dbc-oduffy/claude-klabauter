@@ -46,9 +46,7 @@ if _LIB_DIR not in sys.path:
 
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 _USAGE = "Usage: baton-drift-sweep.py (no arguments)"
 
@@ -61,7 +59,7 @@ def _resolve_repo_root() -> str | None:
             ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

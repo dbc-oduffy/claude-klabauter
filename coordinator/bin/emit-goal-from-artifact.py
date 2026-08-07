@@ -40,7 +40,7 @@ subprocess-invoked read-frontmatter-field.py
 per field per goal. Fix-in-port (DR-059): drops the jq dependency entirely — JSON
 projection uses the stdlib `json` module — and imports
 coordinator_core.ops.read_frontmatter_field.read_frontmatter_field directly
-in-process (via cc_invoke._resolve_claude_klabauter_root() for CLAUDE_KLABAUTER_ROOT resolution,
+in-process (via cc_invoke.resolve_engine_root() for CLAUDE_KLABAUTER_ROOT resolution,
 matching every other Windows-campaign per-op port) instead of subprocess-spawning
 read-frontmatter-field.py once per field per goal artifact. append-goal-event.py
 itself stays a subprocess invocation — that IS the DR-210 single-writer facade
@@ -69,9 +69,27 @@ if _LIB_DIR not in sys.path:
 
 import cc_invoke  # noqa: E402
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+def _no_console_kw() -> dict:
+    """Lazily resolve claude_klabauter_root onto sys.path, then splat the canonical
+    no-console-window kwarg (mirrors ``_resolve_read_frontmatter_field``'s
+    own lazy-import posture).
+
+    Unguarded here by design: this function has no local try/except, so a
+    resolution failure propagates as `resolve_engine_root`'s own RuntimeError
+    (carrying its remediation text) to the caller — both call sites
+    (`_resolve_repo_root`, `_derive_repo_slug`) already catch `RuntimeError`
+    as part of a broader except tuple. `ensure_engine_on_path` would swallow
+    that RuntimeError into a silent None here, losing the remediation text
+    before either caller's except clause ever saw it.
+    """
+    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
+    if claude_klabauter_root not in sys.path:
+        sys.path.insert(0, claude_klabauter_root)
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return no_console_creationflags()
+
 
 _STATUS_MAP = {
     "active": "active",
@@ -92,7 +110,7 @@ def _resolve_read_frontmatter_field():
     precondition (exit 1) by main(), matching the bash oracle's jq-absent /
     helper-not-found fatal-precondition class.
     """
-    claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
+    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
@@ -110,9 +128,9 @@ def _resolve_repo_root(root_override: str) -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_kw(),
         )
-    except OSError:
+    except (OSError, RuntimeError, ImportError):
         return None
     root = result.stdout.strip()
     if result.returncode != 0 or not root:
@@ -128,9 +146,9 @@ def _derive_repo_slug(git_root: str, repo_override: str) -> str:
             ["git", "-C", git_root, "remote", "get-url", "origin"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_kw(),
         )
-    except OSError:
+    except (OSError, RuntimeError, ImportError):
         return "local"
     if result.returncode != 0:
         return "local"
@@ -396,10 +414,10 @@ def main(argv: list[str]) -> int:
         ]
         try:
             result = subprocess.run(
-                cmd, cwd=git_root, creationflags=_NO_WINDOW,
+                cmd, cwd=git_root, **_no_console_kw(),
                 capture_output=True, text=True,
             )
-        except OSError as exc:
+        except (OSError, RuntimeError, ImportError) as exc:
             print(f"[emit-goal] FAIL {basename}: append-goal-event.py invocation error: {exc}", file=sys.stderr)
             emit_fail = True
             continue

@@ -77,12 +77,14 @@ def _resolve_initiatives_dir() -> str | None:
     # pending lockstep cockpit-read flip (improvement-queue entry)
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     try:
         proc = subprocess.run(
             [sys.executable, _COORDINATOR_STATE_ROOT_PY, "--central"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(

@@ -87,6 +87,8 @@ except RuntimeError as _exc:
 if str(_CLAUDE_KLABAUTER_ROOT) not in sys.path:
     sys.path.insert(0, str(_CLAUDE_KLABAUTER_ROOT))
 
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+
 try:
     import yaml  # noqa: E402
 except ImportError:  # pragma: no cover — yaml is a standing project dependency
@@ -271,7 +273,7 @@ def _run_git(args: list[str], repo_root: Path) -> subprocess.CompletedProcess:
         cwd=str(repo_root),
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

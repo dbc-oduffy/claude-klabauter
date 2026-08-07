@@ -30,6 +30,8 @@ import sys
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _CLI = pathlib.Path(__file__).resolve().parents[1] / "scoped-git-commit"
 
 #: Deterministic test session identity (C4c ownership gate — see
@@ -63,7 +65,7 @@ def _run_cli(repo: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         check=False,
         env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -151,6 +153,30 @@ class TestNoUnscopedMode:
     def test_separator_with_no_paths_is_a_usage_error(self, scratch_repo):
         result = _run_cli(scratch_repo, "-m", "subject", "--")
         assert result.returncode == 2
+
+    def test_missing_separator_error_names_the_powershell_quoting_fix(
+        self, scratch_repo
+    ):
+        result = _run_cli(scratch_repo, "-m", "subject")
+        assert result.returncode == 2
+        assert "separator is required" in result.stderr
+        assert "'--'" in result.stderr
+        assert "PowerShell" in result.stderr
+
+    def test_missing_separator_error_names_the_restricted_policy_fallback(
+        self, scratch_repo
+    ):
+        """The Restricted-policy half of the message must name a concrete,
+        invocable `python <path> ...` command — never the literal
+        `<path-to-extensionless-forwarder>` template placeholder, and the
+        path it names must be this CLI's own resolvable location (see the
+        reviewer finding this pins: `scoped-git-commit` IS the extensionless
+        forwarder the message is telling the operator to re-invoke)."""
+        result = _run_cli(scratch_repo, "-m", "subject")
+        assert result.returncode == 2
+        assert "Restricted" in result.stderr
+        assert "<path-to-extensionless-forwarder>" not in result.stderr
+        assert "python %s" % str(_CLI.resolve()) in result.stderr
 
     def test_missing_subject_is_a_usage_error(self, scratch_repo):
         result = _run_cli(scratch_repo, "--", "mine.txt")
@@ -458,6 +484,63 @@ class TestRefusalExitCode:
         result = _run_cli(scratch_repo, "-m", "scoped: unowned", "--", "mine.txt")
         assert result.returncode != 0, result.stdout
         assert result.returncode != 2  # not a usage error -- the op ran and refused
+
+
+class TestMessageFromFile:
+    """`-F <path>` (and `-F -` for stdin) mirrors `git commit -F` -- the way
+    out of the here-string trap on this seam: `-m` forces a multi-line
+    message through a single argv token, and this box has already mangled a
+    commit subject once via PowerShell's `@'...'@` idiom used from the Bash
+    tool.
+    """
+
+    def test_dash_f_produces_the_same_subject_as_equivalent_dash_m(
+        self, scratch_repo, tmp_path
+    ):
+        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+        msg_path = tmp_path / "msg.txt"
+        msg_path.write_text("scoped: from file", encoding="utf-8")
+
+        result = _run_cli(scratch_repo, "-F", str(msg_path), "--", "mine.txt")
+        assert result.returncode == 0, result.stderr
+        subject = _git(scratch_repo, "show", "-s", "--format=%s", "HEAD").strip()
+        assert subject == "scoped: from file"
+
+    def test_dash_m_and_dash_f_together_is_a_usage_error(self, scratch_repo, tmp_path):
+        msg_path = tmp_path / "msg.txt"
+        msg_path.write_text("subject", encoding="utf-8")
+        result = _run_cli(
+            scratch_repo, "-m", "subject", "-F", str(msg_path), "--", "mine.txt"
+        )
+        assert result.returncode == 2
+        assert "-m" in result.stderr
+        assert "-F" in result.stderr
+
+    def test_dash_f_with_nonexistent_path_fails_loudly_before_staging(
+        self, scratch_repo, tmp_path
+    ):
+        missing = tmp_path / "does-not-exist.txt"
+        result = _run_cli(scratch_repo, "-F", str(missing), "--", "mine.txt")
+        assert result.returncode == 2
+        assert str(missing) in result.stderr
+        # Nothing staged as a side effect of the failed read.
+        assert _git(scratch_repo, "status", "--short").strip() == ""
+
+    def test_multiline_body_from_dash_f_survives_intact(self, scratch_repo, tmp_path):
+        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+        msg_path = tmp_path / "msg.txt"
+        msg_path.write_text(
+            "scoped: multiline subject\n\nbody line one\nbody line two\n",
+            encoding="utf-8",
+        )
+
+        result = _run_cli(scratch_repo, "-F", str(msg_path), "--", "mine.txt")
+        assert result.returncode == 0, result.stderr
+        full = _git(scratch_repo, "show", "-s", "--format=%B", "HEAD")
+        assert "body line one" in full
+        assert "body line two" in full
 
 
 class TestMoveSet:

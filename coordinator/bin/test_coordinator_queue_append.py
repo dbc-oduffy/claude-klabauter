@@ -38,11 +38,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from coordinator_core.win_portability import no_console_creationflags
 
-# getattr fallback: CREATE_NO_WINDOW only exists on Windows; returns 0 (no-op) on POSIX.
-# Suppresses console popup under headless Claude Code. Pattern is shared with
-# test_coordinator_queue_append_parity.py — keep in sync.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Repo root — this checkout's own coordinator_core is the byte-identical parity
 # successor to the deleted node schema-cli.js (480ad8f8); `-m coordinator_core.
@@ -83,7 +80,7 @@ def _run_cli(args: list[str], env: dict[str, str] | None = None, cwd: str | None
         capture_output=True,
         text=True,
         cwd=cwd,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -674,7 +671,7 @@ def _improvement_queue_required_args(extra: list[str] | None = None) -> list[str
         "--title", "Test central improvement entry",
         "--body", "Body describing the improvement.",
         "--surface", "state/lessons.md:42",
-        "--proposed-action", "plugins/coordinator/skills/workstream-complete/SKILL.md",
+        "--proposed-action", "plugins/coordinator-claude/coordinator/skills/workstream-complete/SKILL.md",
         "--change-kind", "skill-edit",
         "--status", "open",
         "--from-repo", "test-repo-em",
@@ -1255,7 +1252,7 @@ def test_system_block_with_session_id() -> None:
                 capture_output=True,
                 text=True,
                 cwd=_REPO_ROOT,
-                creationflags=_NO_WINDOW,
+                **no_console_creationflags(),
             )
             validate_json = json.loads(validate_proc.stdout)
         except Exception as exc:
@@ -1334,23 +1331,22 @@ def test_system_block_without_session_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test C2-sentinel — sentinel-file fallback in _resolve_session_id (CCOS-3 C2)
+# Test C2-sentinel — sentinel tier REMOVED from _resolve_session_id (KS-3)
 # ---------------------------------------------------------------------------
 
-def test_sentinel_file_fallback() -> None:
-    """Review: code-reviewer Slice-B — (F1) The PRIMARY production fallback when
-    CLAUDE_CODE_SESSION_ID is unset is the sentinel file at
-    <git_root>/.git/coordinator-sessions/.current-session-id.
-    This test exercises that branch (coordinator-queue-append:274-285).
-
-    Setup: create a real .git directory structure with the sentinel file containing
-    a known session ID, then invoke with CLAUDE_CODE_SESSION_ID="" and cwd=that dir.
-    Assert that system.created_by_session == sentinel content AND
-    provenance_completeness == "complete".
+def test_sentinel_file_ignored_KS3() -> None:
+    """KS-3 (2026-08-07): the `.current-session-id` sentinel tier was removed
+    from _resolve_session_id — unsound under concurrency (last-writer-wins
+    across concurrent sessions sharing one worktree) and its sole writer
+    (session-init.py) was deleted 2026-07-15 (PM directive). A well-formed
+    sentinel file must now be IGNORED: with CLAUDE_CODE_SESSION_ID unset, the
+    session id resolves to "" and provenance_completeness degrades to
+    "unknown" — the record must NOT vouch for its own attribution when it
+    can't be resolved.
 
     Spec backlink: docs/plans/2026-06-26-queue-schema-unify.md § C2 STEP 1
     """
-    name = "Test C2-sentinel — sentinel-file fallback resolves session_id from .git"
+    name = "Test C2-sentinel — sentinel file is ignored (KS-3)"
     sentinel_session_id = "test-sentinel-session-c2-xyz789"
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1365,19 +1361,19 @@ def test_sentinel_file_fallback() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init_result.stderr!r}"))
             return
 
-        # Write the sentinel file.
+        # Write the sentinel file — must be ignored post-KS-3.
         git_dir = os.path.join(tmpdir, ".git")
         sentinel_dir = os.path.join(git_dir, "coordinator-sessions")
         os.makedirs(sentinel_dir, exist_ok=True)
         sentinel_path = os.path.join(sentinel_dir, ".current-session-id")
         with open(sentinel_path, "w", encoding="utf-8") as fh:
-            fh.write(sentinel_session_id + "\n")  # trailing newline is stripped by the CLI
+            fh.write(sentinel_session_id + "\n")
 
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
                 "QUEUE_APPEND_OUTPUT_ROOT": tmpdir,
-                "CLAUDE_CODE_SESSION_ID": "",  # force sentinel path
+                "CLAUDE_CODE_SESSION_ID": "",  # unresolved — sentinel must not rescue this
             },
             cwd=tmpdir,
         )
@@ -1401,28 +1397,27 @@ def test_sentinel_file_fallback() -> None:
         system = parsed.get("system")
         if not isinstance(system, dict):
             # Without PyYAML the minimal parser returns "" for the nested system block.
-            # In that case, inspect the raw YAML for the sentinel id.
+            # In that case, inspect the raw YAML directly.
             with open(yaml_path, encoding="utf-8") as fh:
                 raw = fh.read()
-            if sentinel_session_id not in raw:
-                raise AssertionError(f"{name}: " + (f"sentinel session id {sentinel_session_id!r} not found in written YAML "
-                    f"(system block not dict — PyYAML absent; raw check also failed). "
-                    f"Raw YAML excerpt: {raw[:500]!r}"))
+            if sentinel_session_id in raw:
+                raise AssertionError(f"{name}: " + (f"sentinel session id {sentinel_session_id!r} FOUND in written YAML "
+                    f"— sentinel tier must be ignored post-KS-3. Raw YAML excerpt: {raw[:500]!r}"))
                 return
-            if "provenance_completeness: complete" not in raw:
-                raise AssertionError(f"{name}: " + (f"expected 'provenance_completeness: complete' in raw YAML (sentinel resolved); "
+            if "provenance_completeness: unknown" not in raw:
+                raise AssertionError(f"{name}: " + (f"expected 'provenance_completeness: unknown' in raw YAML (unresolved session_id); "
                     f"raw: {raw[:500]!r}"))
                 return
             return
 
         got_session = system.get("created_by_session")
-        if got_session != sentinel_session_id:
-            raise AssertionError(f"{name}: " + (f"system.created_by_session: expected sentinel {sentinel_session_id!r}, got {got_session!r}"))
+        if got_session == sentinel_session_id:
+            raise AssertionError(f"{name}: " + (f"system.created_by_session: sentinel id {sentinel_session_id!r} was used — sentinel tier must be ignored post-KS-3"))
             return
 
         completeness = system.get("provenance_completeness")
-        if completeness != "complete":
-            raise AssertionError(f"{name}: " + (f"system.provenance_completeness: expected 'complete' (sentinel resolved), got {completeness!r}"))
+        if completeness != "unknown":
+            raise AssertionError(f"{name}: " + (f"system.provenance_completeness: expected 'unknown' (unresolved session_id), got {completeness!r}"))
             return
 
 
@@ -1528,7 +1523,7 @@ def _run_lesson_add_cli(args: list[str], env: dict[str, str] | None = None, cwd:
         capture_output=True,
         text=True,
         cwd=cwd,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 

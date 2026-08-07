@@ -21,6 +21,7 @@ import io
 import os
 import subprocess
 import sys
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -86,9 +87,11 @@ def test_unknown_flag_exits_nonzero_and_never_calls_transport():
     assert calls["n"] == 0, "no transport call should happen on an unrecognized flag"
 
 
-def test_bare_positional_repo_root_resolves():
+def test_bare_positional_repo_root_resolves(tmp_path):
     mod = _load_module()
     seen_repo_roots = []
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
 
     def fake_route(op, params, repo_root, legacy_fn):
         seen_repo_roots.append(repo_root)
@@ -100,17 +103,19 @@ def test_bare_positional_repo_root_resolves():
         raise AssertionError("git subprocess must not run when a positional repo_root is given")
 
     rc, out, _err = _run_main_capturing(
-        mod, ["/tmp/fake-repo"], fake_route=fake_route, fake_run=fake_run
+        mod, [str(fake_repo)], fake_route=fake_route, fake_run=fake_run
     )
 
     assert rc == 0
     assert out.strip() == "0"
-    assert seen_repo_roots == ["/tmp/fake-repo"]
+    assert seen_repo_roots == [str(fake_repo)]
 
 
-def test_noarg_resolves_via_git():
+def test_noarg_resolves_via_git(tmp_path):
     mod = _load_module()
     seen_repo_roots = []
+    resolved_repo = tmp_path / "resolved" / "via" / "git"
+    resolved_repo.mkdir(parents=True)
 
     def fake_route(op, params, repo_root, legacy_fn):
         seen_repo_roots.append(repo_root)
@@ -120,7 +125,7 @@ def test_noarg_resolves_via_git():
 
     class _FakeProc:
         returncode = 0
-        stdout = "/resolved/via/git\n"
+        stdout = str(resolved_repo) + "\n"
 
     def fake_run(*a, **kw):
         return _FakeProc()
@@ -129,7 +134,7 @@ def test_noarg_resolves_via_git():
 
     assert rc == 0
     assert out.strip() == "0"
-    assert seen_repo_roots == ["/resolved/via/git"]
+    assert seen_repo_roots == [str(resolved_repo)]
 
 
 def _partial_route(failed, skipped=()):
@@ -148,7 +153,7 @@ def _partial_route(failed, skipped=()):
     return fake_route
 
 
-def test_partial_sweep_names_the_failed_memo_and_its_reason():
+def test_partial_sweep_names_the_failed_memo_and_its_reason(tmp_path):
     """A partial sweep must name WHICH memo failed and WHY on stderr.
 
     Was: the warning said only "partial (exit_code=2, acted=0) -- check claude-klabauter
@@ -158,6 +163,8 @@ def test_partial_sweep_names_the_failed_memo_and_its_reason():
     error below was available the whole time.
     """
     mod = _load_module()
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
     failed = [{
         "id": "cross-repo/inbox/2026-07-30-x-em-untracked-probe.md",
         "reason": "fatal: not under version control, source=cross-repo/inbox/"
@@ -165,7 +172,7 @@ def test_partial_sweep_names_the_failed_memo_and_its_reason():
     }]
 
     rc, out, err = _run_main_capturing(
-        mod, ["/tmp/fake-repo"], fake_route=_partial_route(failed),
+        mod, [str(fake_repo)], fake_route=_partial_route(failed),
         fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
@@ -178,14 +185,16 @@ def test_partial_sweep_names_the_failed_memo_and_its_reason():
     )
 
 
-def test_partial_sweep_falls_back_to_skip_reasons_when_nothing_failed():
+def test_partial_sweep_falls_back_to_skip_reasons_when_nothing_failed(tmp_path):
     """exit_code=2 with an empty failed[] means every candidate was DEFERRED;
     the skip reasons carry the why, so they must surface too."""
     mod = _load_module()
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
     skipped = [{"id": "cross-repo/inbox/probe.md", "reason": "re-live: live claim held"}]
 
     rc, _out, err = _run_main_capturing(
-        mod, ["/tmp/fake-repo"], fake_route=_partial_route([], skipped=skipped),
+        mod, [str(fake_repo)], fake_route=_partial_route([], skipped=skipped),
         fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
@@ -194,14 +203,16 @@ def test_partial_sweep_falls_back_to_skip_reasons_when_nothing_failed():
     assert "re-live: live claim held" in err
 
 
-def test_partial_sweep_caps_reported_failures():
+def test_partial_sweep_caps_reported_failures(tmp_path):
     """The inbox can hold ~90 memos; an unbounded dump would bury the summary
     line it exists to explain. Overflow is reported as a count, not dropped."""
     mod = _load_module()
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
     failed = [{"id": f"cross-repo/inbox/m{i}.md", "reason": "boom"} for i in range(25)]
 
     rc, _out, err = _run_main_capturing(
-        mod, ["/tmp/fake-repo"], fake_route=_partial_route(failed),
+        mod, [str(fake_repo)], fake_route=_partial_route(failed),
         fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
@@ -218,7 +229,7 @@ def test_cli_help_via_subprocess_exits_zero():
         [sys.executable, os.path.join(SCRIPT_DIR, "sweep-actioned-memos.py"), "--help"],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0
     assert "usage" in proc.stdout.lower()
@@ -229,7 +240,7 @@ def test_cli_unknown_flag_via_subprocess_exits_nonzero():
         [sys.executable, os.path.join(SCRIPT_DIR, "sweep-actioned-memos.py"), "--bogus"],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert proc.returncode != 0
     assert "unrecognized argument" in proc.stderr

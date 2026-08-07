@@ -60,10 +60,6 @@ if _LIB_DIR not in sys.path:
 
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _USAGE = "Usage: day-coverage-sweep.py <YYYY-MM-DD>"
@@ -73,13 +69,18 @@ def _resolve_repo_root() -> str | None:
     """Resolve the current git worktree root from PWD (standalone-repo assumption,
     mirrors reconcile-completion-commits.py's ``_resolve_repo_root``)."""
     try:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
-    except OSError:
+    except (OSError, RuntimeError, ImportError):
         return None
     root = result.stdout.strip()
     if result.returncode != 0 or not root:

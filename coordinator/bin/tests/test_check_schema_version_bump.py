@@ -24,6 +24,8 @@ import sys
 import tempfile
 import unittest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BUMP_TRIPWIRE = os.path.join(_SCRIPT_DIR, "..", "check-schema-version-bump.py")
 
@@ -73,7 +75,7 @@ def _run_tripwire(cwd_env_root: str, *args: str) -> int:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),
     )
     return proc.returncode
 
@@ -157,8 +159,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator/canonical-structure.yaml",
-            "plugins/coordinator/coordinator-schema-version",
+            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
+            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
         )
         _git(repo, "commit", "-q", "-m", "initial nested")
 
@@ -168,7 +170,7 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator/canonical-structure.yaml",
+            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
         )
 
         rc = _run_tripwire(nested, "--staged")
@@ -187,8 +189,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator/canonical-structure.yaml",
-            "plugins/coordinator/coordinator-schema-version",
+            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
+            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
         )
         _git(repo, "commit", "-q", "-m", "initial nested")
 
@@ -200,8 +202,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator/canonical-structure.yaml",
-            "plugins/coordinator/coordinator-schema-version",
+            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
+            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
         )
 
         rc = _run_tripwire(nested, "--staged")

@@ -98,14 +98,14 @@ _FULL_JSON_RESULT = {
 # ===========================================================================
 # [AC-a / State 2] Native OK -> integer sum across four buckets
 # ===========================================================================
-def test_native_ok_sums_four_buckets():
+def test_native_ok_sums_four_buckets(tmp_path):
     mod = _load_sweep_boot()
 
     def fake_route_mutation(op, params, repo_root, legacy_fn):
         assert op == "session.boot_sweep"
         return dict(_FULL_JSON_RESULT)
 
-    rc, out, _err = _run_main_capturing(mod, ["/tmp/fake-repo"], fake_route_mutation)
+    rc, out, _err = _run_main_capturing(mod, [str(tmp_path)], fake_route_mutation)
     count = int(out.strip())
     if rc == 0:
         _pass("native ok: exit 0")
@@ -120,7 +120,7 @@ def test_native_ok_sums_four_buckets():
 # ===========================================================================
 # [AC-c] Integer-count stdout contract across varied bucket sizes
 # ===========================================================================
-def test_integer_count_contract():
+def test_integer_count_contract(tmp_path):
     mod = _load_sweep_boot()
     cases = [
         ({"consumed_handoffs": {"archived": []}, "plans": {"archived": []}, "shipped_handoffs": {"archived": []}, "memos": {"archived": []}}, 0),
@@ -132,7 +132,7 @@ def test_integer_count_contract():
         def fake_route_mutation(op, params, repo_root, legacy_fn, _result=result):
             return dict(_result)
 
-        _rc, out, _err = _run_main_capturing(mod, ["/tmp/fake-repo"], fake_route_mutation)
+        _rc, out, _err = _run_main_capturing(mod, [str(tmp_path)], fake_route_mutation)
         got = int(out.strip())
         if got == expected:
             _pass(f"int-count: expected={expected}, got={got}")
@@ -143,7 +143,7 @@ def test_integer_count_contract():
 # ===========================================================================
 # [AC-d] RouteMutationError (op-level refusal) -> partial count + WARN + exit 0
 # ===========================================================================
-def test_route_mutation_error_partial():
+def test_route_mutation_error_partial(tmp_path):
     mod = _load_sweep_boot()
     partial = {
         "exit_code": 2,
@@ -156,7 +156,7 @@ def test_route_mutation_error_partial():
     def fake_route_mutation(op, params, repo_root, legacy_fn):
         raise RouteMutationError("op refused: exit_code=2", partial)
 
-    rc, out, err = _run_main_capturing(mod, ["/tmp/fake-repo"], fake_route_mutation)
+    rc, out, err = _run_main_capturing(mod, [str(tmp_path)], fake_route_mutation)
     count = int(out.strip())
     if rc == 0:
         _pass("route_mutation error: exit 0 (best-effort ceremony)")
@@ -175,13 +175,13 @@ def test_route_mutation_error_partial():
 # ===========================================================================
 # [AC-a / State 3] Generic RuntimeError (transport failure) -> print 0, exit 0
 # ===========================================================================
-def test_route_mutation_runtime_error():
+def test_route_mutation_runtime_error(tmp_path):
     mod = _load_sweep_boot()
 
     def fake_route_mutation(op, params, repo_root, legacy_fn):
         raise RuntimeError("simulated transport failure")
 
-    rc, out, err = _run_main_capturing(mod, ["/tmp/fake-repo"], fake_route_mutation)
+    rc, out, err = _run_main_capturing(mod, [str(tmp_path)], fake_route_mutation)
     count_str = out.strip()
     if rc == 0:
         _pass("transport error: exit 0 (log-and-continue)")
@@ -217,22 +217,26 @@ def test_legacy_fn_raises():
 # ===========================================================================
 # state_common_dir forwarding — params-json contract (symmetric with repo_root)
 # ===========================================================================
-def test_state_common_dir_forwarded():
+def test_state_common_dir_forwarded(tmp_path):
     mod = _load_sweep_boot()
     seen = {}
+    repo_root = tmp_path / "fake-repo"
+    repo_root.mkdir()
+    state_common_dir = tmp_path / "state-common-dir"
+    state_common_dir.mkdir()
 
     def fake_route_mutation(op, params, repo_root, legacy_fn):
         seen["params"] = params
         return dict(_FULL_JSON_RESULT)
 
-    _run_main_capturing(mod, ["/tmp/fake-repo", "/tmp/state-common-dir"], fake_route_mutation)
-    if seen.get("params") == {"state_common_dir": "/tmp/state-common-dir"}:
+    _run_main_capturing(mod, [str(repo_root), str(state_common_dir)], fake_route_mutation)
+    if seen.get("params") == {"state_common_dir": str(state_common_dir)}:
         _pass("state_common_dir: forwarded verbatim into params")
     else:
         _fail("state_common_dir: forwarded verbatim into params", f"got {seen.get('params')!r}")
 
     seen.clear()
-    _run_main_capturing(mod, ["/tmp/fake-repo"], fake_route_mutation)
+    _run_main_capturing(mod, [str(repo_root)], fake_route_mutation)
     if seen.get("params") == {}:
         _pass("state_common_dir absent: params == {} (op-side unified-state fallback)")
     else:
@@ -270,6 +274,7 @@ def test_refused_op_writes_failure_record():
         raise RouteMutationError("op refused: exit_code=2", partial)
 
     with tempfile.TemporaryDirectory() as repo_root:
+        os.mkdir(os.path.join(repo_root, ".git"))
         rc, _out, _err = _run_main_capturing(mod, [repo_root], fake_route_mutation)
         log = _read_failures_log(repo_root)
         if rc == 0:
@@ -292,6 +297,7 @@ def test_transport_error_writes_failure_record():
         raise RuntimeError("simulated transport failure")
 
     with tempfile.TemporaryDirectory() as repo_root:
+        os.mkdir(os.path.join(repo_root, ".git"))
         rc, _out, _err = _run_main_capturing(mod, [repo_root], fake_route_mutation)
         log = _read_failures_log(repo_root)
         if rc == 0:
@@ -314,6 +320,7 @@ def test_non_object_result_writes_failure_record():
         return ["not", "a", "dict"]
 
     with tempfile.TemporaryDirectory() as repo_root:
+        os.mkdir(os.path.join(repo_root, ".git"))
         rc, out, _err = _run_main_capturing(mod, [repo_root], fake_route_mutation)
         log = _read_failures_log(repo_root)
         if rc == 0 and out.strip() == "0":
@@ -343,6 +350,7 @@ def test_genuine_zero_item_sweep_writes_no_failure_and_stamps_liveness():
         return dict(empty_result)
 
     with tempfile.TemporaryDirectory() as repo_root:
+        os.mkdir(os.path.join(repo_root, ".git"))
         rc, out, _err = _run_main_capturing(mod, [repo_root], fake_route_mutation)
         log = _read_failures_log(repo_root)
         liveness = _read_liveness(repo_root)

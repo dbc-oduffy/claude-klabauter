@@ -26,6 +26,7 @@ import subprocess
 import sys
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +43,7 @@ def _run(script: str, *args: str) -> subprocess.CompletedProcess:
         [sys.executable, os.path.join(SCRIPT_DIR, script), *args],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

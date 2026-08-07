@@ -61,6 +61,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from cc_invoke import RouteMutationError, route, route_mutation  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _OP_CLUSTER = "queue.cluster"
 _OP_AGE_PING = "queue.age_ping"
@@ -74,10 +75,6 @@ _OP_SCAFFOLD = "handoff.scaffold_from_queue"
 # so this is not a general family-legitimacy check (that stays the op's job).
 # Mirrors coordinator-queue-append's `_validate_workstream_identifier` shape.
 _FAMILY_ARG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _legacy_fn(op: str):
@@ -108,7 +105,7 @@ def _resolve_repo_root(explicit: str | None) -> str | None:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

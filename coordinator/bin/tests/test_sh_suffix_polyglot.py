@@ -37,11 +37,12 @@ import shutil
 import subprocess
 import sys
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
 GUARD = os.path.join(_BIN_DIR, "check-sh-suffix-polyglot.py")
 PYTHON = sys.executable
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 TRAMPOLINE_BODY = (
     "#!/bin/sh\n"
@@ -67,7 +68,7 @@ def write(path, content):
 def _git(args, cwd):
     subprocess.run(
         ["git"] + args, cwd=cwd, capture_output=True, text=True,
-        creationflags=_NO_WINDOW, check=True,
+        **no_console_creationflags(), check=True,
     )
 
 
@@ -96,7 +97,7 @@ def _run_guard(guard_dir, args=None):
     guard = os.path.join(guard_dir, "check-sh-suffix-polyglot.py")
     r = subprocess.run(
         [PYTHON, guard] + (args or []),
-        cwd=guard_dir, capture_output=True, text=True, creationflags=_NO_WINDOW,
+        cwd=guard_dir, capture_output=True, text=True, **no_console_creationflags(),
     )
     return r
 

@@ -40,6 +40,7 @@ _MODULE_PATH = os.path.join(_SCRIPT_DIR, "migrate-improvement-queue-project.py")
 
 # Import the module directly for unit-testing internal helpers.
 import importlib.util
+from coordinator_core.win_portability import no_console_creationflags
 
 _spec = importlib.util.spec_from_file_location("migrator", _MODULE_PATH)
 _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
@@ -52,7 +53,7 @@ def _run_script(*args: str) -> subprocess.CompletedProcess:
         [sys.executable, _MODULE_PATH, *args],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

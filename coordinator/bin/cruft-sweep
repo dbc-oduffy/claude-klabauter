@@ -243,6 +243,7 @@ from coordinator_core.resolve_coordinator_clone import (  # noqa: E402
     ResolveCoordinatorCloneError,
     resolve_content_root,
 )
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 # Phases A-D (2026-07-28 collapse — see CHUNK BOUNDARY addendum below) now
 # import their sweep logic directly from coordinator_core.ops.cruft_sweep,
 # the same way Phase E already did — this file no longer carries private
@@ -565,7 +566,7 @@ def _apply_machine_local_days_override(cfg: SweepConfig) -> None:
             text=True,
             timeout=15,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return
@@ -620,7 +621,7 @@ def _resolve_repo_root(cfg: "SweepConfig") -> str:
             result = subprocess.run(
                 [git_bin, "rev-parse", "--show-toplevel"],
                 capture_output=True, text=True, timeout=15, check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             if result.returncode == 0:
                 out = (result.stdout or "").strip()
@@ -745,11 +746,10 @@ def _default_parent_roots() -> List[str]:
     ml_bin = shutil.which("machine-local")
     if ml_bin is None:
         return []
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         keys_result = subprocess.run(
             [ml_bin, "keys"], capture_output=True, text=True, timeout=15,
-            check=False, creationflags=creationflags,
+            check=False, **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -767,7 +767,7 @@ def _default_parent_roots() -> List[str]:
         try:
             get_result = subprocess.run(
                 [ml_bin, "get", key], capture_output=True, text=True,
-                timeout=15, check=False, creationflags=creationflags,
+                timeout=15, check=False, **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired):
             continue

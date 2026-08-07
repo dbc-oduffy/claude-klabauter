@@ -30,8 +30,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from coordinator_core.win_portability import no_console_creationflags
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _GENERATOR = os.path.join(_THIS_DIR, "generate-tested-platforms")
@@ -63,7 +63,7 @@ def _run_git(repo_root: str, *args: str) -> subprocess.CompletedProcess:
         ["git", "-C", repo_root, *args],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -118,7 +118,7 @@ def _run_generator(repo_root: str, write: bool = False) -> subprocess.CompletedP
     args = [sys.executable, _GENERATOR, "--repo-root", repo_root]
     if write:
         args.append("--write")
-    return subprocess.run(args, capture_output=True, text=True, creationflags=_NO_WINDOW)
+    return subprocess.run(args, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _read_manifest(repo_root: str) -> dict:

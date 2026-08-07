@@ -27,6 +27,8 @@ import subprocess
 import sys
 import tempfile
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.normpath(os.path.join(_HERE, "..", "check-machine-path-leak.py"))
 
@@ -38,7 +40,7 @@ def _run_guard(*args, env=None):
         stderr=subprocess.PIPE,
         text=True,
         env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout, proc.stderr
 

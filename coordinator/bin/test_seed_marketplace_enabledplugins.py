@@ -75,9 +75,8 @@ import os
 import subprocess
 import sys
 import tempfile
+from coordinator_core.win_portability import no_console_creationflags
 
-# getattr fallback: CREATE_NO_WINDOW only exists on Windows; returns 0 (no-op) on POSIX.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ---------------------------------------------------------------------------
 # Test infrastructure
@@ -130,7 +129,7 @@ def _run_cli(
         capture_output=True,
         text=True,
         cwd=cwd,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 

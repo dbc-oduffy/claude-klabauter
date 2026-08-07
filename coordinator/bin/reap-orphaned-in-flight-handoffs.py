@@ -140,16 +140,12 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
-from handoff_lifecycle import claim_holder as _shared_claim_holder  # noqa: E402
 from handoff_lifecycle import is_claimed_status  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _ARCHIVE_STAMP_CLI = os.path.join(_SCRIPT_DIR, "archive-stamp-cli")
 _QUERY_CLI_DEFAULT = os.path.join(_SCRIPT_DIR, "query-completions.py")
 _HAS_LIVE_CHILDREN_CLI = os.path.join(_SCRIPT_DIR, "handoff-has-live-children.py")
-
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _resolve_session_live():
@@ -182,6 +178,24 @@ def _resolve_find_archived_twin_by_handoff_id():
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.handoff_creation_guard import find_archived_twin_by_handoff_id
     return find_archived_twin_by_handoff_id
+
+
+def _resolve_claim_state():
+    """Import coordinator_core.claim_state.resolve_claim_state via
+    CLAUDE_KLABAUTER_ROOT.
+
+    Same in-process import trampoline as ``_resolve_session_live`` above.
+    C1 (commit 1194eb3f4) landed this as the canonical ledger-first claim
+    accessor — ledger wins whenever it holds a LIVE claim (regardless of
+    what the frontmatter mirror says); a dead ledger holder degrades to
+    ``source: "mirror"``/``"none"``, never ``"ledger"``. See
+    ``_claim_holder`` below for how this reaper consumes it.
+    """
+    claude_klabauter_root = _resolve_claude_klabauter_root()
+    if claude_klabauter_root not in sys.path:
+        sys.path.insert(0, claude_klabauter_root)
+    from coordinator_core.claim_state import resolve_claim_state
+    return resolve_claim_state
 
 
 def _resolve_canonical_kind():
@@ -235,26 +249,50 @@ def _fm_field(path: str, key: str) -> str:
     return val
 
 
-def _claim_holder(path: str) -> str:
-    """DR-084 dual-read: prefer claimed_by, fall back to consumed_by.
+def _claim_holder(path: str, *, repo_root: str = "") -> str:
+    """Ledger-first claim-holder read: prefer the branch-independent claim
+    ledger's LIVE holder, fall back to the tracked-frontmatter mirror
+    (`claimed_by`, then legacy `consumed_by`).
 
-    Thin wrapper over the shared coordinator/bin/lib/handoff_lifecycle.py
-    accessor (claim_holder) — kept as a local name so every call site below
-    stays unchanged; the dual-read logic itself lives in exactly one place
-    now, not duplicated per-caller. See that module's docstring for why the
-    single-shared-accessor pattern replaced this file's own local dual-read
-    (a prior in-file-only fix here still left the same pattern free to drift
-    a second time in another Python reader).
+    Thin wrapper over `coordinator_core.claim_state.resolve_claim_state` (C1,
+    commit 1194eb3f4) — the canonical ledger-first accessor. This replaces
+    this file's prior mirror-only dual-read
+    (coordinator/bin/lib/handoff_lifecycle.claim_holder): that accessor could
+    never see a claim the ledger still held once the mirror reverted (e.g. a
+    shared-worktree branch switch away from the commit that stamped
+    `claimed_by`) — a LIVE ledger holder would read as "no holder" here and
+    either wrongly disappear into `skipped_no_holder`, or worse, let a STALE
+    mirror value (a different, dead session id left over from a prior claim)
+    stand in as the tested holder and get reaped out from under the true,
+    still-live claimant. `resolve_claim_state` closes both: `.holder`
+    resolves to the ledger's holder whenever the ledger holds a live claim
+    (source == "ledger"), regardless of the mirror; only when the ledger has
+    no live claim does `.holder` fall back to the mirror value (source ==
+    "mirror"/"none"). A dead ledger holder is never surfaced as `.holder`
+    with source == "ledger" (see that module's own fail-closed-to-mirror
+    degrade) — this reaper's downstream `session_live()` re-check therefore
+    still governs whether the RESOLVED holder (ledger-live or mirror
+    fallback) is itself alive; this wrapper only fixes WHICH holder gets
+    tested, never removes that liveness test.
 
-    Review: code-reviewer — Finding 1 (superseded by the shared-accessor
-    promotion above, behavior unchanged). `_shipped_orphan_sha`'s P2 bounded
-    scan previously read raw `consumed_by` only, so a claimed_by-only
-    (migrated-vocabulary) handoff never matched its own dead holder's id,
-    silently zeroing match_count and disabling the ship-reclaim path for
-    any fully-migrated corpus. Factored so main()'s claim-holder resolution
-    and both P2 scan sites share one dual-read implementation.
+    `repo_root` threads through to `resolve_claim_state`'s own
+    `git_common_dir` resolution (lru_cache'd — see that module's docstring),
+    so passing it here costs a cached-dict lookup, not a subprocess.
+
+    A resolution failure (e.g. a malformed ledger record for this one
+    handoff) degrades to "" — this reaper's existing "no claim holder
+    recorded, skip, do not reap" path — rather than aborting the whole
+    batch. Defense-in-depth at this boundary even though the ledger-record
+    accessor itself is expected to degrade rather than raise; this script
+    destroys claim state, so it stays fail-closed-and-skip per handoff on
+    its own terms.
     """
-    return _shared_claim_holder(path)
+    resolve_claim_state = _resolve_claim_state()
+    try:
+        state = resolve_claim_state(path, repo_root=(repo_root or None))
+    except Exception:
+        return ""
+    return state.holder or ""
 
 
 def _handoff_id_archived_twin(handoff_id: str, repo_root: str) -> str:
@@ -302,7 +340,7 @@ def _run_query_cli(query_cli: str, where: str, fmt: str) -> str:
     else:
         cmd = [query_cli, "--where", where, "--format", fmt]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False, creationflags=_NO_WINDOW)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, **no_console_creationflags())
     except OSError:
         return ""
     if result.returncode != 0:
@@ -336,7 +374,7 @@ def _shipped_orphan_sha(
     for h in glob.glob(os.path.join(handoffs_dir, "*.md")):
         if not os.path.isfile(h):
             continue
-        if _claim_holder(h) == consumed_by:
+        if _claim_holder(h, repo_root=repo_root) == consumed_by:
             match_count += 1
 
     archive_handoffs_dir = os.path.join(repo_root, "archive", "handoffs")
@@ -344,7 +382,7 @@ def _shipped_orphan_sha(
         for h in glob.glob(os.path.join(archive_handoffs_dir, "**", "*.md"), recursive=True):
             if not os.path.isfile(h):
                 continue
-            if _claim_holder(h) == consumed_by:
+            if _claim_holder(h, repo_root=repo_root) == consumed_by:
                 match_count += 1
 
     if match_count != 1:
@@ -390,7 +428,7 @@ def _shipped_orphan_sha(
         try:
             result = subprocess.run(
                 ["git", "-C", repo_root, "show", "-s", "--format=%ct", sha],
-                capture_output=True, text=True, check=False, creationflags=_NO_WINDOW,
+                capture_output=True, text=True, check=False, **no_console_creationflags(),
             )
         except OSError:
             continue
@@ -421,7 +459,7 @@ def _run_archive_stamp_cli(args: list) -> bool:
 
         result = subprocess.run(
             [sys.executable, _ARCHIVE_STAMP_CLI] + args,
-            capture_output=True, text=True, check=False, env=child_env(), creationflags=_NO_WINDOW,
+            capture_output=True, text=True, check=False, env=child_env(), **no_console_creationflags(),
         )
     except OSError:
         return False
@@ -447,7 +485,7 @@ def _has_live_children_exit_code(handoff_path: str) -> int:
 
         result = subprocess.run(
             [sys.executable, _HAS_LIVE_CHILDREN_CLI, handoff_path],
-            capture_output=True, text=True, check=False, env=child_env(), creationflags=_NO_WINDOW,
+            capture_output=True, text=True, check=False, env=child_env(), **no_console_creationflags(),
         )
     except OSError:
         return 2
@@ -476,7 +514,7 @@ def main(argv: Optional[list] = None) -> int:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
         repo_root = (result.stdout or "").strip()
     except OSError:
@@ -547,7 +585,7 @@ def main(argv: Optional[list] = None) -> int:
             # preferred value, and the old name misled a reader skimming
             # just the variable name (not the assignment) into assuming
             # old-vocab-only.
-            claim_holder = _claim_holder(f)
+            claim_holder = _claim_holder(f, repo_root=repo_root)
 
             # No claim holder recorded — cannot evaluate liveness; skip
             # (fail-closed, do not reap).

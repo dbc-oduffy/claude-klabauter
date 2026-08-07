@@ -19,6 +19,7 @@ import os
 import sys
 import subprocess
 import tempfile
+from coordinator_core.win_portability import no_console_creationflags
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ def run_script(*args, **kwargs) -> subprocess.CompletedProcess:
         [PYTHON, SCRIPT, *args],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
         **kwargs,
     )
 

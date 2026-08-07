@@ -752,6 +752,81 @@ def test_send_consumes_outbox() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test — send normalizes a hand-authored status: open outbox draft to draft
+# before validating, then sends normally (2026-08-07, cross-repo/inbox/
+# 2026-08-07-example-store-repo-em-memo-tool-rejects-the-shape-it-teaches.md).
+# ---------------------------------------------------------------------------
+
+def test_send_open_status_normalizes_and_sends() -> None:
+    """A draft hand-authored with status: open (the shape every *received*
+    memo carries, an easy field to copy by mistake) is normalized to
+    status: draft in-memory before validation, prints an advisory naming
+    the normalization, and sends successfully — same end state as an
+    ordinary status: draft outbox file (see test_send_consumes_outbox).
+    """
+    name = "test_send_open_status_normalizes_and_sends"
+
+    claude_klabauter_root = _resolve_test_claude_klabauter_root()
+    if claude_klabauter_root is None:
+        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        receiver_repo = _make_git_repo(tmpdir, "receiver_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+
+        mock_impl = _make_mock_machine_local_with_receiver(tmpdir, receiver_repo)
+        _write_registry_toml(
+            claude_home,
+            {
+                _repo_key_for("test-receiver-em"): receiver_repo,
+                _repo_key_for("sender_repo-em"): sender_repo,
+            },
+        )
+
+        env = {
+            "MACHINE_LOCAL_IMPL": mock_impl,
+            "CLAUDE_HOME": claude_home,
+            "COORDINATOR_SETTINGS_HOME": claude_home,
+            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+        }
+
+        topic = "open-status-normalize-test"
+        to = "test-receiver-em"
+        outbox_content = _valid_outbox_content(topic, to).replace("status: draft", "status: open")
+        outbox_path = _make_outbox_file(sender_repo, topic, outbox_content)
+
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            ["send", topic],
+            env=env,
+        )
+
+        if result.returncode != 0:
+            raise AssertionError(f"{name}: " + (f"send exited {result.returncode}: "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"))
+
+        if "normaliz" not in result.stderr.lower():
+            raise AssertionError(f"{name}: " + (f"expected an open->draft normalization advisory on stderr, got: {result.stderr!r}"))
+
+        if os.path.isfile(outbox_path):
+            raise AssertionError(f"{name}: " + (f"outbox file should be archived (moved) after successful send, still exists: {outbox_path}"))
+
+        import glob as _dglob
+        candidates = _dglob.glob(os.path.join(receiver_repo, "cross-repo", "inbox", f"*-{topic}.md"))
+        if not candidates:
+            raise AssertionError(f"{name}: " + (f"receiver-side file not found for topic {topic!r}"))
+
+        with open(candidates[0], encoding="utf-8") as f:
+            receiver_content = f.read()
+        fm = _parse_frontmatter(receiver_content)
+        if fm.get("status") != "open":
+            raise AssertionError(f"{name}: " + (f"receiver memo status should be 'open', got: {fm.get('status')!r}"))
+
+
+# ---------------------------------------------------------------------------
 # Test — send re-declares the sender's touch-claim onto the archived sent
 # copy (docs/plans/2026-08-06-relocation-re-declares-the-touch-claim.md, C4)
 # ---------------------------------------------------------------------------
@@ -957,6 +1032,54 @@ def test_send_malformed_outbox_leaves_in_place() -> None:
         if "compose" not in combined.lower() and "validation" not in combined.lower():
             raise AssertionError(f"{name}: " + (f"validation failure output should hint at compose or mention validation. output: {combined!r}"))
 
+
+
+# ---------------------------------------------------------------------------
+# Test — a status other than draft/open still fails loud with the existing
+# message (the open->draft normalization is narrowly scoped to 'open' only).
+# ---------------------------------------------------------------------------
+
+def test_send_bogus_status_still_fails_loud() -> None:
+    """A draft with an arbitrary bad status (neither 'draft' nor 'open')
+    is NOT normalized — send still exits 2 with the existing
+    "status must be 'draft'" validation message, outbox left in place.
+    """
+    name = "test_send_bogus_status_still_fails_loud"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+
+        mock_impl = _make_mock_machine_local(tmpdir, None)
+        env = {
+            "MACHINE_LOCAL_IMPL": mock_impl,
+            "CLAUDE_HOME": claude_home,
+        }
+
+        topic = "bogus-status-draft"
+        content = _valid_outbox_content(topic, "test-receiver-em").replace(
+            "status: draft", "status: bogus"
+        )
+        outbox_path = _make_outbox_file(sender_repo, topic, content)
+
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            ["send", topic],
+            env=env,
+        )
+
+        if result.returncode != 2:
+            raise AssertionError(f"{name}: " + (f"send with bogus status should exit 2, got {result.returncode}. "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"))
+
+        if not os.path.isfile(outbox_path):
+            raise AssertionError(f"{name}: " + (f"outbox file should remain in place after validation failure, was removed: {outbox_path}"))
+
+        if "status must be 'draft'" not in result.stderr:
+            raise AssertionError(f"{name}: " + (f"expected the existing 'status must be draft' message on stderr, got: {result.stderr!r}"))
+        if "'bogus'" not in result.stderr:
+            raise AssertionError(f"{name}: " + (f"expected the bad status value echoed on stderr, got: {result.stderr!r}"))
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,12 @@ from pathlib import Path
 FIXTURES_DIR = Path(__file__).resolve().parent
 GATE = FIXTURES_DIR.parent.parent / "check-workstream-complete-deletion-blocks.py"
 
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+
 
 def run_gate(args: list[str], cwd: Path) -> int:
     """Run the gate script with args, returning its exit code (stdout/stderr discarded).
@@ -36,7 +42,7 @@ def run_gate(args: list[str], cwd: Path) -> int:
         cwd=str(cwd),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return result.returncode
 
@@ -47,7 +53,7 @@ def git(repo: Path, *args: str) -> None:
         cwd=str(repo),
         check=True,
         capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

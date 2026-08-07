@@ -62,8 +62,26 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _SUBPROCESS_TIMEOUT_SECS = 15
+
+
+def _no_console_kwargs() -> dict:
+    """Deferred coordinator_core import — matches this file's CLAUDE_KLABAUTER_ROOT
+    bootstrap posture so a transport-failure path never pays the resolution
+    cost unnecessarily. On any CLAUDE_KLABAUTER_ROOT resolution/import failure, falls
+    back to the same suppression kwargs computed inline (zero imports beyond
+    ``subprocess``) rather than silently dropping console suppression -- a
+    resolution failure must never turn a quiet spawn into a visible console
+    window."""
+    try:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:  # noqa: BLE001 -- fail-open, matches this module's bootstrap posture
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def _git_toplevel(cwd: str) -> str:
@@ -79,7 +97,7 @@ def _git_toplevel(cwd: str) -> str:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_no_console_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""

@@ -754,6 +754,13 @@ def _patch_chain_scoping(monkeypatch, chain_code_shas=None, chain_dag_shas=None,
 
 def _patch_brightline_persist_seam(monkeypatch, tmp_path, session_id="test-sid-brightline"):
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    # 2026-08-07 (state/audits/2026-08-07-review-gate-scoping-predecessor-and-
+    # planning-artifacts.md): `cmd_brightline_gate`'s PARTITION-MANDATORY
+    # branch now also mints chain-ancestry waivers (same call `coverage-gate`
+    # makes). Stub it to a no-op here — these tests exercise persistence and
+    # discharge, not minting; a real subprocess spawn would hit this process's
+    # actual cwd/repo, not the isolated `tmp_path` these tests already use.
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: session_id)
     # C13: these persistence-focused tests are not exercising the AC20
@@ -806,6 +813,7 @@ def test_brightline_gate_persist_failure_is_non_fatal_and_loud(monkeypatch, tmp_
 
 def test_brightline_gate_persist_skipped_loudly_when_session_id_unresolvable(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: None)
     _patch_chain_scoping(monkeypatch)
@@ -869,6 +877,7 @@ def _patch_brightline_no_persist_seam(monkeypatch, tmp_path, stdout=_TIER_B_STDO
     through the trail-record fixture they supply, not through git-resolution
     noise."""
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, stdout, ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-c13")
     _patch_chain_scoping(monkeypatch)
@@ -2187,3 +2196,175 @@ def test_resolve_chain_code_shas_excludes_a_handoff_authoring_only_commit(monkey
 def test_resolve_chain_code_shas_fails_safe_to_empty_when_dag_unresolvable(monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_dag_candidates", lambda from_handoff: None)
     assert _mod._resolve_chain_code_shas("state/handoffs/x.md") == []
+
+
+# ---------------------------------------------------------------------------
+# brightline-gate mints its own chain-ancestry waivers (2026-08-07,
+# state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-
+# artifacts.md, candidate fixes #1/#2) — the live incident this closes: a
+# chain-terminal `brightline-gate` run, with no prior `coverage-gate`
+# invocation, deadlocked on foreign predecessor commits because no
+# chain-ancestry waiver had ever been minted for the closing session.
+# ---------------------------------------------------------------------------
+
+def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkeypatch, tmp_path):
+    """`cmd_brightline_gate`'s PARTITION-MANDATORY branch must call the SAME
+    mint primitive `coverage-gate` uses (`_run_review_coverage_gate`, which
+    always passes `--mint-chain-waivers`) BEFORE it resolves discharge — so
+    a single `brightline-gate` invocation is self-sufficient regardless of
+    whether an EM ran `coverage-gate` first."""
+    calls = []
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff: (calls.append(from_handoff), (0, "", ""))[1],
+    )
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
+    _patch_chain_scoping(monkeypatch)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+
+    assert rc == 0
+    assert calls == ["state/handoffs/x.md"], (
+        "cmd_brightline_gate did not mint chain-ancestry waivers before "
+        "resolving discharge — a chain-terminal run starting from "
+        "brightline-gate alone would reproduce the live deadlock"
+    )
+
+
+def test_foreign_shas_halt_message_names_coverage_gate_remedy(monkeypatch, tmp_path, capsys):
+    """AC (candidate fix #1): when uncovered commits are foreign to the
+    closing session, the HALT text must name the cheap remedy (mint a
+    chain-ancestry waiver via `coverage-gate --from-handoff`) rather than
+    only the two expensive sanctioned exits (PM vouch, /handoff)."""
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-remedy")
+    chain_code_shas = ["foreignsha1"]
+    _patch_chain_scoping(monkeypatch, chain_code_shas=chain_code_shas)
+
+    def _all_foreign(sha_range, session_id):
+        return frozenset({"foreignsha1"})
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "REMEDY (foreign/predecessor commits)" in err
+    assert "coverage-gate --from-handoff state/handoffs/x.md" in err
+
+
+def test_all_planning_foreign_uncovered_chain_prints_mint_remedy(
+    monkeypatch, tmp_path, capsys,
+):
+    """Supersedes the 22b2537b2 behaviour (formerly
+    test_all_planning_foreign_uncovered_chain_does_not_print_mint_remedy):
+    that commit special-cased an all-planning-artifact uncovered chain to
+    print a REMEDY saying the `coverage-gate --from-handoff` mint step does
+    NOT apply, reasoning that `coordinator_core.coverage.run_coverage_gate`
+    nets an all-planning chain to verdict=COVERED and
+    `coordinator_core.ops.coverage_gate`'s mint block only fired on
+    WARN/UNCOVERED. 2026-08-07 fix (state/audits/2026-08-07-review-gate-
+    scoping-predecessor-and-planning-artifacts.md) decoupled the mint from
+    `result.verdict` entirely — it now gates on `result.uncovered_shas`
+    being non-empty, which is exactly the all-planning case. The mint DOES
+    apply here now, so the normal mint-instruction REMEDY must print."""
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-planning-foreign")
+    chain_code_shas = ["planforeign1", "planforeign2"]
+    _patch_chain_scoping(monkeypatch, chain_code_shas=chain_code_shas)
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(chain_code_shas), None),
+    )
+
+    def _all_foreign(sha_range, session_id):
+        return frozenset(chain_code_shas)
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "2 planning-artifact commit(s) (owe a plan review, not a code review):" in err
+    assert "REMEDY (foreign/predecessor commits): run" in err
+    assert "coverage-gate --from-handoff state/handoffs/x.md` first to mint" in err
+    assert "does NOT apply here" not in err
+
+
+def test_minted_chain_ancestry_waiver_moves_a_foreign_commit_from_uncovered_to_covered(tmp_path):
+    """AC (audit #4, DR-245 closed bug-backlog item — 'waiver coverage is
+    per-SHA but gate crediting is range-based ... a minted waiver may not
+    move the ratio even once minting works'): exercises the REAL
+    `directives_review.chain_partition_uncovered_shas` +
+    `chain_ancestry_waivers` mechanism `cmd_brightline_gate` wires together
+    (`vouched_shas` unions the gate-minted waiver store, exactly as
+    `_resolve_vouched_shas` does), with no mocking of the crediting logic
+    itself — only the git-backed resolvers are doubled.
+
+    Confirms the deadlock does NOT simply reappear one layer down: minting
+    a chain-ancestry waiver for a foreign commit, then supplying a
+    discharging review-trail record whose range names it, moves that commit
+    out of the uncovered set. Without the minted waiver, the same record is
+    rejected (foreign, unvouched) and the commit stays uncovered — the
+    contrast proves the waiver is what moved it, not the record alone."""
+    from coordinator_core import chain_ancestry_waivers
+
+    chain_id = "a" * 8 + "-" + "b" * 4 + "-" + "c" * 4 + "-" + "d" * 4 + "-" + "e" * 12
+    foreign_sha = "f" * 40
+    chain_code_shas = {foreign_sha}
+    chain_dag_shas = {foreign_sha}
+    sha_range = f"start..{foreign_sha}"
+    record = {
+        "verdict": "ok",
+        "sha_range": sha_range,
+        "scope": "chain",
+        "session_id": chain_id,
+    }
+
+    def resolve_range_shas(rng):
+        return {foreign_sha} if rng == sha_range else set()
+
+    def narrow_foreign_shas(rng, session_id):
+        # This commit's own trailer names a predecessor session — always
+        # foreign to the CLOSING session, regardless of which record reads it.
+        return frozenset({foreign_sha})
+
+    def vouched_shas_from(repo_root):
+        return lambda session_id: chain_ancestry_waivers.chain_ancestry_waived_shas(
+            repo_root, session_id or "",
+        )
+
+    # Before minting: the record is rejected (foreign, unvouched) -> uncovered.
+    uncovered_before = chain_partition_uncovered_shas(
+        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
+        narrow_foreign_shas=narrow_foreign_shas,
+        vouched_shas=vouched_shas_from(str(tmp_path)),
+    )
+    assert set(uncovered_before) == {foreign_sha}
+
+    # Mint the waiver under the SAME chain_id the record's session_id carries
+    # (the identity match `_resolve_vouched_shas`'s own docstring requires).
+    chain_ancestry_waivers.record_chain_ancestry_waiver(
+        str(tmp_path), frozenset({foreign_sha}), chain_id,
+    )
+
+    uncovered_after = chain_partition_uncovered_shas(
+        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
+        narrow_foreign_shas=narrow_foreign_shas,
+        vouched_shas=vouched_shas_from(str(tmp_path)),
+    )
+    assert set(uncovered_after) == set(), (
+        "a minted chain-ancestry waiver did not move the uncovered count — "
+        "the deadlock reappears one layer down even after minting works"
+    )

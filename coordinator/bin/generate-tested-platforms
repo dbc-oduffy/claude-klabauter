@@ -48,10 +48,14 @@ USAGE
         --repo-root   Override the repo root (default: derived from this file's
                        on-disk location — coordinator/bin/../.. — never cwd/HOME).
 
-Windows-clean: no shell-out except a single `git rev-parse HEAD` (guarded with
-`creationflags=CREATE_NO_WINDOW` via getattr so it's a no-op off Windows), no
-expanduser("~")/HOME dependency — repo root and manifest/records paths are all
-derived from __file__.
+Windows-clean: no shell-out except a single `git rev-parse HEAD` (guarded via
+`coordinator_core.win_portability.no_console_creationflags()`, a no-op off Windows), no
+expanduser("~")/HOME dependency — repo root defaults to `__file__`-derived (this
+script's own location) but is overridable via `--repo-root` to probe a target repo
+other than claude-klabauter's own checkout; manifest/records paths are then derived from
+whichever repo_root is in effect. `coordinator_core` itself is always imported off
+this script's own location, never off `--repo-root`, since `coordinator_core` lives
+in claude-klabauter's checkout regardless of which repo is being probed.
 
 Spec backlink: docs/plans/2026-07-20-tested-platforms-teeth-windows-honest.md § C3a1
 """
@@ -111,18 +115,35 @@ def _records_root(repo_root: str) -> str:
 
 
 def _current_repo_sha(repo_root: str) -> str | None:
-    """HEAD SHA of the repo providing the entry-point surfaces (this repo). Feeds
-    the PRIMARY staleness rule. Returns None (fail-safe: treats every record as
-    stale) if git is unavailable or the repo has no commits yet."""
+    """HEAD SHA of the repo providing the entry-point surfaces (`repo_root`,
+    which `--repo-root` lets a caller point at a target repo other than
+    claude-klabauter's own checkout). Feeds the PRIMARY staleness rule. Returns None
+    (fail-safe: treats every record as stale) if git is unavailable or the
+    repo has no commits yet.
+
+    Review: code-reviewer P3 — `coordinator_core.win_portability` must be
+    imported off THIS script's own location (`_repo_root()`), never off
+    `repo_root`: `repo_root` is the TARGET repo being probed, not necessarily
+    claude-klabauter's own checkout, so inserting it onto sys.path only resolved the
+    import by coincidence when the target happened to be claude-klabauter itself. For
+    any other `--repo-root` target the import raised ImportError, was
+    swallowed by the except clause below, and silently returned None —
+    marking every staleness record stale.
+    """
     try:
+        own_root = _repo_root()
+        if own_root not in sys.path:
+            sys.path.insert(0, own_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "-C", repo_root, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ImportError):
         return None
     if proc.returncode != 0:
         return None

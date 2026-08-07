@@ -177,6 +177,56 @@ class TestUnscannedPublishedCheckDirect:
         )
         assert ok is True
 
+    def test_pycache_pyc_is_structurally_excluded_not_flagged(self, tmp_path):
+        """`__pycache__/*.pyc` is a locally-generated Python build artifact,
+        never copied into a destination clone by any row's sync (source-side
+        `.percolate-ignore` already excludes it) -- anything that
+        subsequently RUNS Python inside the destination (a pytest run, a
+        stray `python -m`) recreates it there with no row ever having
+        "published" it. Measured live: a real
+        claude-klabauter-publish-repo-toplevel run reported 499 such
+        findings, all `__pycache__/*.pyc`, drowning any real finding.
+        Structural exclusion (`_is_structurally_never_published`), same
+        mechanism as `.git/*`, not a per-file ratified exception."""
+        target = _target(tmp_path)
+        pycache = target.dest_dir / "coordinator_core" / "__pycache__"
+        pycache.mkdir(parents=True)
+        (pycache / "__init__.cpython-313.pyc").write_bytes(b"\x00fake bytecode")
+        (target.dest_dir / "stray.pyo").write_bytes(b"\x00also bytecode")
+        section = {"file_surface": {"include_extensions": ["*.py"]}}
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)], target_filtered=False
+        )
+        assert ok is True
+
+    def test_unscanned_source_file_still_fails_alongside_pycache_noise(self, tmp_path, capsys):
+        """The direction that proves the pycache fix is a narrow noise
+        exclusion, not a hole: a real unscanned SOURCE file (`.md`/`.py`)
+        sitting right next to `__pycache__` noise in the same tree must
+        still fail the gate, loudly, and the pycache file must not appear
+        in the failure output."""
+        target = _target(tmp_path)
+        pycache = target.dest_dir / "coordinator_core" / "__pycache__"
+        pycache.mkdir(parents=True)
+        (pycache / "__init__.cpython-313.pyc").write_bytes(b"\x00fake bytecode")
+        section = {"file_surface": {}}
+        (target.dest_dir / "unscanned_leak.py").write_text(
+            "print('this should have been scanned')\n", encoding="utf-8"
+        )
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)],
+            target_filtered=False,
+            visited_files_by_repo_root={publish._dest_repo_root(target.dest_dir) or target.dest_dir: set()},
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "unscanned_leak.py" in captured.err
+        assert "unscanned-published check FAILED" in captured.err
+        assert "__pycache__" not in captured.err
+        assert ".pyc" not in captured.err
+
     def test_every_published_file_scanned_passes(self, tmp_path):
         target = _target(tmp_path)
         (target.dest_dir / "a.py").write_text("print('clean')\n", encoding="utf-8")

@@ -436,10 +436,12 @@ def check_defender_exclusions(is_windows: Optional[bool] = None, timeout: float 
         return Finding("defender-exclusions", STATUS_UNKNOWN, "powershell.exe not found on PATH", None)
 
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [ps, "-NoProfile", "-Command", "Get-MpPreference | Select-Object -ExpandProperty ExclusionProcess"],
             capture_output=True, text=True, timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         return Finding("defender-exclusions", STATUS_UNKNOWN, f"powershell.exe timed out after {timeout}s", None)

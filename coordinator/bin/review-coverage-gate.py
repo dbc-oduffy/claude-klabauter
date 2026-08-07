@@ -32,13 +32,20 @@ Usage:
   --mint-chain-waivers     Forwarded to `coverage.gate` as `mint_chain_waivers=true`
                            (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
                            § C2b). Ceremony-close-only: only
-                           `wsc-coverage-gate-runner.py`'s `coverage-gate` subcommand
-                           passes this flag. Every ad-hoc/diagnostic invocation of this
-                           CLI MUST omit it — the default (flag absent) stays read-only,
-                           per AC2. Mints a per-SHA chain-ancestry waiver for each
-                           uncovered chain commit on a DAG-mode UNCOVERED verdict; a
-                           no-op on COVERED/INDETERMINATE or in flat mode (no
-                           --from-handoff).
+                           `wsc-coverage-gate-runner.py`'s `coverage-gate` AND
+                           `brightline-gate` subcommands pass this flag (2026-08-07,
+                           state/audits/2026-08-07-review-gate-scoping-predecessor-and-
+                           planning-artifacts.md — brightline-gate now mints its own
+                           chain-ancestry waivers so it is self-sufficient without
+                           requiring coverage-gate to run first; the mint is idempotent
+                           per (sha, chain_id), so both subcommands calling it is safe).
+                           Every ad-hoc/diagnostic invocation of this CLI MUST omit it —
+                           the default (flag absent) stays read-only, per AC2. Mints a
+                           per-SHA chain-ancestry waiver for each sha in the DAG-mode
+                           uncovered set, regardless of verdict — a COVERED chain whose
+                           only uncovered commits are planning artifacts still mints; a
+                           no-op when that set is empty, on INDETERMINATE, or in flat
+                           mode (no --from-handoff).
 
 Missing/empty --scope-paths: falls back to unscoped whole-chain (not an error).
 See Design § "Scope filtering — asymmetric by design" for the full rationale.

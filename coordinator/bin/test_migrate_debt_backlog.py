@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from coordinator_core.win_portability import no_console_creationflags
 
 # ── Locate the module under test ───────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +57,7 @@ _SYNTHETIC_DEBT_BACKLOG = """\
 
 ## 2026-06-08 daily observer flags
 
-- [ ] DSR-2026-06-08-1 [for-weekly-arch-review] Runtime-tripwire thresholds have no empirical basis — surfaces: plugins/coordinator/hooks/scripts/lib/runtime-thresholds.sh
+- [ ] DSR-2026-06-08-1 [for-weekly-arch-review] Runtime-tripwire thresholds have no empirical basis — surfaces: plugins/coordinator-claude/coordinator/hooks/scripts/lib/runtime-thresholds.sh
 """
 
 _HEADER_ONLY_BACKLOG = """\
@@ -84,7 +85,7 @@ def _run_migrator(*args, cwd: str | None = None, env: dict | None = None) -> sub
         text=True,
         cwd=cwd,
         env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

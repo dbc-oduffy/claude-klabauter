@@ -145,6 +145,87 @@ from dr_allocator import (  # noqa: E402
 )
 
 # ---------------------------------------------------------------------------
+# Engine seam — claude-klabauter checkout on sys.path
+# ---------------------------------------------------------------------------
+_CLAUDE_KLABAUTER_ROOT_RESOLVED: str | None = None
+
+
+def _ensure_engine_on_path() -> str | None:
+    """Put the claude-klabauter checkout on ``sys.path`` so ``coordinator_core`` imports.
+
+    Memoizing wrapper over ``cc_invoke.ensure_engine_on_path`` — that function
+    owns the ladder (``CLAUDE_KLABAUTER_ROOT`` env → self-location walk-up → settings-home
+    pointer file → machine-local ``repos.claude_klabauter``), so a hand-set
+    ``PYTHONPATH`` is never a prerequisite of this CLI and the ordering cannot
+    drift away from the ~26 sibling entrypoints resolving through the same seam.
+
+    Called once at import time and again from each engine-touching seam below,
+    so a published/vendored copy that only resolves through a later rung still
+    gets the path in place on the arm that needs it. The import-time call also
+    arms lazy ops-package loading (cc_invoke sets
+    ``sys._coordinator_core_lazy_ops`` as a module-level side effect) before any
+    ``coordinator_core.ops`` touch, which the handoff arm depends on for its
+    import budget.
+
+    Best-effort: returns None when every rung misses, matching this file's
+    graceful-skip convention for un-migrated installs (see
+    ``_assert_no_archived_handoff_twin``) rather than failing a scaffold that
+    has no engine work to do.
+
+    Memoization applies only to a SUCCESSFUL resolution — ``_CLAUDE_KLABAUTER_ROOT_RESOLVED``
+    is only ever assigned a non-None value, so a failed/degraded resolution is
+    never cached and re-attempts on every subsequent call. This costs repeated
+    resolution work per call site on a failing install, not a correctness bug.
+
+    Spec backlink: cross-repo memo — coordinator-doc-new broken from its .cmd
+    forwarder (ModuleNotFoundError: coordinator_core without a hand-set
+    PYTHONPATH); the engine-touching seams below resolved the root ad hoc
+    through ``cc_invoke._resolve_claude_klabauter_root`` (registry-only, no
+    self-location rung) or not at all.
+
+    Negative-spec: does NOT export ``CLAUDE_KLABAUTER_ROOT`` into ``os.environ`` — child
+    processes run their own resolution through the same ladder.
+    """
+    global _CLAUDE_KLABAUTER_ROOT_RESOLVED
+    if _CLAUDE_KLABAUTER_ROOT_RESOLVED is not None:
+        return _CLAUDE_KLABAUTER_ROOT_RESOLVED
+    try:
+        # Review: code-reviewer dccd9967 F3 — the resolution CALL, not just the
+        # import, must sit inside this guard: ensure_engine_on_path's internal
+        # path-walk (Path.resolve()/.parents/.is_dir()) can raise OSError/
+        # PermissionError on a broken junction or symlink loop, which its own
+        # `except RuntimeError` does not catch. This runs at MODULE IMPORT time,
+        # so an uncaught OSError here would crash every invocation outright —
+        # restores ce48a1adb's wrap-the-whole-attempt posture the refit narrowed.
+        from cc_invoke import ensure_engine_on_path  # noqa: PLC0415
+        _CLAUDE_KLABAUTER_ROOT_RESOLVED = ensure_engine_on_path(__file__)
+    except Exception:  # noqa: BLE001 -- lib seam absent or resolution failed; degrade to no-engine
+        return None
+    return _CLAUDE_KLABAUTER_ROOT_RESOLVED
+
+
+_ensure_engine_on_path()
+
+
+def _no_console_creationflags() -> dict:
+    """``subprocess`` kwargs that suppress a console window on Windows.
+
+    Degrade-to-empty wrapper over ``coordinator_core.win_portability``'s helper
+    of the same name: the engine seam stays the source of truth when it is
+    importable, and an unresolvable engine costs a console flash on Windows
+    rather than a ``ModuleNotFoundError`` traceback out of a scaffold arm that
+    is otherwise engine-independent.
+    """
+    _ensure_engine_on_path()
+    try:
+        from coordinator_core.win_portability import (  # noqa: PLC0415
+            no_console_creationflags,
+        )
+    except Exception:  # noqa: BLE001 -- engine absent; no console-suppression kwargs
+        return {}
+    return no_console_creationflags()
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -392,14 +473,7 @@ def _stamp_completion_scaffold_liveness(repo_root: str | None) -> None:
     if not repo_root:
         return
     try:
-        _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import cc_invoke  # noqa: PLC0415
-
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        _ensure_engine_on_path()
         from coordinator_core.ops.ceremony.housekeeping_liveness import (
             COMPLETION_SCAFFOLD,
             stamp_liveness,
@@ -439,14 +513,7 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
     if os.path.basename(os.path.dirname(out_path)) != "handoffs":
         return
     try:
-        _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import cc_invoke  # noqa: PLC0415
-
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        _ensure_engine_on_path()
         from coordinator_core.handoff_creation_guard import (
             HandoffArchivedTwinError,
             assert_no_archived_twin,
@@ -492,14 +559,7 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
     if not repo_root:
         return
     try:
-        _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import cc_invoke  # noqa: PLC0415
-
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        _ensure_engine_on_path()
         from coordinator_core.frontmatter.schema_validate import (
             _SCHEMAS_DIR,
             load_schemas,
@@ -574,7 +634,7 @@ def _resolve_state_root(central: bool = False) -> str | None:
             cmd,
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_creationflags(),
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -641,7 +701,7 @@ def _mint_deliverable_id(
             [sys.executable, mint_script] + cmd_args,
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_creationflags(),
         )
         if result.returncode == 0 and result.stdout.strip():
             # Echo the mint helper's stderr so callers see carry-vs-mint log
@@ -699,14 +759,7 @@ def _resolve_session_held_spinoff_roadmap_stub_path(repo_root: str | None) -> st
     if not repo_root:
         return None
     try:
-        _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import cc_invoke  # noqa: PLC0415
-
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        _ensure_engine_on_path()
         from coordinator_core.session import claims as _claims
         from coordinator_core.session import core as _session_core
     except Exception:  # noqa: BLE001 -- best-effort import; unresolvable seam degrades to no-carry
@@ -1051,7 +1104,7 @@ def _delegate_to_queue_append(doc_type: str) -> None:
     delegate = _find_sibling_binary("coordinator-queue-append")
     passthrough = _argv_without_type()
     cmd = [sys.executable, delegate, "--schema", doc_type] + passthrough
-    result = subprocess.run(cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    result = subprocess.run(cmd, **_no_console_creationflags())
     sys.exit(result.returncode)
 
 
@@ -1070,7 +1123,7 @@ def _delegate_to_lesson_promote() -> None:
     delegate = _find_sibling_binary("coordinator-lesson-promote")
     passthrough = _argv_without_type()
     cmd = [sys.executable, delegate] + passthrough
-    result = subprocess.run(cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    result = subprocess.run(cmd, **_no_console_creationflags())
     sys.exit(result.returncode)
 
 
@@ -1115,7 +1168,7 @@ def _delegate_to_workflow_scaffold() -> None:
             sys.exit(1)
         passthrough = passthrough + ["--repo", repo_root]
     cmd = [sys.executable, delegate] + passthrough
-    result = subprocess.run(cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    result = subprocess.run(cmd, **_no_console_creationflags())
     sys.exit(result.returncode)
 
 
@@ -2456,7 +2509,7 @@ def _scaffold_sizing(title: str) -> str:
     _scaffold_goal — the entire file IS the record, no `---` frontmatter
     fence and no markdown body.
 
-    Required fields: schema, intent, appetite, estimate (tshirt + provisional),
+    Required fields: schema, intent, estimate (tshirt + provisional),
     route, detents, fork, xl_exit, status, premise (provenance).
     `title` is used only to seed the
     `intent` placeholder (sizing-object has no `title` field of its own —
@@ -2470,7 +2523,7 @@ def _scaffold_sizing(title: str) -> str:
     Spec backlink: docs/plans/2026-07-24-sizing-lobby-core.md § C1/C3
     Negative-spec: does NOT emit prose body content or `---` frontmatter
     fences — whole-document-yaml match_mode, matching _scaffold_goal.
-    Does NOT resolve the appetite/estimate fork — `fork` scaffolds `null`;
+    Does NOT resolve the sizing halt — `fork` scaffolds `null`;
     only the sizing skill (operator judgment) ever sets it non-null. `xl_exit`
     is the identical shape for the XL decision point: it scaffolds `null`, the
     engine never sets it, and only the sizing skill fills it once the PM has
@@ -2483,7 +2536,6 @@ def _scaffold_sizing(title: str) -> str:
     lines = [
         "schema: sizing-object",
         f"intent: {_yaml_quote(intent_placeholder)}",
-        "appetite: small  # small | medium | large — the Shape-Up BUDGET, not a size estimate",
         "estimate:",
         "  tshirt: XS  # XS | S | M | L | XL — reuses loe.tshirt; coarse ROUTING estimate only",
         "  provisional: true  # always true — never the committed plan-body LoE",
@@ -4153,14 +4205,7 @@ def main() -> None:
             _session_parent_dlv = None
             if _session_stub_path:
                 try:
-                    _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-                    if _lib_dir not in sys.path:
-                        sys.path.insert(0, _lib_dir)
-                    import cc_invoke  # noqa: PLC0415
-
-                    _claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-                    if _claude_klabauter_root not in sys.path:
-                        sys.path.insert(0, _claude_klabauter_root)
+                    _ensure_engine_on_path()
                     from coordinator_core.ops.deliverable_carry import (
                         resolve_session_state_parent_deliverable_id,
                     )
@@ -4190,22 +4235,14 @@ def main() -> None:
             # initiative`) rather than re-deriving the plan/predecessor
             # precedence here.
             #
-            # Lazy mode is armed (cc_invoke import, before any
-            # coordinator_core.ops touch) unconditionally in this arm, unlike
-            # the `plan` arm's session-stub-gated preamble above: this arm
-            # runs on EVERY direct handoff scaffold with no explicit/env id,
-            # not behind a session-held roadmap-stub claim, so an unarmed
-            # import would pay the ops package's full eager-compile tax on
-            # every such invocation. See coordinator_core/ops/__init__.py's
-            # lazy-mode docstring.
-            _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-            if _lib_dir not in sys.path:
-                sys.path.insert(0, _lib_dir)
-            import cc_invoke  # noqa: PLC0415
-
-            _claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-            if _claude_klabauter_root not in sys.path:
-                sys.path.insert(0, _claude_klabauter_root)
+            # Lazy mode is already armed: `_ensure_engine_on_path`'s cc_invoke
+            # import runs at module import time, so `sys._coordinator_core_
+            # lazy_ops` is set well before any coordinator_core.ops touch on
+            # this arm — which runs on EVERY direct handoff scaffold with no
+            # explicit/env id, and would otherwise pay the ops package's full
+            # eager-compile tax on every such invocation. See
+            # coordinator_core/ops/__init__.py's lazy-mode docstring.
+            _ensure_engine_on_path()
             from coordinator_core.session.claimed_plan import (
                 resolve_claimed_plan_path as _resolve_claimed_plan_path,
             )
@@ -4650,14 +4687,7 @@ def main() -> None:
     # placement-law state/ seam re-anchors to a different repo, e.g. Claude-klabauter).
     _write_repo_root = _anchored_repo_root or _current_repo_root() or os.getcwd()
     try:
-        _lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import cc_invoke  # noqa: PLC0415
-
-        _claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if _claude_klabauter_root not in sys.path:
-            sys.path.insert(0, _claude_klabauter_root)
+        _ensure_engine_on_path()
         from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415
         from coordinator_core.session.declared_writes import declare_write  # noqa: PLC0415
     except Exception:  # noqa: BLE001 -- fail-open: a seam-import failure must never block the scaffold write itself

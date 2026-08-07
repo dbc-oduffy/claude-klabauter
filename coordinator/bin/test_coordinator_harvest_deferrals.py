@@ -56,10 +56,7 @@ import sys
 import textwrap
 
 import pytest
-
-# getattr fallback: CREATE_NO_WINDOW only exists on Windows; returns 0 (no-op) on POSIX.
-# Matches test_coordinator_queue_append.py's own convention.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _script_path() -> str:
@@ -240,7 +237,7 @@ def test_end_to_end_dry_run_selection(tmp_path):
         [_python(), _script_path(), "--plan", str(plan_path), "--dry-run"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert result.returncode == 0, result.stderr
@@ -293,7 +290,7 @@ def test_pm_approved_unroutable_row_fails_loud(tmp_path):
         [_python(), _script_path(), "--plan", str(plan_path), "--dry-run"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert result.returncode != 0
@@ -311,7 +308,7 @@ def test_non_pm_approved_unroutable_row_stays_exit_zero(tmp_path):
         [_python(), _script_path(), "--plan", str(plan_path), "--dry-run"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     # pm_approved:false means the row is not even a harvest candidate (D8

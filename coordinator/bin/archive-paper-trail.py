@@ -90,11 +90,13 @@ def _resolve_repo_root(positional: str | None) -> str | None:
     if positional:
         return positional
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         return None

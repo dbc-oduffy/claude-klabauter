@@ -108,6 +108,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+import cc_invoke  # noqa: E402
 from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -302,16 +303,21 @@ def _get_branch(coordinator_root):
     try:
         r = subprocess.run(
             [sys.executable, branch_helper], cwd=coordinator_root, capture_output=True, text=True, timeout=15,
-            env=child_env(), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env=child_env(), **cc_invoke._no_console_kw(_resolve_claude_klabauter_root()),
         )
         if r.returncode == 0:
             out = r.stdout.strip()
             if out:
                 return out
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, RuntimeError):
         # Review: code-reviewer — subprocess.run(timeout=...) raises
         # TimeoutExpired (a SubprocessError, not an OSError); the bare
         # OSError clause left a hang uncaught and crashed the ceremony.
+        # RuntimeError added (P3) — _resolve_claude_klabauter_root() inside the
+        # _no_console_kw() call can raise RuntimeError, uncovered by the
+        # prior tuple; low risk in practice since main() already resolves
+        # and exits(2) on CLAUDE_KLABAUTER_ROOT failure before _get_branch is reached,
+        # but this is the same unguarded-re-resolution shape worth covering.
         pass
     try:
         r = subprocess.run(

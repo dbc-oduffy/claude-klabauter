@@ -65,9 +65,21 @@ import cc_invoke  # noqa: E402
 
 PROG = "handoff-has-live-children.py"
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise trigger
-# under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+def _no_console_kw() -> dict:
+    """Lazily resolve the engine root onto sys.path (self-location-first via
+    cc_invoke.ensure_engine_on_path — see that function's docstring), then
+    splat the canonical no-console-window kwarg. ``{}`` on any resolution/
+    import failure (fail-open)."""
+    try:
+        if cc_invoke.ensure_engine_on_path(__file__) is None:
+            return {}
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:
+        return {}
+
 
 _DEFAULT_EDGE_KINDS = "predecessor,additional_predecessors,forked_from"
 
@@ -92,7 +104,7 @@ def _resolve_repo_root(candidate_abs: str) -> str | None:
             ["git", "-C", os.path.dirname(candidate_abs), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_kw(),
         )
     except OSError:
         return None

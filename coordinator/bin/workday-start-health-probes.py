@@ -160,7 +160,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from coordinator_core.machine_resolver import registry_get  # noqa: E402
-from coordinator_core.win_portability import is_executable  # noqa: E402
+from coordinator_core.win_portability import is_executable, no_console_creationflags  # noqa: E402
 from cli_shared import machine_local_impl, resolve_python  # noqa: E402
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -248,7 +248,7 @@ def cmd_observer_sidecar_scan(argv: list[str]) -> int:
         [sys.executable, _sibling("stitch-observer-sidecar.py"), "--scan", scan_dir],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     if proc.returncode == 1:
@@ -298,7 +298,7 @@ def cmd_ceremony_hook(argv: list[str]) -> int:
         [sys.executable, _sibling("coordinator-ceremony-hook.py"), ceremony_name],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         # Defensive-only: coordinator-ceremony-hook.py's own contract is
@@ -414,7 +414,7 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
             capture_output=True,
             text=True,
             timeout=_FIX_SPAWN_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(

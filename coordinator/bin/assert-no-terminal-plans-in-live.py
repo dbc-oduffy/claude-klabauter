@@ -78,13 +78,15 @@ def _coordinator_state_root() -> str | None:
     sep = ";" if os.name == "nt" else ":"
     env["PYTHONPATH"] = claude_klabauter_root + (sep + pythonpath if pythonpath else "")
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     proc = subprocess.run(
         [sys.executable, "-m", "coordinator_core.state_root"],
         capture_output=True,
         text=True,
         env=env,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         return None

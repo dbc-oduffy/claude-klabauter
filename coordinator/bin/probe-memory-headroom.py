@@ -77,9 +77,7 @@ import subprocess
 import sys
 from typing import Optional
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _bounded(secs: float, cmd: list[str]) -> Optional[str]:
@@ -96,7 +94,7 @@ def _bounded(secs: float, cmd: list[str]) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=secs,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -188,15 +186,15 @@ def _ram_from_macos() -> tuple[Optional[int], Optional[int]]:
     try:
         total_bytes_out = subprocess.run(
             ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
         pagesize_out = subprocess.run(
             ["sysctl", "-n", "hw.pagesize"], capture_output=True, text=True, timeout=5,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
         stats_out = subprocess.run(
             ["vm_stat"], capture_output=True, text=True, timeout=5,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None, None

@@ -65,6 +65,7 @@ from coordinator_core.ops.draft_plan_aging import (  # noqa: E402
 from coordinator_core.orient_assemble.reader_result import (  # noqa: E402
     truncate_external_text,
 )
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _USAGE_FAIL = 2
 
@@ -95,7 +96,7 @@ def _resolve_repo_root(positional: str | None) -> str | None:
             text=True,
             timeout=_GIT_TOPLEVEL_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

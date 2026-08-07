@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SCRIPT = Path(__file__).parent.parent / "assert-cwd.py"
 
 
@@ -30,7 +32,7 @@ def _run(args, cwd=None):
         cwd=cwd,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -39,7 +41,7 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(
         ["git", "init", "-q", "-b", "main", str(path)],
         check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

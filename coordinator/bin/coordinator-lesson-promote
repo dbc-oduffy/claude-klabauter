@@ -324,7 +324,7 @@ def _validate_target_wiki(
         print(
             "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo'\n"
             "  or set DOE_ROOT=/path/to/example-doctrine-repo before invoking this CLI.\n"
-            "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+            "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
         return _EXIT_DOE_UNRESOLVABLE
@@ -682,7 +682,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo'\n"
                 "  or set DOE_ROOT=/path/to/example-doctrine-repo before invoking this CLI.\n"
-                "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
             return _EXIT_DOE_UNRESOLVABLE

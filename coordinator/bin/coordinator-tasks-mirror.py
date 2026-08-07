@@ -38,7 +38,9 @@ cs_resolve_session_id. Fix-in-port (DR-059): the coordinator-root resolution +
 trusted-root-guard dance existed ONLY as bash's mechanism for safely `source`-ing a
 sibling script — it is not needed here. This port imports
 coordinator_core.session.core.resolve_session_id directly (via
-cc_invoke._resolve_claude_klabauter_root() for CLAUDE_KLABAUTER_ROOT resolution, matching every other
+cc_invoke.resolve_engine_root() for CLAUDE_KLABAUTER_ROOT resolution — self-location-first,
+so this co-located script finds its own checkout even on an install whose
+machine-local registry was never populated — matching every other
 Windows-campaign per-op port) — no bash-source chain, no coordinator-root trust check,
 one fewer subprocess than the bash oracle's shell-wrapping-python shape.
 
@@ -66,9 +68,7 @@ if _LIB_DIR not in sys.path:
 
 import cc_invoke  # noqa: E402
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _resolve_session_id(cwd: str) -> str:
@@ -77,7 +77,7 @@ def _resolve_session_id(cwd: str) -> str:
     Raises RuntimeError on CLAUDE_KLABAUTER_ROOT/import failure (caller maps to exit 1,
     matching the bash oracle's fail-loud coordinator-root-unresolved path).
     """
-    claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
+    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.session.core import resolve_session_id as _resolve
@@ -92,7 +92,7 @@ def _resolve_repo_root() -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

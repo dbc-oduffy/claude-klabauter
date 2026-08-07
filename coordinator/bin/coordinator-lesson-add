@@ -70,11 +70,13 @@ def _git_root():
     Mirrors coordinator-queue-append._current_repo_root resolution.
     """
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -104,11 +106,13 @@ def _machine_local_get(key: str):
     """
     impl = _mlir_machine_local_impl_path(_MACHINE_LOCAL_IMPL_ENV)
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             [sys.executable, impl, "get", key],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         return None
@@ -138,15 +142,14 @@ def _claude_klabauter_root():
 def _same_path(a: str, b: str) -> bool:
     """True if two paths resolve to the same directory (cross-platform).
 
-    Uses os.path.samefile when both paths exist; falls back to normcase+realpath
-    string comparison so absent/unregistered repos never raise.
-
-    Mirrors coordinator_registry._same_path().
+    Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Mirrors coordinator_registry._same_path()
+    (same alias).
     """
-    try:
-        return os.path.samefile(a, b)
-    except OSError:
-        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    from coordinator_core.win_portability import same_path
+
+    return same_path(a, b)
 
 
 def _lessons_dir():
@@ -358,9 +361,11 @@ def main():
     if args.how_to_apply:
         cmd += ["--how-to-apply", args.how_to_apply]
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         cmd,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     sys.exit(result.returncode)
 

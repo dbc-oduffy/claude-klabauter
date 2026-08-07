@@ -41,6 +41,8 @@ import argparse
 import subprocess
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 # ---------------------------------------------------------------------------
 # Constants and patterns
@@ -89,7 +91,7 @@ def _detect_from_repo() -> str:
         result = subprocess.run(
             ['git', 'rev-parse', '--show-toplevel'],
             capture_output=True, text=True, check=True,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            **no_console_creationflags()
         )
         root = Path(result.stdout.strip())
         return root.name
@@ -476,7 +478,7 @@ def cmd_apply(args: argparse.Namespace) -> None:
         result = subprocess.run(
             ['git', 'rm', str(lessons_md)],
             capture_output=True, text=True,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            **no_console_creationflags()
         )
         if result.returncode != 0:
             print(

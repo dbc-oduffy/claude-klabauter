@@ -76,13 +76,18 @@ def _resolve_repo_root() -> str:
     own strangle_route resolution — standalone-repo assumption, no worktrees).
     """
     try:
+        claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
-    except OSError as exc:
+    except (OSError, RuntimeError, ImportError) as exc:
         print(f"emit-cockpit-snapshot: cannot resolve git repo root: {exc}", file=sys.stderr)
         sys.exit(1)
     resolved = (proc.stdout or "").strip()

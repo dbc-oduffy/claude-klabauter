@@ -353,32 +353,37 @@ _current_repo_root = cli_shared.current_repo_root
 
 
 def _resolve_session_id() -> str:
-    """Resolve the current Claude Code session ID.
+    """Delegates to ``coordinator_core.session.core.resolve_session_id``
+    (KS-6, 2026-08-07): the full 3-tier ``SESSION_ENV_PRECEDENCE`` ladder
+    (``COORDINATOR_SESSION_ID``, ``CLAUDE_SESSION_ID``,
+    ``CLAUDE_CODE_SESSION_ID``), widened from the prior
+    ``CLAUDE_CODE_SESSION_ID``-only read to match the canonical reference —
+    see that constant's own docstring for the prior break-class defect two
+    disagreeing copies of this ladder caused. Returns "" if unresolved,
+    including on an import/CLAUDE_KLABAUTER_ROOT resolution failure (fail-soft — an
+    unresolved id here correctly degrades provenance_completeness to
+    "unknown" below, the pre-existing contract of this function's
+    env-var-only predecessor).
 
-    Resolution chain (matches commands/workday-complete.md:95-97):
-      1. CLAUDE_CODE_SESSION_ID env var (stripped of whitespace).
-      2. Sentinel file at <git_root>/.git/coordinator-sessions/.current-session-id
-         (uses _current_repo_root(); strip whitespace). Absent/empty → skip.
-      3. Empty string if neither resolves.
+    Former tier 2 (KS-3, 2026-08-07) REMOVED — was the sentinel file at
+    <git_root>/.git/coordinator-sessions/.current-session-id. Unsound under
+    concurrency (documented last-writer-wins across concurrent sessions
+    sharing one worktree — coordinator_core/bash_guards/guard_inprocess_search.py
+    ~L84) AND its sole writer (session-init.py, the example-doctrine-repo SessionStart
+    hook) was deleted by PM directive 2026-07-15 — no production writer
+    survives.
 
     Spec backlink: docs/plans/2026-06-26-queue-schema-unify.md § C2 STEP 1
     """
-    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    if session_id:
-        return session_id
-    root = _current_repo_root()
-    if root:
-        sentinel = os.path.join(
-            root, ".git", "coordinator-sessions", ".current-session-id"
-        )
-        try:
-            with open(sentinel, encoding="utf-8") as fh:
-                content = fh.read().strip()
-            if content:
-                return content
-        except OSError:
-            pass
-    return ""
+    try:
+        claude-klabauter = _claude_klabauter_root()
+        if claude-klabauter and claude-klabauter not in sys.path:
+            sys.path.insert(0, claude-klabauter)
+        from coordinator_core.session.core import resolve_session_id
+
+        return resolve_session_id()
+    except Exception:  # noqa: BLE001 — fail-soft, matches the prior env-only read's contract
+        return ""
 
 
 # _resolve_from_repo: extracted to bin/lib/cli_shared.py (T2-g2a consolidation) —
@@ -1912,7 +1917,7 @@ def main() -> None:
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                     "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
                 return  # exits 0 via normal return from legacy_fn()
@@ -1938,7 +1943,7 @@ def main() -> None:
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                     "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -1950,7 +1955,7 @@ def main() -> None:
             print(
                 "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                 "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
             return  # exits 0 via normal return from legacy_fn()
@@ -2059,7 +2064,7 @@ def main() -> None:
         print(
             "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
             "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-            "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+            "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
         return

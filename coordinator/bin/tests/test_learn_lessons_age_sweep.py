@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _BIN_DIR = Path(__file__).parent.parent
 _SCRIPT = _BIN_DIR / "learn-lessons-age-sweep.py"
 
@@ -96,7 +98,7 @@ def test_cutoff_cli_skip_loud_exit_code(tmp_path):
         [sys.executable, str(_SCRIPT), "cutoff", str(runs)],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert result.returncode == 1
     assert result.stdout == ""
@@ -113,7 +115,7 @@ def test_cutoff_cli_prints_date_on_stdout(tmp_path):
         [sys.executable, str(_SCRIPT), "cutoff", str(runs)],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "2026-06-01"
@@ -172,7 +174,7 @@ def test_strip_orphans_cli_clean_exit_0(tmp_path):
         ],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert result.returncode == 0
     assert result.stderr == ""
@@ -197,7 +199,7 @@ def test_strip_orphans_cli_rejects_with_exit_1(tmp_path):
         ],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert result.returncode == 1
     assert "STRIP-ORPHAN-REJECT:" in result.stderr

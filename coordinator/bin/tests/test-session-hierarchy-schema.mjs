@@ -5,7 +5,7 @@
  * validateRecord() from bin/lib/schema.js; asserts green on a valid sample record and
  * red on malformed records.
  *
- * Run with: node plugins/coordinator/bin/tests/test-session-hierarchy-schema.mjs
+ * Run with: node plugins/coordinator-claude/coordinator/bin/tests/test-session-hierarchy-schema.mjs
  * Exits 0 on all-pass, 1 on any failure.
  *
  * Spec backlink: docs/plans/2026-06-27-ccos-5-session-workstream-hierarchy-record.md § C1 (AC5)

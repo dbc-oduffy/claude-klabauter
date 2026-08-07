@@ -33,6 +33,11 @@ import subprocess
 import sys
 import tempfile
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+
 
 # One handoff-schema-family type per each of the six scaffolders' distinct
 # hardcoded default, plus required-arg shims so the invocation reaches the
@@ -83,7 +88,7 @@ def _invoke(doc_type: str, out_path: str, extra_args: list[str]) -> tuple[int, s
         capture_output=True,
         text=True,
         timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 

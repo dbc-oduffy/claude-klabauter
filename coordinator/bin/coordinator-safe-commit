@@ -4,7 +4,9 @@ Wave 2 of the coordinator-session-family-repoint-and-delete plan, chunk C2a).
 
 Port of the bash `coordinator-safe-commit` (Phase 3, scoped-safety-commits
 plan) onto `coordinator_core.session` (core/liveness/scope/claims), in-process
-imported via the `cc_invoke._resolve_claude_klabauter_root` seam — the DR-047
+imported via the `cc_invoke.resolve_engine_root` seam (self-location-first —
+CLAUDE_KLABAUTER_ROOT env -> walk-up to this script's own enclosing checkout -> the
+pointer-file/registry ladder) — the DR-047
 Python-caller-shape ruling (the Director of Engineering, 2026-07-22; see
 docs/plans/2026-07-22-coordinator-session-family-repoint-and-delete.md
 § Decisions). Same path, zero caller repoint — every dispatch prompt /
@@ -94,7 +96,7 @@ governing whether a caller may run this script's underlying `git commit` —
 the guard, not a flag this script parses.
 
 Canonical invocation:
-  ~/.claude/plugins/coordinator/bin/coordinator-safe-commit "<subject>"
+  ~/.claude/plugins/coordinator-claude/coordinator/bin/coordinator-safe-commit "<subject>"
 
 Usage forms:
   coordinator-safe-commit "<subject>"                      # default — scoped staging
@@ -172,7 +174,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import resolve_engine_root  # noqa: E402
 
 
 BLANKET_ALLOWED_COMMANDS = frozenset(
@@ -211,11 +213,11 @@ class UsageError(RuntimeError):
 
 
 def _import_session():
-    """Resolve claude-klabauter root (cc_invoke._resolve_claude_klabauter_root seam, DR-047) and
+    """Resolve claude-klabauter root (cc_invoke.resolve_engine_root seam, DR-047) and
     import the four coordinator_core.session submodules this port needs.
     Mirrors the refresh-queries.py in-process-import precedent."""
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = resolve_engine_root(__file__)
     except RuntimeError as exc:
         print(f"coordinator-safe-commit: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         sys.exit(3)
@@ -532,11 +534,14 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     `sys.path` — true in claude-klabauter's own tree, false in every OTHER caller repo
     (example-doctrine-repo foremost), where it dies with `ModuleNotFoundError` the
     instant it's copy-pasted. Fixed by resolving claude-klabauter's root at emit time
-    via the same `cc_invoke._resolve_claude_klabauter_root()` seam `_import_session()`
-    uses (module-level import, line ~159) — settings-home is the sanctioned
-    resolution point (PM ruling, 2026-07-29): `_resolve_claude_klabauter_root()`'s own
-    Rung 1.5 already reads `<settings-home>/machine-local/.claude-klabauter-root`
-    ahead of any bash-spawning fallback, so this call routes through it. No
+    via the same `cc_invoke.resolve_engine_root()` seam `_import_session()`
+    uses (module-level import, line ~159) — self-location (this script's own
+    enclosing checkout) is tried first, falling back to
+    `_resolve_claude_klabauter_root()`'s pointer-file/registry ladder; settings-home
+    is the sanctioned resolution point (PM ruling, 2026-07-29) for that
+    fallback: its own Rung 1.5 already reads
+    `<settings-home>/machine-local/.claude-klabauter-root` ahead of any bash-spawning
+    fallback, so this call routes through it. No
     absolute path is hardcoded in source; the value is resolved fresh on
     every call.
 
@@ -576,7 +581,7 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     paths = dirty if dirty else ["<your-paths>"]
     params = json.dumps({"worktree_root": worktree_root, "paths": paths, "message": subject or "<subject>"})
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = resolve_engine_root(__file__)
     except RuntimeError as exc:
         return (
             "  # claude-klabauter root resolution failed (%s) — run from claude-klabauter's own\n"

@@ -107,10 +107,7 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
-
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 #: Default age floor in days — mirrors the retired review-trail/findings
 #: aged-reap precedent this op supersedes (state-placement-law.md § the
@@ -180,7 +177,7 @@ def _age_days(path: str, now: float) -> float:
 def _is_tracked(repo_root: str, rel_path: str) -> bool:
     result = subprocess.run(
         ["git", "ls-files", "--error-unmatch", "--", rel_path],
-        cwd=repo_root, capture_output=True, text=True, check=False, creationflags=_NO_WINDOW,
+        cwd=repo_root, capture_output=True, text=True, check=False, **no_console_creationflags(),
     )
     return result.returncode == 0
 
@@ -208,7 +205,7 @@ def main(argv: Optional[list] = None) -> int:
 
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     repo_root = (result.stdout or "").strip()
     if not repo_root:
@@ -307,7 +304,7 @@ def main(argv: Optional[list] = None) -> int:
         tracked_rel = [os.path.relpath(f, repo_root) for f in tracked_to_reap]
         rm_res = subprocess.run(
             ["git", "rm", "-q", "--", *tracked_rel], cwd=repo_root,
-            capture_output=True, text=True, check=False, creationflags=_NO_WINDOW,
+            capture_output=True, text=True, check=False, **no_console_creationflags(),
         )
         if rm_res.returncode != 0:
             sys.stderr.write(rm_res.stderr)
@@ -316,7 +313,7 @@ def main(argv: Optional[list] = None) -> int:
         commit_msg = f"reap {len(tracked_to_reap)} stale subagent-share sidecar(s)"
         commit_res = subprocess.run(
             ["git", "commit", "-q", "-m", commit_msg, "--", *tracked_rel], cwd=repo_root,
-            capture_output=True, text=True, check=False, creationflags=_NO_WINDOW,
+            capture_output=True, text=True, check=False, **no_console_creationflags(),
         )
         if commit_res.returncode != 0:
             sys.stderr.write(

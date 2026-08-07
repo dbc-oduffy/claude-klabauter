@@ -218,3 +218,184 @@ def test_em_id_for_root_registered_non_central_loop_step_3():
 
 def test_example_doctrine_repo_em_alias_in_central_receiver_ids():
     assert "example-doctrine-repo-em" in reg.CENTRAL_RECEIVER_IDS
+
+
+# ---------------------------------------------------------------------------
+# C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
+#
+# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (DOE_ROOT,
+# REPO_EXAMPLE_DOCTRINE_REPO, repos.example_doctrine_repo) into names no machine has ever set,
+# leaving the split-repo layout's manifest bootstrap with zero live rungs and
+# an import-time FileNotFoundError. These tests exercise the module in a
+# fresh subprocess (import-time behavior can't be observed by re-importing an
+# already-imported module) with DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset, covering both
+# the pointer-present and pointer-unreachable cases.
+#
+# Spec backlink: docs/plans/2026-08-07-published-engine-resolves-without-a-codename.md § C1
+# ---------------------------------------------------------------------------
+import subprocess  # noqa: E402
+import sys as _sys  # noqa: E402
+import tempfile  # noqa: E402
+
+_IMPORT_SNIPPET = (
+    "import sys; "
+    "sys.path.insert(0, {lib_dir!r}); "
+    "import coordinator_registry; "
+    "print(coordinator_registry._MANIFEST_PATH)"
+).format(lib_dir=_LIB_DIR)
+
+
+def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [_sys.executable, "-c", _IMPORT_SNIPPET],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def test_bootstrap_import_succeeds_with_pointer_present():
+    """Case (a): DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset, real ambient pointer/registry
+    state left intact — import must succeed via a codename-free rung (or the
+    co-located rung, if this checkout happens to be co-located)."""
+    env = dict(os.environ)
+    env.pop("DOE_ROOT", None)
+    env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)
+    result = _run_import_subprocess(env)
+    assert result.returncode == 0, (
+        f"expected import to succeed with pointer/registry state present; "
+        f"stderr:\n{result.stderr}"
+    )
+    assert result.stdout.strip(), "expected _MANIFEST_PATH to print a non-empty path"
+
+
+def test_bootstrap_import_fails_loud_with_pointer_unreachable():
+    """Case (b): DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset AND HOME/CLAUDE_HOME/
+    COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no rung can
+    resolve, proving the file rungs are load-bearing (not merely present)
+    rather than accidentally passing on ambient state. Must NOT delete or
+    edit the real pointer files/registry TOMLs; redirection only."""
+    with tempfile.TemporaryDirectory() as _empty_home:
+        env = dict(os.environ)
+        env.pop("DOE_ROOT", None)
+        env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)
+        env.pop("CLAUDE_PLUGIN_ROOT", None)
+        env["HOME"] = _empty_home
+        env["CLAUDE_HOME"] = _empty_home
+        env["COORDINATOR_SETTINGS_HOME"] = os.path.join(_empty_home, ".coordinator-claude-settings")
+        env.pop("MACHINE_LOCAL_IMPL", None)
+        result = _run_import_subprocess(env)
+        assert result.returncode != 0, (
+            "expected import to fail loud when no rung can resolve a manifest "
+            f"(pointer files unreachable); stdout:\n{result.stdout}"
+        )
+        assert "install-integrity" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# C1D: doe_root() gets the same codename-free rung ladder, in-process via
+# monkeypatch (not a subprocess — doe_root() runs at CALL time, not import
+# time, so isolating just its own rungs from the ambient machine's real
+# DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO/registry state is enough; the module import at the
+# top of this file already proved import-time behavior above).
+#
+# Spec backlink: docs/plans/2026-08-07-published-engine-resolves-without-a-codename.md § C1D
+# ---------------------------------------------------------------------------
+import tempfile as _tempfile  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def _clear_doe_root_env(monkeypatch):
+    """Strip every env var doe_root()'s legacy chain (rungs 6-7) reads, and
+    stub the codename rungs' pointer/registry helpers to '' / None, so a test
+    can install exactly the one rung under test."""
+    monkeypatch.delenv("DOE_ROOT", raising=False)
+    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: "")
+    monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: "")
+    monkeypatch.setattr(reg, "_registry_machine_local_get", lambda key: None)
+
+
+def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
+    """Rungs 1-2: coordinator_read_doe_root_pointer() already returns the example-doctrine-repo
+    REPO root directly — used as-is, no conversion."""
+    with _tempfile.TemporaryDirectory() as _fake_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _fake_root)
+        assert reg.doe_root() == _fake_root
+
+
+def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
+    """Rung 3: the flat marketplace-clone layout is the clone root directly
+    (resolve_coordinator_clone.py::resolve_clone_root() treats it the same
+    way) — used as-is, no conversion."""
+    with _tempfile.TemporaryDirectory() as _fake_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
+        assert reg.doe_root() == _fake_root
+
+
+def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
+    """Rung 4, private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
+    (`<repo_root>/coordinator`), one level below the repo root doe_root()
+    must return — the plugin-root-vs-example-doctrine-repo-root distinction this chunk exists
+    to close. The marker lives beside the repo root, not beside the content
+    root, so the normalizer must climb one level."""
+    with _tempfile.TemporaryDirectory() as _repo_root:
+        os.makedirs(os.path.join(_repo_root, ".claude-plugin"))
+        with open(os.path.join(_repo_root, ".claude-plugin", "plugin.json"), "w") as _f:
+            _f.write("{}")
+        _content_root = os.path.join(_repo_root, "coordinator")
+        os.makedirs(_content_root)
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _content_root)
+        assert reg.doe_root() == _repo_root
+
+
+def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch):
+    """Rung 4, OSS flat layout: CLAUDE_PLUGIN_ROOT already IS the repo root
+    (manifest ships flat at plugin root, marker directly beside it) — no
+    parent-climb, used as-is."""
+    with _tempfile.TemporaryDirectory() as _flat_root:
+        os.makedirs(os.path.join(_flat_root, ".claude-plugin"))
+        with open(os.path.join(_flat_root, ".claude-plugin", "plugin.json"), "w") as _f:
+            _f.write("{}")
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _flat_root)
+        assert reg.doe_root() == _flat_root
+
+
+def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
+    """Rung 5: machine-local plugin.mirrors.coordinator-claude.live_path is
+    used directly as the repo root (resolve_coordinator_clone.py's
+    resolve_clone_root() rung 2 treats it the same way) — no conversion."""
+    with _tempfile.TemporaryDirectory() as _fake_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(
+            reg,
+            "_registry_machine_local_get",
+            lambda key: _fake_root if key == "plugin.mirrors.coordinator-claude.live_path" else None,
+        )
+        assert reg.doe_root() == _fake_root
+
+
+def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
+    """The private-tree chain (rungs 6-7) survives untouched when none of the
+    new codename-free rungs 1-5 resolve."""
+    _clear_doe_root_env(monkeypatch)
+    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/fake/example-doctrine-repo")
+    assert reg.doe_root() == "/fake/example-doctrine-repo"
+
+
+def test_doe_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
+    """With rungs 1-5 (codename-free) AND rungs 6-7 (legacy env/registry) all
+    unreachable, doe_root() still fails loud with _DoeUnresolvable — the
+    existing failure semantics callers rely on (WARN + skip, exit 0) are
+    preserved, not silently swallowed by the new rungs."""
+    _clear_doe_root_env(monkeypatch)
+    with pytest.raises(reg._DoeUnresolvable):
+        reg.doe_root()

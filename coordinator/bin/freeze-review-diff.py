@@ -197,6 +197,7 @@ from coordinator_core.ops.review_freeze_diff import (  # noqa: E402
     _validate_slice_id,
     freeze_diff,
 )
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def _resolve_repo_root(explicit: str) -> Path | None:
@@ -212,7 +213,7 @@ def _resolve_repo_root(explicit: str) -> Path | None:
             capture_output=True,
             text=True,
             timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: failed to run `git rev-parse --show-toplevel`: {exc}", file=sys.stderr)

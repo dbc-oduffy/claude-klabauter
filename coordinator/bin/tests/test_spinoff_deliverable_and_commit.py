@@ -32,6 +32,7 @@ _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)  # type: ignore[union-attr]
 
 from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def _write_frontmatter(path, **fields):
@@ -116,7 +117,7 @@ def test_cli_resolve_deliverable_carry_path_emits_shell_assignments(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -135,7 +136,7 @@ def test_cli_resolve_deliverable_empty_slug_guard_exits_nonzero_fail_loud():
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 1
@@ -181,7 +182,7 @@ def test_cli_resolve_origin_handoff_id_emits_shell_assignment(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -253,7 +254,7 @@ def test_cli_commit_scope_fails_loud_on_missing_scope_block(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 1
@@ -289,7 +290,7 @@ def test_cli_commit_scope_dry_run_prints_git_commands(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -329,7 +330,7 @@ def test_cli_commit_scope_actually_commits_scope_and_handoff(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -340,7 +341,7 @@ def test_cli_commit_scope_actually_commits_scope_and_handoff(tmp_path):
         capture_output=True,
         text=True,
         check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert "chore(spinoff): my-slug [authored mid-session]" in log.stdout
     assert "coordinator/example.py" in log.stdout
@@ -354,6 +355,6 @@ def test_cli_missing_subcommand_exits_nonzero():
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert proc.returncode != 0

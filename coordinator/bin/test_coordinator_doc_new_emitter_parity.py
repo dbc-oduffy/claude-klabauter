@@ -73,6 +73,11 @@ import tempfile
 
 _UNREACHABLE_MARKER = "unreachable doc_type"
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+
 
 # Types that must NOT be smoke-invoked via this test's minimal-args shape,
 # each with a logged reason. Empty by design — every currently-known type
@@ -175,7 +180,7 @@ def _invoke_scaffold(doc_type: str, out_path: str) -> tuple[int, str]:
         capture_output=True,
         text=True,
         timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 

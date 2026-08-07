@@ -74,10 +74,19 @@ Subcommands (argv[1] selects):
       review-coverage-gate.py with `--mint-chain-waivers` — on a DAG-mode
       UNCOVERED verdict, the underlying `coverage.gate` op mints a per-SHA
       chain-ancestry waiver for each uncovered chain commit, from the
-      ancestry it already derived. This subcommand is the SOLE
-      ceremony-close caller of review-coverage-gate.py in this codebase; no
-      other invocation of that CLI passes the flag, so no other caller takes
-      on this side effect.
+      ancestry it already derived.
+
+      2026-08-07 update (state/audits/2026-08-07-review-gate-scoping-
+      predecessor-and-planning-artifacts.md): this subcommand is no longer
+      the SOLE ceremony-close caller of review-coverage-gate.py's
+      `--mint-chain-waivers` path — `brightline-gate` below also makes this
+      same call (from its own PARTITION-MANDATORY branch) so that either
+      subcommand is self-sufficient regardless of which one an EM reaches
+      for first. The two callers cannot double-mint or diverge: the mint is
+      idempotent per (sha, chain_id) (see coordinator_core.ops.coverage_gate's
+      `mint_chain_waivers` docstring). Every OTHER invocation of
+      review-coverage-gate.py (the ad-hoc EM CLI, diagnostics) still omits
+      the flag and stays read-only.
 
   write-trail --sha-range <A..B> --reviewer <name> --scope <chain|session>
               --verdict <ok|warn|blocked|waived|pending> --diff-loc <N>
@@ -204,6 +213,7 @@ from coordinator_core.workstream_complete.chain_partition_verdict_store import (
 )
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel  # noqa: E402
 from coordinator_core import session_attribution  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +231,7 @@ def _run_session_claim_cli(slug: str) -> tuple[int, str]:
         stderr=subprocess.STDOUT,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),  # popup-safe-env-suppressed
     )
     return proc.returncode, proc.stdout
 
@@ -250,16 +260,25 @@ def cmd_claim_plan(args: argparse.Namespace) -> int:
 # coverage-gate
 # ---------------------------------------------------------------------------
 
-def _run_review_coverage_gate(from_handoff: str) -> tuple[int, str, str]:
+def _run_review_coverage_gate(from_handoff: str, mint_chain_waivers: bool = True) -> tuple[int, str, str]:
     """Invoke the sibling review-coverage-gate.py in DAG mode and return
     (returncode, stdout, stderr). Isolated for test monkeypatching.
 
-    Always passes `--mint-chain-waivers`: this subcommand IS the
+    Passes `--mint-chain-waivers` by default: this subcommand IS a
     ceremony-close caller (docs/plans/2026-07-31-review-trail-chain-ancestry-
-    discriminator.md § C2b) — the only caller of review-coverage-gate.py
-    that may request minting (see that flag's own docstring for why every
-    other/diagnostic invocation of review-coverage-gate.py must omit it).
-    A no-op on COVERED/INDETERMINATE or in flat mode; this call is always
+    discriminator.md § C2b) that may request minting (see that flag's own
+    docstring for why every other/diagnostic invocation of
+    review-coverage-gate.py must omit it). As of 2026-08-07
+    (state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-
+    artifacts.md), `cmd_brightline_gate` also calls this same function for
+    its own mint side effect — the mint is idempotent per (sha, chain_id),
+    so either or both ceremony-close subcommands calling it is safe.
+    The mint fires whenever `--from-handoff`'s resulting uncovered-shas set
+    is non-empty, regardless of verdict — a COVERED chain whose only
+    uncovered commits are planning artifacts still mints; a no-op when that
+    set is empty, on INDETERMINATE, or in flat mode. `mint_chain_waivers=False`
+    (the `--no-mint` passthrough) omits the flag for wall-clock/dry
+    measurement callers that must not mutate state; this call is always
     DAG-mode (`--from-handoff` is required by this subcommand's own argparse
     definition below)."""
     cmd = [
@@ -267,14 +286,15 @@ def _run_review_coverage_gate(from_handoff: str) -> tuple[int, str, str]:
         os.path.join(_SCRIPT_DIR, "review-coverage-gate.py"),
         "--from-handoff",
         from_handoff,
-        "--mint-chain-waivers",
     ]
+    if mint_chain_waivers:
+        cmd.append("--mint-chain-waivers")
     proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),  # popup-safe-env-suppressed
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -513,7 +533,7 @@ def _resolve_chain_tip_sha(from_handoff: str) -> str | None:
             text=True,
             check=False,
             cwd=repo_root,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         return None
@@ -548,7 +568,7 @@ def _git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
             capture_output=True,
             text=True,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         return False
@@ -586,7 +606,7 @@ def _resolve_range_shas(sha_range: str) -> frozenset[str]:
                 text=True,
                 check=False,
                 cwd=repo_root,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except OSError:
             proc = None
@@ -695,7 +715,7 @@ def _git_run_for_session_attribution(cmd: list[str], cwd: str | None = None) -> 
             text=True,
             cwd=cwd,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         return proc.returncode, proc.stdout.rstrip("\n"), proc.stderr
     except OSError as exc:
@@ -945,7 +965,7 @@ def _describe_uncovered_shas(shas: list[str], repo_root: str | None) -> list[str
             text=True,
             check=False,
             cwd=repo_root,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         return list(shas)
@@ -1109,7 +1129,7 @@ def _warn_if_covered_verdict_unterminated(verdict_line: str, from_handoff: str) 
 
 
 def cmd_coverage_gate(args: argparse.Namespace) -> int:
-    returncode, stdout, stderr = _run_review_coverage_gate(args.from_handoff)
+    returncode, stdout, stderr = _run_review_coverage_gate(args.from_handoff, mint_chain_waivers=not args.no_mint)
 
     # Review: F9 (carried from the ported SKILL comment) — parse the VERDICT
     # token out of stdout; do NOT rely on the gate's exit code (it exits 0 on
@@ -1199,7 +1219,7 @@ def _run_write_review_trail(argv: list[str]) -> tuple[int, str, str]:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),  # popup-safe-env-suppressed
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -1267,7 +1287,7 @@ def _run_review_brightline_gate(argv: list[str]) -> tuple[int, str, str]:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),  # popup-safe-env-suppressed
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -1289,8 +1309,9 @@ def _resolve_closing_session_id(repo_root: str) -> str | None:
     """Resolve the closing session id via the SAME algorithm `workstream_
     complete.compute_session_shape_gate` uses (`wsc-session-disposition.py::
     resolve_session_id` — em_sid / CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID
-    env vars, then the `.current-session-id` sentinel, then an epoch
-    fallback), so the verdict record this subcommand writes is keyed by the
+    env vars, then an epoch fallback; the `.current-session-id` sentinel
+    tier was removed, KS-3/KS-4, 2026-08-07), so the verdict record this
+    subcommand writes is keyed by the
     EXACT id `brief()`'s `gate.sid` will resolve to on read-back. Loaded by
     file path (hyphenated bin script, not a package) — see
     `workstream_complete.__init__._load_bin_module`'s own docstring for why
@@ -1551,6 +1572,29 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         # reached PARTITION-MANDATORY had no discharge path at all short of
         # `/handoff`. The honest answer: a chain that owes no code review
         # cannot fail to discharge one.
+        # 2026-08-07 (state/audits/2026-08-07-review-gate-scoping-
+        # predecessor-and-planning-artifacts.md, candidate fix #2): fold the
+        # mint into brightline-gate itself, so this subcommand is
+        # self-sufficient regardless of whether an EM reached for
+        # `coverage-gate` first. This is the SAME call `coverage-gate` makes
+        # (`_run_review_coverage_gate` passes `--mint-chain-waivers` by
+        # default, omitted when `--no-mint` is given), so it inherits that
+        # call's own contract: best-effort, minting one waiver per sha in
+        # the uncovered set whenever that set is non-empty regardless of
+        # verdict — a COVERED chain whose only uncovered commits are
+        # planning artifacts still mints — a no-op when that set is empty,
+        # on INDETERMINATE, or in flat mode, and idempotent per
+        # (sha, chain_id) (coordinator_core.ops.coverage_gate's own docstring
+        # — "that side effect is itself idempotent per (sha, chain_id), see
+        # record_chain_ancestry_waiver"). Running `coverage-gate` and then
+        # `brightline-gate` in sequence therefore cannot double-mint or
+        # produce a different result than either alone — this call is purely
+        # additive coverage of the "brightline-gate reached first" case.
+        # Discarded here deliberately: this subcommand owns its own verdict
+        # line/parsing (the BRIGHTLINE line already printed above); the
+        # underlying coverage-gate verdict is not this subcommand's output
+        # contract, only its minting side effect is wanted at this call site.
+        _run_review_coverage_gate(args.from_handoff, mint_chain_waivers=not args.no_mint)
         dag_resolved = _derive_dag_shas(args.from_handoff)
         trail_records = _load_trail_records()
         chain_code_shas = _resolve_chain_code_shas(args.from_handoff)
@@ -1651,6 +1695,33 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                         "waiver, or /handoff.",
                         file=sys.stderr,
                     )
+                    # 2026-08-07 (state/audits/2026-08-07-review-gate-scoping-
+                    # predecessor-and-planning-artifacts.md, candidate fix #1):
+                    # a chain-ancestry waiver (DR-245) already exists precisely
+                    # for this case, but this subcommand only READS waivers —
+                    # it never mints them. Name the cheap remedy explicitly so
+                    # an operator does not default straight to the two
+                    # expensive sanctioned exits above when the correct next
+                    # step is one gate invocation away.
+                    #
+                    # 2026-08-07 fix (coordinator_core/ops/coverage_gate.py):
+                    # the mint's gate now keys on `result.uncovered_shas`
+                    # being non-empty, not on `result.verdict` — the verdict
+                    # answers a CODE-coverage question and the mint answers a
+                    # foreign-session-narrowing question, so an
+                    # all-planning-uncovered chain (which nets
+                    # `coverage_ratio == 1.0` / verdict=COVERED) is exactly
+                    # the case the mint needs to reach, not one it should
+                    # skip. The mint instruction below therefore applies
+                    # unconditionally here, all-planning or not.
+                    print(
+                        "REMEDY (foreign/predecessor commits): run "
+                        "`wsc-coverage-gate-runner.py coverage-gate "
+                        f"--from-handoff {args.from_handoff}` first to mint a "
+                        "chain-ancestry waiver for these commits, then retry "
+                        "this brightline-gate invocation.",
+                        file=sys.stderr,
+                    )
                 if own_shas:
                     print(
                         f"REMEDY: record a per-commit review-trail verdict "
@@ -1737,6 +1808,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_gate = sub.add_parser("coverage-gate")
     p_gate.add_argument("--from-handoff", required=True, dest="from_handoff")
+    p_gate.add_argument(
+        "--no-mint",
+        action="store_true",
+        dest="no_mint",
+        help="Omit --mint-chain-waivers when invoking review-coverage-gate.py "
+        "(read-only; for wall-clock/dry measurement callers that must not "
+        "mutate state). Default: mint on (unchanged behaviour).",
+    )
     p_gate.set_defaults(func=cmd_coverage_gate)
 
     p_trail = sub.add_parser("write-trail")
@@ -1752,6 +1831,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_brightline = sub.add_parser("brightline-gate")
     p_brightline.add_argument("--from-handoff", required=True, dest="from_handoff")
     p_brightline.add_argument("git_range", nargs="?", default=None)
+    p_brightline.add_argument(
+        "--no-mint",
+        action="store_true",
+        dest="no_mint",
+        help="Omit --mint-chain-waivers when invoking review-coverage-gate.py "
+        "(read-only; for wall-clock/dry measurement callers that must not "
+        "mutate state). Default: mint on (unchanged behaviour).",
+    )
     p_brightline.set_defaults(func=cmd_brightline_gate)
 
     return parser

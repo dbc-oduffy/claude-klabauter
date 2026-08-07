@@ -181,6 +181,8 @@ def main(argv: list[str]) -> int:
     adir = args.archive_dir or (repo_root / "archive" / "lessons" / ym)
     adir.mkdir(parents=True, exist_ok=True)
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     archived = 0
     for src, date in archive_entries:
         dst = adir / src.name
@@ -188,7 +190,7 @@ def main(argv: list[str]) -> int:
             ["git", "mv", str(src), str(dst)],
             capture_output=True,
             cwd=str(repo_root),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if result.returncode != 0:
             err = result.stderr.decode("utf-8", errors="replace").strip()

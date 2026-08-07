@@ -85,9 +85,8 @@ CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 #   point (see module docstring) — its CANON-overlapping literals are the
 #   exemption table itself, not a hand-enumeration of the vocabulary.
 _KNOWN_OVERLAP_EXEMPTIONS: dict[str, frozenset[frozenset[str]]] = {
-    "coordinator/bin/tests/test_sweep_shipped_handoffs_terminal_selector.py": frozenset(
-        {frozenset({"shipped", "abandoned", "superseded"})}
-    ),
+    # test_sweep_shipped_handoffs_terminal_selector.py's exemption removed 2026-08-07 —
+    # the file was excised in the spawn-heavy test cull (see _CONSUMERS below).
     "coordinator/bin/tests/test-initiative-shape.mjs": frozenset(
         {frozenset({"active", "paused", "shipped", "abandoned"})}
     ),
@@ -132,8 +131,14 @@ _CONSUMERS: list[tuple[str, bool]] = [
     # spells the field — flipped from False to True.
     ("coordinator/bin/tests/test_handoff_archive_transition.py", True),  # C13 (5310420b2) added a re-read assertion on deployment_state: continued
     ("coordinator/bin/tests/test_handoff_terminal_vocabulary_consumers.py", True),  # this module — a vocabulary-pinning test inside the scanned path is its own fixed point; its CANON literal is the canonical set by construction
-    ("coordinator/bin/tests/test_reap_orphaned_in_flight_handoffs.py", True),  # genuine handoff deployment_state toucher; positively asserts the retired "abandoned" is never (re)written
-    ("coordinator/bin/tests/test_sweep_shipped_handoffs_terminal_selector.py", True),  # genuine toucher; its _PRE_DR084_SELECTOR is a deliberate pre-fix fixture and carries the non-canonical "superseded", so it is not a pure subset
+    # Re-triaged 2026-08-07, NOT silently dropped: test_reap_orphaned_in_flight_handoffs.py
+    # and test_sweep_shipped_handoffs_terminal_selector.py were both excised in the
+    # spawn-heavy test cull (both resolved _REPO_ROOT by spawning `git rev-parse
+    # --show-toplevel` at import time, so they spawned on every collection). Neither
+    # was a production consumer — both were tests. The vocabulary they pinned is still
+    # pinned by the surviving entries above. Recover either via
+    # `git show 6f0e89044:<path>`; full set in
+    # state/audits/2026-08-07-spawn-heavy-test-excision-ledger.md.
 ]
 
 _JS_STRING_ARRAY_RE = re.compile(r"\[([^\[\]]*)\]")

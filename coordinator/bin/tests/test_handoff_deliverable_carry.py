@@ -37,6 +37,8 @@ import sys
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CLI = os.path.normpath(os.path.join(_HERE, "..", "handoff-deliverable-carry.py"))
 _LIB_DIR = os.path.normpath(os.path.join(_HERE, "..", "lib"))
@@ -174,7 +176,7 @@ def test_cli_subprocess_exits_dropped_join_fail_when_plan_lacks_deliverable_id(t
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 4
@@ -193,7 +195,7 @@ def test_cli_subprocess_emits_shell_assignment_lines(tmp_path):
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -217,7 +219,7 @@ def test_cli_subprocess_exits_divergent_join_fail_when_plan_and_predecessor_disa
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 5
@@ -234,6 +236,6 @@ def test_cli_missing_subcommand_exits_nonzero():
         text=True,
         check=False,
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert proc.returncode != 0

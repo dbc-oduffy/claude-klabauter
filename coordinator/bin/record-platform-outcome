@@ -79,6 +79,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from coordinator_registry import doe_root, _DoeUnresolvable, _registry_machine_local_get  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 # Canonical PlatformId vocabulary — agent-install-manifest.schema.json §PlatformId,
 # platform-outcome.schema.json §platform. Mirrors the identical mapping in the C4
@@ -91,7 +92,6 @@ _PLATFORM_MAP = {
     "Windows": "windows",
 }
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class RecordPlatformOutcomeError(RuntimeError):
@@ -168,7 +168,7 @@ def _git_rev_parse(root: str, *args: str) -> str:
     cmd = ["git", "-C", root, "rev-parse", *args]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, creationflags=_NO_WINDOW,
+            cmd, capture_output=True, text=True, **no_console_creationflags(),
         )
     except OSError as exc:
         raise RecordPlatformOutcomeError(f"git launch failed for {cmd!r}: {exc}") from exc

@@ -16,11 +16,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "standup.py")
 PYTHON = sys.executable
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _make_git_repo(path: str) -> None:
@@ -31,7 +31,7 @@ def _make_git_repo(path: str) -> None:
         ["git", "config", "user.name", "Test"],
         ["git", "commit", "-q", "--allow-empty", "-m", "init"],
     ):
-        r = subprocess.run(cmd, cwd=path, capture_output=True, text=True, creationflags=_NO_WINDOW)
+        r = subprocess.run(cmd, cwd=path, capture_output=True, text=True, **no_console_creationflags())
         if r.returncode != 0:
             raise RuntimeError(f"FATAL: git setup failed in {path}: {r.stderr}")
 
@@ -42,7 +42,7 @@ def _run_helper(cwd):
         cwd=cwd,
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     return r.returncode, r.stdout, r.stderr
 

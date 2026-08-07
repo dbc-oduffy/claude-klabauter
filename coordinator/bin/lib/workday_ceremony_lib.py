@@ -37,6 +37,8 @@ from __future__ import annotations
 import os
 import subprocess
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 # ---------------------------------------------------------------------------
 # Path resolution
@@ -76,7 +78,7 @@ def git(
         env=env,
         check=check,
         timeout=timeout,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

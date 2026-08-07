@@ -31,6 +31,15 @@
 #
 # Usage:
 #   scoped-git-commit -m "<subject>" -- <path> [<path>...]
+#   scoped-git-commit -F <path> -- <path> [<path>...]
+#   scoped-git-commit -F - -- <path> [<path>...]
+#     Reads the subject from <path> (or stdin, for `-F -`) instead of `-m`,
+#     mirroring `git commit -F`. `-m` and `-F` are mutually exclusive. Exists
+#     to give agents a way out of the here-string trap on this seam: `-m`
+#     forces a multi-line message through a single argv token, and this
+#     fleet's Windows box has already mangled a commit subject once via the
+#     PowerShell `@'...'@` idiom used from the Bash tool (a literal `@` became
+#     the subject; exit 0; damage visible only in `git log --format=%s`).
 #   scoped-git-commit -m "<subject>" --repo <worktree-root> -- <path>...
 #     Stages exactly <paths>, commits them under <subject>, and pushes when a
 #     remote exists. Selects the agree-case form vs. the private-index form
@@ -71,13 +80,17 @@ _EXIT_USAGE = 2
 _EXIT_TRANSPORT_FAIL = 3
 
 _USAGE = (
-    "usage: scoped-git-commit -m \"<subject>\" [--repo <worktree-root>] [--json]\n"
-    "                        [--include-orphans] -- <path> [<path>...]\n"
+    "usage: scoped-git-commit (-m \"<subject>\" | -F <path>) [--repo <worktree-root>]\n"
+    "                        [--json] [--include-orphans] -- <path> [<path>...]\n"
     "\n"
     "Stages and commits exactly <paths> via claude-klabauter's ceremony.scoped_git_commit,\n"
     "which selects the agree-case form vs. the private-index form from\n"
     "index/worktree state. The `--` separator and at least one path are\n"
     "REQUIRED: this CLI has no unscoped mode by construction.\n"
+    "\n"
+    "-F <path> reads the commit subject from <path> (UTF-8) instead of the\n"
+    "argv-embedded `-m` form -- `-F -` reads it from stdin, mirroring\n"
+    "`git commit -F`. Mutually exclusive with -m.\n"
     "\n"
     "--include-orphans adopts NAMED orphan paths (dirty, claimed by no session,\n"
     "not a live peer) among the paths already listed after `--` — it never\n"
@@ -91,8 +104,25 @@ class _Usage(Exception):
     """Argument-shape rejection — mapped to exit 2, never to a guess."""
 
 
+def _read_message_file(path: str) -> str:
+    """Reads `-F <path>`'s subject -- `-F -` reads stdin, mirroring
+    `git commit -F -`. UTF-8 explicit (this box is Windows; the platform
+    default encoding mangles non-ASCII bodies). A missing/unreadable path
+    fails loud and early -- before any staging or git invocation -- rather
+    than falling through to an empty subject.
+    """
+    if path == "-":
+        return sys.stdin.read()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise _Usage("-F %s: cannot read file: %s" % (path, exc))
+
+
 def _parse_args(argv: list[str]) -> tuple[str, str | None, list[str], bool, bool]:
-    """`-m <subject> [--repo <root>] [--json] [--include-orphans] -- <paths>...`.
+    """`(-m <subject> | -F <path>) [--repo <root>] [--json] [--include-orphans]
+    -- <paths>...`.
 
     Hand-rolled rather than argparse because the `--` separator is load-bearing
     here in git's own sense (everything after it is a pathspec, never a flag)
@@ -100,6 +130,7 @@ def _parse_args(argv: list[str]) -> tuple[str, str | None, list[str], bool, bool
     could require it.
     """
     subject: str | None = None
+    message_file: str | None = None
     repo: str | None = None
     as_json = False
     include_orphans = False
@@ -124,6 +155,12 @@ def _parse_args(argv: list[str]) -> tuple[str, str | None, list[str], bool, bool
             subject = argv[i + 1]
             i += 2
             continue
+        if tok in ("-F", "--file"):
+            if i + 1 >= n:
+                raise _Usage("%s requires a path argument." % tok)
+            message_file = argv[i + 1]
+            i += 2
+            continue
         if tok == "--repo":
             if i + 1 >= n:
                 raise _Usage("--repo requires a path argument.")
@@ -142,12 +179,22 @@ def _parse_args(argv: list[str]) -> tuple[str, str | None, list[str], bool, bool
             raise _Usage("")
         raise _Usage("unrecognized argument %r (paths go after `--`)." % tok)
 
-    if subject is None:
-        raise _Usage("-m \"<subject>\" is required.")
+    if subject is not None and message_file is not None:
+        raise _Usage("-m and -F are mutually exclusive; pass only one.")
+    if subject is None and message_file is None:
+        raise _Usage("-m \"<subject>\" or -F <path> is required.")
+    if message_file is not None:
+        subject = _read_message_file(message_file)
     if not saw_separator:
+        forwarder_path = os.path.abspath(__file__)
         raise _Usage(
             "the `-- <paths>` separator is required — this CLI has no unscoped "
-            "mode. Name the paths this commit owns."
+            "mode. Name the paths this commit owns. From PowerShell, quote it as "
+            "'--' — PowerShell's binder consumes a bare `--` while parsing the "
+            "call to this script, so it never reaches this CLI. On a Restricted "
+            "execution policy (the Windows 11 default, where the .ps1 launcher "
+            "never runs), invoke `python %s ...` instead — it preserves argv "
+            "intact regardless of policy." % forwarder_path
         )
     if not paths:
         raise _Usage("`--` was given with no paths after it.")

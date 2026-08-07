@@ -33,6 +33,8 @@ import sys
 import unittest.mock
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # ---------------------------------------------------------------------------
 # Path setup — locate the CLI, its lib deps, and the schema relative to this
 # test file.
@@ -77,13 +79,11 @@ _REAL_MANIFEST_PATH = Path(sys.modules["coordinator_registry"]._MANIFEST_PATH)
 _REAL_SCHEMAS_DIR = _REAL_MANIFEST_PATH.parent
 _SCHEMA_PATH = _REAL_SCHEMAS_DIR / "platform-outcome.schema.json"
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
 
 def _run_git(cwd: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", cwd, *args],
-        capture_output=True, text=True, creationflags=_NO_WINDOW,
+        capture_output=True, text=True, **no_console_creationflags(),
     )
 
 
@@ -194,7 +194,7 @@ def _run_cli(surface_root, *, surface: str, command: str, exit_code: int) -> sub
         ],
         cwd=surface_root,
         capture_output=True, text=True, env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -281,7 +281,7 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
         ],
         cwd=surface_root,
         capture_output=True, text=True, env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     assert result.returncode != 0
     assert "DOE_ROOT" in result.stderr

@@ -82,11 +82,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-_BIN_DIR = Path(__file__).resolve().parent
+from coordinator_core.win_portability import no_console_creationflags
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_BIN_DIR = Path(__file__).resolve().parent
 
 
 def _git(*args: str, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -95,7 +93,7 @@ def _git(*args: str, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         cwd=cwd,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -113,7 +111,7 @@ def _run_sibling_cli(name: str, args: List[str]) -> subprocess.CompletedProcess:
         [sys.executable, str(script), *args],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 

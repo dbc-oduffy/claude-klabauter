@@ -56,6 +56,38 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
+from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+
+
+def _no_console_creationflags() -> dict:
+    """Resolve CLAUDE_KLABAUTER_ROOT onto `sys.path` before importing `coordinator_core`
+    (mirrors `safe-commit-offer.py` / `sweep-boot.py`'s resolve-then-insert
+    shape, which every other in-process op import in this directory uses).
+
+    This module used to import `coordinator_core.win_portability` at module
+    level with no root bootstrap at all, so it resolved only where
+    `coordinator_core` happened to already be importable -- i.e. when the
+    process cwd was the engine checkout. Invoked through the settings-home
+    `bin` shim from a SIBLING repo (the ordinary case: this is the reaper an
+    operator reaches for after a scoped-commit refusal names a claim), it
+    raised `ModuleNotFoundError: No module named 'coordinator_core'` at
+    import time -- before `main`'s best-effort error handling could run, so
+    the "never block session start" contract in this module's own docstring
+    was defeated by its own import line. Reported 2026-08-07 by example-doctrine-repo-em
+    (cross-repo memo `...-scoped-commit-calls-a-live-peer-dead-and-reapable`).
+
+    Degrades to `{}` rather than raising: a missing subprocess-window flag is
+    cosmetic, and this reaper must not fail on any path.
+    """
+    try:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root and claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:
+        return {}
 
 
 def _no_fallback() -> None:
@@ -72,7 +104,7 @@ def _resolve_repo_root(argv: list[str]) -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_creationflags(),
         )
     except OSError:
         return None

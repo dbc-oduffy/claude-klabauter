@@ -39,6 +39,8 @@ import subprocess
 import sys
 import unittest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_SCRIPT_DIR)
 _CLI = os.path.join(_BIN_DIR, "parallel-review-gate-decision.py")
@@ -117,7 +119,7 @@ class GateDecisionTests(unittest.TestCase):
                 [sys.executable, _CLI, "resolver-branch", "--resolver-exit", str(code)],
                 capture_output=True,
                 text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             import json
@@ -142,7 +144,7 @@ class GateDecisionTests(unittest.TestCase):
             [sys.executable, _CLI, "resolver-branch", "--resolver-exit", "99"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(proc.returncode, 1)
 
@@ -153,7 +155,7 @@ class GateDecisionTests(unittest.TestCase):
             [sys.executable, _CLI, "gate", "--range", "HEAD~1..HEAD", "--force"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
             cwd=_BIN_DIR,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -190,7 +192,7 @@ class GateDecisionTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             envelope = json.loads(proc.stdout)

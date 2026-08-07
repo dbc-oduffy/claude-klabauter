@@ -3,10 +3,14 @@
 # wsc-session-disposition — naked-Python port of the workstream-complete Step 0
 # "Session-Shape Detection" block (example-doctrine-repo
 # coordinator/skills/workstream-complete/SKILL.md, the `<!-- VERBATIM -->`
-# fence at its Step 0). Self-contained: no coordinator_core import, no
-# cc_invoke/IPC hop — this is pure resolution logic operating on git and the
-# filesystem, plus one subprocess call out to the sibling `session-claim-cli`
-# entrypoint for Detector C's liveness enumeration.
+# fence at its Step 0). No cc_invoke/IPC hop — this is pure resolution logic
+# operating on git and the filesystem, plus one subprocess call out to the
+# sibling `session-claim-cli` entrypoint for Detector C's liveness
+# enumeration, and (as of the ledger-first authoritative-read plan, chunk C7)
+# one `coordinator_core.claim_state.resolve_claim_state` import for the
+# claim-holder reads below — the sole coordinator_core dependency this file
+# carries; every other helper here stays self-contained by the same
+# discipline the rest of this module's comments still describe.
 #
 # Ported under docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 # (M3 chunk WSC-1) — moves the 5-way session-id resolution + 3-detector
@@ -17,12 +21,23 @@
 # CLI instead of running the resolver logic inline; this file lands first so
 # that repoint has something to call.
 #
+# P6 (epoch-tail fabricated-id fallback) REMOVED — KS-5, 2026-08-07: a
+# fabricated id is different on every invocation and indistinguishable from
+# a real one downstream, which turned an unidentifiable session into a
+# passing single-session disposition (the same false-clean failure mode the
+# P4/.current-session-id sentinel removal fixed, reached by a different
+# route). `resolve_session_id` now returns "" when no tier resolves, and
+# `_cmd_resolve` refuses to run the detector chain against it — see
+# `resolve_session_id` and `_cmd_resolve` below.
+#
 # Resolution stack this CLI replaces (see SKILL.md Step 0 for the full
 # rationale prose, preserved here only where it disambiguates a corner case):
 #   Session-id 5-way superset resolution (AC2b):
 #     P1 em_sid env var, then P2 CLAUDE_SESSION_ID, then P3
-#     CLAUDE_CODE_SESSION_ID, then P4 the .current-session-id sentinel, then
-#     P5 the hex-timestamp fallback.
+#     CLAUDE_CODE_SESSION_ID, then P4 REMOVED (KS-3, 2026-08-07 — was the
+#     .current-session-id sentinel; unsound under concurrency + its sole
+#     writer deleted 2026-07-15, see resolve_session_id() below), falls
+#     through directly to P5 the hex-timestamp fallback.
 #   Disposition = chain-terminal iff ANY of:
 #     - primary scan: a LIVE state/handoffs/ entry stamped
 #       claimed_by/consumed_by: <this session> (DR-084 dual-read: both key
@@ -65,7 +80,11 @@
 # Exit codes: 0 on a completed resolution (chain-terminal OR single-session —
 # both are valid answers, not failures). 2 usage error (bad/missing
 # subcommand or flag). 3 transport failure — repo root unresolvable (no
-# `--repo-root` and `git rev-parse --show-toplevel` failed). Detector-level
+# `--repo-root` and `git rev-parse --show-toplevel` failed). 4 session id
+# unresolvable — no tier (em_sid/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID)
+# resolved (KS-5, 2026-08-07): refusing to run the detector chain against an
+# unidentified session, rather than reporting a single-session disposition
+# that would read as a clean chain-end coverage gate skip. Detector-level
 # resolution failures (missing session-claim-cli, non-zero CLI exit,
 # unresolvable merge-base) do NOT propagate to the process exit code — they
 # print a WARN to stderr and resolve the disposition as best-effort
@@ -84,7 +103,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
@@ -93,9 +111,12 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from handoff_lifecycle import claim_holder as _claim_holder  # noqa: E402
+
+from coordinator_core.claim_state import resolve_claim_state  # noqa: E402
+from coordinator_core.wire_paths import rel_id  # noqa: E402
 
 _TRANSPORT_FAIL = 3
+_SESSION_ID_UNRESOLVED = 4
 
 
 # ---------------------------------------------------------------------------
@@ -105,22 +126,31 @@ _TRANSPORT_FAIL = 3
 
 def resolve_session_id(repo_root: Path) -> str:
     """Resolve the current session id, first hit wins: the em_sid env var, then
-    CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID, then the .current-session-id
-    sentinel, then a hex-timestamp
+    CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID, then a hex-timestamp
     fallback (last 6 digits of the current epoch second, mirroring the
-    ported bash's `date +%s | tail -c 7 | head -c 6`)."""
+    ported bash's `date +%s | tail -c 7 | head -c 6`).
+
+    The `.current-session-id` sentinel tier that used to sit here was
+    REMOVED (KS-3, 2026-08-07): unsound under concurrency (documented
+    last-writer-wins across concurrent sessions sharing one worktree — see
+    coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
+    sole writer (session-init.py, the example-doctrine-repo SessionStart hook) was
+    deleted by PM directive 2026-07-15 — no production writer survives.
+
+    The hex-timestamp fallback that used to sit BELOW the sentinel was
+    REMOVED (KS-5, 2026-08-07): a fabricated id is different on every
+    invocation and indistinguishable to a downstream reader from a real
+    one — strictly worse than the sentinel it sat below, which at least
+    named a session that once existed. Returns "" when no tier resolves;
+    `_cmd_resolve` refuses to run the detector chain against an empty sid
+    rather than let it silently resolve "single-session" (the same
+    false-clean failure mode the sentinel removal fixed, reached by a
+    different route)."""
     for var in ("em_sid", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         val = os.environ.get(var, "")
         if val:
             return val
-    sentinel = repo_root / ".git" / "coordinator-sessions" / ".current-session-id"
-    try:
-        sid = sentinel.read_text().strip()
-    except OSError:
-        sid = ""
-    if sid:
-        return sid
-    return str(int(time.time()))[-6:]
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -129,25 +159,28 @@ def resolve_session_id(repo_root: Path) -> str:
 
 
 def primary_consumed_handoff_paths(repo_root: Path, sid: str) -> list[str]:
-    """This bin script's OWN detector set: an UNANCHORED regex
-    `(claimed_by|consumed_by):\\s*<sid>` scanned over every file under
-    state/handoffs/, collected and sorted. Deliberately NOT the same
-    computation as branch_resolution.py's anchored
-    `step0_evidence["consumed_handoff_paths"]` one layer down — this is a
-    self-contained local scan, not a cross-package agreement."""
+    """This bin script's OWN detector set: every file under state/handoffs/
+    whose claim state — resolved ledger-first via
+    `coordinator_core.claim_state.resolve_claim_state`, frontmatter mirror
+    as fallback (C1, plan `2026-08-07-claim-state-ledger-first-authoritative-
+    read.md`) — names `sid` as holder, collected and sorted. Was previously
+    an UNANCHORED regex `(claimed_by|consumed_by):\\s*<sid>` scanned directly
+    over file text, which only ever saw the frontmatter mirror; a claim held
+    only in the branch-independent ledger (mirror desynced by a branch
+    switch — see `claim_state.py`'s module docstring for the incident this
+    closes) was invisible to it. Deliberately NOT the same computation as
+    branch_resolution.py's anchored `step0_evidence["consumed_handoff_paths"]`
+    one layer down — this is a self-contained local scan, not a cross-package
+    agreement."""
     handoffs_dir = repo_root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
         return []
-    pattern = re.compile(rf"(claimed_by|consumed_by):\s*{re.escape(sid)}")
     matches = []
     for f in handoffs_dir.rglob("*"):
         if not f.is_file():
             continue
-        try:
-            text = f.read_text(errors="replace")
-        except OSError:
-            continue
-        if pattern.search(text):
+        state = resolve_claim_state(f, repo_root=repo_root)
+        if state.holder == sid:
             matches.append(f)
     matches.sort()
     # POSIX separators, not the native ones: this value becomes the ceremony's
@@ -170,20 +203,24 @@ def primary_consumed_handoff(repo_root: Path, sid: str) -> str | None:
 
 
 def detector_a(repo_root: Path, sid: str) -> str | None:
+    """An ARCHIVED handoff whose claim state — resolved ledger-first via
+    `coordinator_core.claim_state.resolve_claim_state`, frontmatter mirror as
+    fallback (C1) — names this session as holder AND carries a
+    `predecessor:` field. Was previously this function's own private
+    UNANCHORED regex `^(claimed_by|consumed_by): +<sid> *$` read directly off
+    file text — replaced for the same reason as
+    `primary_consumed_handoff_paths` above (a mirror-only read misses a claim
+    that survives only in the branch-independent ledger)."""
     archive_dir = repo_root / "archive" / "handoffs"
     if not archive_dir.is_dir():
         return None
-    consumer_re = re.compile(rf"^(claimed_by|consumed_by): +{re.escape(sid)} *$", re.MULTILINE)
     predecessor_re = re.compile(r"^predecessor:", re.MULTILINE)
     candidates = []
     for f in archive_dir.rglob("*"):
         if not f.is_file():
             continue
-        try:
-            text = f.read_text(errors="replace")
-        except OSError:
-            continue
-        if consumer_re.search(text):
+        state = resolve_claim_state(f, repo_root=repo_root)
+        if state.holder == sid:
             candidates.append(f)
     for f in sorted(candidates):
         try:
@@ -360,8 +397,9 @@ def _origin_session(path: Path) -> str:
     unlike `authoring_session` (observed path-shaped, not session-id-shaped,
     in this corpus — deliberately NOT consulted here for that reason).
     Returns "" when absent/unreadable. Bounded fence scan (first `---`/`---`
-    pair only) — same idiom as handoff_lifecycle._fm_field; this module
-    deliberately does not import coordinator_core (see module docstring)."""
+    pair only) — same idiom as handoff_lifecycle._fm_field; this local scan
+    stays self-contained rather than routing through this module's one
+    coordinator_core dependency (see module docstring)."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             in_fm = False
@@ -392,10 +430,15 @@ def _foreign_consumer_guard(repo_root: Path, shipped_by_me: str, sid: str) -> tu
     by the current call site but carried for any future caller that wires
     it up. Two independent negative-evidence reads, EITHER of which rejects:
 
-      - the DR-084 claim-holder PREFERENCE read (`claimed_by:` checked
-        first, `consumed_by:` only as fallback — a restoration-commit spoof,
-        e.g. re-ADDing another session's archived handoff while recovering a
-        file a stale shared-index commit deleted).
+      - the ledger-first claim-holder read (`coordinator_core.claim_state.
+        resolve_claim_state` — DR-084 dual-tolerant `claimed_by`/
+        `consumed_by` mirror fallback, ledger-first when the ledger holds a
+        live claim; was previously a mirror-only DR-084 preference read,
+        which left this rung DISARMED whenever a claim survived only in the
+        branch-independent ledger and the mirror had desynced — see
+        `claim_state.py`'s module docstring for the incident this closes): a
+        restoration-commit spoof, e.g. re-ADDing another session's archived
+        handoff while recovering a file a stale shared-index commit deleted.
       - `origin_session:` (widened 2026-08-05 — chain-terminal
         misattribution incident, this session's own reproduction: a record
         with NO claim holder at all was accepted by the pre-fix guard
@@ -409,7 +452,7 @@ def _foreign_consumer_guard(repo_root: Path, shipped_by_me: str, sid: str) -> tu
     claim ever stamped and no origin_session recorded either) must still
     pass."""
     shipped_path = repo_root / shipped_by_me
-    consumer = _claim_holder(str(shipped_path))
+    consumer = resolve_claim_state(shipped_path, repo_root=repo_root).holder or ""
     if consumer and consumer != sid:
         return True, f"claimed_by ({consumer}) is another session (restoration-commit spoof guard)"
     origin = _origin_session(shipped_path)
@@ -437,9 +480,9 @@ def _is_executable(path: Path) -> bool:
     check there anyway, and both call sites below already gate on their own
     `.is_file()` before calling this, so the Windows branch is a no-op on
     top of that already-passed check. Local rather than
-    `coordinator_core.win_portability.is_executable` because this file is
-    deliberately self-contained (see module docstring: "no coordinator_core
-    import")."""
+    `coordinator_core.win_portability.is_executable` because this helper
+    stays self-contained rather than reaching for this module's one
+    coordinator_core dependency (see module docstring)."""
     if os.name != "nt":
         return os.access(path, os.X_OK)
     return True
@@ -795,8 +838,9 @@ def _read_fm_field_local(path: Path, key: str) -> str:
 def _run_git_local(repo_root: Path, args: list[str]) -> "subprocess.CompletedProcess | None":
     """Local mirror of `coordinator_core.workstream_complete.
     directives_memo_lifecycle._run_git`'s guard semantics — duplicated, not
-    imported, per this module's "no coordinator_core import" contract (see
-    module docstring). Same bounded `timeout` and the same
+    imported, keeping this helper self-contained rather than reaching for
+    this module's one coordinator_core dependency (see module docstring).
+    Same bounded `timeout` and the same
     `(OSError, subprocess.SubprocessError)` swallow-to-None: a stale git
     lock, a hung `git` process, or a missing `git` binary degrades this leg
     rather than hanging or crashing `resolve_disposition`. Review:
@@ -933,7 +977,7 @@ def find_memo_predecessor(repo_root: Path, sid: str, diagnostics: list[str]) -> 
         return None
     matches.sort(key=lambda pair: pair[0])
     chosen, chosen_at_raw = matches[0]
-    rel = str(chosen.relative_to(repo_root))
+    rel = rel_id(chosen, repo_root)
     diagnostics.append(
         f"NOTE: memo-predecessor candidate: {rel} (picked_up_by={sid}, "
         f"picked_up_at={chosen_at_raw} <= session-start {session_start.isoformat()})"
@@ -960,7 +1004,7 @@ def _normalize_override_handoff(repo_root: Path, raw: str, diagnostics: list[str
     candidate = Path(raw)
     if candidate.is_absolute():
         try:
-            rel = str(candidate.resolve().relative_to(repo_root.resolve()))
+            rel = rel_id(candidate.resolve(), repo_root.resolve())
         except (OSError, ValueError):
             rel = raw
     else:
@@ -1444,6 +1488,23 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
         return _TRANSPORT_FAIL
 
     sid = resolve_session_id(repo_root)
+    if not sid:
+        # KS-5: never run the detector chain against an unresolved sid — an
+        # empty sid would either (a) spuriously match unclaimed handoffs
+        # (resolve_claim_state's holder is also "" for those, so `"" == sid`
+        # would false-positive), or (b) fall through to "single-session",
+        # which reads as a clean chain-end coverage gate skip identical to
+        # the false clean the fabricated-epoch fallback produced. Fail loud
+        # instead.
+        print(
+            "wsc-session-disposition: session id could not be resolved via any tier "
+            "(em_sid/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID) — refusing to classify "
+            "chain-terminal disposition against an unidentified session (KS-5: the "
+            "fabricated-epoch fallback that used to paper over this was removed as "
+            "strictly worse than reporting unresolved)",
+            file=sys.stderr,
+        )
+        return _SESSION_ID_UNRESOLVED
     disposition, consumed, diagnostics, _consumed_paths = resolve_disposition(repo_root, sid)
 
     for msg in diagnostics:

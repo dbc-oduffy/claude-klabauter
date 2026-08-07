@@ -30,6 +30,8 @@ import sys
 import tempfile
 import unittest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_SCRIPT_DIR)
 _CLI = os.path.join(_BIN_DIR, "parallel-review-orthogonality-guard.py")
@@ -42,7 +44,7 @@ def _git(cwd: str, *args: str) -> subprocess.CompletedProcess:
         check=True,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -63,7 +65,7 @@ def _run_cli(args: list[str], cwd: str | None = None) -> subprocess.CompletedPro
         cwd=cwd,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

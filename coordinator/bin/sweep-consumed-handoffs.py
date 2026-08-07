@@ -67,21 +67,19 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 from sweep_argv import parse_repo_root_argv  # noqa: E402
-
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _USAGE = "usage: python3 sweep-consumed-handoffs.py [-h] [--dry-run] [<repo_root>]"
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
+    """Resolve CLAUDE_KLABAUTER_ROOT (self-location-first) and import
+    `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
 
     Mirrors `sweep-boot.py::_import_housekeeping_seam` / the copies in the sibling
     per-class CLIs -- best-effort; returns None on any resolution/import failure.
     """
     try:
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        if cc_invoke.ensure_engine_on_path(__file__) is None:
+            return None
         from coordinator_core.ops.ceremony.housekeeping_liveness import (
             ARCHIVE_SWEEPS,
             stamp_liveness,
@@ -120,9 +118,9 @@ def _resolve_repo_root(explicit: str | None) -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **cc_invoke._no_console_kw(cc_invoke.resolve_engine_root(__file__)),  # popup-safe-env-suppressed
         )
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     resolved = (proc.stdout or "").strip()
     if proc.returncode != 0 or not resolved:

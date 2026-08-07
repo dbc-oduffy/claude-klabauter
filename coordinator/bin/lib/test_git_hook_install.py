@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from git_hook_install import _append_block, _shim_body  # noqa: E402
+from git_hook_install import _append_block, _ml_get, _shim_body  # noqa: E402
 
 
 def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
@@ -128,3 +128,47 @@ def test_append_block_missing_interpreter_and_missing_script_both_warn():
         '"$_PY" "$_T" "$@"',
     )
     assert block.count("[coordinator] WARNING: hook installed but") == 2
+
+
+# ---------------------------------------------------------------------------
+# _ml_get — Windows-exec regression (extensionless `machine-local` shebang
+# script is not directly invocable by CreateProcess; see this module's own
+# fix and coordinator_core.launchable's module docstring for the underlying
+# WinError 193 defect).
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+@pytest.mark.skipif(os.name != "nt", reason="WinError 193 exec defect is Windows-only")
+def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):
+    """`ml_bin` is the bareword `machine-local` (no extension) — `CreateProcess`
+    cannot exec it directly. `_ml_get` must resolve through its `.cmd` twin
+    (mirroring `_resolve_machine_local_bin`'s real-world layout) rather than
+    silently swallowing the WinError 193 and returning None as if the key
+    were simply unset."""
+    ml_bin = tmp_path / "machine-local"
+    ml_bin.write_text("#!/usr/bin/env python3\nraise SystemExit(1)\n", encoding="utf-8")
+    ml_cmd = tmp_path / "machine-local.cmd"
+    ml_cmd.write_text(
+        "@echo off\r\n"
+        'if "%1"=="get" if "%2"=="repos.claude_klabauter" (echo dummy-resolved-value) else (exit /b 1)\r\n',
+        encoding="utf-8",
+    )
+
+    result = _ml_get(str(ml_bin), "repos.claude_klabauter")
+
+    assert result == "dummy-resolved-value"
+
+
+def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
+    """An exec failure (resolver could not even be launched) must be
+    distinguishable from a genuinely-unset key: it warns to stderr rather
+    than the two cases looking identical (both `None`, zero output)."""
+    unlaunchable = tmp_path  # a directory is never launchable as argv[0]
+
+    result = _ml_get(str(unlaunchable), "some.key")
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "could not execute machine-local resolver" in captured.err

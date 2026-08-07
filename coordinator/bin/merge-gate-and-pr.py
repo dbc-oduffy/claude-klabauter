@@ -58,6 +58,8 @@ import os
 import subprocess
 import sys
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -76,7 +78,7 @@ def _run_review_coverage_gate(range_arg: str | None) -> tuple[int, str, str]:
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),  # popup-safe-env-suppressed
     )
     return proc.returncode, proc.stdout, proc.stderr
 

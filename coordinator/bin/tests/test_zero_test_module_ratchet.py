@@ -130,12 +130,13 @@ import tomllib
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(_TESTS_DIR))
 )  # .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
 _PYPROJECT = os.path.join(_REPO_ROOT, "pyproject.toml")
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # pytest's built-in `norecursedirs` default, mirrored so the on-disk oracle
 # walks exactly the tree pytest walks. This repo does not override
@@ -328,7 +329,7 @@ def _collected_test_files() -> set[str]:
         text=True,
         check=False,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     if proc.returncode != 0:
@@ -395,7 +396,7 @@ def _really_yields_no_nodes(rel_path: str) -> bool:
         text=True,
         check=False,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     # pytest exits 5 for "no tests collected" — that is not an error, it is
     # this guard's positive signal, and reading it as an error is how the
@@ -505,7 +506,7 @@ def test_nested_collect_survives_a_leaked_lazy_ops_flag(monkeypatch) -> None:
         text=True,
         check=False,
         env=_nested_pytest_env(),
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, (

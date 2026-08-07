@@ -28,6 +28,8 @@ import tempfile
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.normpath(os.path.join(_HERE, "..", "check-multi-event-hook-hardcoded-event.py"))
 LIVE_HOOKS_JSON = os.path.normpath(os.path.join(_HERE, "..", "..", "hooks", "hooks.json"))
@@ -40,7 +42,7 @@ def _run_guard(*args, cwd=None):
         stderr=subprocess.PIPE,
         text=True,
         cwd=cwd,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout, proc.stderr
 

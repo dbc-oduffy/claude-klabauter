@@ -65,11 +65,11 @@ def _fake_session_loe_module(*, git_root, ad, od, em_tokens, tshirt):
 # ---------------------------------------------------------------------------
 
 
-def test_returns_computed_fields():
+def test_returns_computed_fields(tmp_path):
     """Real values flow through unmodified when the sibling module loads and
     computes cleanly."""
     fake = _fake_session_loe_module(
-        git_root="/tmp/fake-repo", ad=26, od=4, em_tokens=482000, tshirt="L"
+        git_root=str(tmp_path), ad=26, od=4, em_tokens=482000, tshirt="L"
     )
     with mock.patch.object(_mod, "_load_session_loe_module", return_value=fake):
         result = _mod._loe_metrics("some-session", include_children=False)
@@ -78,13 +78,13 @@ def test_returns_computed_fields():
     }
 
 
-def test_none_dispatch_counts_normalize_to_zero():
+def test_none_dispatch_counts_normalize_to_zero(tmp_path):
     """_count_session returns (None, None) when dispatched-agents.txt is
     absent (null-honesty in the read helper) — the summary CLI still
     needs a concrete int for the ledger, matching the bash block's
     implicit `${AD:-0}`-shaped consumption."""
     fake = _fake_session_loe_module(
-        git_root="/tmp/fake-repo", ad=None, od=None, em_tokens=None, tshirt="XS"
+        git_root=str(tmp_path), ad=None, od=None, em_tokens=None, tshirt="XS"
     )
     with mock.patch.object(_mod, "_load_session_loe_module", return_value=fake):
         result = _mod._loe_metrics("some-session", include_children=False)
@@ -207,7 +207,7 @@ def test_no_session_id_falls_back_to_unknown_on_resolution_failure():
     assert payload["session_id"] == "unknown"
 
 
-def test_include_children_flag_forwarded():
+def test_include_children_flag_forwarded(tmp_path):
     with mock.patch.object(
         _mod, "_loe_metrics", return_value=_mod._FALLBACK_LOE
     ) as mock_loe, mock.patch.object(
@@ -215,7 +215,7 @@ def test_include_children_flag_forwarded():
     ), mock.patch.object(
         _mod, "_utc_now_iso", return_value="2026-07-23T00:00:00Z"
     ), mock.patch.object(
-        _mod, "_resolve_claude_klabauter_root", return_value="/tmp/fake-claude-klabauter-root"
+        _mod, "_resolve_claude_klabauter_root", return_value=str(tmp_path / "fake-claude-klabauter-root")
     ), mock.patch.object(
         _mod, "_format_oneline_row", return_value=None
     ):
@@ -265,14 +265,15 @@ def test_format_oneline_row_none_claude_klabauter_root_returns_none():
     assert _mod._format_oneline_row(None, "abc123def", "L", 5, 1, "2026-07-25T00:00:00Z") is None
 
 
-def test_format_oneline_row_import_failure_returns_none():
+def test_format_oneline_row_import_failure_returns_none(tmp_path):
     with mock.patch.object(_mod.sys, "path", list(_mod.sys.path)):
         with mock.patch(
             "builtins.__import__",
             side_effect=ImportError("no coordinator_core here"),
         ):
             result = _mod._format_oneline_row(
-                "/nonexistent/claude-klabauter/root", "abc123def", "L", 5, 1, "2026-07-25T00:00:00Z"
+                str(tmp_path / "nonexistent" / "claude-klabauter" / "root"),
+                "abc123def", "L", 5, 1, "2026-07-25T00:00:00Z"
             )
     assert result is None
 

@@ -60,10 +60,12 @@ from pathlib import Path
 
 import yaml
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _CLI_PATH = _BIN_DIR / "coordinator-doc-new"
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 
 def _load_cli_module():

@@ -146,6 +146,9 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
 # ``TypeError: 'str' object is not callable``.
 from coordinator_core.diff_scoped_tests import diag as diff_diag  # noqa: E402
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
+from coordinator_core.testing import suite_mutex  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from coordinator_core.testing.suite_mutex import MUTEX_WAIT_SECS, mutex_owner  # noqa: E402
 
 # coordinator-resolve-validation-cmd.py is co-located in this same bin/ dir.
 # Its on-disk filename is hyphenated (a bin/-resident CLI, not an importable
@@ -234,7 +237,7 @@ def _run_resolved_command(cmd: str) -> int:
         proc = subprocess.run(
             argv,
             env=child_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         return proc.returncode
     except OSError as exc:
@@ -325,7 +328,16 @@ def run_fast(repo_root: str | None) -> tuple[str, int]:
         print(gate.refusal_message, file=sys.stderr)
         return "tier-u-refused", 3
 
-    cmd_exit = _run_resolved_command(scoped_cmd)
+    owner = mutex_owner("suite-mutex")
+    with suite_mutex.held(owner, "validate-fast", timeout=MUTEX_WAIT_SECS) as acquired:
+        if not acquired:
+            current = suite_mutex.holder() or {}
+            print(
+                "[WARN] suite mutex held by %s for %ss — proceeding unserialized"
+                % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS)),
+                file=sys.stderr,
+            )
+        cmd_exit = _run_resolved_command(scoped_cmd)
 
     if diff_paths and cmd_exit == PYTEST_NO_TESTS_COLLECTED:
         # The diff-scoped run named a changed test file the `-m` marker
@@ -344,7 +356,15 @@ def run_fast(repo_root: str | None) -> tuple[str, int]:
         if not gate_full.proceed:
             print(gate_full.refusal_message, file=sys.stderr)
             return "tier-u-refused", 3
-        cmd_exit = _run_resolved_command(cmd)
+        with suite_mutex.held(owner, "validate-fast", timeout=MUTEX_WAIT_SECS) as acquired:
+            if not acquired:
+                current = suite_mutex.holder() or {}
+                print(
+                    "[WARN] suite mutex held by %s for %ss — proceeding unserialized"
+                    % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS)),
+                    file=sys.stderr,
+                )
+            cmd_exit = _run_resolved_command(cmd)
 
     return str(cmd_exit), cmd_exit
 
@@ -390,7 +410,7 @@ def run_packageability(passthrough: list[str]) -> tuple[int, str | None]:
     proc = subprocess.run(
         [python_bin, _VALIDATE_INSTALL_CONTRACT, *passthrough],
         env=child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return proc.returncode, None
 

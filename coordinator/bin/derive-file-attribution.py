@@ -17,7 +17,7 @@ Achieves this via line-by-line streaming (never json.load a whole file) and a si
 pass per transcript.
 
 Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C1
-Ported from: plugins/coordinator/bin/lib/file-attribution/project.mjs
+Ported from: plugins/coordinator-claude/coordinator/bin/lib/file-attribution/project.mjs
 
 Performance cache (2026-07-29): a full re-scan (read + regex + json.loads every
 transcript line, on every invocation, no caching) cost ~2.4s wall against a
@@ -49,7 +49,7 @@ Negative-spec:
     to state/" ban protected, and it still holds in full.
   - Narrowed, deliberately, on 2026-07-29 (PM-authorized): the producer MAY maintain its
     own private performance cache under the durable-data plane
-    (`$(coordinator-settings-home)/claude-klabauter/file-attribution-cache/`, per
+    (`$(coordinator-settings-home)/<engine-repo-name>/file-attribution-cache/`, per
     CLAUDE.md § Durable-data plane) — NOT state/, NOT an ad-hoc `~/` path. This is an
     internal implementation detail of the producer's own runtime, not attribution
     OUTPUT; a cache miss, corrupt/missing/unwritable cache, or a `--no-cache` run all
@@ -480,6 +480,22 @@ def derive_attribution(
         }]
 
     # -- Bash → edited (bash) or unknown ------------------------------------
+    # Disposition (AC7, docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md
+    # § C7): NOT converted to a membership check against
+    # coordinator_core.bash_guards._tool_names.COMMAND_TOOL_NAMES. This is a REAL, SIZED
+    # GAP, not an absence of cases: a fleet-wide scan of ~/.claude/projects transcripts
+    # (2026-08-07) counted tool_use.name == "PowerShell" 1,753 times against 7,912 "Bash"
+    # -- roughly 18% of shell-tool invocations (1,753 of 9,665) already arrive as
+    # PowerShell today, and every one of them falls through this gate and yields NO
+    # attribution row (silent drop, not a wrong one). The hold is NOT "PowerShell never
+    # appears" -- it does, routinely, on this machine right now. The hold is that a bare
+    # membership-check widening would immediately hand a PowerShell command string to
+    # parse_bash_for_writes(), which is POSIX-redirect-grammar-bound and cannot parse
+    # PowerShell write syntax (`>`/`Out-File`/`Set-Content`/`Add-Content` etc. all differ
+    # from bash); that would trade 1,753 silent drops for 1,753 wrong-or-empty parses,
+    # which is worse, not better. Fixing this for real needs a PowerShell-write-syntax
+    # parser this chunk does not have license to author. Tracked as a known gap, not
+    # closed by this disposition.
     if tool_name == 'Bash':
         cmd = args.get('command')
         if not cmd:
@@ -496,7 +512,7 @@ def derive_attribution(
                 'file_path': None,
                 'link_type': 'unknown',
                 'tool_use_id': tool_use_id,
-                'metadata': {'toolName': 'Bash', 'bashCommand': cmd},
+                'metadata': {'toolName': tool_name, 'bashCommand': cmd},
                 'system': {
                     'capture_source': 'derived',
                     'completeness': 'partial',
@@ -511,7 +527,7 @@ def derive_attribution(
             'tool_use_id': tool_use_id,
             'metadata': {
                 'operation': 'bash',
-                'toolName': 'Bash',
+                'toolName': tool_name,
                 'bashCommand': cmd,
             },
             'system': {
@@ -644,13 +660,16 @@ def encode_project_path(project_root: str) -> str:
     Example: /Users/example-operator/.claude → -Users-example-operator--claude
     """
     # Review: code-reviewer (F8) — normalize Windows path separators before encoding
-    # so coordinator_root on Windows (C:\Users\...) produces the same encoded form
-    # as forward-slash paths (Claude Code encodes all separators as '-').
+    # so coordinator_root on Windows (drive letter, colon, then Users\...)
+    # produces the same encoded form as forward-slash paths (Claude Code
+    # encodes all separators as '-').
     #
     # The drive-letter colon is part of that same normalization and is NOT
-    # optional: Claude Code encodes `X:\claude-klabauter` as `X--claude-klabauter`
-    # (colon AND separator each become '-'), so stripping only the backslash
-    # yields `X:-claude-klabauter`, which matches no directory that exists. The
+    # optional: Claude Code encodes a drive letter, colon, backslash,
+    # example-repo path as drive-letter, dash, dash, example-repo (colon AND
+    # separator each become '-'), so stripping only the backslash yields
+    # drive-letter, colon, dash, example-repo, which matches no directory
+    # that exists. The
     # miss is silent all the way up — `derive_rows` returns [] for a missing
     # transcript dir, the section porter swallows that into [], and the
     # emission simply carries an empty `file_attributions` collection. That is
@@ -670,8 +689,9 @@ def encode_project_path(project_root: str) -> str:
 def _require_rooted_env(var: str, raw: str) -> str:
     """Return `raw`, or raise ValueError if it would anchor the cache at the cwd.
 
-    A rooted path ('/srv/x', 'C:\\Users\\x', '\\\\server\\share') is accepted; a
-    relative one ('foo', 'C:foo') is not. On Windows a drive letter alone is NOT
+    A rooted path ('/srv/x', a Windows drive-rooted path like 'Users\\x' under
+    a drive letter, or a UNC share) is accepted; a relative one ('foo',
+    'C:foo') is not. On Windows a drive letter alone is NOT
     absolute — 'C:foo' means "foo relative to the cwd on drive C:" — so the test is
     `is_absolute() or root`, which accepts a POSIX-style rooted path under a Windows
     interpreter while still rejecting the drive-relative form.
@@ -687,8 +707,8 @@ def _require_rooted_env(var: str, raw: str) -> str:
         raise ValueError(
             f"{var} must be an absolute path; got {raw!r} — a relative value anchors "
             "the attribution cache at a cwd that moves between runs, silently disabling "
-            "the cache. (On Windows, a drive letter alone is insufficient — use "
-            "'C:\\...' form.)"
+            "the cache. (On Windows, a drive letter alone is insufficient — a "
+            "drive-rooted path needs the separator after the colon too.)"
         )
     return raw
 

@@ -319,15 +319,25 @@ def _machine_local_mirror_keys() -> "list[str] | None":
             file=sys.stderr,
         )
         return None
-    mirror_keys = []
+    # 2026-08-07 incident fix: `.owner` alone used to be the sole sentinel — a
+    # mirror table declared with `.path` but no `.owner` (claude_klabauter:
+    # `.path` set, `.owner` never set) was invisible here, so
+    # `_is_publish_target_em` never fired and `resolve_receiver_inbox`'s
+    # ordinary `repos.*` match delivered the memo straight into a published
+    # OSS mirror. `.path` is now ALSO a sentinel — a mirror declared by
+    # EITHER field is enough to guard; `_get_publish_target_owners` below
+    # substitutes a placeholder owner string when `.owner` is genuinely unset
+    # so the guard still fires (with an actionable message) rather than
+    # silently trusting an incomplete registration.
+    mirror_keys = set()
     for line in result.stdout.splitlines():
         key = line.strip()
-        # Match: publish.mirrors.<name>.owner — one-segment name (no dots in <name>)
-        if key.startswith("publish.mirrors.") and key.endswith(".owner"):
-            middle = key[len("publish.mirrors."):-len(".owner")]
-            if middle and "." not in middle:
-                mirror_keys.append(middle)
-    return mirror_keys
+        for suffix in (".owner", ".path"):
+            if key.startswith("publish.mirrors.") and key.endswith(suffix):
+                middle = key[len("publish.mirrors."):-len(suffix)]
+                if middle and "." not in middle:
+                    mirror_keys.add(middle)
+    return sorted(mirror_keys)
 
 
 def _mirror_key_to_hyphenated(mirror_key: str) -> str:
@@ -399,7 +409,17 @@ def _get_publish_target_owners() -> dict[str, str]:
     for mirror_key in mirror_keys:
         owner = _machine_local_get(f"publish.mirrors.{mirror_key}.owner")
         if not owner:
-            continue  # mirror table with no owner — skip; shouldn't happen post-C4
+            # 2026-08-07 incident fix: a mirror declared via `.path` alone (no
+            # `.owner` set) MUST still classify as a publish target — an
+            # incomplete registration is a registry-data defect, not a
+            # license to treat the repo as an ordinary receiver. Placeholder
+            # owner keeps `_is_publish_target_em` True and gives the
+            # rejection message something actionable to print instead of
+            # silently falling through to `resolve_receiver_inbox`.
+            owner = (
+                f"<owner unset — run: machine-local set "
+                f"publish.mirrors.{mirror_key}.owner <em-id>>"
+            )
         for alias in _derive_mirror_alias_set(mirror_key):
             owners[alias.lower()] = owner
 
@@ -2511,6 +2531,14 @@ def _validate_outbox_frontmatter(fm: dict) -> list[str]:
     """CLI-local validator for outbox draft frontmatter.
 
     Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C1
+    2026-08-07 extraction: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md
+    (the rule set itself now lives in
+    coordinator_core.ops.fleet._outbox_frontmatter_rules.validate_outbox_frontmatter
+    — SINGLE SOURCE OF TRUTH shared with
+    coordinator_core.write_guards.nudge_outbox_draft_frontmatter_shape, the
+    write-time advisory guard that catches the same defect at authoring time
+    instead of only at `send`. This wrapper's signature/name/call site are
+    unchanged; only the body now delegates.)
 
     Accepts status == "draft" and validates the required sender-side fields.
     This is intentionally separate from schemas/cross-repo-memo.yaml — the inbox
@@ -2522,47 +2550,18 @@ def _validate_outbox_frontmatter(fm: dict) -> list[str]:
     later via `compose`); only its KEY must be present. All other required fields
     must be present and non-empty.
 
+    `_cmd_send` normalizes a hand-authored `status: open` to `draft` BEFORE
+    calling this function (see its own docstring) — this function's status
+    check itself is UNCHANGED (still requires exactly `draft`), so its error
+    strings/exit codes are unaffected; the normalization is upstream of it.
+
     Returns a list of error strings; empty list = valid.
     """
-    errors = []
-    if fm.get("status") not in ("draft",):
-        errors.append(f"status must be 'draft', got: {fm.get('status')!r}")
-    # All required fields must have their KEY present; summary may be empty at draft time.
-    for field in _OUTBOX_REQUIRED_FIELDS:
-        if field == "summary":
-            # summary key must exist; empty string is allowed (placeholder draft)
-            if field not in fm:
-                errors.append(f"required field '{field}' missing")
-        else:
-            if not fm.get(field):
-                errors.append(f"required field '{field}' missing or empty")
-    # kind is OPTIONAL — absent/None is valid (reader applies an 'ask' default);
-    # only a PRESENT value outside the enum is rejected.
-    kind = fm.get("kind")
-    if kind is not None and kind not in _VALID_KINDS:
-        errors.append(
-            f"kind {kind!r} is not a valid enum value "
-            f"(must be one of: {', '.join(_VALID_KINDS)}; absent is also valid). "
-            f"Note: 'ack' is not a kind — acknowledgement is receipt-state."
-        )
-    # Mirrors coordinator/bin/lib/schema.js:2290 (presence-triggered
-    # scoped_to completeness, regardless of kind) — see _scoped_to_errors
-    # docstring. Fires on the outbox draft's flattened scoped_to_* fields,
-    # whether they arrived via `draft --scoped-to-*` flags or a hand-edit of
-    # the draft file before `send` — both compose the same flat frontmatter
-    # shape.
-    errors.extend(
-        _scoped_to_errors(
-            kind,
-            {
-                "artifact": fm.get("scoped_to_artifact"),
-                "version": fm.get("scoped_to_version"),
-                "sha": fm.get("scoped_to_sha"),
-                "seam": fm.get("scoped_to_seam"),
-            },
-        )
+    cc_invoke.ensure_engine_on_path(__file__)
+    from coordinator_core.ops.fleet._outbox_frontmatter_rules import (
+        validate_outbox_frontmatter as _shared_validate_outbox_frontmatter,
     )
-    return errors
+    return _shared_validate_outbox_frontmatter(fm)
 
 
 # _compose_outbox_frontmatter DELETED 2026-07-21 (A8 strangler cutover, verb
@@ -3035,9 +3034,7 @@ def _archive_sent_outbox_draft(outbox_path: str, sender_root: str | None = None)
 
     if sender_root:
         try:
-            claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-            if claude_klabauter_root not in sys.path:
-                sys.path.insert(0, claude_klabauter_root)
+            cc_invoke.ensure_engine_on_path(__file__)
             from coordinator_core.session import core as _session_core
             from coordinator_core.session import scope as _session_scope
 
@@ -3501,6 +3498,30 @@ def _cmd_send(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # 2026-08-07 open->draft normalization (cross-repo/inbox/2026-08-07-
+    # example-store-repo-em-memo-tool-rejects-the-shape-it-teaches.md): an outbox
+    # draft hand-authored with `status: open` — the shape every *received*
+    # inbox memo around it carries, an easy field to copy by mistake — is
+    # unambiguous sender-side: `open` on a file still sitting in
+    # state/memo-outbox/ can only mean "this was meant to be a draft", since
+    # `send` is what promotes draft -> open in the first place (see this
+    # function's own docstring). Normalized here, in-memory only (the file on
+    # disk is untouched — the existing send flow already stamps it), so
+    # `_validate_outbox_frontmatter` never sees `open` on this path. Any
+    # OTHER status (not 'draft' or 'open') still fails loud, unchanged, via
+    # the validator below.
+    if fm.get("status") == "open":
+        print(
+            f"cross-repo-memo send: outbox draft '{topic}' has status: open — "
+            f"normalizing to status: draft before send. 'open' is the shape a "
+            f"*received* memo carries; an outbox draft is un-sent by "
+            f"definition, so this is unambiguous. (Fix the draft file to avoid "
+            f"this notice on a future send.)",
+            file=sys.stderr,
+        )
+        fm = dict(fm)
+        fm["status"] = "draft"
 
     validation_errors = _validate_outbox_frontmatter(fm)
     if validation_errors:

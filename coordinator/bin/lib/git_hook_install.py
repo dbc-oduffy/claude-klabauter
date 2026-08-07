@@ -80,10 +80,11 @@ import os
 import subprocess
 import sys
 from typing import List, Optional
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.py_probe_sh import python_probe_lines
+from coordinator_core.launchable import resolve_launchable
 
-_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator/bin"
+_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator-claude/coordinator/bin"
 
 # DR-072: durable-first .doe-root pointer read, cold shape (no lib-sourcing —
 # these are POSIX-`sh` string literals baked into installed git hooks, which
@@ -133,18 +134,39 @@ def _resolve_machine_local_bin(bin_dir: str) -> Optional[str]:
 
 def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
     """Best-effort `machine-local get <key>` — returns stripped stdout, or None
-    on any failure (missing binary, missing key, timeout, non-zero exit)."""
+    on any failure (missing binary, missing key, timeout, non-zero exit).
+
+    `ml_bin` (from `_resolve_machine_local_bin`) is the extensionless
+    `machine-local` shebang script — `CreateProcess` cannot exec it directly
+    on Windows (`OSError [WinError 193] %1 is not a valid Win32 application`).
+    `resolve_launchable` resolves the actually-invocable argv prefix for this
+    OS (the `.cmd` twin on Windows, a bare path on POSIX where the shebang is
+    authoritative) — see `coordinator_core.launchable` module docstring.
+
+    A resolver-exec failure (OSError — could not even launch the resolver) is
+    NOT the same fact as "key genuinely unset" (clean non-zero exit / empty
+    stdout): the former is loudly warned to stderr so a broken machine-local
+    install is distinguishable from an unset key, without raising — this sits
+    on the session-boot / hook-install path and must never block."""
     if not ml_bin:
         return None
     try:
         out = subprocess.run(
-            [ml_bin, "get", key],
+            [*resolve_launchable(ml_bin), "get", key],
             capture_output=True,
             text=True,
             timeout=15,
+            **no_console_creationflags(),
         )
         val = (out.stdout or "").strip()
         return val or None
+    except OSError as exc:
+        print(
+            f"[git_hook_install] WARNING: could not execute machine-local "
+            f"resolver '{ml_bin}' for key '{key}': {exc}",
+            file=sys.stderr,
+        )
+        return None
     except Exception:
         return None
 
@@ -178,7 +200,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
             `<claude_klabauter>/coordinator/bin/<script_name>` — the executable
             surface's actual current home on a migrated machine.
     Rung 4: marketplace path
-            `$HOME/.claude/plugins/coordinator/bin` —
+            `$HOME/.claude/plugins/coordinator-claude/coordinator/bin` —
             unconditional backstop, no isfile probe (matches prior behavior;
             this is the last resort, not a candidate to skip past).
     """

@@ -34,13 +34,12 @@ import subprocess
 import sys
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "fan-out-dispatch.py")
 PYTHON = sys.executable
 
-# Windows: suppress the console popup a child process would otherwise allocate; no-op on POSIX.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def make_git_repo(path: str) -> None:
@@ -51,7 +50,7 @@ def make_git_repo(path: str) -> None:
         ["git", "config", "user.name", "Test"],
         ["git", "commit", "-q", "--allow-empty", "-m", "init"],
     ):
-        r = subprocess.run(cmd, cwd=path, capture_output=True, text=True, creationflags=_NO_WINDOW)
+        r = subprocess.run(cmd, cwd=path, capture_output=True, text=True, **no_console_creationflags())
         if r.returncode != 0:
             raise RuntimeError(f"git setup failed in {path}: {r.stderr}")
 
@@ -72,7 +71,7 @@ def run_helper(cwd, spec_file=None, stdin_text=None, extra_env=None, args=None):
         capture_output=True,
         text=True,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     return r.returncode, r.stdout, r.stderr
 
@@ -286,7 +285,7 @@ def test_threshold_resolution_order(root):
         env={**os.environ, "MACHINE_LOCAL_REGISTRY_DIR": reg_h2},
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     assert ml.returncode == 0, ml.stderr
     _, out5, _ = run_helper(repo_h, spec_file=specs[5], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h2}))

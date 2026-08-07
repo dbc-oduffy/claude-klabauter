@@ -29,14 +29,25 @@ Test coverage:
     T9  _run_resolved_command executes a plain argv command directly (no
         bash needed) and preserves the rc=127 "command not found" contract
         for an unresolvable first token
+  DR-088 layer-6 take side (suite mutex -- the mutex.held() call now wraps
+  this module's actual suite subprocess invocation, mirroring
+  coordinator_core.testing.full_runner's established take-side posture):
+    T10 run_fast's resolved-command execution runs inside a held suite
+        mutex (mutex_owner acquires and releases across the call)
+    T11 a suite mutex already held by another owner produces the WARN and
+        still proceeds (fail-open), never an abort
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
 import unittest
+
+from coordinator_core.win_portability import no_console_creationflags
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_SCRIPT_DIR)
@@ -62,7 +73,7 @@ def _run(args: list[str], env: dict | None = None, cwd: str | None = None) -> su
         capture_output=True,
         text=True,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),
     )
 
 
@@ -249,6 +260,91 @@ class MetacharGuardAndDirectExecTest(unittest.TestCase):
         mod = _load_cli_module()
         exit_code = mod._run_resolved_command("this-binary-does-not-exist-anywhere-12345")
         self.assertEqual(exit_code, 127)
+
+
+class SuiteMutexTakeSideTest(unittest.TestCase):
+    """DR-088 layer-6 take side: `run_fast`'s resolved-command execution must
+    run inside the held suite mutex, and a held-elsewhere mutex must WARN and
+    proceed (fail-open), never abort."""
+
+    def _fake_resolve(self, mod, resolved_cmd: str) -> None:
+        class _FakeResolveResult:
+            def __init__(self, stdout: str, returncode: int) -> None:
+                self.stdout = stdout
+                self.returncode = returncode
+
+        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
+            resolved_cmd + "\n", 0
+        )
+        mod.find_changed_test_files = lambda repo_root: []
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+            proceed=True, refusal_message=None
+        )
+
+    def _isolated_settings_home(self, tmp_dir: str) -> None:
+        # This machine is shared with live peer sessions -- point the mutex's
+        # lock directory at a per-test scratch dir rather than touching the
+        # real machine-wide lock a concurrent suite run elsewhere may hold.
+        os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
+        self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
+
+    def test_t10_resolved_command_runs_inside_held_mutex(self) -> None:
+        import tempfile
+
+        from coordinator_core.testing import suite_mutex
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._isolated_settings_home(tmp_dir)
+
+            mod = _load_cli_module()
+            self._fake_resolve(mod, "true")
+
+            observed_holder: list[object] = []
+
+            def _fake_run_resolved_command(cmd: str) -> int:
+                observed_holder.append(suite_mutex.holder())
+                return 0
+
+            mod._run_resolved_command = _fake_run_resolved_command
+
+            validation_result, exit_code = mod.run_fast("/tmp")
+
+            self.assertEqual((validation_result, exit_code), ("0", 0))
+            self.assertEqual(len(observed_holder), 1)
+            self.assertIsNotNone(observed_holder[0], "mutex was not held during the suite call")
+            # Released again after the call.
+            self.assertIsNone(suite_mutex.holder())
+
+    def test_t11_held_elsewhere_warns_and_proceeds(self) -> None:
+        import tempfile
+
+        from coordinator_core.testing import suite_mutex
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._isolated_settings_home(tmp_dir)
+
+            mod = _load_cli_module()
+            self._fake_resolve(mod, "true")
+            mod.MUTEX_WAIT_SECS = 0.0
+
+            ran: list[bool] = []
+            mod._run_resolved_command = lambda cmd: (ran.append(True) or 0)
+
+            self.assertTrue(suite_mutex.acquire("other-owner", "other-suite-run"))
+            try:
+                stderr_buf = io.StringIO()
+                with contextlib.redirect_stderr(stderr_buf):
+                    validation_result, exit_code = mod.run_fast("/tmp")
+            finally:
+                suite_mutex.release("other-owner")
+
+            self.assertEqual((validation_result, exit_code), ("0", 0))
+            self.assertEqual(ran, [True])
+            self.assertIn("suite mutex held by other-owner", stderr_buf.getvalue())
+            self.assertIn("proceeding unserialized", stderr_buf.getvalue())
 
 
 if __name__ == "__main__":

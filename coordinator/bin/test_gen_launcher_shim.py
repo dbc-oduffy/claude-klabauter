@@ -43,6 +43,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from coordinator_core.win_portability import no_console_creationflags
 
 _MODULE_PATH = Path(__file__).with_name("gen-launcher-shim.py")
 _spec = importlib.util.spec_from_file_location("gen_launcher_shim", _MODULE_PATH)
@@ -150,7 +151,7 @@ class WhoamiBootstrapTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         recorded = argv_sink.read_text(encoding="utf-8").splitlines()
@@ -171,7 +172,7 @@ class WhoamiBootstrapTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(result.returncode, 127)
         self.assertIn("coordinator.python", result.stderr)
@@ -193,9 +194,36 @@ class WhoamiBootstrapTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(result.returncode, 127)
+
+
+class Ps1DefaultTests(unittest.TestCase):
+    """Regression coverage for generate()'s `ps1` default flip (False->True,
+    2026-08-07 argv-fidelity chunk C2). Prior coverage only asserted .cmd
+    presence with the flag omitted; it never asserted the new default
+    actually emits the .ps1 sibling, so the flip itself had no direct
+    regression test."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = Path(self._tmpdir.name)
+
+    def test_generate_emits_ps1_by_default_when_flag_omitted(self) -> None:
+        written = gls.generate("queue-triage", self.tmp)
+        names = {p.name for p in written}
+        self.assertIn("queue-triage.ps1", names)
+        self.assertIn("queue-triage.cmd", names)
+        self.assertTrue((self.tmp / "queue-triage.ps1").is_file())
+
+    def test_generate_suppresses_ps1_with_explicit_false(self) -> None:
+        written = gls.generate("queue-triage", self.tmp, ps1=False)
+        names = {p.name for p in written}
+        self.assertNotIn("queue-triage.ps1", names)
+        self.assertIn("queue-triage.cmd", names)
+        self.assertFalse((self.tmp / "queue-triage.ps1").exists())
 
 
 class BakedInterpreterExistenceGateTests(unittest.TestCase):

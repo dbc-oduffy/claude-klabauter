@@ -39,7 +39,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_NO_CONSOLE_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # sys.path bootstrap — ensure <settings-home>/bin is importable without
@@ -98,7 +98,7 @@ def _cli_get(key: str) -> str | None:
     result = subprocess.run(
         [sys.executable, impl, "get", key],
         capture_output=True, text=True,
-        **_NO_CONSOLE_WINDOW,
+        **no_console_creationflags(),
     )
     if result.returncode == 0:
         return result.stdout.strip()

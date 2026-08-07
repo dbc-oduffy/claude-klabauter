@@ -44,7 +44,7 @@ import os
 import subprocess
 import sys
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 _SESSION_ID_ENV_TIERS = (
     "COORDINATOR_SESSION_ID",
@@ -100,7 +100,7 @@ def _resolve_git_root() -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

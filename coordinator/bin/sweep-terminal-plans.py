@@ -67,18 +67,19 @@ _USAGE = "usage: python3 sweep-terminal-plans.py [-h] [<repo_root>]"
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
+    """Resolve CLAUDE_KLABAUTER_ROOT (self-location-first) and import
+    `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
 
     Mirrors `sweep-boot.py::_import_housekeeping_seam` verbatim (same resolve-then-import
-    shape) — this trampoline's own `__file__` lives inside the claude-klabauter checkout, but the seam
-    must be imported via the resolved CLAUDE_KLABAUTER_ROOT, not a relative import, because `repo_root`
-    here is the CALLER's repo (may be a consumer repo). Returns None on any resolution/import
-    failure — best-effort forensics, never a reason to fail the sweep itself louder.
+    shape) — this trampoline's own `__file__` lives inside the claude-klabauter checkout, so
+    self-location resolves it directly; `repo_root` here is a separate value (the
+    CALLER's repo, which may be a consumer repo) and plays no part in this resolution.
+    Returns None on any resolution/import failure — best-effort forensics, never a
+    reason to fail the sweep itself louder.
     """
     try:
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        if cc_invoke.ensure_engine_on_path(__file__) is None:
+            return None
         from coordinator_core.ops.ceremony.housekeeping_liveness import (
             ARCHIVE_SWEEPS,
             stamp_liveness,
@@ -119,9 +120,9 @@ def _resolve_repo_root(positional: list[str]) -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **cc_invoke._no_console_kw(cc_invoke.resolve_engine_root(__file__)),  # popup-safe-env-suppressed
         )
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     resolved = (proc.stdout or "").strip()
     if proc.returncode != 0 or not resolved:

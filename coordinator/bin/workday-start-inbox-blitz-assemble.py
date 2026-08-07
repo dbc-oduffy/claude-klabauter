@@ -81,6 +81,32 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 
+def _no_console_kw() -> dict:
+    """Splat-ready Windows console-suppression kwarg. Falls back to the same
+    suppression kwargs computed inline (zero imports beyond ``subprocess``) on
+    any resolution failure, rather than silently dropping console suppression —
+    a resolution failure must never turn a quiet spawn into a visible console
+    window (Review: code-reviewer P2 — matched to the pattern ccbdbecc2 applied
+    to sweep-boot.py/standup.py/render-project-tracker/refresh-plugin-live-install.py)."""
+    try:
+        from cc_invoke import _resolve_claude_klabauter_root
+
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:  # noqa: BLE001 -- fail-open, matches this file's transport posture
+        # `{}` off Windows, matching the primitive's own POSIX contract exactly --
+        # `{"creationflags": 0}` splats harmlessly too, but a substitute that
+        # disagrees with the thing it substitutes for is a trap for any caller
+        # comparing against `no_console_creationflags()`.
+        if os.name != "nt":
+            return {}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 # --------------------------------------------------------------------------
 # Dispatch briefs -- the three non-negotiable clauses live HERE, in the text
 # actually handed to a dispatched agent, not in ceremony prose.
@@ -352,7 +378,7 @@ def _resolve_repo_root() -> str:
             # cwd fallback below is a fine degradation, a stalled ceremony
             # is not.
             timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_kw(),
         )
     except (OSError, subprocess.TimeoutExpired):
         proc = None

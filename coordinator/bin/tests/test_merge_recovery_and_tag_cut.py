@@ -31,6 +31,7 @@ def _load_module():
 _mod = _load_module()
 cut_tag = _mod.cut_tag
 resolve_tag_prefix = _mod.resolve_tag_prefix
+cmd_recovery_branch = _mod.cmd_recovery_branch
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +150,100 @@ def test_resolve_tag_prefix_quoted_value_fails_loud(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         resolve_tag_prefix(config)
     assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# recovery-branch liveness gate
+# ---------------------------------------------------------------------------
+#
+# Spec backlink: coordinator_core.session.worktree_safety.branch_mutation_verdict
+# and its precedent application in coordinator/lib/session_ensure_branch.py
+# (commit bc756ce3f534). This subcommand is strictly worse than that seam
+# because it hard-resets main in addition to switching branches, so it MUST
+# consult the same verdict before its first git mutation.
+
+class _FakeVerdict:
+    def __init__(self, outcome: str, reason: str) -> None:
+        self.outcome = outcome
+        self.reason = reason
+
+
+class _Args:
+    def __init__(self, repo_root: Path, branch_name: str = "work/testhost/2026-08-07") -> None:
+        self.repo_root = str(repo_root)
+        self.branch_name = branch_name
+
+
+def _current_branch(work: Path) -> str:
+    return _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=work).stdout.strip()
+
+
+def _head_sha(work: Path, ref: str = "HEAD") -> str:
+    return _git(["rev-parse", ref], cwd=work).stdout.strip()
+
+
+def test_refused_verdict_blocks_all_mutation(tmp_path: Path, monkeypatch) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    before_branch = _current_branch(work)
+    before_sha = _head_sha(work)
+    before_branches = _git(["branch"], cwd=work).stdout
+
+    monkeypatch.setattr(
+        _mod,
+        "_branch_mutation_verdict",
+        lambda: (lambda cwd=None: _FakeVerdict(
+            "refused", "1 live peer session(s): abc123 (on main)"
+        )),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cmd_recovery_branch(_Args(work))
+    assert exc_info.value.code == 1
+
+    assert _current_branch(work) == before_branch
+    assert _head_sha(work) == before_sha
+    assert _git(["branch"], cwd=work).stdout == before_branches
+    assert "work/testhost/2026-08-07" not in before_branches
+
+
+def test_unknown_verdict_treated_same_as_refused(tmp_path: Path, monkeypatch) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    before_branch = _current_branch(work)
+    before_sha = _head_sha(work)
+    before_branches = _git(["branch"], cwd=work).stdout
+
+    monkeypatch.setattr(
+        _mod,
+        "_branch_mutation_verdict",
+        lambda: (lambda cwd=None: _FakeVerdict(
+            "unknown", "cannot resolve live-session set"
+        )),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cmd_recovery_branch(_Args(work))
+    assert exc_info.value.code == 1
+
+    assert _current_branch(work) == before_branch
+    assert _head_sha(work) == before_sha
+    assert _git(["branch"], cwd=work).stdout == before_branches
+
+
+def test_ok_verdict_still_runs_recovery_dance(tmp_path: Path, monkeypatch, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+
+    monkeypatch.setattr(
+        _mod,
+        "_branch_mutation_verdict",
+        lambda: (lambda cwd=None: _FakeVerdict("ok", "no live peer sessions")),
+    )
+
+    rc = cmd_recovery_branch(_Args(work))
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "BRANCH=work/testhost/2026-08-07" in out
+    assert _current_branch(work) == "work/testhost/2026-08-07"
+    assert "refs/heads/work/testhost/2026-08-07" in _git(
+        ["ls-remote", "--heads", "origin"], cwd=work
+    ).stdout

@@ -123,8 +123,15 @@ def _ensure_claude_klabauter_on_path() -> str:
     the root or re-inserting it independently. (`_LIB_DIR` above is a
     different root — the `coordinator/bin/lib` dir for `cc_invoke` itself
     — and is not part of this dedup.)
+
+    Resolves self-location-first (this script's own enclosing checkout)
+    ahead of the pointer-file/registry rungs — see
+    `cc_invoke.resolve_engine_root`'s docstring. Raises RuntimeError,
+    same as the ladder it replaces, when every rung misses; callers that
+    catch RuntimeError around this (`_resolve_state_root`,
+    `_resolve_repo_root`) keep working unchanged.
     """
-    claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
+    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     return claude_klabauter_root
@@ -294,14 +301,17 @@ def _strip_quotes(value: str) -> str:
 
 def _git_cat_file_e(sha: str, cwd: str) -> bool:
     try:
+        _ensure_claude_klabauter_on_path()
+        from coordinator_core.win_portability import no_console_creationflags  # noqa: PLC0415
+
         proc = subprocess.run(
             ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
             cwd=cwd,
             capture_output=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         return proc.returncode == 0
-    except OSError:
+    except (OSError, RuntimeError):
         return False
 
 
@@ -348,13 +358,16 @@ def _no_fallback() -> None:
 
 def _resolve_repo_root() -> str | None:
     try:
+        _ensure_claude_klabauter_on_path()
+        from coordinator_core.win_portability import no_console_creationflags  # noqa: PLC0415
+
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     resolved = (proc.stdout or "").strip()
     if proc.returncode != 0 or not resolved:

@@ -23,13 +23,11 @@ import subprocess
 import sys
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBJECT = os.path.join(SCRIPT_DIR, "coordinator-tasks-mirror.py")
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 PASS = 0
 FAIL = 0
@@ -225,7 +223,7 @@ def test_cli_usage_error() -> None:
         [sys.executable, SUBJECT],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     if result.returncode == 1:
         _pass("CLI with no args exits 1")
@@ -246,7 +244,7 @@ def test_cli_end_to_end(mod, tmp_path) -> None:
     repo = os.path.join(tmp_root, "cli-e2e")
     os.makedirs(repo, exist_ok=True)
     init = subprocess.run(
-        ["git", "init", "-q", repo], capture_output=True, text=True, creationflags=_NO_WINDOW
+        ["git", "init", "-q", repo], capture_output=True, text=True, **no_console_creationflags()
     )
     if init.returncode != 0:
         _pass("skipped (git init unavailable in this sandbox)")
@@ -254,12 +252,12 @@ def test_cli_end_to_end(mod, tmp_path) -> None:
     subprocess.run(
         ["git", "-C", repo, "config", "user.email", "test@example.com"],
         capture_output=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "-C", repo, "config", "user.name", "Test"],
         capture_output=True,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
     env = dict(os.environ)
@@ -273,7 +271,7 @@ def test_cli_end_to_end(mod, tmp_path) -> None:
         text=True,
         cwd=repo,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     if result.returncode == 0:
         _pass("CLI init exits 0 in a real git repo")

@@ -12,12 +12,22 @@ Git hook signature (prepare-commit-msg):
 
 Behaviour:
   1. Resolve the git dir once (``git rev-parse --git-dir``, ONE subprocess —
-     needed both for the session-id sentinel fallback and for locating
-     ``session-shape.json``) and the current session-id via the canonical
-     three-tier ladder:
-       (1) $CLAUDE_SESSION_ID                                   (legacy var)
-       (2) $CLAUDE_CODE_SESSION_ID                              (platform-injected)
-       (3) <git-dir>/coordinator-sessions/.current-session-id   (sentinel fallback)
+     needed for locating ``session-shape.json``) and the current session-id
+     via the three-tier env ladder (KS-6, 2026-08-07 — widened to match
+     ``coordinator_core.session.core.SESSION_ENV_PRECEDENCE``, the canonical
+     reference; this hook cannot cheaply import ``coordinator_core`` on its
+     hot commit-hook path, so this ladder is a hand-mirrored copy of that
+     module's — a change to one must be mirrored in the other):
+       (1) $COORDINATOR_SESSION_ID                              (explicit test override)
+       (2) $CLAUDE_SESSION_ID                                   (legacy var)
+       (3) $CLAUDE_CODE_SESSION_ID                              (platform-injected)
+     A former tier-4 ``<git-dir>/coordinator-sessions/.current-session-id`` sentinel
+     fallback (liveness-gated as of 2026-08-07) was REMOVED entirely on
+     2026-08-07 (KS-1) — unsound by construction under this fleet's
+     concurrency (documented last-writer-wins,
+     ``coordinator_core/bash_guards/guard_inprocess_search.py`` ~L84) and its
+     writer (``session-init.py``) was deleted 2026-07-15. See
+     ``_resolve_session_id``'s own docstring for the full rationale.
   2. Empty session-id → exit 0 silently (non-coordinator commit; unaffected).
   3. Fail-safe UUID validation — a resolved session-id that is not UUID-shaped
      (e.g. a poisoned sentinel or a stray profiling-run env override) → exit 0,
@@ -38,7 +48,13 @@ Behaviour:
      git unavailable, timeout, empty stage) and a genuinely divergent
      multi-artifact commit (``DivergentDeliverableIdError``) both degrade to
      "tier 0 has nothing to say" — noted on stderr for the divergent case —
-     rather than blocking or erroring the commit. This mirrors
+     rather than blocking or erroring the commit. Gated (2026-08-07, DR-207)
+     on ``coordinator_core.claim_state.resolve_claim_state``: a staged
+     artifact claimed by a DIFFERENT live session is excluded from tier 0's
+     consideration (falls through to the session-keyed tiers below) rather
+     than stamping the peer's deliverable onto this commit — see
+     ``_resolve_deliverable_id_from_paths``'s own docstring for the
+     memo-write-through defect this closes. This mirrors
      ``coordinator_core.git.commit_trailers.compute_missing_trailer_args``'s
      own tier 0 for a caller (``git commit-tree`` et al.) that hooks never
      fire for; that sibling is CLI-facing and propagates the same divergence
@@ -116,6 +132,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -126,8 +143,8 @@ def _resolve_git_dir() -> str:
     """Resolve the current repo's git-dir via ONE ``git rev-parse --git-dir``
     subprocess call. Returns ``""`` on any failure (git missing, not a repo,
     spawn error, timeout) — callers treat that as "no git-dir available" and
-    degrade gracefully (sentinel-tier session-id resolution and
-    Deliverable-Id lookup both become no-ops, never errors)."""
+    degrade gracefully (Deliverable-Id lookup becomes a no-op, never
+    errors)."""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
@@ -141,21 +158,46 @@ def _resolve_git_dir() -> str:
 
 
 def _resolve_session_id(git_dir: str) -> str:
-    """Three-tier ladder: legacy env → platform env → sentinel file (under
-    the already-resolved ``git_dir`` — no subprocess of its own)."""
+    """Hand-mirrored copy of ``coordinator_core.session.core
+    .resolve_session_id`` / ``SESSION_ENV_PRECEDENCE`` (KS-6, 2026-08-07) —
+    THAT function is the source of truth for this ladder; this copy exists
+    only because this hook runs on the hot commit-hook path and cannot
+    cheaply import ``coordinator_core`` there. A change to the precedence
+    order or tier set in ``core.py`` MUST be mirrored here by hand.
+
+    Full 3-tier ladder: ``COORDINATOR_SESSION_ID`` -> ``CLAUDE_SESSION_ID``
+    -> ``CLAUDE_CODE_SESSION_ID`` — widened from the prior 2-tier (legacy
+    env -> platform env) chain this function used to implement, to match
+    the canonical reference (see ``SESSION_ENV_PRECEDENCE``'s own docstring
+    for the prior break-class defect two disagreeing copies of this ladder
+    caused).
+
+    A former tier (the ``<git_dir>/coordinator-sessions/.current-session-id``
+    sentinel file, plus its liveness gate ``_sentinel_session_live``) was
+    REMOVED here, not merely gated — KS-1, mirrored from
+    ``coordinator_core.git.commit_trailers._resolve_session_id`` (see that
+    module's own docstring for the full rationale). Two independent
+    reasons: (1) unsound by construction under this fleet's concurrency,
+    documented as last-writer-wins in
+    ``coordinator_core/bash_guards/guard_inprocess_search.py`` ~L84 — ~18
+    concurrent sessions on one shared worktree means even a freshly-written
+    sentinel hands session A the id of whichever session wrote last, so a
+    liveness gate only made it confidently wrong rather than obviously
+    wrong; (2) its writer, ``session-init.py`` (example-doctrine-repo SessionStart
+    hook), was deleted by PM directive 2026-07-15
+    ("full-kill-keep-fast-orientation") — no production writer survives
+    anywhere. ``git_dir`` is accepted (and resolved by the caller) purely
+    for the Deliverable-Id lookups below, which still need it. Do not
+    restore this tier without a new writer for the sentinel file."""
+    sid = os.environ.get("COORDINATOR_SESSION_ID", "").strip()
+    if sid:
+        return sid
     sid = os.environ.get("CLAUDE_SESSION_ID", "").strip()
     if sid:
         return sid
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if sid:
         return sid
-    if git_dir:
-        sentinel = os.path.join(git_dir, "coordinator-sessions", ".current-session-id")
-        try:
-            with open(sentinel, encoding="utf-8") as fh:
-                return fh.read().strip()
-        except Exception:
-            return ""
     return ""
 
 
@@ -229,13 +271,15 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
     session-tiers behaviour this hook must degrade to.
     """
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         out = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
             capture_output=True,
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except Exception:
         return []
@@ -267,7 +311,9 @@ def _ensure_claude_klabauter_on_syspath() -> str:
         return ""
 
 
-def _resolve_deliverable_id_from_paths(paths: list) -> str:
+def _resolve_deliverable_id_from_paths(
+    paths: list, session_id: "str | None" = None, git_dir: "str | None" = None
+) -> str:
     """Tier 0: resolve straight off the committed artifact(s), not the
     session — hand-mirrored from
     ``coordinator_core.git.commit_trailers._resolve_deliverable_id_from_paths``
@@ -284,6 +330,19 @@ def _resolve_deliverable_id_from_paths(paths: list) -> str:
     ``_resolve_deliverable_id`` (below) downgrades to a non-aborting
     fallback rather than letting it propagate, unlike the CLI-facing
     sibling this mirrors.
+
+    Contention gate (2026-08-07, DR-207): a staged artifact claimed by a
+    DIFFERENT live session (per
+    ``coordinator_core.claim_state.resolve_claim_state``) must NOT have its
+    ``deliverable_id`` stamped onto THIS commit — that enrolls the commit in
+    the peer's chain DAG (see the memo-write-through defect this closes).
+    Claimed-by-``session_id`` itself, or unclaimed, is not contention and is
+    treated exactly as before. Each claim lookup is independently fail-soft:
+    an exception, unresolvable path, or missing ledger degrades to "no claim
+    information" — the SAFE direction here is to KEEP the artifact's
+    ``deliverable_id`` (today's behaviour), never to suppress it. ``paths``
+    carrying a claim only from a different session are dropped from
+    consideration entirely, as if they had no ``deliverable_id``.
     """
     if not paths:
         return ""
@@ -300,6 +359,13 @@ def _resolve_deliverable_id_from_paths(paths: list) -> str:
     except Exception:
         return ""
 
+    try:
+        from coordinator_core.claim_state import resolve_claim_state
+    except Exception:
+        resolve_claim_state = None
+
+    common_dir = Path(git_dir) if git_dir else None
+
     found = {}
     for rel_path in paths:
         try:
@@ -314,6 +380,18 @@ def _resolve_deliverable_id_from_paths(paths: list) -> str:
         if isinstance(deliverable_id, str):
             cleaned = deliverable_id.strip()
             if cleaned and cleaned.lower() not in ("none", "null", "~"):
+                if resolve_claim_state is not None and session_id:
+                    try:
+                        claim = resolve_claim_state(
+                            Path(rel_path), common_dir=common_dir
+                        )
+                        holder = claim.holder
+                    except Exception:
+                        # Fail-soft to today's behaviour: an errored claim
+                        # lookup is NOT evidence of contention.
+                        holder = None
+                    if holder and holder != session_id:
+                        continue
                 found[rel_path] = cleaned
 
     distinct_values = sorted(set(found.values()))
@@ -422,7 +500,9 @@ def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" 
     """
     if paths:
         try:
-            deliverable_id = _resolve_deliverable_id_from_paths(paths)
+            deliverable_id = _resolve_deliverable_id_from_paths(
+                paths, session_id=session_id, git_dir=git_dir
+            )
         except Exception as exc:
             sys.stderr.write(
                 "coordinator-prepare-commit-msg: tier-0 artifact deliverable-id "

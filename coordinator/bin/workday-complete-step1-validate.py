@@ -101,6 +101,9 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
     find_changed_test_files,
 )
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
+from coordinator_core.testing import suite_mutex  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from coordinator_core.testing.suite_mutex import MUTEX_WAIT_SECS, mutex_owner  # noqa: E402
 
 # "error:" is compiler-diagnostic-shaped (gcc/clang/tsc: "path/file.c:12:5: error:
 # ...") only when NOT immediately preceded by a letter — a Python exception name
@@ -189,7 +192,7 @@ def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
             capture_output=True,
             text=True,
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         ft_content = (ft.stdout or "") + (ft.stderr or "")
         ft_rc = ft.returncode
@@ -330,7 +333,16 @@ def main() -> int:
     _ft_env = os.environ.copy()
     _ft_env.pop("COORDINATOR_CORE_LAZY_OPS", None)
 
-    ft_rc, ft_content = _run_fast_test_cmd(scoped_cmd, _ft_env)
+    owner = mutex_owner("suite-mutex")
+    with suite_mutex.held(owner, "workday-complete-step1", timeout=MUTEX_WAIT_SECS) as acquired:
+        if not acquired:
+            current = suite_mutex.holder() or {}
+            _err(
+                "[workday-complete-step1] [WARN] suite mutex held by %s for %ss — "
+                "proceeding unserialized"
+                % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS))
+            )
+        ft_rc, ft_content = _run_fast_test_cmd(scoped_cmd, _ft_env)
 
     if diff_paths and ft_rc == PYTEST_NO_TESTS_COLLECTED:
         # The diff-scoped run named a changed test file the `-m` marker
@@ -350,7 +362,15 @@ def main() -> int:
             _err(gate_full.refusal_message)
             _emit(rc_ubt, "tier-u-refused")
             return 5
-        ft_rc, ft_content = _run_fast_test_cmd(cmd, _ft_env)
+        with suite_mutex.held(owner, "workday-complete-step1", timeout=MUTEX_WAIT_SECS) as acquired:
+            if not acquired:
+                current = suite_mutex.holder() or {}
+                _err(
+                    "[workday-complete-step1] [WARN] suite mutex held by %s for %ss — "
+                    "proceeding unserialized"
+                    % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS))
+                )
+            ft_rc, ft_content = _run_fast_test_cmd(cmd, _ft_env)
 
     rc_validate = ft_rc
 

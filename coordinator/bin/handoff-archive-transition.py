@@ -124,9 +124,21 @@ import cc_invoke  # noqa: E402
 
 PROG = "handoff-archive-transition.py"
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+def _no_console_kw() -> dict:
+    """Lazily resolve the engine root onto sys.path (self-location-first via
+    cc_invoke.ensure_engine_on_path — see that function's docstring), then
+    splat the canonical no-console-window kwarg. ``{}`` on any resolution/
+    import failure (fail-open)."""
+    try:
+        if cc_invoke.ensure_engine_on_path(__file__) is None:
+            return {}
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:
+        return {}
+
 
 _HAS_LIVE_CHILDREN_SCRIPT = os.path.join(_BIN_DIR, "handoff-has-live-children.py")
 
@@ -152,7 +164,7 @@ def _resolve_repo_root(handoff_path: str) -> str | None:
             ["git", "-C", os.path.dirname(handoff_abs), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_kw(),
         )
     except OSError:
         return None
@@ -180,7 +192,7 @@ def _guard_exit_code(handoff_path: str, exclude: list[str]) -> int:
         cmd,
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_no_console_kw(),
     )
     return proc.returncode
 
@@ -467,7 +479,7 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
         )
         return 1
 
-    claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
+    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.archival import claimed_or_shipped_at_path

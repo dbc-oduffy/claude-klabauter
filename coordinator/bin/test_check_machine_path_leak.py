@@ -27,7 +27,10 @@ import pytest
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "check-machine-path-leak.py")
 PYTHON = sys.executable
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def write(path, content):
@@ -45,7 +48,7 @@ def run_helper(args, cwd=None, extra_env=None):
         capture_output=True,
         text=True,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     return r.returncode, r.stdout, r.stderr
 
@@ -143,7 +146,7 @@ def test_pyyaml_absent_linescan_fallback(root, fake_home):
         capture_output=True,
         text=True,
         env=env_e,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     assert r.returncode == 0, "PyYAML-absent run still exits 0 (soft warn)"
     assert "PyYAML absent" in r.stderr

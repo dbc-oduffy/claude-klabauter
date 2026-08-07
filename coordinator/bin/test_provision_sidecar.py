@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "provision-sidecar.py")
@@ -33,8 +34,6 @@ PYTHON = sys.executable
 ELIGIBLE_TYPE = "coordinator:fixture-eligible-reviewer"
 INELIGIBLE_TYPE = "coordinator:fixture-ineligible-type"
 
-# Windows: suppress the console popup a child process would otherwise allocate; no-op on POSIX.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 @pytest.fixture
@@ -47,7 +46,7 @@ def git_repo(tmp_path: Path) -> Path:
         ["git", "config", "user.name", "Test"],
         ["git", "commit", "-q", "--allow-empty", "-m", "init"],
     ):
-        r = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, creationflags=_NO_WINDOW)
+        r = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, **no_console_creationflags())
         if r.returncode != 0:
             raise RuntimeError(f"git setup failed in {tmp_path}: {r.stderr}")
     return tmp_path
@@ -91,7 +90,7 @@ def run_cli(git_root: Path, policy_path: Path, extra_args=None, extra_env=None):
         capture_output=True,
         text=True,
         env=env,
-        creationflags=_NO_WINDOW,
+        **no_console_creationflags(),
     )
     return r.returncode, r.stdout, r.stderr
 

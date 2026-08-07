@@ -37,12 +37,10 @@ import os
 import subprocess
 import sys
 
+from coordinator_core.win_portability import no_console_creationflags
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBJECT = os.path.join(SCRIPT_DIR, "emit-goal-from-artifact.py")
-
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 _SHIM_BODY = '''#!/usr/bin/env python3
@@ -81,10 +79,10 @@ def _run_emitter(repo: str, shim: str, log: str, extra_args: list[str] | None = 
     env = dict(os.environ)
     env["COORDINATOR_APPEND_GOAL_HELPER"] = shim
     env["SHIM_LOG"] = log
-    args = [sys.executable, SUBJECT, "--root", repo, "--repo", "dbc-example-operator/doe-test"]
+    args = [sys.executable, SUBJECT, "--root", repo, "--repo", "dbc-oduffy/doe-test"]
     if extra_args:
         args += extra_args
-    return subprocess.run(args, capture_output=True, text=True, env=env, creationflags=_NO_WINDOW)
+    return subprocess.run(args, capture_output=True, text=True, env=env, **no_console_creationflags())
 
 
 def _write_goal(repo: str, filename: str, content: str) -> None:
@@ -305,7 +303,7 @@ def test_emit_goal_from_artifact(tmp_path):
     env12["SHIM_LOG"] = log12
     subprocess.run(
         [sys.executable, SUBJECT, "--root", repo, "--repo", "myorg/myrepo"],
-        capture_output=True, text=True, env=env12, creationflags=_NO_WINDOW,
+        capture_output=True, text=True, env=env12, **no_console_creationflags(),
     )
     lines12 = _read_log(log12)
     assert lines12, "shim log not created"

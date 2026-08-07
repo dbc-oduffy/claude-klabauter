@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # ---------------------------------------------------------------------------
 # Path setup — locate CLI relative to this test file
 # test file: coordinator/bin/tests/test_coordinator_lesson_add_meta_routing.py
@@ -76,7 +78,7 @@ def meta_repo_home(tmp_path, monkeypatch):
         ["git", "init", "--quiet", fake_home],
         check=True,
         capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     monkeypatch.chdir(fake_home)

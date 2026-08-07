@@ -107,11 +107,12 @@ import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _TESTS_DIR = Path(__file__).resolve().parent
 # .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
 _REPO_ROOT = _TESTS_DIR.parents[2]
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # The four basename shapes a reader would call "a test file". `test_*.py` is
 # the only one `python_files` collects; the other three are here because a
@@ -202,7 +203,7 @@ def _tracked_files() -> list[str]:
             capture_output=True,
             text=True,
             check=False,
-            creationflags=_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         _fail(

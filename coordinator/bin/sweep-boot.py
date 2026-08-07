@@ -90,7 +90,7 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import RouteMutationError, _resolve_claude_klabauter_root, route_mutation  # noqa: E402
+from cc_invoke import RouteMutationError, _no_console_kw, _resolve_claude_klabauter_root, route_mutation  # noqa: E402
 from sweep_argv import parse_repo_root_argv  # noqa: E402
 
 _OP = "session.boot_sweep"
@@ -168,11 +168,6 @@ def _stamp_archive_sweeps_liveness(repo_root: str) -> None:
     except Exception:  # noqa: BLE001 -- never raise out of a best-effort liveness stamp
         pass
 
-# Windows: suppresses the console popup a subprocess.run(...) would otherwise
-# trigger under the headless Claude Code Bash-tool parent. No-op (0) elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
 def _legacy_fn() -> Any:
     """No-bash-fallback marker — big-bang cutover per the de-bash campaign.
 
@@ -192,6 +187,18 @@ def _legacy_fn() -> Any:
     )
 
 
+def _no_console_kw_safe() -> dict:
+    """``_no_console_kw`` needs a resolved CLAUDE_KLABAUTER_ROOT, which can raise
+    RuntimeError; on any resolution failure, fall back to the same
+    suppression kwargs computed inline (zero imports beyond ``subprocess``)
+    rather than silently dropping console suppression -- a resolution
+    failure must never turn a quiet spawn into a visible console window."""
+    try:
+        return _no_console_kw(_resolve_claude_klabauter_root())
+    except Exception:  # noqa: BLE001 -- fail-open, matches this module's transport posture
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 def _resolve_repo_root(explicit: str | None) -> str | None:
     """Resolve repo_root — explicit arg wins; else `git rev-parse --show-toplevel`."""
     if explicit:
@@ -201,7 +208,7 @@ def _resolve_repo_root(explicit: str | None) -> str | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=_NO_WINDOW,
+            **_no_console_kw_safe(),
         )
     except OSError:
         return None

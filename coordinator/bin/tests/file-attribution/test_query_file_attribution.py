@@ -38,6 +38,8 @@ import sys
 import tempfile
 import unittest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -77,7 +79,7 @@ def _run_cli(*extra_args: str, transcript_dir: str) -> subprocess.CompletedProce
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        **no_console_creationflags(),
     )
 
 
@@ -254,7 +256,7 @@ class TestQueryCLIErrorHandling(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            **no_console_creationflags(),
         )
         self.assertNotEqual(result.returncode, 0)
 
@@ -268,7 +270,7 @@ class TestQueryCLIErrorHandling(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            **no_console_creationflags(),
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn('not found', result.stderr)

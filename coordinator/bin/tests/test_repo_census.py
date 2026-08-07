@@ -20,6 +20,8 @@ import subprocess
 import sys
 import tempfile
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CLI = os.path.normpath(os.path.join(_HERE, "..", "repo-census.py"))
 
@@ -30,7 +32,7 @@ def _run(*args):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout, proc.stderr
 

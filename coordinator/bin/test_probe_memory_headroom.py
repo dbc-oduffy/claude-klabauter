@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBJECT = os.path.join(SCRIPT_DIR, "probe-memory-headroom.py")
@@ -42,7 +43,7 @@ def _field(out: str, key: str) -> str:
 def key_value_output() -> str:
     result = subprocess.run(
         [sys.executable, SUBJECT], capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, f"rc={result.returncode}"
     return result.stdout
@@ -63,7 +64,7 @@ def test_every_value_is_int_or_unknown(key_value_output: str) -> None:
 def test_human_mode_prints_sentence_exit_zero() -> None:
     hresult = subprocess.run(
         [sys.executable, SUBJECT, "--human"], capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert hresult.returncode == 0, f"rc={hresult.returncode}"
     assert "memory headroom" in hresult.stdout, f"out={hresult.stdout}"
@@ -72,7 +73,7 @@ def test_human_mode_prints_sentence_exit_zero() -> None:
 def test_bad_argument_usage_error_exit_two() -> None:
     dresult = subprocess.run(
         [sys.executable, SUBJECT, "--bogus"], capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     assert dresult.returncode == 2, f"rc={dresult.returncode}"
 

@@ -36,16 +36,17 @@ import time
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 VENEER = os.path.normpath(os.path.join(_HERE, "..", "handoff-has-live-children.py"))
-_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _run_veneer(*args):
     proc = subprocess.run(
         [sys.executable, VENEER, *args],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        creationflags=_NO_CONSOLE,
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -73,7 +74,7 @@ def repo(tmp_path):
     which calls the async op directly and never shells out to git)."""
     subprocess.run(
         ["git", "init", "-q", str(tmp_path)],
-        check=True, capture_output=True, creationflags=_NO_CONSOLE,
+        check=True, capture_output=True, **no_console_creationflags(),
     )
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     return tmp_path

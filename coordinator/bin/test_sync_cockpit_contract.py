@@ -39,6 +39,7 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from coordinator_data_root import data_root  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def _resolve_canonical() -> str | None:
@@ -91,7 +92,7 @@ def _run(args, env=None):
         text=True,
         env=full_env,
         check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout + proc.stderr
 

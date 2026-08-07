@@ -37,6 +37,8 @@ from shutil import which
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -61,7 +63,7 @@ def _git(cwd: str, *args: str) -> None:
         cwd=cwd,
         check=True,
         capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -139,7 +141,7 @@ def test_cve_recheck_manifest_untouched_in_window_skips(
         check=True,
         capture_output=True,
         env={**os.environ, "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"},
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
     rc = _mod.main(["cve-recheck", "--repo-root", str(tmp_path)])

@@ -86,6 +86,8 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 def _run(
     cmd: list[str],
@@ -100,13 +102,23 @@ def _run(
         capture_output=True,
         text=True,
         check=check,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
 def _die(message: str) -> None:
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def _branch_mutation_verdict():
+    """Import indirection mirroring `session_ensure_branch._branch_mutation_verdict`
+    — native import, no subprocess spawn. Isolated so a missing/broken
+    coordinator_core install degrades loudly via ImportError at call time
+    rather than silently at module load."""
+    from coordinator_core.session.worktree_safety import branch_mutation_verdict
+
+    return branch_mutation_verdict
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +135,22 @@ def cmd_recovery_branch(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
     branch = args.branch_name or _default_branch_name()
 
+    branch_mutation_verdict = _branch_mutation_verdict()
+    verdict = branch_mutation_verdict(cwd=str(repo_root))
+    if verdict.outcome != "ok":
+        _die(
+            "REFUSED-LIVE-PEERS: declining to cut a recovery branch and "
+            f"hard-reset main — {verdict.reason}. A branch is a property of "
+            "the shared TREE, not this session; recovering main here would "
+            "switch every live peer's checkout and reset main out from "
+            "under them. Wait for peers to clear, or resolve manually."
+        )
+
     sync_main = Path(__file__).resolve().parent / "sync-main.py"
     sync = subprocess.run(
         [sys.executable, str(sync_main)],
         cwd=str(repo_root),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if sync.returncode != 0:
         _die(
@@ -322,7 +345,7 @@ def publish_gh_release(tag: str, repo: str, notes_file: Path) -> None:
         ],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if edit.returncode == 0:
         return
@@ -336,7 +359,7 @@ def publish_gh_release(tag: str, repo: str, notes_file: Path) -> None:
         ],
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if create.returncode != 0:
         _die(

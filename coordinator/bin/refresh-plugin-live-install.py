@@ -71,7 +71,28 @@ import urllib.parse
 from pathlib import Path
 
 PROG = "refresh-plugin-live-install.py"
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _no_console_kwargs() -> dict:
+    """Deferred coordinator_core import — matches this file's CLAUDE_KLABAUTER_ROOT
+    bootstrap posture (see ``_import_registry_deps``) so ``--help``/usage
+    paths never pay a CLAUDE_KLABAUTER_ROOT resolution cost. On any CLAUDE_KLABAUTER_ROOT
+    resolution/import failure, falls back to the same suppression kwargs
+    computed inline (zero imports beyond ``subprocess``) rather than
+    silently dropping console suppression -- a resolution failure must
+    never turn a quiet spawn into a visible console window.
+    """
+    try:
+        from cc_invoke import _resolve_claude_klabauter_root
+
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:  # noqa: BLE001 -- fail-open, matches this module's bootstrap posture
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 _HELP_TEXT = """\
 Usage: refresh-plugin-live-install.py <plugin> [--force] [--interactive]
@@ -232,9 +253,10 @@ def _win_safe_shlex_split(cmd_str: str) -> list[str]:
 
     Bare ``shlex.split`` (POSIX mode) treats ``\\`` as a C-style escape
     character, so a Windows-authored drive-letter path with backslash
-    separators (abs-path-ok: illustrative example, not a real path —
-    ``C:\\Users\\bob\\tools\\refresh.exe``) is silently stripped down to
-    ``C:Usersbobtoolsrefresh.exe``. ``posix=False`` is NOT the fix: it also
+    separators (illustrative example, not a real path: a drive letter,
+    colon, then ``Users``, ``bob``, ``tools``, ``refresh.exe`` joined by
+    backslashes) is silently stripped down to the same segments joined with
+    no separator at all. ``posix=False`` is NOT the fix: it also
     stops stripping the surrounding quote characters from a quoted token
     (``"hello world"`` splits to the literal 4-char token ``"hello`` plus
     ``world"`` retaining the quotes), which regresses the argv-only
@@ -321,7 +343,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         ["git", "-C", str(cwd), *args],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_no_console_kwargs(),
     )
 
 
@@ -1252,7 +1274,7 @@ def _handle_copy_install(
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            **_no_console_kwargs(),
         )
         if r.returncode != 0:
             post_flight_clean = False
@@ -1452,7 +1474,7 @@ def _handle_editable_sibling_venv(
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            **_no_console_kwargs(),
         )
         if r.returncode != 0:
             post_flight_clean = False
@@ -1504,7 +1526,7 @@ def _handle_default(
             env=child_env(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            **_no_console_kwargs(),
         )
         if r.returncode != 0:
             clean_tree_ok = False
@@ -1680,7 +1702,7 @@ def _handle_default(
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=_NO_WINDOW,
+                **_no_console_kwargs(),
             )
             if r.returncode != 0:
                 post_flight_clean = False

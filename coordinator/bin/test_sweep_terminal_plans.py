@@ -70,7 +70,7 @@ def _run_main_capturing(mod, argv=None, fake_route=None):
 # Two-call dry/act shape: Call 1 dry_run:true previews candidates via route();
 # Call 2 dry_run:false acts on them, also via route() (never route_mutation()).
 # ===========================================================================
-def test_two_call_dry_then_act_via_route():
+def test_two_call_dry_then_act_via_route(tmp_path):
     mod = _load_module()
     calls = []
 
@@ -81,7 +81,7 @@ def test_two_call_dry_then_act_via_route():
             return {"exit_code": 0, "candidates": [{"id": "docs/plans/p1.md"}, {"id": "docs/plans/p2.md"}]}
         return {"exit_code": 0, "acted": [{"id": "docs/plans/p1.md"}, {"id": "docs/plans/p2.md"}]}
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("two-call shape: exit 0")
@@ -123,7 +123,7 @@ def test_two_call_dry_then_act_via_route():
 # ===========================================================================
 # Empty candidates from dry-run -> print 0, Call 2 (act) skipped entirely.
 # ===========================================================================
-def test_empty_candidates_skips_act_call():
+def test_empty_candidates_skips_act_call(tmp_path):
     mod = _load_module()
     act_called = {"n": 0}
 
@@ -133,7 +133,7 @@ def test_empty_candidates_skips_act_call():
         act_called["n"] += 1
         return {"exit_code": 0, "acted": []}
 
-    rc, out, _err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, _err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("empty candidates: exit 0")
@@ -155,7 +155,7 @@ def test_empty_candidates_skips_act_call():
 # Op-level partial refusal on the ACT call (exit_code==2) -> WARNs (does not
 # raise), still prints the true acted count from the partial result.
 # ===========================================================================
-def test_act_call_partial_exit_code_warns_not_raises():
+def test_act_call_partial_exit_code_warns_not_raises(tmp_path):
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -163,7 +163,7 @@ def test_act_call_partial_exit_code_warns_not_raises():
             return {"exit_code": 0, "candidates": [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}]}
         return {"exit_code": 2, "acted": [{"id": "p1"}], "failed": [{"id": "p2"}, {"id": "p3"}]}
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("act partial exit_code=2: exit 0 (WARN, not raise)")
@@ -185,13 +185,13 @@ def test_act_call_partial_exit_code_warns_not_raises():
 # Dry-run call transport failure (route() raises) -> print 0, WARN on stderr,
 # exit 0 (best-effort ceremony, log-and-continue).
 # ===========================================================================
-def test_dry_run_transport_failure_prints_zero():
+def test_dry_run_transport_failure_prints_zero(tmp_path):
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         raise RuntimeError("simulated dry-run transport failure")
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("dry-run transport failure: exit 0")
@@ -212,7 +212,7 @@ def test_dry_run_transport_failure_prints_zero():
 # ===========================================================================
 # Act call transport failure (route() raises on Call 2) -> print 0, exit 0.
 # ===========================================================================
-def test_act_call_transport_failure_prints_zero():
+def test_act_call_transport_failure_prints_zero(tmp_path):
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -220,7 +220,7 @@ def test_act_call_transport_failure_prints_zero():
             return {"exit_code": 0, "candidates": [{"id": "p1"}]}
         raise RuntimeError("simulated act-call transport failure")
 
-    rc, out, err = _run_main_capturing(mod, argv=["/tmp/fake-repo"], fake_route=fake_route)
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
 
     if rc == 0:
         _pass("act transport failure: exit 0")

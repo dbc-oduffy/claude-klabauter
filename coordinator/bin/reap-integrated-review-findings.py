@@ -118,8 +118,13 @@ otherwise.
 #     strangler-facade.sh DOES support and this script's own test harness
 #     relies on for every AC). cc_invoke.py is a shared lib used by other
 #     landed trampolines (coordinator-auto-push, handoff-gate-aging) and is
-#     out of this port's file scope — reused (_resolve_claude_klabauter_root,
-#     _seam_present), not modified, not re-derived.
+#     out of this port's file scope — reused (resolve_engine_root,
+#     _seam_present), not modified, not re-derived. resolve_engine_root adds
+#     a self-location rung ahead of the pointer-file/registry ladder (Review:
+#     code-reviewer — comment previously undersold this as a bare rename from
+#     _resolve_claude_klabauter_root; the rung order changed too), but the site here is
+#     still wrapped by `except RuntimeError`, so bash-oracle failure-mode
+#     parity is unaffected.
 #
 # Review: code-reviewer — Finding 6 (pre-port bash oracle): DR-218 is a
 # claude-klabauter-tree citation, not a example-doctrine-repo-relative path; qualified above per
@@ -143,6 +148,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _PROG = "reap-integrated-review-findings.sh"
 
@@ -159,7 +165,6 @@ _DEFAULT_SUMMARY_LIMIT = 10
 _MARKER_RE = re.compile(r"^## Integrator Dispositions[ \t]*$", re.MULTILINE)
 
 _GIT_TIMEOUT_SECS = 30
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(args: List[str], cwd: Optional[str] = None) -> "subprocess.CompletedProcess[str]":
@@ -176,7 +181,7 @@ def _git(args: List[str], cwd: Optional[str] = None) -> "subprocess.CompletedPro
         text=True,
         timeout=_GIT_TIMEOUT_SECS,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        **no_console_creationflags(),
     )
 
 
@@ -366,7 +371,7 @@ def _reap_seam_present() -> Tuple[bool, str]:
     if os.environ.get("COORDINATOR_FORCE_LEGACY", "") == "1":
         return False, ""
     try:
-        claude_klabauter_root = cc_invoke._resolve_claude_klabauter_root()
+        claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     except RuntimeError:
         return False, ""
     if not cc_invoke._seam_present(claude_klabauter_root):

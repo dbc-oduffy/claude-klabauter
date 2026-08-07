@@ -95,6 +95,28 @@ def _ensure_claude_klabauter_on_path() -> str:
     return claude_klabauter_root
 
 
+def _no_console_kw() -> dict:
+    """Splat-ready Windows console-suppression kwarg. Falls back to the same
+    suppression kwargs computed inline (zero imports beyond ``subprocess``) on
+    any resolution failure, rather than silently dropping console suppression —
+    a resolution failure must never turn a quiet spawn into a visible console
+    window (Review: code-reviewer P2 — matched to the pattern ccbdbecc2 applied
+    to sweep-boot.py/standup.py/render-project-tracker/refresh-plugin-live-install.py)."""
+    try:
+        _ensure_claude_klabauter_on_path()
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:  # noqa: BLE001 -- fail-open, matches this file's transport posture
+        # `{}` off Windows, matching the primitive's own POSIX contract exactly --
+        # `{"creationflags": 0}` splats harmlessly too, but a substitute that
+        # disagrees with the thing it substitutes for is a trap for any caller
+        # comparing against `no_console_creationflags()`.
+        if os.name != "nt":
+            return {}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 # ---------------------------------------------------------------------------
 # reap-log
 # ---------------------------------------------------------------------------
@@ -112,7 +134,7 @@ def _run_reap_sessions() -> str:
             text=True,
             timeout=60,
             env=child_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_kw(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"workday-start-day-branch-resolve.py: reap-sessions.py invocation failed (continuing): {exc}", file=sys.stderr)
@@ -149,7 +171,7 @@ def _current_branch() -> str:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_kw(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""

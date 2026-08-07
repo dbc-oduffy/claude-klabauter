@@ -135,7 +135,21 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cc_invoke  # noqa: E402
 from cc_invoke import route_mutation  # noqa: E402
+
+
+def _no_console_kw() -> dict:
+    """Lazily resolve claude_klabauter_root onto sys.path, then splat the canonical
+    no-console-window kwarg. ``{}`` on any resolution failure (fail-open,
+    matches this function's own ``except OSError: pass`` posture)."""
+    try:
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return no_console_creationflags()
+    except Exception:
+        return {}
 
 
 def _resolve_repo_root() -> str:
@@ -151,7 +165,7 @@ def _resolve_repo_root() -> str:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **_no_console_kw(),
         )
         resolved = (proc.stdout or "").strip()
         if proc.returncode == 0 and resolved:

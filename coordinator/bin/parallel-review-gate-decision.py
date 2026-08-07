@@ -133,6 +133,7 @@ from coordinator_core.contract.decision_object import (  # noqa: E402
     emit,
 )
 from coordinator_core.contract.decision_object.judgment import build_disposition  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 # build_judgment_point is intentionally NOT imported: every judgment point
 # this assembler emits is untrusted-gate-shaped (Rule 5's skip-vs-narrow
@@ -160,7 +161,7 @@ def _run_git(args: list[str], repo_root: Path | None = None, timeout: int = _GIT
             capture_output=True,
             text=True,
             timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: failed to run `git {' '.join(args)}`: {exc}", file=sys.stderr)
