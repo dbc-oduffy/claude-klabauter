@@ -23,17 +23,18 @@ working.
 
 ## claude-klabauter and coordinator-claude
 
-Claude-klabauter is one of two halves, and it is deliberately the half without opinions.
+Claude-klabauter is one of three parts of my setup, and it deliberately lacks opinions.
 
-- **coordinator-claude** (`~/.claude`) — the doctrine and the agent-facing surface: the rules,
+- **coordinator-claude** — the doctrine and the agent-facing surface: the rules,
   the skills and slash commands, the session ceremonies, and the meaning of every artifact shape.
-  This is what an agent experiences.
+  This is what an agent experiences. [Also OSS](https://github.com/dbc-oduffy/coordinator-claude).
 - **claude-klabauter** (this repo) — the engine underneath it. It produces and mutates the
   authoritative on-disk work-state, triggers sessions, and computes the answers the doctrine would
   otherwise have to ask someone to remember. It owns mechanism, not meaning: it is not a successor
   to coordinator-claude and it does not own doctrine.
-- **the retrieval layer** — the indexing and query capability: chunker, embedder, query surface. It reads
-  claude-klabauter's artifacts; claude-klabauter never writes into its store.
+- **bonus retrieval layer** — the indexing and query capability: chunker, embedder, query surface. It 
+  reads claude-klabauter's artifacts; claude-klabauter never writes into its store. Add one if you've
+  got one, cos all this emitting of data would love a good home. Mine isn't OSS ready yet.
 
 Claude-klabauter is a **hard prerequisite** of coordinator-claude — most mutating coordinator operations
 fail without it present. The reverse edge is soft: the engine runs standalone.
