@@ -17,7 +17,7 @@
 #   (query-records.js:531), then walkGlob reads <root>/state/lessons/*.yaml.
 #   The two are wired to the same $TMPROOT so fixture files are always found.
 #
-# Run: bash ~/.claude/plugins/coordinator-claude/coordinator/bin/query-records-facets.test.sh
+# Run: bash ~/.claude/plugins/coordinator/bin/query-records-facets.test.sh
 #
 # Tests:
 #   1. trigger filter returns lesson A, excludes lesson B (positive + negative on trigger).

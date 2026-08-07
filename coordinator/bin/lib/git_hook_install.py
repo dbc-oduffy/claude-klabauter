@@ -83,7 +83,7 @@ from typing import List, Optional
 from coordinator_core.win_portability import is_executable
 from coordinator_core.py_probe_sh import python_probe_lines
 
-_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator-claude/coordinator/bin"
+_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator/bin"
 
 # DR-072: durable-first .doe-root pointer read, cold shape (no lib-sourcing —
 # these are POSIX-`sh` string literals baked into installed git hooks, which
@@ -178,7 +178,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
             `<claude_klabauter>/coordinator/bin/<script_name>` — the executable
             surface's actual current home on a migrated machine.
     Rung 4: marketplace path
-            `$HOME/.claude/plugins/coordinator-claude/coordinator/bin` —
+            `$HOME/.claude/plugins/coordinator/bin` —
             unconditional backstop, no isfile probe (matches prior behavior;
             this is the last resort, not a candidate to skip past).
     """

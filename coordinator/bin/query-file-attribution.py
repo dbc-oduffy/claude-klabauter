@@ -16,7 +16,7 @@ CLI:
     python3 query-file-attribution.py --session <id> --file <path>  [--project <root>]
 
 Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C2
-Replaces:      plugins/coordinator-claude/coordinator/bin/query-file-attribution.mjs
+Replaces:      plugins/coordinator/bin/query-file-attribution.mjs
 
 Negative-spec:
   - Do NOT write to state/ or any other disk location — read-only consumer.
@@ -173,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
             '  query-file-attribution.py --session abc-123\n'
             '\n'
             '  # Which sessions touched a specific file?\n'
-            '  query-file-attribution.py --file plugins/coordinator-claude/coordinator/bin/derive-file-attribution.py\n'
+            '  query-file-attribution.py --file plugins/coordinator/bin/derive-file-attribution.py\n'
             '\n'
             '  # Use a test fixture directory\n'
             '  query-file-attribution.py --transcript-dir /path/to/fixtures --session test-session-0001'

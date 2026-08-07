@@ -7,7 +7,7 @@
 # session_id deduped; missing-predecessor terminates with annotation; cycle
 # terminates with annotation; archived predecessors traversed.
 #
-# Run: bash ~/.claude/plugins/coordinator-claude/coordinator/bin/tests/test-aggregate-chain-loe.sh
+# Run: bash ~/.claude/plugins/coordinator/bin/tests/test-aggregate-chain-loe.sh
 
 set -uo pipefail
 

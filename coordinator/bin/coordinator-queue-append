@@ -1912,7 +1912,7 @@ def main() -> None:
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                     "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
+                    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
                 return  # exits 0 via normal return from legacy_fn()
@@ -1938,7 +1938,7 @@ def main() -> None:
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                     "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
+                    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -1950,7 +1950,7 @@ def main() -> None:
             print(
                 "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                 "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
+                "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
             return  # exits 0 via normal return from legacy_fn()
@@ -2059,7 +2059,7 @@ def main() -> None:
         print(
             "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
             "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-            "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
+            "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
         return

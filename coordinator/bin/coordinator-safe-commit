@@ -94,7 +94,7 @@ governing whether a caller may run this script's underlying `git commit` —
 the guard, not a flag this script parses.
 
 Canonical invocation:
-  ~/.claude/plugins/coordinator-claude/coordinator/bin/coordinator-safe-commit "<subject>"
+  ~/.claude/plugins/coordinator/bin/coordinator-safe-commit "<subject>"
 
 Usage forms:
   coordinator-safe-commit "<subject>"                      # default — scoped staging

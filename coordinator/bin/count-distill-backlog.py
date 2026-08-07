@@ -40,7 +40,7 @@ THRESHOLD_DAYS = 30
 def _resolve_root() -> str:
     """Resolve the archive/wiki scan root: the example-doctrine-repo repo, whose
     `archive/completed` + `docs/wiki` (source layout) or the live-installed
-    `~/.claude` + `plugins/coordinator-claude/coordinator/docs/wiki`
+    `~/.claude` + `plugins/coordinator/docs/wiki`
     (live-install layout) hold the completion-log corpus this script counts
     against — this is example-doctrine-repo doctrine's own distill backlog, not the calling
     repo's.

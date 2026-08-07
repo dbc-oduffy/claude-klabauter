@@ -13,7 +13,7 @@
 # then deleted by the trap on EXIT regardless of assertion outcome. git status must
 # be clean after the test runs.
 #
-# Run: bash ~/.claude/plugins/coordinator-claude/coordinator/bin/tests/test-audit-roadmap-dependency-order.sh
+# Run: bash ~/.claude/plugins/coordinator/bin/tests/test-audit-roadmap-dependency-order.sh
 
 set -uo pipefail
 

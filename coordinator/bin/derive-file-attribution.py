@@ -17,7 +17,7 @@ Achieves this via line-by-line streaming (never json.load a whole file) and a si
 pass per transcript.
 
 Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C1
-Ported from: plugins/coordinator-claude/coordinator/bin/lib/file-attribution/project.mjs
+Ported from: plugins/coordinator/bin/lib/file-attribution/project.mjs
 
 Performance cache (2026-07-29): a full re-scan (read + regex + json.loads every
 transcript line, on every invocation, no caching) cost ~2.4s wall against a

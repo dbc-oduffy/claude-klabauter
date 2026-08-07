@@ -22,7 +22,7 @@ Classification contract (from state-placement-law.md § Plan Homes and
 
   doctrine     — artifact is ABOUT coordinator doctrine: skills, hooks,
                  agents, ceremonies, coordinator plugin source
-                 (plugins/coordinator-claude/coordinator/**), meta-repo
+                 (plugins/coordinator/**), meta-repo
                  doctrine surfaces (CLAUDE.md, CLAUDE.local.md,
                  docs/decisions/, docs/wiki/), coordinator install skill /
                  commands/install.md. Default class for everything else

@@ -183,8 +183,8 @@ def _improvement_queue_minimal_args() -> list[str]:
         "--title", "Parity test improvement entry",
         "--body", "Body text for parity improvement test.",
         "--status", "open",
-        "--surface", "plugins/coordinator-claude/coordinator/skills/workstream-complete/SKILL.md",
-        "--proposed-action", "plugins/coordinator-claude/coordinator/skills/",
+        "--surface", "plugins/coordinator/skills/workstream-complete/SKILL.md",
+        "--proposed-action", "plugins/coordinator/skills/",
         "--change-kind", "skill-edit",
         "--from-repo", "test-repo-em",
     ]
@@ -464,7 +464,7 @@ def test_improvement_queue_missing_required_field() -> None:
                 "--title", "T",
                 "--body", "B",
                 "--status", "open",
-                "--proposed-action", "plugins/coordinator-claude/coordinator/",
+                "--proposed-action", "plugins/coordinator/",
                 "--change-kind", "skill-edit",
                 "--from-repo", "test-repo-em",
                 # --surface is intentionally omitted
@@ -497,8 +497,8 @@ def test_improvement_queue_invalid_change_kind() -> None:
                 "--title", "T",
                 "--body", "B",
                 "--status", "open",
-                "--surface", "plugins/coordinator-claude/coordinator/",
-                "--proposed-action", "plugins/coordinator-claude/coordinator/",
+                "--surface", "plugins/coordinator/",
+                "--proposed-action", "plugins/coordinator/",
                 "--change-kind", "bogus",  # not in the improvement-queue enum
                 "--from-repo", "test-repo-em",
             ],

@@ -56,7 +56,7 @@ _SYNTHETIC_DEBT_BACKLOG = """\
 
 ## 2026-06-08 daily observer flags
 
-- [ ] DSR-2026-06-08-1 [for-weekly-arch-review] Runtime-tripwire thresholds have no empirical basis — surfaces: plugins/coordinator-claude/coordinator/hooks/scripts/lib/runtime-thresholds.sh
+- [ ] DSR-2026-06-08-1 [for-weekly-arch-review] Runtime-tripwire thresholds have no empirical basis — surfaces: plugins/coordinator/hooks/scripts/lib/runtime-thresholds.sh
 """
 
 _HEADER_ONLY_BACKLOG = """\

@@ -16,8 +16,8 @@ bin/regenerate-orientation-cache.
 # (DR-047: example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
 #
 # Spec backlink: docs/plans/2026-05-18-orientation-cache-authoring-discipline.md
-# Schema:       plugins/coordinator-claude/coordinator/pipelines/workday-start-internals.md § 5.5
-# Producer:     plugins/coordinator-claude/coordinator/bin/regenerate-orientation-cache (still example-doctrine-repo bash)
+# Schema:       plugins/coordinator/pipelines/workday-start-internals.md § 5.5
+# Producer:     plugins/coordinator/bin/regenerate-orientation-cache (still example-doctrine-repo bash)
 # Port source:  coordinator/bin/verify-orientation-cache-sync.py (this file, prior bash body; see git log)
 # Spec backlink (port): docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 #

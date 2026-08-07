@@ -128,7 +128,7 @@ Coordinator_claude_klabauter_root() {
     echo "  Remediate (choose one):"
     echo "    machine-local set repos.claude_klabauter /path/to/claude-klabauter"
     echo "    Re-run /coordinator:install to populate the repos.* registry entries."
-    echo "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+    echo "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
   } >&2
   return 1
 }

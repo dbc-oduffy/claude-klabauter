@@ -29,7 +29,7 @@ here).
 
 Usage:
   cd <repo-root>
-  python ~/.claude/plugins/coordinator-claude/coordinator/bin/migrate-completion-log-legacy.py
+  python ~/.claude/plugins/coordinator/bin/migrate-completion-log-legacy.py
 
 Or, with an explicit repo root:
   migrate-completion-log-legacy.py --root <path>

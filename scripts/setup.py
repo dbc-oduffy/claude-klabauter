@@ -44,7 +44,7 @@ Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-al
   (this file replaces scripts/setup.sh + scripts/setup.ps1 — one cross-platform
   naked-Python installer instead of a bash/PowerShell twin pair, per the
   project's pure-Python-shop mandate; DR-047/DR-059).
-Spec backlink: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/agent-install-contract.md
+Spec backlink: ~/.claude/plugins/coordinator/docs/wiki/agent-install-contract.md
 Resolver reference: coordinator/lib/coordinator-claude-klabauter-root.sh (the CLAUDE_KLABAUTER_ROOT
   ladder the example-doctrine-repo command veneers + coordinator_core.invoke entrypoint share)
 
@@ -1114,7 +1114,7 @@ def register_claude_klabauter_root(
             print(f"  Tried to register: {claude_klabauter_root_resolved}", file=sys.stderr)
             print("  Remediation: run manually:", file=sys.stderr)
             print(f"    machine-local set {key} {claude_klabauter_root_resolved}", file=sys.stderr)
-            print("  Reference: ~/.claude/plugins/coordinator-claude/coordinator/lib/coordinator-claude-klabauter-root.sh", file=sys.stderr)
+            print("  Reference: ~/.claude/plugins/coordinator/lib/coordinator-claude-klabauter-root.sh", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {claude_klabauter_root_resolved}")
     return claude_klabauter_root_resolved

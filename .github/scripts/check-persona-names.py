@@ -165,7 +165,11 @@ SURNAME_RE = re.compile(r"O['’]Duffy", re.IGNORECASE)
 # A bare handle with no slug is NOT permitted — that is the blanket-allow the
 # split exists to avoid.
 HANDLE_URL_RE = re.compile(r"github\.com/dbc-oduffy(?:/[\w.\-]+)*", re.IGNORECASE)
-HANDLE_SLUG_RE = re.compile(r"(?<![A-Za-z0-9])dbc-oduffy/[\w.\-]+", re.IGNORECASE)
+# (?<!/) excludes a slug preceded by another slash — a home-directory path of
+# the shape "/<something>/dbc-oduffy/<segment>" must NOT be treated as the
+# permitted owner/repo slug form; only a slug at a non-path-internal boundary
+# qualifies.
+HANDLE_SLUG_RE = re.compile(r"(?<![A-Za-z0-9])(?<!/)dbc-oduffy/[\w.\-]+", re.IGNORECASE)
 # @-mention form, as used to name the maintainer in CONTRIBUTING.md.
 HANDLE_MENTION_RE = re.compile(r"@dbc-oduffy(?![A-Za-z0-9])", re.IGNORECASE)
 

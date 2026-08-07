@@ -359,7 +359,7 @@ def _resolve_claude_klabauter_root() -> str:
         "  Remediate (choose one):\n"
         "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
         "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-        "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+        "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
     )
 
     _candidate = _machine_local_get("repos.claude_klabauter")

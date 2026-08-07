@@ -5,7 +5,7 @@
 # § Chunk 2 — AC: correct three numbers + t-shirt; missing token metadata degrades
 # gracefully; YAML-frontmatter output paste-ready; concurrency declarations present.
 #
-# Run: bash ~/.claude/plugins/coordinator-claude/coordinator/bin/tests/test-coordinator-session-loe.sh
+# Run: bash ~/.claude/plugins/coordinator/bin/tests/test-coordinator-session-loe.sh
 
 set -uo pipefail
 

@@ -8,7 +8,7 @@
 #
 # Spec backlink: docs/plans/2026-06-26-datetime-handling-coherence.md § C-A1, AC1, AC2.
 #
-# Run: bash plugins/coordinator-claude/coordinator/lib/tests/test-datetime-anchor-coherence.sh
+# Run: bash plugins/coordinator/lib/tests/test-datetime-anchor-coherence.sh
 # (from any directory — script resolves its own location)
 #
 # Exit codes:

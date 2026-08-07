@@ -674,7 +674,7 @@ def _improvement_queue_required_args(extra: list[str] | None = None) -> list[str
         "--title", "Test central improvement entry",
         "--body", "Body describing the improvement.",
         "--surface", "state/lessons.md:42",
-        "--proposed-action", "plugins/coordinator-claude/coordinator/skills/workstream-complete/SKILL.md",
+        "--proposed-action", "plugins/coordinator/skills/workstream-complete/SKILL.md",
         "--change-kind", "skill-edit",
         "--status", "open",
         "--from-repo", "test-repo-em",
