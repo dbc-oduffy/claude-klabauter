@@ -1016,6 +1016,144 @@ def test_brightline_gate_chain_owing_review_cannot_reach_the_vacuous_pass(monkey
     assert "vacuously satisfied" not in err
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-07 (state/audits/2026-08-07-wsc-chain-gate-counts-doc-only-
+# commits.md): the HALT's own UNCOVERED message told two lies — it called
+# every entry a "chain code commit" (PLANNING commits stay in the
+# obligation set by design but aren't code) and stayed silent when an
+# uncovered commit is foreign to the closing session (frequently
+# undischargeable BY CONSTRUCTION, not because no one reviewed it). This is
+# a rendering-only fix: `chain_partition_uncovered_shas`'s output, the
+# denominator, and the verdict are untouched — only the message's labeling
+# of the SAME uncovered list.
+# ---------------------------------------------------------------------------
+
+
+def test_brightline_gate_uncovered_message_labels_planning_only_set_as_planning(
+    monkeypatch, tmp_path, capsys,
+):
+    """A PLANNING-only uncovered set (every commit classifies PLANNING, e.g.
+    the sibling incident's seven `docs/plans/**`/`state/sizings/**`
+    commits) must render as planning-artifact commit(s), never as "code
+    commit(s)" — the exact mislabel the audit traced a sibling EM chasing
+    the wrong fix over."""
+    chain_code_shas = ["planonly1", "planonly2"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(chain_code_shas), None),
+    )
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
+    assert "2 planning-artifact commit(s) (owe a plan review, not a code review):" in err
+    assert "code commit(s):" not in err
+
+
+def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
+    monkeypatch, tmp_path, capsys,
+):
+    """An uncovered set that is entirely foreign to the closing session
+    (every commit authored by a predecessor session — the sibling
+    deadlock's actual shape) must narrate the unrecordable-by-construction
+    case and name BOTH sanctioned exits, and must NOT print the ordinary
+    REMEDY line — no per-commit write this session could make would ever
+    discharge them."""
+    chain_code_shas = ["foreign1", "foreign2"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(), None),
+    )
+
+    def _all_foreign(sha_range, session_id):
+        sha = sha_range.split("^..", 1)[0]
+        return frozenset({sha})
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
+    assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "Sanctioned exits: a PM vouch waiver, or /handoff." in err
+    assert "REMEDY: record a per-commit" not in err
+
+
+def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp_path, capsys):
+    """A mixed uncovered set — one own-session code commit, one foreign
+    code commit, one own-session planning commit — must partition BOTH
+    axes correctly: classification counts stay accurate, only the foreign
+    subset is called unrecordable, and REMEDY names only the remaining
+    (genuinely undischarged, own-session) count."""
+    chain_code_shas = ["codeown", "codeforeign", "planown"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset({"planown"}), None),
+    )
+
+    def _one_foreign(sha_range, session_id):
+        sha = sha_range.split("^..", 1)[0]
+        return frozenset({sha}) if sha == "codeforeign" else frozenset()
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED: 3 of 3 chain code commit(s)" in err
+    assert "2 code commit(s):" in err
+    assert "1 planning-artifact commit(s) (owe a plan review, not a code review):" in err
+    assert "1 of these 3 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "REMEDY: record a per-commit review-trail verdict for each of the remaining 2" in err
+
+
+def test_brightline_gate_uncovered_denominator_and_verdict_unchanged_by_labeling(
+    monkeypatch, tmp_path, capsys,
+):
+    """Regression pin: the rendering split must never touch the verdict
+    token or the `N of M` denominator — a reader diffing this change must
+    see only strings (and their supporting per-sha classification) move,
+    never the halt decision or the counts it's built from. Exercised over
+    the same mixed-classification, partially-foreign shape as the
+    partition test above, so a future change that quietly narrows
+    `chain_code_shas` or flips the verdict on a classification/foreign
+    split would fail here even if it left the per-bucket labels intact."""
+    chain_code_shas = ["codeown", "codeforeign", "planown"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset({"planown"}), None),
+    )
+
+    def _one_foreign(sha_range, session_id):
+        sha = sha_range.split("^..", 1)[0]
+        return frozenset({sha}) if sha == "codeforeign" else frozenset()
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "HALT: brightline verdict=PARTITION-MANDATORY" in err
+    assert (
+        "UNCOVERED: 3 of 3 chain code commit(s) carry no discharging "
+        "review-trail verdict (no record's range names them):"
+    ) in err
+
+
 def test_brightline_gate_dag_resolution_failure_does_not_take_vacuous_pass(monkeypatch, tmp_path, capsys):
     """`dag_resolution_failed` (DAG derivation itself indeterminate) is a
     DIFFERENT condition from a legitimately-empty `chain_code_shas` — it

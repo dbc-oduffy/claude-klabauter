@@ -180,9 +180,21 @@ _REVIEW_INTEGRATOR_TYPE = "coordinator:review-integrator"
 _ARCHIVE_RE = re.compile(r"(^|/)archive/")
 
 #: Reference hook — daily-summaries dated-file carve-out.
+#: The optional ``.observer`` segment (2026-08-07 widening) admits the
+#: strategic-observer sidecar that /workday-complete Step 7 dispatches a
+#: SUBAGENT to write. Without it the ceremony and this guard were jointly
+#: unsatisfiable: the observer's only specified output path is under
+#: ``archive/``, so the guard hard-denied every well-behaved observer, and the
+#: strategic-observer trail sat empty from 2026-07-23 onward across at least
+#: two repos -- silently, because /workweek-complete Step 9's arch-pass
+#: skip-condition reads an empty trail as "no architectural risk".
+#: Deliberately narrow: a single literal segment on an already-carved-out
+#: dated path, not a general subagent exemption. The guard's wrap-up
+#: self-log backstop purpose is unchanged -- a ceremony-specified sidecar is
+#: not the over-eager-self-log class it exists to stop.
 _DAILY_SUMMARY_RE = re.compile(
     r"(^|/)archive/daily-summaries/[0-9]{4}-[0-9]{2}-[0-9]{2}"
-    r"(-[a-z0-9][a-z0-9-]*)?\.md$"
+    r"(-[a-z0-9][a-z0-9-]*)?(\.observer)?\.md$"
 )
 
 #: Reference hook — per-entry completion fallback carve-out.

@@ -4571,6 +4571,51 @@ class TestParseYamlLegacyDialect:
         assert list(item.keys()) == ['body', 'route']
         assert item['body'] == 'para one\n\npara two: here'
 
+    # Regression: a top-level (unindented) block sequence of mappings — e.g.
+    # `carried_items:` in coordinator/schemas/handoff.schema.json — was returned
+    # as the bare list itself, discarding every scalar key already parsed
+    # (including ones AFTER the sequence). parse_frontmatter then saw a list,
+    # not a dict, and reported every required field as missing on a valid file.
+    def test_unindented_block_sequence_of_mappings_as_last_key(self):
+        text = 'title: x\ncarried_items:\n- carry_id: a\n  disposition: carried\n'
+        assert parse_yaml(text) == {
+            'title': 'x',
+            'carried_items': [{'carry_id': 'a', 'disposition': 'carried'}],
+        }
+
+    def test_unindented_block_sequence_of_mappings_as_middle_key(self):
+        text = 'title: x\ncarried_items:\n- carry_id: a\n  disposition: carried\nsummary: y\n'
+        assert parse_yaml(text) == {
+            'title': 'x',
+            'carried_items': [{'carry_id': 'a', 'disposition': 'carried'}],
+            'summary': 'y',
+        }
+
+    def test_unindented_block_sequence_of_scalars(self):
+        text = 'scope:\n- a\n- b\ntitle: y\n'
+        assert parse_yaml(text) == {'scope': ['a', 'b'], 'title': 'y'}
+
+    def test_indented_block_sequence_of_scalars_still_works(self):
+        text = 'scope:\n  - a\n  - b\ntitle: y\n'
+        assert parse_yaml(text) == {'scope': ['a', 'b'], 'title': 'y'}
+
+    def test_nested_mapping_with_unindented_sequence_value(self):
+        text = 'outer:\n  inner_seq:\n  - a\n  - b\ntitle: y\n'
+        assert parse_yaml(text) == {'outer': {'inner_seq': ['a', 'b']}, 'title': 'y'}
+
+    def test_real_handoff_carried_items_round_trips_with_scalar_keys_intact(self):
+        fixture = (
+            Path(__file__).parent.parent.parent.parent
+            / 'state' / 'handoffs'
+            / '2026-08-06-2026-08-05_215136_2026-08-04_235721_2026-08-03_155105_claude-klabauter-oss-release.md'
+        )
+        fm = parse_frontmatter(fixture.read_text(encoding='utf-8'))['frontmatter']
+        assert isinstance(fm, dict)
+        assert fm['title']
+        assert fm['status']
+        assert isinstance(fm['carried_items'], list)
+        assert fm['carried_items'][0]['carry_id'] == 'cf-all-families-residual-invariant-3a91c4'
+
 
 class TestDescribeBehavioralCases:
     """Two behavioral cases pinned by example-doctrine-repo's own consult, independent of the node

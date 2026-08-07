@@ -1841,3 +1841,251 @@ class TestForeignSessionScopeChainAncestryWaiver:
             own_session_id=_CHAIN_OWN_SESSION,
         )
         assert Path(result["out_path"]).is_file()
+
+
+# ---------------------------------------------------------------------------
+# Write-time zero-chain-terminal-credit diagnostic (state/audits/2026-08-07-
+# wsc-chain-gate-counts-doc-only-commits.md Q2/Q4/Q5).
+# ---------------------------------------------------------------------------
+
+_ZERO_CREDIT_KEY = "chain_terminal_zero_credit_warning"
+
+
+class TestZeroChainTerminalCreditDiagnostic:
+    """The write ALWAYS succeeds in every case below — the diagnostic is
+    advisory-only and never turns an accepted write into a failure."""
+
+    def test_diff_scope_kind_foreign_unvouched_range_is_guard_refused_not_diagnosed(
+        self, tmp_path
+    ) -> None:
+        """A `scope_kind='diff'` single-commit range naming a predecessor
+        session's own, unvouched commit — the exact audited incident shape
+        (state/audits/2026-08-07-wsc-chain-gate-counts-doc-only-commits.md
+        Q2) — never reaches the diagnostic at all for `scope_kind='diff'`:
+        `_guard_foreign_session_range` already refuses it outright (this is
+        the write-side guard's own Case 1, verified live, not merely
+        asserted) before `write_review_trail_entry` ever gets to build a
+        result. This pins that fact so a future change to the guard's
+        strictness cannot silently make this shape both guard-accepted AND
+        undiagnosed."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "predecessor.py", "predecessor work",
+            session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ValueError, match="names a different session"):
+            _write_guarded(repo, f"{foreign_sha}^..{foreign_sha}", scope="chain")
+
+    def test_plan_scope_kind_foreign_unvouched_range_emits_diagnostic(
+        self, tmp_path
+    ) -> None:
+        """THE reachable gap this diagnostic exists to close: a
+        `scope_kind='plan'` record never passes through
+        `_guard_foreign_session_range` at all (only `scope_kind='diff'`
+        does — see `write_review_trail_entry`'s call site), so a
+        single-commit range naming a predecessor session's own, unvouched
+        commit is accepted with ZERO write-time check today. It is 100%
+        foreign and unvouched, so the record is a provable zero-credit
+        write at the chain-terminal path — the write still succeeds, but
+        now carries the diagnostic."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "predecessor.py", "predecessor work",
+            session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        result = write_review_trail_entry(
+            sha_range=f"{foreign_sha}^..{foreign_sha}",
+            reviewer="staff-eng",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            scope_kind="plan",
+            session_id=_GUARD_OWN_SESSION,
+            workstream="",
+            caller_worktree=repo,
+        )
+
+        assert Path(result["out_path"]).is_file()
+        diagnostic = result.get(_ZERO_CREDIT_KEY)
+        assert diagnostic is not None, (
+            f"expected a {_ZERO_CREDIT_KEY!r} diagnostic on a 100%-foreign, "
+            f"unvouched single-commit 'plan' range; result={result!r}"
+        )
+        assert diagnostic["reason"] == "foreign_session_narrowing"
+        assert foreign_sha in diagnostic["shas"]
+
+    def test_plan_scope_kind_foreign_pm_vouched_range_emits_no_diagnostic(
+        self, tmp_path
+    ) -> None:
+        """A `scope_kind='plan'` record over a foreign range covered by a
+        live PM-vouch grant must NOT false-positive — this diagnostic
+        resolves the vouch/waiver evidence itself (independently of the
+        guard, which never runs for 'plan') and must reach the same "still
+        credits" conclusion the read side will."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "predecessor.py", "predecessor work",
+            session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
+        ok = _vouch.write_review_trail_vouch(
+            [foreign_sha],
+            "reviewed live during workstream-complete",
+            session_id=_GUARD_OWN_SESSION,
+            cwd=str(repo),
+        )
+        assert ok is True
+
+        result = write_review_trail_entry(
+            sha_range=f"{foreign_sha}^..{foreign_sha}",
+            reviewer="staff-eng",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            scope_kind="plan",
+            session_id=_GUARD_OWN_SESSION,
+            workstream="",
+            caller_worktree=repo,
+        )
+
+        assert Path(result["out_path"]).is_file()
+        assert _ZERO_CREDIT_KEY not in result, (
+            f"a PM-vouched foreign sha is credited at the read side, not "
+            f"stripped — the diagnostic must stay silent, got: {result.get(_ZERO_CREDIT_KEY)!r}"
+        )
+
+    def test_scope_kind_integration_emits_diagnostic_regardless_of_shas(
+        self, tmp_path
+    ) -> None:
+        """scope_kind='integration' is rejected outright by the discharge
+        path's _NON_CODE_SCOPE_KINDS filter — credits zero unconditionally,
+        even over this session's own commits, so the diagnostic fires
+        without needing to resolve sha_range at all."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+        tip_sha = _make_commit(repo, "tip", session_id=_GUARD_OWN_SESSION)
+
+        result = write_review_trail_entry(
+            sha_range=f"{base_sha}..{tip_sha}",
+            reviewer="staff-eng",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            scope_kind="integration",
+            session_id=_GUARD_OWN_SESSION,
+            workstream="",
+            caller_worktree=repo,
+        )
+
+        assert Path(result["out_path"]).is_file()
+        diagnostic = result.get(_ZERO_CREDIT_KEY)
+        assert diagnostic is not None
+        assert diagnostic["reason"] == "non_code_scope_kind"
+
+    def test_ordinary_own_session_write_emits_no_diagnostic(
+        self, tmp_path, caplog
+    ) -> None:
+        """The false-positive check the brief calls out as mattering most:
+        an ordinary, fully-own-session write must emit NEITHER the result
+        key NOR a warning log — a diagnostic on every ordinary write would
+        be worse than the bug it exists to catch."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit_touching(
+            repo, "own.py", "own edit", session_id=_GUARD_OWN_SESSION,
+        )
+
+        with caplog.at_level(
+            logging.WARNING, logger="coordinator_core.ops.review_trail_write"
+        ):
+            result = _write_guarded(repo, f"{base_sha}..{tip_sha}", scope="chain")
+
+        assert Path(result["out_path"]).is_file()
+        assert _ZERO_CREDIT_KEY not in result
+        zero_credit_logs = [
+            r.message for r in caplog.records if "zero-credit" in r.message
+        ]
+        assert not zero_credit_logs, (
+            f"expected no zero-credit warning log on an ordinary own-session "
+            f"write, got: {zero_credit_logs}"
+        )
+
+    def test_zero_credit_mirrored_constants_stay_in_sync(self) -> None:
+        """`review_trail_write` deliberately DUPLICATES two constants that live
+        in `coordinator_core.workstream_complete` / `coordinator_core.coverage`
+        rather than importing them, keeping the ops layer from reaching across
+        the ops/workstream_complete layering boundary at runtime.
+        `_ALWAYS_ZERO_CREDIT_SCOPE_KINDS`' own comment promises a test pins that
+        duplication — this is it. A test module may import across the boundary
+        freely; only the runtime module may not.
+
+        Both directions matter. If `_NON_CODE_SCOPE_KINDS` GAINS a kind the
+        diagnostic goes silent on a shape it should flag; if it LOSES one (as
+        "plan" did in 1b710512e) the diagnostic false-positives on records that
+        now credit. On failure, re-read the discharge path before re-syncing —
+        the constants must follow it, not be forced back into agreement.
+        """
+        from coordinator_core.coverage import _FOREIGN_STRIPPED_SCOPES
+        from coordinator_core.ops import review_trail_write as _rtw
+        from coordinator_core.workstream_complete.directives_review import (
+            _NON_CODE_SCOPE_KINDS,
+        )
+
+        assert _rtw._ALWAYS_ZERO_CREDIT_SCOPE_KINDS == frozenset(_NON_CODE_SCOPE_KINDS), (
+            "review_trail_write._ALWAYS_ZERO_CREDIT_SCOPE_KINDS has drifted from "
+            "directives_review._NON_CODE_SCOPE_KINDS — the set of scope_kinds that "
+            "provably credit zero at the chain-terminal path has moved."
+        )
+        assert _rtw._FOREIGN_NARROWED_SCOPES == frozenset(_FOREIGN_STRIPPED_SCOPES), (
+            "review_trail_write._FOREIGN_NARROWED_SCOPES has drifted from "
+            "coverage._FOREIGN_STRIPPED_SCOPES — the write-time diagnostic now "
+            "predicts narrowing for a different scope set than the read side "
+            "actually applies it to."
+        )
+
+    def test_foreign_but_pm_vouched_range_emits_no_diagnostic(self, tmp_path) -> None:
+        """A foreign single-commit range covered by a live PM-vouch grant is
+        NOT stripped by the read side's narrowing either (vouched shas are
+        subtracted out of the foreign set before subtraction) — the write-
+        time diagnostic must not false-positive on this case."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "predecessor.py", "predecessor work",
+            session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
+        ok = _vouch.write_review_trail_vouch(
+            [foreign_sha],
+            "reviewed live during workstream-complete",
+            session_id=_GUARD_OWN_SESSION,
+            cwd=str(repo),
+        )
+        assert ok is True
+
+        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
+
+        assert Path(result["out_path"]).is_file()
+        assert _ZERO_CREDIT_KEY not in result, (
+            f"a PM-vouched foreign sha is credited at the read side, not "
+            f"stripped — the diagnostic must stay silent, got: {result.get(_ZERO_CREDIT_KEY)!r}"
+        )

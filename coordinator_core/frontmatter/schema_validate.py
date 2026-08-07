@@ -4626,7 +4626,9 @@ def _parse_yaml_lines(lines: list[str], start: int, base_indent: int) -> tuple[A
             if next_line < n:
                 next_raw = lines[next_line]
                 next_indent = _lstrip_len(next_raw)
-                if next_indent > indent:
+                next_trimmed = next_raw.strip()
+                next_is_list_item = next_trimmed.startswith('- ') or next_trimmed == '-'
+                if next_indent > indent or (next_indent == indent and next_is_list_item):
                     nested_value, nested_next = _parse_yaml_lines(lines, next_line, next_indent)
                     result[key] = nested_value
                     i = nested_next

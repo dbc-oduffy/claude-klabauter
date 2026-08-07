@@ -90,6 +90,14 @@ Negative-spec:
     - NO cwd-based repo resolution; worktree derived from caller's ``repo_root`` param.
     - NO concurrent-session sentinel ambiguity detection (cs_resolve_session_id tier-4
       logic) — simplified sentinel read; daemon context always supplies session_id via env.
+    - NO persistence of the write-time zero-chain-terminal-credit diagnostic
+      (``chain_terminal_zero_credit_warning``) into the on-disk JSON record —
+      advisory-only, returned in the op result, never a ninth/tenth record key
+      (see the "Write-time zero-chain-terminal-credit diagnostic" section).
+    - NO turning an accepted write into a failure on a predicted zero-credit
+      shape — the diagnostic never raises and never blocks; a record written
+      for the human paper trail stays legitimate even when it provably
+      discharges nothing at the chain-terminal path.
 """
 
 from __future__ import annotations
@@ -779,6 +787,245 @@ def _guard_foreign_session_range(
 
 
 # ---------------------------------------------------------------------------
+# Write-time zero-chain-terminal-credit diagnostic
+#
+# state/audits/2026-08-07-wsc-chain-gate-counts-doc-only-commits.md (Q2, Q4,
+# Q5); state/lessons/2026-08-06-a-chain-terminal-reviewer-cannot-record-
+# 2220489ba97a.yaml.
+#
+# `_guard_foreign_session_range` above answers "is this range DEFENSIBLE for
+# the writing session to record at all" — a self-contained single-commit
+# slice with an honest range boundary passes it (case 2), or is admitted
+# under a PM vouch / chain-ancestry waiver (case 1's relaxation). The
+# chain-terminal discharge path
+# (`coordinator_core.workstream_complete.directives_review.
+# _record_membership_shas`, consumed by `_collect_discharging_range_shas`)
+# asks a DIFFERENT question at READ time: it narrows a session/chain-scoped
+# record's raw commit set by SUBTRACTING every commit whose own Session-Id
+# trailer does not name the WRITING session (vouched/waived shas excluded
+# from the subtraction) — a predicate the write-side guard never runs. A
+# record can therefore pass the guard, land on disk with verdict "ok", and
+# still credit ZERO commits at that discharge path — sharpest on a
+# single-commit range naming a predecessor session's own commit, which is
+# 100% foreign-and-unvouched by construction and narrows to `set()`. The
+# writer sees a clean accepted write and has no way to learn, at write time,
+# that the record they just wrote discharges nothing — this is exactly the
+# "silently accept, silently credit nothing" shape this repo's own doctrine
+# calls out as the failure mode to avoid.
+#
+# `_diagnose_zero_chain_terminal_credit` predicts the two shapes that are
+# PROVABLY zero-credit using only write-time-available information (no
+# chain DAG, no chain_code_shas/chain_planning_shas — those exist only
+# after the CLOSING session's own chain traversal, which has not happened
+# yet when an earlier session in the chain writes its own record):
+#
+#   (a) every commit named by a `scope_kind` "diff" or "plan" sha_range is
+#       foreign to the writing session AND not covered by a live PM-vouch
+#       grant or a gate-minted chain-ancestry waiver — the read side's
+#       narrowing then empties this record's raw set to `set()` regardless
+#       of what chain_dag/chain_code/chain_planning turn out to be later
+#       (intersecting the empty set with anything is still empty). This
+#       function resolves the same two evidence sources
+#       `_guard_foreign_session_range` consults for its own Case-1
+#       relaxation (`review_trail_vouch.check_review_trail_vouch`,
+#       `chain_ancestry_waivers.chain_ancestry_waived_shas`) INDEPENDENTLY,
+#       rather than trusting that guard to have already run: for
+#       `scope_kind="diff"` the guard already refuses an unvouched foreign
+#       range outright (this shape is therefore live-unreachable there
+#       today — verified directly against `_guard_foreign_session_range`,
+#       not merely inferred), but for `scope_kind="plan"` NO write-time
+#       guard runs at all (see `write_review_trail_entry`'s call site,
+#       `if scope_kind == "diff" and caller_worktree is not None:`) — a
+#       plan record over a fully-foreign, unvouched range is accepted with
+#       zero write-time check today, and IS narrowed by
+#       `_record_membership_shas`'s `narrow_foreign_shas` leg exactly like
+#       a diff record (only `scope_kind in _NON_CODE_SCOPE_KINDS`, i.e.
+#       "integration", skips that leg entirely — see shape (b)). This is
+#       the live, reachable gap this diagnostic exists to close; the
+#       `scope_kind="diff"` leg is retained because a future change to the
+#       guard's strictness must not silently regress this diagnostic's own
+#       coverage of that shape.
+#   (b) `scope_kind == "integration"` — rejected OUTRIGHT by the discharge
+#       path's `_NON_CODE_SCOPE_KINDS` filter before any range resolution
+#       runs, credits zero unconditionally, regardless of sha_range or
+#       scope.
+#
+# `scope_kind == "plan"` is NOT flagged for reason (b) (2026-08-07
+# correction, commit 1b710512e, `directives_review._NON_CODE_SCOPE_KINDS`):
+# a plan record now credits the commits its range shares with the
+# caller-supplied PLANNING subset of chain_code_shas, a chain-scoped fact
+# this write-time diagnostic cannot resolve — so shape (b) stays silent on
+# every plan record rather than either over- or under-claiming about its
+# eventual credit; shape (a) still applies to it, independently of (b).
+#
+# Purely advisory: never raises, never changes `verdict`, `scope`,
+# `scope_kind`, or any crediting rule, and never blocks, retries, or slows
+# the write. A record written for the human paper trail is still a
+# legitimate record even when it provably discharges nothing here — see
+# `write_review_trail_entry`'s Returns docstring for the additive result
+# key this surfaces on.
+# ---------------------------------------------------------------------------
+
+#: mirrors `directives_review._NON_CODE_SCOPE_KINDS` as of the 2026-08-07
+#: correction (commit 1b710512e) — "plan" was removed from that set,
+#: "integration" was not. Duplicated, not imported: this ops-layer module
+#: does not import `coordinator_core.workstream_complete` (layering), and
+#: this set is small and has changed exactly once in this module's history.
+#: `test_review_trail_write.py` pins that this stays in sync with the real
+#: constant.
+_ALWAYS_ZERO_CREDIT_SCOPE_KINDS = frozenset({"integration"})
+
+#: mirrors `coverage._FOREIGN_STRIPPED_SCOPES` — as of writing, identical to
+#: this module's own `_VALID_SCOPES` (every scope this module accepts is
+#: subject to the chain-terminal discharge path's foreign-session
+#: narrowing). Kept as an explicit local mirror rather than a cross-layer
+#: import so a future divergence between the two fails this diagnostic
+#: CLOSED (it silently stops warning) rather than reaching across the
+#: ops/workstream_complete layering boundary.
+_FOREIGN_NARROWED_SCOPES = frozenset({"chain", "session", "workstream-close-auto"})
+
+_ZERO_CREDIT_REASON_FOREIGN_SESSION = "foreign_session_narrowing"
+_ZERO_CREDIT_REASON_NON_CODE_SCOPE_KIND = "non_code_scope_kind"
+
+
+def _walk_range_commit_session_trailers(
+    sha_range: str, caller_worktree: Path,
+) -> Optional[dict[str, Optional[str]]]:
+    """Return ``{sha: trailer_or_None}`` for every commit git resolves in
+    ``sha_range``, or ``None`` if the range fails to resolve (unparseable,
+    no matching repo, git failure) — the caller treats ``None`` as "cannot
+    predict, stay silent" rather than guessing.
+
+    Mirrors `wsc-coverage-gate-runner.py`'s `_resolve_foreign_session_shas`
+    walk (git log WITH merges, same trailer atom) so a write-time
+    "every commit is foreign" verdict here is never contradicted later by
+    the read side resolving a different commit set for the same range.
+    """
+    rc, out, _err = _git_runner(
+        ["git", "log", "--format=%H%x1f%(trailers:key=Session-Id,valueonly)", sha_range],
+        str(caller_worktree),
+    )
+    if rc != 0:
+        return None
+    result: dict[str, Optional[str]] = {}
+    for line in out.splitlines():
+        if "\x1f" not in line:
+            continue
+        sha, _sep, trailer = line.partition("\x1f")
+        sha = sha.strip()
+        trailer = trailer.strip()
+        if not sha:
+            continue
+        result[sha] = trailer or None
+    return result or None
+
+
+def _resolve_write_time_vouched_shas(
+    candidate_shas: FrozenSet[str], own_session_id: str, caller_worktree: Path,
+) -> FrozenSet[str]:
+    """The same two evidence sources `_guard_foreign_session_range`'s
+    Case-1 relaxation consults (module docstring above), resolved
+    independently against an arbitrary ``candidate_shas`` set — used here
+    so this diagnostic stays accurate for ``scope_kind="plan"``, which
+    never runs through that guard at all. Fail-safe toward "not vouched":
+    either lookup raising is treated as an empty result, matching
+    ``_guard_foreign_session_range``'s own fail-safe posture for the same
+    two calls.
+    """
+    try:
+        pm_vouched, _record = review_trail_vouch.check_review_trail_vouch(
+            candidate_shas, cwd=str(caller_worktree), session_id=own_session_id,
+        )
+    except Exception:  # noqa: BLE001 - a broken vouch lookup must narrow, never crash
+        pm_vouched = frozenset()
+    try:
+        chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
+            str(caller_worktree), own_session_id,
+        ) & candidate_shas
+    except Exception:  # noqa: BLE001 - a broken waiver lookup must narrow, never crash
+        chain_waived = frozenset()
+    return frozenset(pm_vouched) | frozenset(chain_waived)
+
+
+def _diagnose_zero_chain_terminal_credit(
+    sha_range: str,
+    scope: str,
+    scope_kind: str,
+    own_session_id: str,
+    caller_worktree: Optional[Path],
+) -> Optional[dict]:
+    """Predict, from write-time-available information only, whether this
+    record is a PROVABLE zero-credit write at the chain-terminal discharge
+    path (`directives_review._record_membership_shas`). See this section's
+    module-level comment for the two shapes detected. Returns `None`
+    whenever neither shape is provably present — including every case this
+    function cannot resolve (no `caller_worktree`, an unparseable range, a
+    git failure) — never a false positive on an ordinary write.
+    """
+    if scope_kind in _ALWAYS_ZERO_CREDIT_SCOPE_KINDS:
+        return {
+            "reason": _ZERO_CREDIT_REASON_NON_CODE_SCOPE_KIND,
+            "shas": [],
+            "detail": (
+                f"scope_kind={scope_kind!r} is rejected outright by the "
+                "chain-terminal discharge path's _NON_CODE_SCOPE_KINDS filter, "
+                "before any sha_range resolution runs — this record credits "
+                "zero commits there regardless of sha_range or scope."
+            ),
+            "alternatives": [
+                "This record is still a legitimate paper-trail entry — no "
+                "action is required if that is its only purpose.",
+                "If this record was meant to discharge a chain code-coverage "
+                "obligation, write a scope_kind='diff' record (or, for a "
+                "planning-artifact commit, 'plan') over the relevant "
+                "commit(s) instead.",
+            ],
+        }
+    if scope_kind not in ("diff", "plan") or scope not in _FOREIGN_NARROWED_SCOPES:
+        return None
+    if caller_worktree is None:
+        return None
+    trailers = _walk_range_commit_session_trailers(sha_range, caller_worktree)
+    if not trailers:
+        return None
+    foreign = frozenset(sha for sha, trailer in trailers.items() if trailer != own_session_id)
+    if not foreign or len(foreign) != len(trailers):
+        return None  # at least one commit is this session's own — not provably zero.
+    vouched = _resolve_write_time_vouched_shas(foreign, own_session_id, caller_worktree)
+    if vouched >= foreign:
+        return None  # every foreign commit is vouched/waived — will still credit.
+    shas = sorted(trailers)
+    shown = shas[:_FOREIGN_SHA_DISPLAY_CAP]
+    remainder = len(shas) - len(shown)
+    remainder_note = f" (+{remainder} more)" if remainder else ""
+    return {
+        "reason": _ZERO_CREDIT_REASON_FOREIGN_SESSION,
+        "shas": shas,
+        "detail": (
+            f"every commit named by sha_range {sha_range!r} carries a "
+            f"Session-Id trailer other than this writing session's own "
+            f"({own_session_id!r}), or none at all, and none is covered by "
+            "a live PM-vouch grant or chain-ancestry waiver — the "
+            "chain-terminal discharge path's foreign-session narrowing "
+            f"subtracts all of them, emptying this record's contribution "
+            f"to the empty set: {', '.join(shown)}{remainder_note}."
+        ),
+        "alternatives": [
+            "This record is still a legitimate paper-trail entry — no "
+            "action is required if that is its only purpose.",
+            "If this record was meant to discharge a chain-terminal "
+            "coverage obligation over a predecessor session's commit(s), "
+            "the sanctioned remedies are a PM-vouch grant "
+            "(python3 coordinator/bin/review-trail-vouch-cli grant pm "
+            "\"<verbatim PM utterance>\" --sha <sha> ...) or a gate-minted "
+            "chain-ancestry waiver — narrowing sha_range further does not "
+            "help here, since it is already narrowed to a range containing "
+            "none of this session's own commits.",
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Timestamp helpers (platform-aware — byte-parity with oracle)
 # ---------------------------------------------------------------------------
 
@@ -1227,7 +1474,12 @@ def write_review_trail_entry(
         {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
          "scope_kind": str, "verdict": str, "diff_loc": int,
          "session_id": str, "workstream": str | None,
-         "reviewed_paths": list[str] | None}  (key present only when scope_kind == "diff")
+         "reviewed_paths": list[str] | None,  # key present only when scope_kind == "diff"
+         "chain_terminal_zero_credit_warning": dict}  # key present ONLY when
+        `_diagnose_zero_chain_terminal_credit` provably determines this record
+        discharges zero commits at the chain-terminal read path — see that
+        function's docstring. Absent on every ordinary write; never changes
+        `verdict` or blocks the write.
 
     Raises:
         ValueError  — invalid/missing required field or enum value.
@@ -1335,6 +1587,22 @@ def write_review_trail_entry(
     }
     if scope_kind == "diff":
         result["reviewed_paths"] = reviewed_paths
+
+    # Advisory-only, additive: never persisted to the on-disk JSON record
+    # (see the "Write-time zero-chain-terminal-credit diagnostic" section
+    # above) — present in the result ONLY when a zero-credit shape is
+    # provable, so an ordinary write's result/log stays unchanged.
+    zero_credit_diagnostic = _diagnose_zero_chain_terminal_credit(
+        sha_range, scope, scope_kind, resolved_session_id, caller_worktree,
+    )
+    if zero_credit_diagnostic is not None:
+        logger.warning(
+            "review_trail.write: this record is a provable zero-credit write "
+            "at the chain-terminal discharge path (reason=%s) — %s",
+            zero_credit_diagnostic["reason"],
+            zero_credit_diagnostic["detail"],
+        )
+        result["chain_terminal_zero_credit_warning"] = zero_credit_diagnostic
     return result
 
 
