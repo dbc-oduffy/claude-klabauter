@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coordinator_core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Command-type, spawn-per-call control-plane engine for the coordinator tri-plane (JSON-RPC 2.0 op registry + dispatch)."
 authors = [
     { name = "Dónal O'Duffy" },
