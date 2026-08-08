@@ -411,17 +411,38 @@ def _stage_chain_ancestry_waivers(repo_root: Path, chain_id: str) -> None:
     not fail the coverage-gate call it backs, the same posture
     ``record_chain_ancestry_waiver`` itself takes for its own writes.
 
-    Named, accepted limitation (review finding, 2026-07-31 chain-ancestry-discriminator
-    slice): this stage — and the later ``wsc_tail`` stage-path lookup that carries the
-    directory into the ceremony's own bookkeeping commit — both key on ``chain_id`` ==
-    the closing session's own id. If that session never resumes the ceremony itself
-    (context-limit kill, handoff to a fresh EM session, crash) and a DIFFERENT session
-    eventually drives the same chain to a passing gate, the old directory is never
-    staged/committed by that later session and sits as untracked disk litter under
-    ``state/review-trail/chain-ancestry-waivers/<old-sid>/`` with no sweep/reap path.
-    See ``wsc_tail._pending_chain_ancestry_waiver_stage_path``'s docstring for the full
-    reasoning, including why this is deliberately NOT fixed by scanning for stale
-    sibling directories instead.
+    Cross-session non-resumption scenario (review finding, 2026-07-31
+    chain-ancestry-discriminator slice): this stage — and the later ``wsc_tail``
+    stage-path lookup that carries the directory into the ceremony's own bookkeeping
+    commit — both key on ``chain_id`` == the closing session's own id. If that session
+    never resumes the ceremony itself (context-limit kill, handoff to a fresh EM
+    session, crash) and a DIFFERENT session eventually drives the same chain to a
+    passing gate, the old directory is never staged/committed by that later session and
+    sits as untracked disk litter under
+    ``state/review-trail/chain-ancestry-waivers/<old-sid>/``.
+
+    This is no longer an accepted limitation left unfixed — the PM ruling recorded in
+    docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md's
+    § Problem reversed that acceptance: the corpus is in scope, "you either include
+    the corpus now, or it never gets done." A reap path now exists:
+    ``coordinator_core.chain_ancestry_waivers.chain_reached_terminal_close`` (the
+    terminal-close predicate, fail-closed on "continued", a missing archived record,
+    CC-7 errors, or any non-zero exit) backs
+    ``coordinator_core.ops.reap_chain_ancestry_waivers``, registered as JSON-RPC op
+    ``chain_ancestry_waivers.reap`` — fail-closed, remove-only (only ever unlinks a
+    waiver file or rmdirs an emptied chain directory; never writes, mints, merges or
+    edits a record), idempotent, and single-chain-scoped. Invoking it against the old
+    directory above clears the litter.
+
+    Be precise about what is and is not true today: the reaper exists and is
+    invokable, but nothing invokes it automatically yet — no scheduled sweep, no
+    ceremony-close hook. A standing bound assertion (companion work, same plan) is
+    intended to turn this from "an operator has to remember to invoke the reaper" into
+    something that goes red on drift, but until that lands (or something else calls
+    the reap op), an untracked directory left by this scenario still requires a manual
+    ``chain_ancestry_waivers.reap`` invocation. See
+    ``wsc_tail._pending_chain_ancestry_waiver_stage_path``'s docstring for the fuller
+    keying reasoning.
     """
     chain_dir = chain_waiver_dir(str(repo_root), chain_id)
     if chain_dir is None or not chain_dir.is_dir():

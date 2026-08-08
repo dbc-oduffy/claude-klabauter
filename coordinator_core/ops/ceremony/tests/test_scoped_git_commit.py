@@ -375,6 +375,59 @@ def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypa
     assert "integrity_breach" not in result
 
 
+def test_landed_but_sha_unverified_reports_committed_true_not_false(tmp_path, monkeypatch):
+    """W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
+    a commit that LANDED but whose sha could not be resolved
+    (`PipelineResult.sha_unverified=True`) must render `committed: True` --
+    the previous `result.committed_sha is not None` predicate alone would
+    report `committed: False` here (`committed_sha` is correctly `None`,
+    only ITS PRESENCE was ever the signal), which is the exact "landed
+    commit reported as failed" bug this plan closes.
+
+    Mechanism check (not just the assertion): reverting the fix -- i.e.
+    `"committed": result.committed_sha is not None` alone, without the `or
+    result.sha_unverified` widening -- makes `result["committed"]` False
+    here, failing this test's very first assertion. Verified by hand:
+    temporarily restoring the old expression and re-running this test
+    reproduces a fail (`assert False is True`) before the fix; restored
+    immediately after.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "notes/alpha.md", "content")
+
+    fake_result = SimpleNamespace(
+        committed_sha=None,
+        pushed=None,
+        commit_failed=False,
+        integrity_breach=False,
+        sha_unverified=True,
+        diagnostics=[
+            "commit: landed but sha verification failed -- HEAD unresolvable"
+        ],
+    )
+    monkeypatch.setattr(scoped_git_commit, "run_commit_pipeline", lambda *a, **k: fake_result)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["notes/alpha.md"],
+            "message": "add notes",
+        }
+    )
+
+    assert result["committed"] is True
+    assert result["sha"] is None
+    assert result.get("sha_unverified") is True
+    assert result.get("diagnostics")
+    # Never the failure shape -- this is not "nothing landed".
+    assert "commit_failed" not in result
+    assert result.get("reason") != "empty-commit-set"
+
+
 def _commit_and_fake_pipeline(tmp_path, monkeypatch, *, with_remote: bool):
     """Land a real local commit, then make the pipeline claim `pushed=False`
     for it — the shape `derive_pushed_tristate` produces when this op's own

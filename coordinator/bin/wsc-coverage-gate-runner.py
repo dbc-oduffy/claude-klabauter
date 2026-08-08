@@ -922,6 +922,114 @@ def _classify_uncovered_shas(
     return planning, code
 
 
+def _resolve_uncovered_commit_attribution_window(
+    shas: list[str], repo_root: str,
+) -> dict | None:
+    """A3 (2026-08-08, N+1 git-spawn-class plan): the trailer signal for
+    EXACTLY `shas`, in ONE `git log --no-walk` spawn — `--no-walk` is
+    load-bearing: `git log sha1 sha2 ...` WITHOUT it walks each named
+    commit's full ancestry (every sha's own history, not just the named
+    commits), turning a bounded window into an unbounded one and
+    reintroducing the very N+1-adjacent blowup this chunk exists to avoid.
+    `chain_attribution.bulk_commit_attribution_map` cannot be reused
+    directly here — its `range_str` parameter is ONE `git log` argv token,
+    and `shas` is an arbitrary, generally discontiguous set with no single
+    range expression that provably covers exactly (and only) its members;
+    `--no-walk sha1 sha2 ... shaN` is that single-spawn cover.
+
+    Reuses `chain_attribution`'s own record framing/parsing contract
+    (`_LOG_FORMAT`, `_parse_log_records`) rather than re-deriving the
+    `\\x1e`/`\\x1f` separators and multi-valued-trailer handling a second
+    time — those are exactly the shape `bulk_commit_attribution_map`
+    already gets right; this function only differs in accepting N explicit
+    revs instead of one range expression, so the per-record value
+    extraction below (parents -> `is_merge`, trailer lines ->
+    `trailer_session_id`/`trailer_ambiguous`) mirrors that function's own
+    body verbatim.
+
+    Returns `None` on any git failure (non-zero rc, `OSError`) — the
+    caller (`_partition_foreign_uncovered_shas`) treats `None` exactly as
+    it treats an unresolvable repo root: whole-batch degrade to `own`,
+    never a false foreign claim from a window this function could not
+    positively build. A sha named in `shas` but genuinely absent from
+    `--no-walk`'s output (e.g. a mistyped/garbage sha) is simply absent
+    from the returned dict — the caller's own "every classified sha must
+    be present in the window" check catches that, this function does not
+    special-case it."""
+    if not shas:
+        return {}
+    rc, out, _err = _git_run_for_session_attribution(
+        ["git", "log", "--no-walk", f"--format={chain_attribution._LOG_FORMAT}", *shas],
+        repo_root,
+    )
+    if rc != 0:
+        return None
+    window: dict[str, chain_attribution.CommitAttribution] = {}
+    for sha, parents, trailer in chain_attribution._parse_log_records(out):
+        parent_shas = [p for p in parents.split(" ") if p]
+        is_merge = len(parent_shas) > 1
+        trailer_values = [v for v in trailer.split("\n") if v.strip()]
+        if not trailer_values:
+            trailer_session_id: str | None = None
+            ambiguous = False
+        elif len(trailer_values) == 1:
+            trailer_session_id = trailer_values[0].strip()
+            ambiguous = False
+        else:
+            trailer_session_id = trailer_values[0].strip()
+            ambiguous = True
+        window[sha] = chain_attribution.CommitAttribution(
+            sha=sha,
+            trailer_session_id=trailer_session_id,
+            is_merge=is_merge,
+            trailer_ambiguous=ambiguous,
+        )
+    return window
+
+
+def _resolve_uncovered_grep_attribution(
+    shas: list[str], session_id: str, repo_root: str,
+) -> frozenset[str] | None:
+    """A3: the grep signal for EXACTLY `shas`, in ONE `git log --no-walk
+    --no-merges` spawn — mirrors `chain_attribution.bulk_grep_attributed_
+    shas`'s `--no-merges` posture (load-bearing there, and here: a merge
+    commit's own message matching the grep must never be grep-attributed,
+    since it is already unconditionally foreign via `is_merge` and
+    `foreign_shas_from_window`'s merge-is-foreign rule would otherwise be
+    bypassed) and its `_UUID_RE` shape-validation (an unvalidated
+    `session_id` — an arbitrary on-disk record field — interpolated raw
+    into `--grep=` could collapse the pattern to match every commit).
+    `--no-walk` is load-bearing for the identical reason it is in
+    `_resolve_uncovered_commit_attribution_window`: without it this walks
+    each sha's ancestry, not just the named commits.
+
+    Callers only reach this when at least one sha in the window needs the
+    grep signal at all (an untrailered, non-merge, non-ambiguous commit —
+    see `_partition_foreign_uncovered_shas`'s `needs_grep` guard); a window
+    fully resolved by trailers alone skips this spawn entirely, which is
+    the 2N-not-N fix the plan names.
+
+    Returns the empty frozenset immediately, without spawning, on a
+    malformed `session_id` — fail-closed, matching `bulk_grep_attributed_
+    shas`. Returns `None` on any git failure — distinct from the empty
+    frozenset, so the caller can tell "confirmed nothing" from "could not
+    ask" and whole-batch degrade on the latter."""
+    if not _UUID_RE.match(session_id):
+        return frozenset()
+    rc, out, _err = _git_run_for_session_attribution(
+        [
+            "git", "log", "--no-walk", "--no-merges",
+            f"--grep=^Session-Id: {session_id}$",
+            "--format=%H",
+            *shas,
+        ],
+        repo_root,
+    )
+    if rc != 0:
+        return None
+    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+
+
 def _partition_foreign_uncovered_shas(
     shas: list[str], session_id: str | None,
 ) -> tuple[list[str], list[str]]:
@@ -938,32 +1046,61 @@ def _partition_foreign_uncovered_shas(
     individually correct; jointly they make a foreign uncovered commit
     unsatisfiable by any write this session could make.
 
-    Reuses `_resolve_foreign_session_shas` per sha, over the same `X^..X`
-    single-commit range idiom the write path itself produces
-    (`directives_review.py`'s own comments), rather than a second
-    trailer-reading implementation.
+    A3 (2026-08-08, N+1 git-spawn-class plan): answers from ONE window
+    covering exactly `shas` (`_resolve_uncovered_commit_attribution_
+    window`, one spawn) plus, ONLY when at least one sha in that window is
+    untrailered/non-merge/non-ambiguous and therefore needs the grep
+    signal at all, a second window-scoped grep spawn
+    (`_resolve_uncovered_grep_attribution`) — replacing the prior per-sha
+    `X^..X` loop (2 spawns * N shas, no dedup possible: every sha yields a
+    distinct range so the module-level memo never hits). NOT sized as the
+    N+1 win here (measured 1.04s/22 spawns on real 11-sha input, not the
+    39.7s figure that belongs to a different call site); this migration is
+    correctness-bearing — the P1/P2 posture (`chain_attribution`'s
+    fail-closed treatment of merges/ambiguous trailers, see that module's
+    docstring), and the window-coverage contract below.
 
-    `session_id=None` (closing session unresolvable) degrades every sha to
-    `own` — this diagnostic must never assert a commit is foreign when it
-    cannot positively confirm who the closing session even is. A per-sha
-    `_resolve_foreign_session_shas` failure (unresolvable repo root,
-    `session_attribution.GitLogFailed`) degrades that one sha to `own` for
-    the same reason: silence, not a false claim, on the diagnostics-only
-    leg this backs."""
-    if not session_id:
+    `session_id=None`, an empty `shas`, an unresolvable repo root, a
+    window-build failure, a sha `shas` names but the window walk did not
+    return (absence must never be read as "untrailered" — a window that
+    does not provably cover every classified sha is not trusted at all),
+    or a grep-leg failure when the grep leg was actually needed: ALL
+    degrade the WHOLE BATCH to `own`, never per-sha. This is a deliberate
+    change from the prior per-sha degrade-to-own posture — this diagnostic
+    must never assert ANY commit is foreign from a partially-failed
+    resolution; silence beats a false foreign claim across the entire
+    batch, not just the one sha that happened to fail."""
+    if not session_id or not shas:
         return [], list(shas)
-    foreign: list[str] = []
-    own: list[str] = []
-    for sha in shas:
+    repo_root = _resolve_repo_root()
+    if not repo_root:
+        return [], list(shas)
+    try:
+        window = _resolve_uncovered_commit_attribution_window(shas, repo_root)
+    except Exception:
+        window = None
+    if window is None or any(sha not in window for sha in shas):
+        return [], list(shas)
+    needs_grep = any(
+        not window[sha].is_merge
+        and not window[sha].trailer_ambiguous
+        and window[sha].trailer_session_id is None
+        for sha in shas
+    )
+    grep_attributed: frozenset[str] = frozenset()
+    if needs_grep:
         try:
-            foreign_set = _resolve_foreign_session_shas(f"{sha}^..{sha}", session_id)
+            grep_result = _resolve_uncovered_grep_attribution(shas, session_id, repo_root)
         except Exception:
-            own.append(sha)
-            continue
-        if sha in foreign_set:
-            foreign.append(sha)
-        else:
-            own.append(sha)
+            grep_result = None
+        if grep_result is None:
+            return [], list(shas)
+        grep_attributed = grep_result
+    foreign_set = chain_attribution.foreign_shas_from_window(
+        shas, session_id, window, grep_attributed,
+    )
+    foreign = [sha for sha in shas if sha in foreign_set]
+    own = [sha for sha in shas if sha not in foreign_set]
     return foreign, own
 
 

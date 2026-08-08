@@ -661,25 +661,43 @@ class HomeResolutionLintEngine:
         function-level site (the spike's own double-report bug -- see
         `_iter_ladder_sites`).
 
-        DOES resolve one shape of intra-function name binding -- a `test` or
-        return value that is a bare `Name` bound by a preceding top-level
-        `<name> = <expr>` statement in the SAME function body resolves to
-        `<expr>` for rung purposes (the live fleet's actual guard-ladder
-        shape: `claude_home = os.environ.get("CLAUDE_HOME")` then `if
-        claude_home: return Path(claude_home)`). This is deliberately
-        narrower than general data-flow: only a direct single-`Name`
-        assignment target, looked up by exact name, no re-assignment
-        tracking, no resolution through any OTHER expression shape (a
-        ternary's `test`/`body`/`orelse`, in particular, is NOT resolved
-        this way -- see the module docstring's declared miss for the
-        ternary-over-locally-bound-env-read shape, which this pass does not
-        share the fix for)."""
-        bindings: dict[str, ast.expr] = {}
+        Each candidate rung expression (a guard's `test`, a guard's `return`
+        value, and any bare `return` value) is run through `_extract_rungs`,
+        which (a) resolves a bare `Name` bound by a preceding top-level
+        `<name> = <expr>` statement in the SAME function body back to
+        `<expr>`, recursively -- including a bound `Name` used as a `Call`
+        argument (`os.path.join(home, ".claude")` where `home` was bound to
+        an or-chain resolves the chain, not just the join call itself; the
+        C5e fix -- previously only a bare-`Name` return/test was resolved,
+        never a `Name` nested inside a `Call`'s arguments), and (b) flattens
+        a resolved `BoolOp(Or, ...)` into its individual operands as
+        separate rungs rather than one opaque expression, so an or-chain
+        reached through a guard's return value (`if x: return x` then
+        `return a or b or c`, or a locally-bound `home = a or b or c`
+        followed by `return os.path.join(home, ...)`) is scored rung-by-rung
+        the same way a top-level `bare_or` BoolOp site already is. This is
+        deliberately narrower than general data-flow: only a direct
+        single-`Name` assignment target, looked up by exact name, no
+        re-assignment tracking, no resolution through any OTHER expression
+        shape (a ternary's `test`/`body`/`orelse`, in particular, is NOT
+        resolved this way -- see the module docstring's declared miss for
+        the ternary-over-locally-bound-env-read shape, which this pass does
+        not share the fix for).
 
-        def resolve(node: ast.expr) -> ast.expr:
-            if isinstance(node, ast.Name) and node.id in bindings:
-                return bindings[node.id]
-            return node
+        **Adjacent-duplicate collapse (the C5e `rung_order` false-positive
+        fix).** A guard `if x: return x` (the dominant fleet shape) yields
+        the SAME resolved expression for both its `test` and its `return`
+        value -- appending both as distinct rungs made every such guard a
+        same-rank "transposition" against itself
+        (`_rung_order_is_violation`'s `order_seq[i] >= order_seq[i + 1]`
+        treats equal ranks as a fail), flagging every correct guard-ladder
+        alongside every genuinely transposed one. The full rung list is
+        collapsed via `_collapse_adjacent_duplicates` (structural,
+        `ast.dump`-keyed) before being returned, so a guard's test/return
+        pair -- or two textually-identical `environ.get(...)` calls, bound
+        or not -- contributes ONE rung, while a genuine transposition
+        (different keys, different order) is untouched."""
+        bindings: dict[str, ast.expr] = {}
 
         rungs: list[ast.expr] = []
         saw_guard = False
@@ -698,13 +716,90 @@ class HomeResolutionLintEngine:
                 and isinstance(stmt.body[0], ast.Return)
                 and stmt.body[0].value is not None
             ):
-                rungs.append(resolve(stmt.test))
-                rungs.append(resolve(stmt.body[0].value))
+                rungs.extend(HomeResolutionLintEngine._extract_rungs(stmt.test, bindings))
+                rungs.extend(HomeResolutionLintEngine._extract_rungs(stmt.body[0].value, bindings))
                 saw_guard = True
                 continue
             if isinstance(stmt, ast.Return) and stmt.value is not None:
-                rungs.append(resolve(stmt.value))
-        return rungs if saw_guard else None
+                rungs.extend(HomeResolutionLintEngine._extract_rungs(stmt.value, bindings))
+        if not saw_guard:
+            return None
+        return HomeResolutionLintEngine._collapse_adjacent_duplicates(rungs)
+
+    @staticmethod
+    def _extract_rungs(
+        node: ast.expr, bindings: dict[str, ast.expr], _seen: frozenset[str] = frozenset()
+    ) -> list[ast.expr]:
+        """Resolves `node` against `bindings` (a bare `Name`, anywhere in
+        the expression -- including nested inside a `Call`'s arguments, not
+        just a top-level bare return/test -- resolves to its bound
+        expression) and flattens a `BoolOp(Or, ...)` reached this way into
+        its individual operands, recursively, so a locally-bound or-chain
+        wrapped in a formatting call (`os.path.join(home, ".claude")` where
+        `home = a or b or c`) yields `[a, b, c, ".claude"]` rather than one
+        opaque `Call` node the classifier cannot see into.
+
+        A recognised rung-shape `Call` (`environ.get(...)`, `Path.home()`,
+        an `expanduser(...)` call) is always returned as a single leaf --
+        never decomposed further -- so `_classify_rung` still receives the
+        exact node shapes it already knows how to classify. Any OTHER
+        `Call` is treated as a transparent wrapper: its own arguments are
+        recursively extracted (a bound `Name` argument resolves first), and
+        if that yields nothing, the call itself is returned as an
+        unclassifiable leaf (harmless -- `_classify_rung` returns `None` for
+        it, same as before this method existed).
+
+        `_seen` guards a genuine live-fleet shape (`resolve_subagent_identity`
+        in `coordinator/lib/session/identity.py`): a self-shadowing rebind
+        `agent_id = agent_id or ""`, where `bindings["agent_id"]`'s own
+        value expression contains a `Name("agent_id")` referring to the
+        parameter it shadows, not a cycle in the home-resolution sense.
+        Resolving a `Name` a second time within the SAME top-level rung
+        expression is refused (the `Name` is returned unresolved instead) --
+        this is a self-scan-discovered infinite-recursion fix, not a
+        speculative one; the self-scan test caught it live."""
+        if isinstance(node, ast.Name) and node.id in bindings and node.id not in _seen:
+            return HomeResolutionLintEngine._extract_rungs(
+                bindings[node.id], bindings, _seen | {node.id}
+            )
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            rungs: list[ast.expr] = []
+            for value in node.values:
+                rungs.extend(HomeResolutionLintEngine._extract_rungs(value, bindings, _seen))
+            return rungs
+        if isinstance(node, ast.Call):
+            if (
+                HomeResolutionLintEngine._is_environ_get_home(node)
+                or HomeResolutionLintEngine._is_environ_get_userprofile(node)
+                or HomeResolutionLintEngine._is_path_home_call(node)
+            ):
+                return [node]
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "expanduser":
+                return [node]
+            wrapped: list[ast.expr] = []
+            for arg in node.args:
+                wrapped.extend(HomeResolutionLintEngine._extract_rungs(arg, bindings, _seen))
+            return wrapped or [node]
+        return [node]
+
+    @staticmethod
+    def _collapse_adjacent_duplicates(rungs: list[ast.expr]) -> list[ast.expr]:
+        """Collapses consecutive structurally-identical rungs (`ast.dump`
+        equality -- ignores `lineno`/`col_offset`, so two textually distinct
+        but structurally identical `environ.get(...)` call sites, or a
+        `Name` resolved to the same bound expression twice in a row, count
+        as one rung) -- see `_extract_guard_ladder`'s "Adjacent-duplicate
+        collapse" note for why this is required, not cosmetic."""
+        collapsed: list[ast.expr] = []
+        previous_dump: str | None = None
+        for rung in rungs:
+            dump = ast.dump(rung)
+            if dump == previous_dump:
+                continue
+            collapsed.append(rung)
+            previous_dump = dump
+        return collapsed
 
     @staticmethod
     def _default_arg_ladder_rungs(node: ast.AST) -> list[ast.expr] | None:
@@ -953,7 +1048,25 @@ class HomeResolutionLintEngine:
         if any(kind == "TILDE" for kind in kinds):
             return True
         order_seq = [cls._RUNG_ORDER[kind] for kind in kinds if kind in cls._RUNG_ORDER]
-        return any(order_seq[i] >= order_seq[i + 1] for i in range(len(order_seq) - 1))
+        # Collapse adjacent duplicate ranks before scoring order: the same
+        # rung key can legitimately appear more than once in the raw
+        # extracted sequence -- e.g. a guard-ladder site where a wrapper
+        # call re-mentions the SAME resolved CLAUDE_HOME expression a
+        # second time a few rungs later (`_require_rooted("CLAUDE_HOME",
+        # claude_home)` -- the literal label argument classifies as `None`
+        # and is already dropped above, but the resolved `claude_home` Name
+        # argument re-contributes the same CLAUDE_HOME rank non-adjacently
+        # in the RAW rung list, past `_extract_guard_ladder`'s own
+        # adjacent-only collapse). A repeated identical rank is never a
+        # transposition (a transposition is a rank going backwards, not the
+        # same rank twice); only a genuinely lower rank following a higher
+        # one is scored below.
+        collapsed_seq: list[int] = []
+        for rank in order_seq:
+            if collapsed_seq and collapsed_seq[-1] == rank:
+                continue
+            collapsed_seq.append(rank)
+        return any(collapsed_seq[i] >= collapsed_seq[i + 1] for i in range(len(collapsed_seq) - 1))
 
     @classmethod
     def _rung_order_is_warn(cls, kinds: list[str | None]) -> bool:

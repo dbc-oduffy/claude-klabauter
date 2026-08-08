@@ -104,6 +104,7 @@ import yaml
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.coverage import (
     _DagChainResult,
+    _DagChainSetContext,
     _derive_dag_chain_set,
     _is_planning_artifact_path,
     _PLANNING_ARTIFACT_PATH_PREFIXES,
@@ -666,9 +667,19 @@ def _compute_chain_oracle(
     indeterminate = False
     notes: List[str] = []
 
+    # C8: ONE _DagChainSetContext constructed here and threaded across every
+    # baton in this loop — amortises _build_dag_index and the batched
+    # Session-Id/Deliverable-Id git-log walk over all owned batons sharing
+    # repo_root, instead of each baton's _derive_dag_chain_set call re-deriving
+    # the whole DAG from scratch. Deliberately excludes walked_deliverable_ids
+    # (baton-specific, derived from closing_set) — see _DagChainSetContext.
+    shared_context = _DagChainSetContext()
     for baton_path, _baton_fm in owned_batons:
         result: _DagChainResult = _derive_dag_chain_set(
-            str(baton_path), str(repo_root), closing_session_id
+            str(baton_path),
+            str(repo_root),
+            closing_session_id,
+            shared_context=shared_context,
         )
         if result.indeterminate:
             indeterminate = True

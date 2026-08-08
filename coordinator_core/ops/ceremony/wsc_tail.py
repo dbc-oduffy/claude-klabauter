@@ -806,6 +806,27 @@ def _swept_srcs_dsts(swept_renames: list[str]) -> tuple[list[str], list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _commit_gap_reason(commit_failed: bool, sha_unverified: bool) -> str:
+    """Discriminator string for every `tail_results[...]["skipped"/"failed"]`
+    entry that explains WHY a post-commit step did not run (no resolvable
+    `committed_sha` to key off of).
+
+    W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md): this
+    used to be a binary `'commit-failed' if commit_failed else
+    'nothing-to-commit'` repeated at every call site in this module -- both
+    branches wrong for the third real state `commit_pipeline.PipelineResult.
+    sha_unverified` describes: the commit LANDED (history changed, it is
+    NOT a no-op) but its sha could not be resolved, so this op still cannot
+    key a post-commit step (stamp, origin-stub close, archive sweeps) off a
+    real sha. `sha_unverified` is checked first -- it can be True only when
+    `commit_failed` is False (see `commit_pipeline.run_commit_pipeline`'s own
+    `landed` split), so there is no ambiguity between the two.
+    """
+    if sha_unverified:
+        return "landed-sha-unverified"
+    return "commit-failed" if commit_failed else "nothing-to-commit"
+
+
 def _d_node(node_id: str, resolving_op: str, tail_result: dict) -> dict:
     """Wrap a tail_ops-shaped {acted, skipped, failed[, failed_critical]}
     result dict into a schema-valid tail D-node -- feeds `compute_op_tail`.
@@ -1216,6 +1237,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     pushed: Optional[bool] = None
     integrity_breach = False
     commit_failed = False
+    # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md): the
+    # third real commit-pipeline state -- "landed, sha unresolvable" -- is
+    # neither `commit_failed` nor "nothing happened". A resumed pass never
+    # sets this (it skips `run_commit_pipeline` entirely and recovers a real
+    # sha from the sentinel -- see `resumed` above), so it stays `False` on
+    # that path by construction, exactly like `commit_failed` does.
+    sha_unverified = False
 
     if not resumed:
         # --- Step 2: pre-commit tail ops (best-effort) --- `precommit_tail_total`
@@ -1334,6 +1362,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         diagnostics.extend(pipeline_result.diagnostics)
         commit_failed = pipeline_result.commit_failed
         committed_sha = pipeline_result.committed_sha
+        sha_unverified = pipeline_result.sha_unverified
         pushed = pipeline_result.pushed
         integrity_breach = pipeline_result.integrity_breach
 
@@ -1415,7 +1444,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "acted": [],
             "skipped": [
                 f"{tail_ops.OP_ARCHIVE_SWEEPS_DETACHED}:"
-                f"{'commit-failed' if commit_failed else 'nothing-to-commit'}"
+                f"{_commit_gap_reason(commit_failed, sha_unverified)}"
             ],
             "failed": [],
         }
@@ -1428,8 +1457,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             _spawn_deferred_push_skip_loud(worktree_root)
 
     tail_results["commit_pipeline"] = {
-        "acted": [committed_sha] if committed_sha else [],
-        "skipped": [] if committed_sha or commit_failed else ["commit_pipeline:nothing-to-commit"],
+        # W3: a `sha_unverified` landing is neither an `acted` sha (there is
+        # none to name) nor a `nothing-to-commit` skip (history DID change) --
+        # see `_commit_gap_reason`'s own docstring for why the prior
+        # `committed_sha or commit_failed` binary rendered it as the latter.
+        "acted": [committed_sha] if committed_sha else (
+            ["commit_pipeline:landed-sha-unverified"] if sha_unverified else []
+        ),
+        "skipped": (
+            []
+            if committed_sha or commit_failed or sha_unverified
+            else ["commit_pipeline:nothing-to-commit"]
+        ),
         "failed": diagnostics if commit_failed else [],
     }
     tail_results["consumed_handoff_stamp"] = {
@@ -1441,7 +1480,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # empty default and every skip-reason list below is empty too --
             # without this entry, an aborted pass emitted a bare `[]` here,
             # indistinguishable from "nothing to do".
-            *([f"consumed_handoff_stamp:{'commit-failed' if commit_failed else 'nothing-to-commit'}"]
+            *([f"consumed_handoff_stamp:{_commit_gap_reason(commit_failed, sha_unverified)}"]
               if committed_sha is None else []),
             *[f"future-dated:{p}" for p in stamp_outcome.skipped_future_dated],
             *[f"live-children:{p}" for p in stamp_outcome.skipped_live_children],
@@ -1505,7 +1544,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # tell the operator to supply the sha of the commit that
             # actually landed the work, rather than emit a broken
             # `archive-stamp-cli ship-handoff <path> None`.
-            reason = "commit-failed" if commit_failed else "nothing-to-commit"
+            reason = _commit_gap_reason(commit_failed, sha_unverified)
             for p, _fm in initial_consumed:
                 tail_results["consumed_handoff_stamp"]["failed"].append(
                     f"never-evaluated:{p}: stamp step did not run ({reason}) -- "
@@ -1521,7 +1560,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # above, applied to this node's own `skipped` channel.
         origin_stub_result["skipped"] = [
             f"{OP_CLOSE_ORIGIN_STUB}:"
-            f"{'commit-failed' if commit_failed else 'nothing-to-commit'}"
+            f"{_commit_gap_reason(commit_failed, sha_unverified)}"
         ]
         # Review: coordinator:code-reviewer — C6b's cascade result was computed
         # by post_commit_tail.run() but never read here, so AC6h refusals never
@@ -1529,7 +1568,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # origin_stub_result immediately above.
         deliverable_cascade_result["skipped"] = [
             f"{post_commit_tail.OP_DELIVERABLE_CASCADE}:"
-            f"{'commit-failed' if commit_failed else 'nothing-to-commit'}"
+            f"{_commit_gap_reason(commit_failed, sha_unverified)}"
         ]
     tail_results[OP_CLOSE_ORIGIN_STUB] = origin_stub_result
     tail_results[post_commit_tail.OP_DELIVERABLE_CASCADE] = deliverable_cascade_result

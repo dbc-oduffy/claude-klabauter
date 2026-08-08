@@ -8,7 +8,7 @@ tool call into two append-only T-event logs:
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
-Port of the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
+Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
 track-touched-files.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.

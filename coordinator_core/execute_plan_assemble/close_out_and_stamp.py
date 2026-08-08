@@ -3433,8 +3433,24 @@ def _stage_paths_committed_already(root: Path, stage_paths: Sequence[str]) -> bo
     `commit_paths` regardless of whether that path actually differs from
     HEAD -- so without this check `close_out_and_stamp` would always reach a
     real `git commit` with nothing to commit, which git (correctly) refuses
-    with a bare `exit_code=1`, misreported here as `commit_failed`. See this
-    function's only call site for how the two are told apart.
+    with a bare `exit_code=1`. See this function's only call site for how
+    the two are told apart.
+
+    What's now true (W3, docs/plans/2026-08-08-a-landed-commit-reported-as-
+    failed.md): this specific `exit_code=1` -- the genuine "nothing to
+    commit" no-op -- is NOT the defect that plan fixes. `commit_pipeline.
+    commit()` (W1) still sets `landed=False` on exactly this path by design
+    (see `CommitOutcome.landed`'s own docstring: "the ordinary 'nothing to
+    commit' empty-commit-set exit 1... must keep `landed=False`"), so
+    `run_commit_pipeline` still reports it as an ordinary `commit_failed=
+    True`, same as before W1/W2 -- this function's own check below remains
+    the correct, load-bearing way to tell that apart from a genuine refusal.
+    The DEFECT W1/W2/W3 fix is a DIFFERENT `exit_code=1` shape entirely: a
+    commit that DID land (history changed) but whose sha could not be
+    resolved (`PipelineResult.sha_unverified`) -- see this module's own
+    `elif pipeline_result.sha_unverified:` branch at this function's call
+    site for how that state (never reaching this function at all, since it
+    is not "nothing landed") is now rendered honestly instead.
 
     Deliberately narrower than a repo-wide dirty check: scoped to exactly
     `stage_paths` (this op's own pathspec), so a live peer session's
@@ -4260,6 +4276,12 @@ def close_out_and_stamp(
             "committed_sha": pipeline_result.committed_sha,
             "pushed": pipeline_result.pushed,
             "commit_failed": pipeline_result.commit_failed,
+            # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
+            # surfaced unconditionally, not just on the failure branch below --
+            # a caller inspecting `commit_result` after a `sha_unverified`
+            # landing needs to see WHY `committed_sha` stayed `None` despite
+            # `commit_failed` also being `False`.
+            "sha_unverified": pipeline_result.sha_unverified,
             "diagnostics": pipeline_result.diagnostics,
         }
         if pipeline_result.commit_failed:
@@ -4289,6 +4311,24 @@ def close_out_and_stamp(
             origin_stub_result = _reach_post_commit_tail_stub_close(
                 root, plan_path_rel, pipeline_result.committed_sha
             )
+        elif pipeline_result.sha_unverified:
+            # W3: the commit landed (`commit_failed=False` above, so this is
+            # NOT the raise branch) but has no resolvable sha --
+            # `_reach_post_commit_tail_stub_close` needs a real sha to join
+            # the origin stub on (see that function's own docstring), so the
+            # reach is skipped rather than attempted-and-crashed. Recorded
+            # here, not silently dropped -- same labelled-skip posture as
+            # `wsc_tail`'s own W3 fix for the identical gap.
+            origin_stub_result = {
+                "acted": [],
+                "skipped": [
+                    "post_commit_tail:landed-sha-unverified -- commit "
+                    "landed but its sha could not be resolved, so the "
+                    "origin-stub-close reach (needs a real committed sha) "
+                    "was skipped"
+                ],
+                "failed": [],
+            }
     else:
         # Nothing of this op's own to commit -- skipped entirely rather
         # than attempted-and-caught (see "wrote_anything" above; this is

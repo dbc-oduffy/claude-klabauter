@@ -457,6 +457,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                      # PUSH_STATE_* below
         }
 
+        Conditionally present (only when a commit landed but its sha could
+        not be resolved -- W3, docs/plans/2026-08-08-a-landed-commit-
+        reported-as-failed.md; "committed" is still True on this path, "sha"
+        is still None, and it is pushed exactly as any other landed commit):
+          "sha_unverified": bool,      # always True when present
+          "diagnostics":    list[str], # names what happened: history
+                                        # changed, the sha is unresolvable
+
         `pushed`/`push_state` answer "is this commit published", NOT "did
         this op's own push step do the publishing" -- a concurrent
         `coordinator-auto-push` post-commit push that wins the race and
@@ -568,6 +576,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (sweep_reason,),
         }
 
+    # W3 dead-wire finding (docs/plans/2026-08-08-a-landed-commit-reported-
+    # as-failed.md, item 4 -- verified on disk 2026-08-08): `session_id` is
+    # UNREAD across the entirety of `run_commit_pipeline`'s body (grepped;
+    # its only other appearance in commit_pipeline.py is the parameter
+    # declaration itself) -- the absorbed-peer-claims trailer that used to
+    # consume it was removed by a later commit, per this plan's own text.
+    # NOT removed here: `session_id` is a required (no-default) keyword-only
+    # parameter of `run_commit_pipeline`, so dropping this mint would also
+    # require dropping the parameter in `commit_pipeline.py` -- explicitly
+    # out of this chunk's file scope (W1/W2 own that file). Left in place,
+    # both halves intact, pending a follow-up chunk scoped to that file.
     session_id = f"scoped-git-commit-{uuid.uuid4().hex}"
 
     result = run_commit_pipeline(
@@ -580,10 +599,38 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
 
     response: Dict[str, Any] = {
-        "committed": result.committed_sha is not None,
+        # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
+        # `committed_sha is not None` used to be the WHOLE predicate, so a
+        # commit that landed with an unresolvable sha (`PipelineResult.
+        # sha_unverified`) reported `committed: False` -- the exact "landed
+        # commit reported as failed" shape this op's own docstring promises
+        # never happens (`"committed": bool, # True iff a NEW commit landed
+        # this call`). `sha` stays `result.committed_sha` (still correctly
+        # `None` on this path -- there is genuinely no sha to report) --
+        # only `committed` widens to also cover "landed, sha unknown".
+        # Read as a bare attribute here, deliberately, even though the
+        # `sha_unverified` probe just below uses `getattr(..., False)`: THIS
+        # key must never silently answer `False`. A fallback here would
+        # re-report a landed commit as `committed: False` -- the exact defect
+        # the widening exists to remove -- the moment the field is renamed,
+        # whereas the probe below only decides whether to ATTACH an
+        # explanatory key. The partial `SimpleNamespace` doubles in this
+        # package (see `_declined_paths`' matching `getattr(result, "stage",
+        # None)`) reach that probe but never this constructor, so the strict
+        # read costs them nothing. Verified: relaxing this to `getattr` breaks
+        # nothing, tightening the probe below to a bare read breaks three.
+        "committed": result.committed_sha is not None or result.sha_unverified,
         "sha": result.committed_sha,
         "pushed": result.pushed,
     }
+    if getattr(result, "sha_unverified", False):
+        # Surfaced unconditionally (not folded into the failure-only
+        # `diagnostics` key below, which is gated on `not response[
+        # "committed"]` and therefore never reached on this path) -- a
+        # caller needs to know WHY `sha` is `None` on an otherwise-committed
+        # response, not just that it is.
+        response["sha_unverified"] = True
+        response["diagnostics"] = list(result.diagnostics)
 
     # A bare {"committed": False, "sha": None, "pushed": False} is returned for
     # THREE materially different outcomes -- the benign already-committed no-op,
@@ -780,6 +827,24 @@ def _classify_uncommitted(
         staging failure leaves `result.commit` None and is never reclassified);
       - only when nothing landed;
       - a git that cannot answer stays `commit_failed=True`.
+
+    Still earns its keep post-W3 (docs/plans/2026-08-08-a-landed-commit-
+    reported-as-failed.md): this probe answers a DIFFERENT question than
+    `PipelineResult.sha_unverified` does. `sha_unverified` covers "the commit
+    step's own verification could not resolve a sha for the commit it just
+    made" (`commit_pipeline.commit()`'s nonce-grep failing loud); this
+    function covers "a LATER, separate re-invocation over paths a PRIOR call
+    already committed" (the idempotency case, AC7) -- a genuine "nothing to
+    commit" `git commit` exit 1 that the pipeline correctly reports as
+    `commit_failed=True, landed=False`, which W1/W2 leave untouched by
+    design (see `commit_pipeline.CommitOutcome.landed`'s own docstring: the
+    ordinary no-op must stay `landed=False`). The two states are mutually
+    exclusive at the point this function runs -- `reclassifiable` requires
+    `result.committed_sha is None`, which also holds for the (now-tracked-
+    separately) `sha_unverified` state, but `_handler` never reaches this
+    function on that path: `response["committed"]` is already `True`
+    (widened for `sha_unverified` at this handler's own call site) before
+    `_classify_uncommitted` is ever invoked.
     """
     commit_failed = result.commit_failed
     diagnostics = list(result.diagnostics)

@@ -18,6 +18,13 @@ MID-BOOTSTRAP DEGRADATION
   skipped rather than failed, and they start being enforced the moment its
   contents arrive.
 
+TEST FIXTURES ARE NOT DOCUMENTATION
+  A `.md` file under a `tests/fixtures/` directory is golden expected-output,
+  not authored documentation — its relative links are synthetic paths the
+  fixture pins on purpose, and are expected to be dangling. Such files are
+  skipped entirely rather than link-checked; editing a golden to satisfy this
+  checker would corrupt the thing it pins.
+
 EXIT CONTRACT
   0 — every checkable relative link resolves (or there are no .md files)
   1 — at least one broken link
@@ -63,9 +70,21 @@ def present_top_level(root: pathlib.Path) -> set[str]:
     return present
 
 
+def is_test_fixture(rel: str) -> bool:
+    """True when `rel` sits under a `tests/fixtures/` directory anywhere in its path."""
+    parts = rel.split("/")
+    return any(
+        parts[i] == "tests" and parts[i + 1] == "fixtures"
+        for i in range(len(parts) - 1)
+    )
+
+
 def main() -> int:
     root = repo_root()
-    md_files = [p for p in repo_files(root) if p.endswith(".md")]
+    md_files = [
+        p for p in repo_files(root)
+        if p.endswith(".md") and not is_test_fixture(p)
+    ]
 
     if not md_files:
         print("Reference validation: no .md files in tree — nothing to validate.")

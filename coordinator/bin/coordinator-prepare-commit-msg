@@ -119,6 +119,12 @@ Behaviour:
 
 NEVER blocks a commit — always exits 0. `git interpret-trailers` is core git ≥ 1.8.
 
+Also emits ONE write-time advisory, unrelated to trailers and equally
+non-blocking: a subject shaped as a chunk-id RANGE (`C1-C5: ...`) is named on
+stderr with its enumerated form (`C1,C2,C3,C4,C5: ...`) attached — see
+`_warn_hyphen_range_subject`. Fires ahead of the session-id gate, adds no
+subprocess, and never rewrites the message.
+
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § git-hook-installers-port
 Prior spec: docs/plans/2026-06-15-brightline-session-scope-fix.md § C1
 Spec: cross-repo/inbox/2026-07-21-claude-klabauter-em-claude-klabauter-session-id-leak-fix-reply.md (residual B(i))
@@ -136,6 +142,18 @@ from pathlib import Path
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+#: Range-shaped chunk-id prefix on a commit subject — `C1-C5: <prose>`,
+#: `C1 - 5: <prose>`, `1-4: <prose>`. Deliberately requires DIGITS on BOTH
+#: sides of the hyphen, which is what keeps every real compound dash-tag in
+#: the corpus (`DOCTRINE-C7a:`, `RESIDUE-C9:`, `RESIDUE-C1..C7:`) out of it:
+#: their left component is prose, so the alternation never starts. The
+#: optional right-hand alpha prefix is captured so it can be checked equal to
+#: the left one (or absent) before firing — `C1-D4:` is two different spine
+#: families, not a range, and must not be reported as one.
+_HYPHEN_RANGE_SUBJECT_RE = re.compile(
+    r"^\s*(?P<lp>[A-Za-z]{0,10}?)(?P<ln>\d+)\s*-\s*(?P<rp>[A-Za-z]{0,10}?)(?P<rn>\d+)\s*:"
 )
 
 
@@ -546,10 +564,98 @@ def _has_trailer_line(commit_msg_file: str, prefix: str) -> bool:
     return False
 
 
+def _subject_line(commit_msg_file: str) -> str:
+    """First non-blank, non-comment line of ``commit_msg_file`` — git's own
+    notion of the subject. ``""`` on any read failure or an all-comment
+    message (a commit being aborted)."""
+    try:
+        with open(commit_msg_file, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                return stripped
+    except Exception:
+        return ""
+    return ""
+
+
+def _warn_hyphen_range_subject(commit_msg_file: str) -> None:
+    """Emit a write-time advisory (stderr, never a block) when the subject
+    about to be committed uses a hyphen RANGE where the chunk-id convention
+    takes an enumeration.
+
+    Landed 2026-08-08 on a example-store-repo-em FYI memo (`cross-repo/inbox/
+    2026-08-08-example-store-repo-em-close-out-and-stamp-chunk-id-separator.md`) —
+    a second independent hit, in a consumer repo, of
+    `state/lessons/2026-08-05-a-machine-parsed-commit-subject-is-an-api-and-
+    a-hyphen-is-not-a-separator.yaml`. `_extract_chunk_ids` (close_out_and_
+    stamp) recognizes `,`/`+`/`/` and deliberately NOT `-`, so `C1-C5:` takes
+    the single-id path, matches no spine id, and five shipped chunks read as
+    uncommitted at close-out — after which the honest repairs are a
+    hand-stamp or a rebase of already-landed commits.
+
+    The lesson's own discharge (`_hyphen_range_subject_diagnostics`) fires at
+    close-out, which is the last possible moment; this is the first one. The
+    sender's run is the evidence that read-time-only left a load-bearing gap:
+    a human reads the range effortlessly, so nothing else in the chain
+    disagrees with the author until the parser is consulted.
+
+    NEVER blocks, and never edits the message. This hook's whole contract is
+    fail-open (see this module's docstring and the `__main__` backstop), and
+    a subject-shape opinion is emphatically not the thing to break it for.
+    Rewriting `C1-C5:` into an enumeration is equally out of scope: this hook
+    cannot know whether `C2`/`C3`/`C4` exist on the plan's spine, and
+    inventing ids the author never wrote is the over-crediting
+    `_extract_chunk_ids` already refuses on the read side.
+
+    Negative-spec: do NOT widen `_HYPHEN_RANGE_SUBJECT_RE` to `..`/`through`/
+    `etc` shapes on suspicion. The corpus contains legitimate compound tags
+    carrying `..` inside a single id (`RESIDUE-C1..C7`); a diagnostic that
+    confidently names a wrong cause is worse than none, and the hyphen shape
+    is the one with two independent live incidents behind it.
+    """
+    subject = _subject_line(commit_msg_file)
+    if not subject:
+        return
+    match = _HYPHEN_RANGE_SUBJECT_RE.match(subject)
+    if not match:
+        return
+    left_prefix = match.group("lp")
+    right_prefix = match.group("rp")
+    if right_prefix and right_prefix.lower() != left_prefix.lower():
+        return
+    try:
+        first = int(match.group("ln"))
+        last = int(match.group("rn"))
+    except ValueError:
+        return
+    if last <= first:
+        return
+    enumerated = ",".join("%s%d" % (left_prefix, n) for n in range(first, last + 1))
+    sys.stderr.write(
+        "[coordinator] commit subject reads as a chunk-id RANGE: %r\n"
+        "              Write it enumerated instead: '%s: ...'\n"
+        "              Close-out chunk-id parsing recognizes only , + / as "
+        "separators (a hyphen is excluded on purpose — real ids carry one, "
+        "e.g. DOCTRINE-C7a), so a range registers as ONE unknown id and every "
+        "chunk in it reads as uncommitted at /execute-plan close-out.\n"
+        "              Advisory only — this commit is NOT blocked; amend the "
+        "subject now while it is free.\n"
+        % (match.group(0).rstrip(":").strip(), enumerated)
+    )
+
+
 def main(argv: list) -> int:
     commit_msg_file = argv[0] if argv else ""
     if not commit_msg_file or not os.path.isfile(commit_msg_file):
         return 0
+
+    # Ahead of the session-id gate on purpose: a range-shaped chunk-id
+    # subject is equally wrong on a commit this hook adds no trailer to, and
+    # the whole value of the advisory is that it lands BEFORE the commit
+    # does. Pure string work — no subprocess, nothing added to the hot path.
+    _warn_hyphen_range_subject(commit_msg_file)
 
     git_dir = _resolve_git_dir()
     session_id = _resolve_session_id(git_dir)

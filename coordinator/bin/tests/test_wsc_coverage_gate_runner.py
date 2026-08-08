@@ -1085,11 +1085,17 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
         lambda shas, cwd, cache: (frozenset(), frozenset(), None),
     )
 
-    def _all_foreign(sha_range, session_id):
-        sha = sha_range.split("^..", 1)[0]
-        return frozenset({sha})
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
+    # A3 (2026-08-08): `_partition_foreign_uncovered_shas` now resolves
+    # foreign/own from a real git window walk, not per-sha
+    # `_resolve_foreign_session_shas` calls — these fixture shas
+    # ("foreign1"/"foreign2") are not real commits, so the partition
+    # itself is stubbed directly here; its own git-window behaviour is
+    # covered by the dedicated `test_partition_foreign_uncovered_shas_*`
+    # tests.
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (list(shas), []),
+    )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 0
@@ -1186,11 +1192,15 @@ def test_brightline_gate_own_shas_in_uncovered_set_still_halts_even_with_foreign
         lambda shas, cwd, cache: (frozenset(), frozenset(), None),
     )
 
-    def _one_foreign(sha_range, session_id):
-        sha = sha_range.split("^..", 1)[0]
-        return frozenset({sha}) if sha == "foreignundischarged" else frozenset()
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    # A3: see the identical fixture-shape note above — stubbed directly,
+    # git-window mechanics covered elsewhere.
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (
+            [s for s in shas if s == "foreignundischarged"],
+            [s for s in shas if s != "foreignundischarged"],
+        ),
+    )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     err = capsys.readouterr().err
@@ -1218,11 +1228,15 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
         lambda shas, cwd, cache: (frozenset(), frozenset({"planown"}), None),
     )
 
-    def _one_foreign(sha_range, session_id):
-        sha = sha_range.split("^..", 1)[0]
-        return frozenset({sha}) if sha == "codeforeign" else frozenset()
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    # A3: see the identical fixture-shape note above — stubbed directly,
+    # git-window mechanics covered elsewhere.
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (
+            [s for s in shas if s == "codeforeign"],
+            [s for s in shas if s != "codeforeign"],
+        ),
+    )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 1
@@ -1254,11 +1268,15 @@ def test_brightline_gate_uncovered_denominator_and_verdict_unchanged_by_labeling
         lambda shas, cwd, cache: (frozenset(), frozenset({"planown"}), None),
     )
 
-    def _one_foreign(sha_range, session_id):
-        sha = sha_range.split("^..", 1)[0]
-        return frozenset({sha}) if sha == "codeforeign" else frozenset()
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    # A3: see the identical fixture-shape note above — stubbed directly,
+    # git-window mechanics covered elsewhere.
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (
+            [s for s in shas if s == "codeforeign"],
+            [s for s in shas if s != "codeforeign"],
+        ),
+    )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 1
@@ -2048,6 +2066,166 @@ def test_grep_attributed_session_shas_resolves_well_formed_uuid(monkeypatch, tem
     assert _mod._grep_attributed_session_shas(f"{base}..{tip}", session_id) == frozenset({tip})
 
 
+def test_partition_foreign_uncovered_shas_no_session_id_returns_all_own(monkeypatch, temp_git_repo):
+    """A3: `session_id=None` (closing session unresolvable) must degrade
+    every sha to `own` without spawning at all — this diagnostic must never
+    assert a commit is foreign when it cannot positively confirm who the
+    closing session even is."""
+    sha_a = _make_commit(temp_git_repo, "a.txt", "commit A")
+    calls = []
+    monkeypatch.setattr(
+        _mod, "_git_run_for_session_attribution",
+        lambda *a, **k: (calls.append(a) or (1, "", "should not spawn")),
+    )
+    assert _mod._partition_foreign_uncovered_shas([sha_a], None) == ([], [sha_a])
+    assert calls == []
+
+
+def test_partition_foreign_uncovered_shas_empty_shas_is_a_noop(monkeypatch):
+    """An empty `shas` list degrades to `([], [])` without resolving a repo
+    root or spawning."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: (_ for _ in ()).throw(AssertionError("must not be called")))
+    assert _mod._partition_foreign_uncovered_shas([], "own-sid") == ([], [])
+
+
+def test_partition_foreign_uncovered_shas_all_trailered_skips_grep_spawn(monkeypatch, temp_git_repo):
+    """A3's 2N-not-N fix: when every sha in the window carries an
+    unambiguous trailer (own or foreign), the grep leg must never spawn —
+    only ONE `git log` call total for the whole batch, not one per sha and
+    not a second grep call it does not need."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    own_sid = "deadbeef-1234-4abc-8def-0123456789ab"
+    other_sid = "aaaaaaaa-1234-4abc-8def-0123456789ab"
+    own = _commit_with_session_trailer(temp_git_repo, "own.txt", "own commit", own_sid)
+    other = _commit_with_session_trailer(temp_git_repo, "other.txt", "other commit", other_sid)
+
+    real_run = _mod._git_run_for_session_attribution
+    spawn_count = {"n": 0}
+
+    def _counted(*args, **kwargs):
+        spawn_count["n"] += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(_mod, "_git_run_for_session_attribution", _counted)
+
+    foreign, own_list = _mod._partition_foreign_uncovered_shas([own, other], own_sid)
+
+    assert foreign == [other]
+    assert own_list == [own]
+    assert spawn_count["n"] == 1
+
+
+def test_partition_foreign_uncovered_shas_untrailered_needs_grep_spawn(monkeypatch, temp_git_repo):
+    """An untrailered-but-grep-attributed commit needs the second (grep)
+    spawn to resolve — exactly 2 spawns total for the whole batch, matching
+    the "2 spawns per element" pre-fix measurement collapsed to "2 spawns
+    total" post-fix."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    own_sid = "deadbeef-1234-4abc-8def-0123456789ab"
+    base = _make_commit(temp_git_repo, "base.txt", "base")
+    grep_only = _make_commit(temp_git_repo, "grep_only.txt", f"Session-Id: {own_sid}\nfooter line")
+    untrailered_foreign = _make_commit(temp_git_repo, "untrailered.txt", "no session line at all")
+
+    real_run = _mod._git_run_for_session_attribution
+    spawn_count = {"n": 0}
+
+    def _counted(*args, **kwargs):
+        spawn_count["n"] += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(_mod, "_git_run_for_session_attribution", _counted)
+
+    foreign, own_list = _mod._partition_foreign_uncovered_shas(
+        [grep_only, untrailered_foreign], own_sid,
+    )
+
+    assert grep_only in own_list
+    assert untrailered_foreign in foreign
+    assert spawn_count["n"] == 2
+    _ = base  # anchors the range git resolves from; not asserted on directly
+
+
+def test_partition_foreign_uncovered_shas_merge_commit_is_foreign(monkeypatch, temp_git_repo):
+    """A merge commit is unconditionally foreign, regardless of any
+    Session-Id trailer it carries (fail-closed P2 posture,
+    `chain_attribution.foreign_shas_from_window`)."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    own_sid = "deadbeef-1234-4abc-8def-0123456789ab"
+    base = _make_commit(temp_git_repo, "base.txt", "base")
+    _git("checkout", "-b", "side", cwd=temp_git_repo)
+    side = _make_commit(temp_git_repo, "side.txt", "side commit")
+    _git("checkout", "-", cwd=temp_git_repo)
+    other = _commit_with_session_trailer(temp_git_repo, "other.txt", "other commit", own_sid)
+    _git("merge", "--no-ff", "-m", f"merge\n\nSession-Id: {own_sid}", side, cwd=temp_git_repo)
+    merge_sha = _git("rev-parse", "HEAD", cwd=temp_git_repo)
+
+    foreign, _own_list = _mod._partition_foreign_uncovered_shas([merge_sha], own_sid)
+
+    assert foreign == [merge_sha]
+    _ = base, other  # anchors for a realistic repo shape
+
+
+def test_partition_foreign_uncovered_shas_repo_root_unresolvable_degrades_whole_batch(monkeypatch):
+    """An unresolvable repo root must degrade the WHOLE batch to `own`,
+    never per-sha — this is the A3 posture change from the prior per-sha
+    degrade."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: None)
+    assert _mod._partition_foreign_uncovered_shas(["a" * 40, "b" * 40], "own-sid") == (
+        [], ["a" * 40, "b" * 40],
+    )
+
+
+def test_partition_foreign_uncovered_shas_window_build_failure_degrades_whole_batch(monkeypatch, temp_git_repo):
+    """A failed window build (non-zero `git log` rc, or an unresolvable
+    root inside the helper) must degrade the WHOLE batch to `own` — never a
+    false foreign claim on the shas the window walk never confirmed."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    monkeypatch.setattr(_mod, "_resolve_uncovered_commit_attribution_window", lambda shas, repo_root: None)
+    shas = ["a" * 40, "b" * 40]
+    assert _mod._partition_foreign_uncovered_shas(shas, "own-sid") == ([], shas)
+
+
+def test_partition_foreign_uncovered_shas_sha_absent_from_window_degrades_whole_batch(monkeypatch, temp_git_repo):
+    """A sha named in `shas` but not returned by the window walk is a
+    coverage-gap in the window itself — absence must never be read as
+    'untrailered' (§ Anti-scope 25 / § Anti-scope 8's three-way
+    distinction). The WHOLE batch degrades to `own`, not just the missing
+    sha."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    own_sid = "deadbeef-1234-4abc-8def-0123456789ab"
+    own = _commit_with_session_trailer(temp_git_repo, "own.txt", "own commit", own_sid)
+    missing_sha = "c" * 40
+
+    real_window = _mod._resolve_uncovered_commit_attribution_window
+
+    def _incomplete(shas, repo_root):
+        window = real_window(shas, repo_root)
+        window.pop(missing_sha, None)
+        return window
+
+    monkeypatch.setattr(_mod, "_resolve_uncovered_commit_attribution_window", _incomplete)
+
+    result = _mod._partition_foreign_uncovered_shas([own, missing_sha], own_sid)
+    assert result == ([], [own, missing_sha])
+
+
+def test_partition_foreign_uncovered_shas_grep_failure_degrades_whole_batch(monkeypatch, temp_git_repo):
+    """A grep-leg failure (non-zero rc), when the grep leg was actually
+    needed, must degrade the WHOLE batch to `own` — not just the
+    untrailered sha the grep leg would have resolved."""
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    own_sid = "deadbeef-1234-4abc-8def-0123456789ab"
+    base = _make_commit(temp_git_repo, "base.txt", "base")
+    trailered = _commit_with_session_trailer(temp_git_repo, "trailered.txt", "own commit", own_sid)
+    untrailered = _make_commit(temp_git_repo, "untrailered.txt", "no trailer at all")
+
+    monkeypatch.setattr(_mod, "_resolve_uncovered_grep_attribution", lambda shas, sid, repo_root: None)
+
+    result = _mod._partition_foreign_uncovered_shas([trailered, untrailered], own_sid)
+    assert result == ([], [trailered, untrailered])
+    _ = base
+
+
 def test_resolve_vouched_shas_unreadable_store_falls_back_to_narrowing(monkeypatch):
     """`_resolve_vouched_shas` (the `wsc-coverage-gate-runner.py` caller
     that resolves the `vouched_shas` injected argument) degrades to an
@@ -2299,10 +2477,12 @@ def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
         lambda shas, cwd, cache: (frozenset(), frozenset(chain_code_shas), None),
     )
 
-    def _all_foreign(sha_range, session_id):
-        return frozenset(chain_code_shas)
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
+    # A3: see the identical fixture-shape note above — stubbed directly,
+    # git-window mechanics covered elsewhere.
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (list(shas), []),
+    )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
 
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])

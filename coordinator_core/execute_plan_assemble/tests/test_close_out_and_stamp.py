@@ -667,6 +667,80 @@ class TestPostCommitTailStubCloseReach:
         assert calls == []
         assert result["origin_stub_close"] == {"acted": [], "skipped": [], "failed": []}
 
+    def test_landed_sha_unverified_does_not_raise_and_records_skip(
+        self, tmp_path, monkeypatch
+    ):
+        """W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
+        a commit that LANDED but whose sha could not be resolved
+        (`commit_pipeline.PipelineResult.sha_unverified=True`,
+        `commit_failed=False`, `committed_sha=None`) must NOT hit the
+        `if pipeline_result.commit_failed:` raise branch -- that would
+        report durable history as a failure, the exact bug this plan
+        closes. `origin_stub_close` must record the reach was skipped
+        (needs a real sha), not silently stay at its empty default and not
+        crash attempting the reach with `committed_sha=None`.
+
+        Mechanism check (red-proof): reverting the `elif pipeline_result.
+        sha_unverified:` branch back out (so only `if pipeline_result.
+        committed_sha:` remains) makes `origin_stub_close` fall through to
+        the bare `{"acted": [], "skipped": [], "failed": []}` default
+        instead of naming the skip reason -- this test's `skipped`
+        assertion then fails. Verified by hand: temporarily removing that
+        elif and re-running reproduces exactly that failure (an empty
+        `skipped` list); restored immediately after.
+        """
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        from types import SimpleNamespace
+
+        fake_result = SimpleNamespace(
+            committed_sha=None,
+            pushed=None,
+            commit_failed=False,
+            sha_unverified=True,
+            diagnostics=[
+                "commit: landed but sha verification failed -- HEAD unresolvable",
+            ],
+        )
+        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
+        # Force the REAL `run_commit_pipeline` call site (rather than the
+        # DR-272 `_stage_paths_committed_already` shortcut, which reports
+        # the stamp step's OWN already-landed HEAD sha and never calls
+        # `run_commit_pipeline` at all -- see that function's own docstring)
+        # so this test actually exercises the branch under test.
+        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
+
+        calls: list[dict] = []
+
+        async def _fake_close_origin_stub_handler(params: dict, common_dir: Path) -> dict:
+            calls.append(params)
+            return {"exit_code": 0, "closed": [], "skipped": []}
+
+        monkeypatch.setattr(
+            coas, "_close_origin_stub_handler", _fake_close_origin_stub_handler
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        # Never the raise/EXIT_BUSINESS_FAIL branch -- the commit landed.
+        assert exit_code == coas.EXIT_OK
+        assert "error" not in result
+        assert result["commit"]["committed_sha"] is None
+        assert result["commit"]["commit_failed"] is False
+        assert result["commit"]["sha_unverified"] is True
+
+        # The stub-close reach was never attempted (no real sha to join on)
+        # -- but the gap is NAMED, not a silent empty default.
+        assert calls == []
+        assert result["origin_stub_close"]["acted"] == []
+        assert result["origin_stub_close"]["failed"] == []
+        assert len(result["origin_stub_close"]["skipped"]) == 1
+        assert "sha-unverified" in result["origin_stub_close"]["skipped"][0]
+
 
 class TestCloseOutAndStampContinued:
     """Continuation of `TestCloseOutAndStamp` above -- split into a second

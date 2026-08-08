@@ -313,13 +313,38 @@ def _generic_runner_param(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     return None
 
 
-def _build_func_index(files: list[tuple[str, pathlib.Path]]) -> _FuncIndex:
-    """One pass over the scoped corpus, building the repo-wide name index routes b/c/d/e
-    resolve against. Single-hop only -- no fixpoint, no recursion -- so there is no cycle for
-    the re-entrancy sentinel above to guard beyond the self-scan check already applied to
-    `files`."""
-    index = _FuncIndex()
+@dataclasses.dataclass(frozen=True)
+class _FileRecord:
+    """One file's read+parse+spawn-detect result, computed exactly ONCE and shared between
+    `_build_func_index` and `find_unbatched_per_item_git_spawns`'s own violation-detection pass
+    below. Pure memoization -- see `_load_file_records`'s docstring for why this exists; it
+    changes cost, never output."""
 
+    relpath: str
+    file_path: pathlib.Path
+    text: str
+    tree: ast.Module
+    spawn_sites: list
+
+
+def _load_file_records(files: list[tuple[str, pathlib.Path]]) -> list[_FileRecord]:
+    """Reads, parses (`ast.parse`), and spawn-detects (`sites_in_source`, which does its own
+    internal `ast.parse`) each file in `files` exactly ONCE.
+
+    Perf note (G3, 2026-08-08): the prior implementation had `_build_func_index` and
+    `find_unbatched_per_item_git_spawns`'s own loop each independently re-read, re-`ast.parse`,
+    and re-run `sites_in_source` (itself another `ast.parse`) over every file in the ~1287-file
+    scoped corpus -- four parses per file, two full read+parse+detect passes, for identical
+    results both times. Measured repo-wide: `_build_func_index` alone cost ~8.3s and the
+    violation-detection loop (re-reading/re-parsing/re-detecting the same files) cost a further
+    ~12.5s on top, out of a ~20-22s total. Sharing one `_FileRecord` list between both passes
+    removes that duplication -- pure memoization, byte-identical output (same files, same
+    order, same read/parse/detect results), never a change in what either pass computes.
+
+    A file that fails to read, parse, or spawn-detect is skipped here exactly as it was skipped
+    independently in each prior pass (both `_build_func_index` and the violation-detection loop
+    applied the identical read/parse/detect try-except triplet before this change)."""
+    records: list[_FileRecord] = []
     for relpath, file_path in files:
         try:
             text = file_path.read_text(encoding="utf-8")
@@ -333,6 +358,24 @@ def _build_func_index(files: list[tuple[str, pathlib.Path]]) -> _FuncIndex:
             spawn_sites = sites_in_source(text, relpath)
         except SpawnParseError:
             continue
+        records.append(_FileRecord(relpath, file_path, text, tree, spawn_sites))
+    return records
+
+
+def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
+    """One pass over the scoped corpus, building the repo-wide name index routes b/c/d/e
+    resolve against. Single-hop only -- no fixpoint, no recursion -- so there is no cycle for
+    the re-entrancy sentinel above to guard beyond the self-scan check already applied to the
+    files `records` was built from.
+
+    Consumes pre-computed `_FileRecord`s (G3) rather than re-reading/re-parsing/re-detecting
+    each file itself -- see `_load_file_records`'s docstring."""
+    index = _FuncIndex()
+
+    for record in records:
+        relpath = record.relpath
+        tree = record.tree
+        spawn_sites = record.spawn_sites
 
         git_enclosing = {s.enclosing for s in spawn_sites if s.argv0 == _GIT_ARGV0}
         any_enclosing = {s.enclosing for s in spawn_sites}
@@ -562,24 +605,16 @@ def find_unbatched_per_item_git_spawns(
     below does.
     """
     files = _discover_scope_files(roots)
+    records = _load_file_records(files)
     if index is None:
-        index = _build_func_index(files)
+        index = _build_func_index(records)
 
     violations: list[GitAmpSite] = []
 
-    for relpath, file_path in files:
-        try:
-            text = file_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        try:
-            tree = ast.parse(text, filename=str(file_path))
-        except SyntaxError:
-            continue
-        try:
-            spawn_sites = sites_in_source(text, relpath)
-        except SpawnParseError:
-            continue
+    for record in records:
+        relpath = record.relpath
+        tree = record.tree
+        spawn_sites = record.spawn_sites
 
         git_linenos = _git_argv0_linenos(spawn_sites)
         literal_names = _module_level_literal_names(tree)

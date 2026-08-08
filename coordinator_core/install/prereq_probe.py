@@ -471,7 +471,7 @@ def probe_clone_auth() -> str:  # noqa: C901 — faithful port of a genuinely br
                 ["git", "credential", "fill"],
                 input_text=f"protocol=https\nhost={gcm_host}\n\n",
             )
-            if fill is not None and "password=" in (fill.stdout or ""):
+            if fill is not None and "password=" in (fill.stdout or ""):  # noqa: secrets
                 return emit_line(
                     "clone_auth", "pass", "advisory",
                     f"Git credential manager configured for {gcm_host} (git credential fill: credentials found)", "",

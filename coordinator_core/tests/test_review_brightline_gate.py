@@ -939,3 +939,48 @@ def test_compute_chain_oracle_mixed_commit_deweights_only_planning_file(
     # c.py: 2 insertions at full weight = 2.
     assert result["chain_loc"] == 4
     assert result["chain_surfaces"] == {"doctrine", "python"}
+
+
+def test_compute_chain_oracle_shares_one_dag_context_across_batons(
+    tmp_path, monkeypatch
+):
+    """C8's win is ONE `_DagChainSetContext` for the whole baton loop, not one
+    per baton.
+
+    Pinned by object identity rather than by call count, because the
+    per-baton-construction regression is invisible to every other test in this
+    file: they monkeypatch `_derive_dag_chain_set` wholesale, so a context
+    rebuilt on each iteration still arrives as a `shared_context=` kwarg and
+    still satisfies them. That is precisely the shape the plan's Anti-scope 23
+    names -- a caching change that lands green and saves nothing, because the
+    thing meant to be reused is reconstructed at the call site.
+    """
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    seen_contexts = []
+
+    def _recording(*args, **kwargs):
+        seen_contexts.append(kwargs.get("shared_context"))
+        return _DagChainResult(shas=[sha])
+
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", _recording)
+    monkeypatch.chdir(repo)
+
+    owned = [(repo / "one.md", {}), (repo / "two.md", {}), (repo / "three.md", {})]
+    rbg._compute_chain_oracle(repo, owned, "closing-sid")
+
+    assert len(seen_contexts) == len(owned), (
+        "expected one _derive_dag_chain_set call per owned baton"
+    )
+    assert all(ctx is not None for ctx in seen_contexts), (
+        "every call must receive a shared_context -- a bare call re-derives the "
+        "whole DAG for that baton"
+    )
+    assert len({id(ctx) for ctx in seen_contexts}) == 1, (
+        "all batons must share ONE context object; distinct objects mean the "
+        "context is being rebuilt per baton and nothing is amortised"
+    )
