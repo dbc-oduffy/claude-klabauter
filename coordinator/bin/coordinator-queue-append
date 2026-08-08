@@ -376,9 +376,9 @@ def _resolve_session_id() -> str:
     Spec backlink: docs/plans/2026-06-26-queue-schema-unify.md § C2 STEP 1
     """
     try:
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter and claude-klabauter not in sys.path:
-            sys.path.insert(0, claude-klabauter)
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root and claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
         from coordinator_core.session.core import resolve_session_id
 
         return resolve_session_id()
@@ -586,12 +586,12 @@ def _output_path(
         # unregistered and CLAUDE_KLABAUTER_ROOT env var is not set — legacy_fn() catches and
         # degrades gracefully (WARN + skip, exit 0) per the graceful-degradation
         # contract, mirroring the meta-repo per-project branch below.
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
                 "repos.claude_klabauter not set; cannot route central-scope write to claude-klabauter"
             )
-        base = os.path.join(claude-klabauter, output_dir)
+        base = os.path.join(claude_klabauter_root, output_dir)
     else:
         # Per-repo state: use git root, not os.getcwd() (L7 fix — cwd can be a subdir,
         # giving a wrong state path and silently writing to the wrong location).
@@ -601,12 +601,12 @@ def _output_path(
         home = _claude_home()
         if git_root and _same_path(git_root, home):
             # Meta-repo cwd → route to claude-klabauter via seam.
-            claude-klabauter = _claude_klabauter_root()
-            if claude-klabauter is None:
+            claude_klabauter_root = _claude_klabauter_root()
+            if claude_klabauter_root is None:
                 raise _ClaudeKlabauterUnresolvable(
                     "repos.claude_klabauter not set; cannot route meta-repo per-repo state to claude-klabauter"
                 )
-            base = os.path.join(claude-klabauter, output_dir)
+            base = os.path.join(claude_klabauter_root, output_dir)
         elif git_root:
             # Sibling repo → per-repo state stays in the repo itself.
             base = os.path.join(git_root, output_dir)

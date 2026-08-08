@@ -266,10 +266,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _entry_path_for(family: str, entry_path: str) -> str:
-    """Expand a bare filename against `family`; leave an already-qualified path alone."""
+    """Expand a bare filename against `family`; leave an already-qualified path alone.
+
+    Emitted as a POSIX-separated string regardless of platform -- the
+    downstream `handoff.scaffold_from_queue` param contract carries
+    repo-relative identifiers, not native filesystem paths, and Windows'
+    `Path.__str__()` yields backslashes that would otherwise leak a
+    host-specific separator into it.
+    """
     if "/" in entry_path or "\\" in entry_path:
-        return entry_path
-    return str(Path("state") / family / entry_path)
+        # Review: code-reviewer P2, EM override — the bare-filename branch
+        # below was POSIX-normalized but this already-qualified branch still
+        # returned a caller-supplied path verbatim, backslashes included.
+        # Normalize here too so both branches honour the same
+        # repo-relative-identifier contract that `handoff.scaffold_from_queue`
+        # expects.
+        return entry_path.replace("\\", "/")
+    return "/".join(("state", family, entry_path))
 
 
 def _load_cluster_json(cluster_json: str) -> dict:

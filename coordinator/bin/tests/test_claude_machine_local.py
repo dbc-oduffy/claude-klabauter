@@ -306,11 +306,18 @@ def test_settings_home_default_falls_back_to_home(monkeypatch):
 
 def test_reader_invocation_composes_settings_home_impl_path(monkeypatch):
     """_reader_invocation composes <settings-home>/bin/_machine_local.py under
-    sys.executable — never the bare-name `machine-local` wrapper."""
+    sys.executable — never the bare-name `machine-local` wrapper.
+
+    _reader_invocation composes the path via ``pathlib.Path`` (subprocess argv,
+    legitimately OS-native), which fully normalizes the POSIX-literal env-var
+    value's separators too -- unlike ``os.path.join``, which leaves the raw
+    prefix untouched. Compute the expectation the same way the implementation
+    does rather than pinning a partially-POSIX literal.
+    """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", "/tmp/probe-settings-home")
     mod = _fresh_module()
     invocation = mod._reader_invocation()
     assert invocation[0] == sys.executable
-    assert invocation[1] == os.path.join(
-        "/tmp/probe-settings-home", "bin", "_machine_local.py"
+    assert invocation[1] == str(
+        Path("/tmp/probe-settings-home") / "bin" / "_machine_local.py"
     )

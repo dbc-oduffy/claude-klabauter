@@ -124,7 +124,7 @@ def _run_gate(monkeypatch, returncode, stdout, stderr, handoff="state/handoffs/x
     monkeypatch.setattr(
         _mod,
         "_run_review_coverage_gate",
-        lambda from_handoff: (returncode, stdout, stderr),
+        lambda from_handoff, mint_chain_waivers=True: (returncode, stdout, stderr),
     )
     return _mod.main(["coverage-gate", "--from-handoff", handoff])
 
@@ -239,7 +239,8 @@ def _run_gate_with_trail_fixture(
     handoff="state/handoffs/x.md",
 ):
     monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate", lambda from_handoff: (0, verdict_line, "")
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (0, verdict_line, ""),
     )
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: records)
     monkeypatch.setattr(_mod, "_resolve_chain_tip_sha", lambda from_handoff: chain_tip_sha)
@@ -347,7 +348,7 @@ def test_coverage_gate_disbelief_check_never_fatal_on_git_failure(monkeypatch, c
     monkeypatch.setattr(
         _mod,
         "_run_review_coverage_gate",
-        lambda from_handoff: (
+        lambda from_handoff, mint_chain_waivers=True: (
             0,
             "range=dag:x chain_commits=3 covered=3 uncovered=0 VERDICT=COVERED\n",
             "",
@@ -597,7 +598,7 @@ def test_coverage_gate_uses_chain_own_tip_end_to_end(monkeypatch, temp_git_repo,
     monkeypatch.setattr(
         _mod,
         "_run_review_coverage_gate",
-        lambda from_handoff: (
+        lambda from_handoff, mint_chain_waivers=True: (
             0,
             "range=dag:x chain_commits=1 covered=1 uncovered=0 VERDICT=COVERED\n",
             "",
@@ -760,7 +761,7 @@ def _patch_brightline_persist_seam(monkeypatch, tmp_path, session_id="test-sid-b
     # makes). Stub it to a no-op here — these tests exercise persistence and
     # discharge, not minting; a real subprocess spawn would hit this process's
     # actual cwd/repo, not the isolated `tmp_path` these tests already use.
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: session_id)
     # C13: these persistence-focused tests are not exercising the AC20
@@ -813,7 +814,7 @@ def test_brightline_gate_persist_failure_is_non_fatal_and_loud(monkeypatch, tmp_
 
 def test_brightline_gate_persist_skipped_loudly_when_session_id_unresolvable(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: None)
     _patch_chain_scoping(monkeypatch)
@@ -877,7 +878,7 @@ def _patch_brightline_no_persist_seam(monkeypatch, tmp_path, stdout=_TIER_B_STDO
     through the trail-record fixture they supply, not through git-resolution
     noise."""
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, stdout, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-c13")
     _patch_chain_scoping(monkeypatch)
@@ -1069,9 +1070,12 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
     """An uncovered set that is entirely foreign to the closing session
     (every commit authored by a predecessor session — the sibling
     deadlock's actual shape) must narrate the unrecordable-by-construction
-    case and name BOTH sanctioned exits, and must NOT print the ordinary
-    REMEDY line — no per-commit write this session could make would ever
-    discharge them."""
+    case, must NOT print the ordinary REMEDY line — no per-commit write
+    this session could make would ever discharge them — and, with no
+    `own_shas` entry to halt on, communicates rather than halting (exit 0).
+    The retired vouch-waiver sanctioned exit must be gone from the message
+    entirely, while the rest of the uncovered-set diagnostic (the header,
+    the code/foreign split, and the basis line) survives its removal."""
     chain_code_shas = ["foreign1", "foreign2"]
     _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
     monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
@@ -1088,12 +1092,115 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
     monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 1
+    assert rc == 0
     err = capsys.readouterr().err
     assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
     assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
-    assert "Sanctioned exits: a PM vouch waiver, or /handoff." in err
+    assert "Sanctioned exits: a PM vouch waiver, or /handoff." not in err
     assert "REMEDY: record a per-commit" not in err
+    assert 'basis: "' in err
+
+
+# ---------------------------------------------------------------------------
+# AC1 / AC13 (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md, C4):
+# the vouch-free posture's positive and negative pins. AC1 uses REAL
+# review-trail records written by the real writer (`write_review_trail_
+# entry`) and read back through the real `_load_trail_records` — the
+# original defect this plan corrects was in a read path, so a mocked read
+# proves nothing. AC13 pins the one HALT case C1 deliberately did not
+# touch: an `own_shas` entry in the undischarged uncovered set still halts,
+# whether or not `foreign_shas` is also populated.
+# ---------------------------------------------------------------------------
+
+
+def test_brightline_gate_own_commit_covered_foreign_ancestor_uncovered_caps_cleanly(
+    monkeypatch, temp_git_repo, capsys,
+):
+    """AC1: a chain whose own commit carries a real `ok` review-trail
+    verdict (written by the real writer, read back by the real
+    `_load_trail_records`, never mocked) and whose only remaining uncovered
+    commit is a foreign chain ancestor — `own_shas` is therefore empty —
+    reaches a clean exit 0 with no HALT, the exact shape the vouch-free
+    posture must still cap."""
+    from coordinator_core.ops.review_trail_write import write_review_trail_entry
+
+    foreign_sha = _make_commit(temp_git_repo, "ancestor.txt", "foreign predecessor commit")
+    own_sha = _make_commit(temp_git_repo, "own.txt", "own reviewed commit")
+
+    state_root = temp_git_repo / "state"
+    monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(state_root))
+    monkeypatch.setenv("COORDINATOR_ROOT", str(state_root))
+
+    write_review_trail_entry(
+        sha_range=f"{foreign_sha}..{own_sha}",
+        reviewer="code-reviewer",
+        scope="chain",
+        verdict="ok",
+        diff_loc=5,
+        scope_kind="diff",
+        session_id="own-sid",
+    )
+
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (0, "", ""),
+    )
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "own-sid")
+    chain_code_shas = [foreign_sha, own_sha]
+    _patch_chain_scoping(
+        monkeypatch,
+        chain_code_shas=chain_code_shas,
+        range_shas_map={f"{foreign_sha}..{own_sha}": {own_sha}},
+    )
+    monkeypatch.setattr(
+        _mod, "_resolve_foreign_session_shas",
+        lambda sha_range, session_id: frozenset({foreign_sha}) if sha_range.startswith(foreign_sha) else frozenset(),
+    )
+    # `_load_trail_records` is deliberately left un-mocked — this test's
+    # whole point is exercising the real disk read.
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "HALT:" not in err
+    assert "NOTE: brightline verdict=PARTITION-MANDATORY" in err
+    assert "UNCOVERED: 1 of 2 chain code commit(s)" in err
+
+
+def test_brightline_gate_own_shas_in_uncovered_set_still_halts_even_with_foreign(
+    monkeypatch, tmp_path, capsys,
+):
+    """AC13: a chain whose undischarged uncovered set contains BOTH an
+    `own_shas` entry (the closing session's own code commit with no
+    discharging verdict) and a foreign-session entry still prints HALT and
+    exits 1 — the one case C1 deliberately did not touch, unaffected by the
+    vouch-waiver text's removal."""
+    chain_code_shas = ["ownundischarged", "foreignundischarged"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(), None),
+    )
+
+    def _one_foreign(sha_range, session_id):
+        sha = sha_range.split("^..", 1)[0]
+        return frozenset({sha}) if sha == "foreignundischarged" else frozenset()
+
+    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _one_foreign)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 1, err
+    assert "HALT: brightline verdict=PARTITION-MANDATORY" in err
+    assert "the review this chain mandates has not been run" in err
+    assert (
+        "REMEDY: record a per-commit review-trail verdict for each of the "
+        "remaining 1"
+    ) in err
 
 
 def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp_path, capsys):
@@ -1944,107 +2051,39 @@ def test_grep_attributed_session_shas_resolves_well_formed_uuid(monkeypatch, tem
 def test_resolve_vouched_shas_unreadable_store_falls_back_to_narrowing(monkeypatch):
     """`_resolve_vouched_shas` (the `wsc-coverage-gate-runner.py` caller
     that resolves the `vouched_shas` injected argument) degrades to an
-    empty set — never crediting — when either underlying store cannot be
-    read. A missing/unreadable vouch store must never manufacture
-    coverage."""
+    empty set — never crediting — when the underlying chain-ancestry-
+    waiver store cannot be read. A missing/unreadable waiver store must
+    never manufacture coverage."""
     _mod._VOUCHED_SHAS_CACHE.clear()
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/no/such/repo")
 
     def _raises(*args, **kwargs):
-        raise OSError("vouch store unreadable")
+        raise OSError("waiver store unreadable")
 
-    monkeypatch.setattr(_mod, "_pm_vouched_waiver_shas", _raises)
     monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", _raises)
 
     assert _mod._resolve_vouched_shas("own-sid") == frozenset()
     _mod._VOUCHED_SHAS_CACHE.clear()
 
 
-def test_resolve_vouched_shas_credits_live_grant_for_plan_scope_foreign_sha(monkeypatch):
-    """2026-08-07 fix regression pin: `scope_kind == "plan"` writes never run
-    `review_trail_write._guard_foreign_session_range` (gated to `scope_kind
-    == "diff"` only), so no `pm-vouches/<sha>.json` waiver is ever minted
-    for a plan-scoped foreign commit even under a live PM grant.
-    `_resolve_vouched_shas` must still credit it by consulting the live
-    grant directly (`review_trail_vouch.check_review_trail_vouch`), scoped
-    to the closing session and the caller-bound candidate set — this is the
-    mechanism `chain_partition_uncovered_shas`'s `functools.partial`-bound
-    `vouched_shas` argument now always threads through."""
+def test_resolve_vouched_shas_credits_gate_minted_chain_ancestry_waiver(monkeypatch):
+    """Positive leg: `_resolve_vouched_shas` credits exactly the shas
+    `_chain_ancestry_waived_shas` names for the given `session_id` — the
+    gate-minted chain-ancestry waiver store this resolver wraps."""
     _mod._VOUCHED_SHAS_CACHE.clear()
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/repo")
-    monkeypatch.setattr(_mod, "_pm_vouched_waiver_shas", lambda repo_root: frozenset())
-    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", lambda repo_root, sid: frozenset())
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "closing-sid")
 
-    vouched_sha = "1" * 40
-    unnamed_sha = "2" * 40
+    waived_sha = "1" * 40
 
-    def _check(shas, cwd=None, session_id=None):
-        assert session_id == "closing-sid"
-        granted = frozenset({vouched_sha})
-        return (frozenset(shas) & granted, {"note": "test grant"})
+    def _waived(repo_root, session_id):
+        assert repo_root == "/repo"
+        assert session_id == "own-sid"
+        return frozenset({waived_sha})
 
-    monkeypatch.setattr(_mod.review_trail_vouch, "check_review_trail_vouch", _check)
+    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", _waived)
 
-    result = _mod._resolve_vouched_shas(
-        "foreign-writer-sid",
-        live_vouch_candidate_shas=frozenset({vouched_sha, unnamed_sha}),
-    )
-    assert result == frozenset({vouched_sha})
-    _mod._VOUCHED_SHAS_CACHE.clear()
-
-
-def test_resolve_vouched_shas_live_grant_never_widens_beyond_named_shas(monkeypatch):
-    """Hard constraint pin: a live grant naming SHA X must not discharge a
-    different SHA Y merely because Y is in the candidate set — the
-    resolver's job is narrowing an already-computed `foreign` set, never
-    minting coverage for a sha the grant never named."""
-    _mod._VOUCHED_SHAS_CACHE.clear()
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/repo")
-    monkeypatch.setattr(_mod, "_pm_vouched_waiver_shas", lambda repo_root: frozenset())
-    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", lambda repo_root, sid: frozenset())
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "closing-sid")
-
-    named_sha = "3" * 40
-    other_sha = "4" * 40
-
-    def _check(shas, cwd=None, session_id=None):
-        return (frozenset(shas) & frozenset({named_sha}), {"note": "narrow grant"})
-
-    monkeypatch.setattr(_mod.review_trail_vouch, "check_review_trail_vouch", _check)
-
-    result = _mod._resolve_vouched_shas(
-        "foreign-writer-sid", live_vouch_candidate_shas=frozenset({named_sha, other_sha}),
-    )
-    assert result == frozenset({named_sha})
-    assert other_sha not in result
-    _mod._VOUCHED_SHAS_CACHE.clear()
-
-
-def test_resolve_vouched_shas_no_live_grant_leaves_plan_scope_foreign_sha_unvouched(monkeypatch):
-    """Guard-still-works pin: an UNVOUCHED foreign sha (no live grant names
-    it, `check_review_trail_vouch` returns an empty subset — the
-    non-liveness / non-matching-session / not-in-`shas`-list case) must not
-    discharge, whatever `scope_kind` the record carries. The vouch stays
-    REQUIRED for a foreign commit; this fix makes an already-granted vouch
-    effective, it does not remove the need for one."""
-    _mod._VOUCHED_SHAS_CACHE.clear()
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/repo")
-    monkeypatch.setattr(_mod, "_pm_vouched_waiver_shas", lambda repo_root: frozenset())
-    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", lambda repo_root, sid: frozenset())
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "closing-sid")
-
-    unvouched_sha = "5" * 40
-
-    def _check(shas, cwd=None, session_id=None):
-        return (frozenset(), None)
-
-    monkeypatch.setattr(_mod.review_trail_vouch, "check_review_trail_vouch", _check)
-
-    result = _mod._resolve_vouched_shas(
-        "foreign-writer-sid", live_vouch_candidate_shas=frozenset({unvouched_sha}),
-    )
-    assert result == frozenset()
+    result = _mod._resolve_vouched_shas("own-sid")
+    assert result == frozenset({waived_sha})
     _mod._VOUCHED_SHAS_CACHE.clear()
 
 
@@ -2217,7 +2256,7 @@ def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkey
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
     monkeypatch.setattr(
         _mod, "_run_review_coverage_gate",
-        lambda from_handoff: (calls.append(from_handoff), (0, "", ""))[1],
+        lambda from_handoff, mint_chain_waivers=True: (calls.append(from_handoff), (0, "", ""))[1],
     )
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
@@ -2234,49 +2273,23 @@ def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkey
     )
 
 
-def test_foreign_shas_halt_message_names_coverage_gate_remedy(monkeypatch, tmp_path, capsys):
-    """AC (candidate fix #1): when uncovered commits are foreign to the
-    closing session, the HALT text must name the cheap remedy (mint a
-    chain-ancestry waiver via `coverage-gate --from-handoff`) rather than
-    only the two expensive sanctioned exits (PM vouch, /handoff)."""
-    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-remedy")
-    chain_code_shas = ["foreignsha1"]
-    _patch_chain_scoping(monkeypatch, chain_code_shas=chain_code_shas)
-
-    def _all_foreign(sha_range, session_id):
-        return frozenset({"foreignsha1"})
-
-    monkeypatch.setattr(_mod, "_resolve_foreign_session_shas", _all_foreign)
-    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
-
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-
-    err = capsys.readouterr().err
-    assert rc == 1
-    assert "REMEDY (foreign/predecessor commits)" in err
-    assert "coverage-gate --from-handoff state/handoffs/x.md" in err
-
-
-def test_all_planning_foreign_uncovered_chain_prints_mint_remedy(
+def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
     monkeypatch, tmp_path, capsys,
 ):
-    """Supersedes the 22b2537b2 behaviour (formerly
-    test_all_planning_foreign_uncovered_chain_does_not_print_mint_remedy):
-    that commit special-cased an all-planning-artifact uncovered chain to
-    print a REMEDY saying the `coverage-gate --from-handoff` mint step does
-    NOT apply, reasoning that `coordinator_core.coverage.run_coverage_gate`
-    nets an all-planning chain to verdict=COVERED and
-    `coordinator_core.ops.coverage_gate`'s mint block only fired on
-    WARN/UNCOVERED. 2026-08-07 fix (state/audits/2026-08-07-review-gate-
-    scoping-predecessor-and-planning-artifacts.md) decoupled the mint from
-    `result.verdict` entirely — it now gates on `result.uncovered_shas`
-    being non-empty, which is exactly the all-planning case. The mint DOES
-    apply here now, so the normal mint-instruction REMEDY must print."""
+    """Supersedes the 22b2537b2 / e8fc10284f67 behaviour (formerly
+    test_all_planning_foreign_uncovered_chain_does_not_print_mint_remedy,
+    then formerly test_all_planning_foreign_uncovered_chain_prints_mint_
+    remedy): the `REMEDY (foreign/predecessor commits)` block — which
+    instructed operators to mint a chain-ancestry waiver that cannot
+    actually discharge a foreign/ancestor commit on its own — was deleted
+    outright in e8fc10284f67. With `own_shas` empty (every uncovered
+    commit here is foreign) and every uncovered commit a planning
+    artifact, the gate is now communicate-only: rc=0, a `NOTE:` explaining
+    no discharging verdict exists but nothing here is recordable by this
+    session, and the planning-artifact breakdown of the uncovered set
+    still fully present in the diagnostic."""
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff: (0, "", ""))
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-planning-foreign")
     chain_code_shas = ["planforeign1", "planforeign2"]
@@ -2295,11 +2308,11 @@ def test_all_planning_foreign_uncovered_chain_prints_mint_remedy(
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
 
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 0
+    assert "NOTE: brightline verdict=PARTITION-MANDATORY" in err
+    assert "communicate-only gate here, not a halt." in err
     assert "2 planning-artifact commit(s) (owe a plan review, not a code review):" in err
-    assert "REMEDY (foreign/predecessor commits): run" in err
-    assert "coverage-gate --from-handoff state/handoffs/x.md` first to mint" in err
-    assert "does NOT apply here" not in err
+    assert "REMEDY (foreign/predecessor commits)" not in err
 
 
 def test_minted_chain_ancestry_waiver_moves_a_foreign_commit_from_uncovered_to_covered(tmp_path):
@@ -2368,3 +2381,63 @@ def test_minted_chain_ancestry_waiver_moves_a_foreign_commit_from_uncovered_to_c
         "a minted chain-ancestry waiver did not move the uncovered count — "
         "the deadlock reappears one layer down even after minting works"
     )
+
+
+def test_stored_head_only_covering_record_stays_uncovered_even_when_waived(tmp_path):
+    """Live-incident root cause (2026-08-08, sidecar coordinatorexecutor-
+    f6dbb4bf): a chain whose ONLY discharging review-trail evidence for a
+    foreign/predecessor commit is a stale `<sha>..HEAD` range (the shape
+    `coverage._record_range_has_stored_head` exists to reject, per the
+    2026-06-30 false-COVERED incident) is structurally un-dischargeable by a
+    gate-minted chain-ancestry waiver — NOT because the waiver read/write
+    wiring is broken, but because DR-245 requires "an actual trail record
+    over the range" and `_record_membership_shas` rejects a stored-HEAD
+    range at Phase 1, before `narrow_foreign_shas`/`vouched_shas` are ever
+    consulted (contrast `test_minted_chain_ancestry_waiver_moves_a_foreign_
+    commit_from_uncovered_to_covered`, whose covering record uses a
+    concrete-SHA range and DOES get rescued). This is the counterpart proof:
+    minting the identical waiver over a stored-HEAD-only-covered commit must
+    NOT flip it to covered — the correct fix for the live incident was
+    correcting the misleading REMEDY text (which promised the mint-then-
+    retry loop would resolve this), not weakening this rejection."""
+    from coordinator_core import chain_ancestry_waivers
+
+    chain_id = "a" * 8 + "-" + "b" * 4 + "-" + "c" * 4 + "-" + "d" * 4 + "-" + "e" * 12
+    foreign_sha = "f" * 40
+    chain_code_shas = {foreign_sha}
+    chain_dag_shas = {foreign_sha}
+    stale_sha_range = "start..HEAD"
+    record = {
+        "verdict": "ok",
+        "sha_range": stale_sha_range,
+        "scope": "chain",
+        "session_id": chain_id,
+    }
+
+    def resolve_range_shas(rng):
+        return {foreign_sha} if rng == stale_sha_range else set()
+
+    def narrow_foreign_shas(rng, session_id):
+        return frozenset({foreign_sha})
+
+    def vouched_shas_from(repo_root):
+        return lambda session_id: chain_ancestry_waivers.chain_ancestry_waived_shas(
+            repo_root, session_id or "",
+        )
+
+    chain_ancestry_waivers.record_chain_ancestry_waiver(
+        str(tmp_path), frozenset({foreign_sha}), chain_id,
+    )
+
+    uncovered = chain_partition_uncovered_shas(
+        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
+        narrow_foreign_shas=narrow_foreign_shas,
+        vouched_shas=vouched_shas_from(str(tmp_path)),
+    )
+    assert set(uncovered) == {foreign_sha}, (
+        "a stored-HEAD-only-covered commit was credited by a minted "
+        "chain-ancestry waiver — this would reintroduce the false-COVERED "
+        "defect the stored-HEAD rejection exists to prevent"
+    )
+
+

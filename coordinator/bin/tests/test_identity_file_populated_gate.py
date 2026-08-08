@@ -67,7 +67,7 @@ def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, ro
     )
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: setup_dir / "store.yaml")
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _StubClaudeKlabauter())
-    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude-klabauter, store_path: {"targets": {}})
+    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude_klabauter_root, store_path: {"targets": {}})
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
     monkeypatch.setattr(publish, "process_target", lambda *a, **k: None)

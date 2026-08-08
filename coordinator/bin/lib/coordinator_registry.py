@@ -85,6 +85,14 @@ _MANIFEST_PATH = os.path.join(
 # down into lib/.
 _COORDINATOR_LIB_DIR = os.path.join(os.path.dirname(os.path.dirname(_REGISTRY_LIB_DIR)), "lib")
 
+# Published payload flattens: the mirror ships helper at "<repo root>/lib"
+# with no "coordinator/" segment (coordinator/lib -> lib). Three dirname()s
+# up from _REGISTRY_LIB_DIR (bin/lib -> bin -> coordinator -> repo root),
+# then down into lib/. Probed as a fallback below — private tree wins first.
+_COORDINATOR_LIB_DIR_FLAT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(_REGISTRY_LIB_DIR))), "lib"
+)
+
 # Env var name honoured by the internal machine-local reader — shared with the CLIs
 # so a single test-isolation set covers all callers (MACHINE_LOCAL_IMPL). Defined
 # here (ahead of the manifest bootstrap below) rather than further down, because
@@ -156,7 +164,12 @@ def _mp_doe_root_pointer_rung() -> str:
     on failure, and never raises. Pure file I/O — no subprocess, preserving
     import-time purity.
     """
+    # Probe both helper-dir layouts, private tree first: co-located
+    # coordinator/lib exists here on this dev box, but the published
+    # payload flattens to <root>/lib with no coordinator/ segment.
     _lib_dir = _COORDINATOR_LIB_DIR
+    if not os.path.isfile(os.path.join(_lib_dir, "read_doe_root_pointer.py")):
+        _lib_dir = _COORDINATOR_LIB_DIR_FLAT
     _added = _lib_dir not in sys.path
     if _added:
         sys.path.insert(0, _lib_dir)
@@ -165,6 +178,9 @@ def _mp_doe_root_pointer_rung() -> str:
 
         return coordinator_read_doe_root_pointer()
     except Exception:
+        # Swallows: helper missing at both probed dirs, import error inside
+        # the helper itself, or any runtime failure in the read — all
+        # collapse to "no pointer configured" by contract (never-raise).
         return ""
     finally:
         if _added:
@@ -417,7 +433,21 @@ def _same_path(a: str, b: str) -> bool:
     Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
     consolidated primitive (state/sizings/2026-08-07-path-equality-
     consolidates-onto-one-prim.yaml).
+
+    ``coordinator_core`` is NOT ambiently importable outside a claude-klabauter
+    checkout with an editable install (see editable-install-masks-engine-
+    import-defects hazard) -- callers elsewhere (e.g. coordinator-queue-append
+    invoked without ``--from-repo``, from a caller repo's cwd) hit a bare
+    ``ModuleNotFoundError`` here. Route through the same engine-root-on-
+    sys.path seam every other bin/lib trampoline uses (records_query.py's
+    ``_no_console_kw``, coordinator-queue-append's ``_resolve_session_id``)
+    rather than a raw import.
     """
+    if _REGISTRY_LIB_DIR not in sys.path:
+        sys.path.insert(0, _REGISTRY_LIB_DIR)
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
     from coordinator_core.win_portability import same_path
 
     return same_path(a, b)

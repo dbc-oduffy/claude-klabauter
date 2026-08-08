@@ -283,7 +283,7 @@ def test_delta_row_unchanged_false_when_no_prior_record(tmp_path, monkeypatch):
 def test_compute_delta_invalidation_signature_changes_on_store_edit(tmp_path):
     store_path = tmp_path / "percolate-store.yaml"
     store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
-    engine_ctx = publish.PercolateEngineContext(claude-klabauter=None, store=None)
+    engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=None, store=None)
     sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
     store_path.write_text("schema_version: '1.0.0'\nextra: true\n", encoding="utf-8")
     sig2 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
@@ -293,7 +293,7 @@ def test_compute_delta_invalidation_signature_changes_on_store_edit(tmp_path):
 def test_compute_delta_invalidation_signature_stable_when_nothing_changes(tmp_path):
     store_path = tmp_path / "percolate-store.yaml"
     store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
-    engine_ctx = publish.PercolateEngineContext(claude-klabauter=None, store=None)
+    engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=None, store=None)
     sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
     sig2 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
     assert sig1 == sig2

@@ -95,12 +95,13 @@ class _RealEngineClaudeKlabauter:
     real engine module -- everything else this fixture never touches."""
 
     run_function_gate = staticmethod(pct_engine.run_function_gate)
+    run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
     oss_shaped_subprocess_env = staticmethod(pct_engine.oss_shaped_subprocess_env)
 
 
 class _EngineCtxStub:
     def __init__(self):
-        self.claude-klabauter = _RealEngineClaudeKlabauter()
+        self.engine_claude_klabauter = _RealEngineClaudeKlabauter()
 
 
 class TestEndOfRunFunctionGateLeg:
@@ -166,6 +167,7 @@ class _StubClaudeKlabauter:
     mocked pass/fail)."""
 
     run_function_gate = staticmethod(pct_engine.run_function_gate)
+    run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
     oss_shaped_subprocess_env = staticmethod(pct_engine.oss_shaped_subprocess_env)
 
     def resolve_target(self, store, name):
@@ -196,7 +198,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: setup_dir / "store.yaml")
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _StubClaudeKlabauter())
-    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude-klabauter, store_path: {"targets": {}})
+    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda engine_claude_klabauter, store_path: {"targets": {}})
     monkeypatch.setattr(publish, "check_identity_file_present", lambda *a, **k: None)
     monkeypatch.setattr(publish, "check_identity_file_safe", lambda *a, **k: None)
     monkeypatch.setattr(

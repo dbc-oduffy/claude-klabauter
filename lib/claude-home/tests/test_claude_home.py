@@ -43,8 +43,17 @@ from _claude_home import (  # noqa: E402
     machine_local_dir,
     plugins_dir,
     read_config,
+    resolve_home_base,
     write_config,
 )
+
+# The shim lives at coordinator/lib/claude_home_shim.py, a sibling of this
+# hyphenated claude-home/ directory (two levels up from tests/).
+_LIB_DIR = _MODULE_DIR.parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+import claude_home_shim  # noqa: E402
 
 
 @contextmanager
@@ -160,6 +169,87 @@ class TestHomeResolution(unittest.TestCase):
             Path, "home", classmethod(lambda cls: fake)
         ):
             self.assertEqual(home_dir(), fake)
+
+
+# ---------------------------------------------------------------------------
+# resolve_home_base — parity with home_dir() across the four-rung precedence
+# ---------------------------------------------------------------------------
+
+
+class TestResolveHomeBase(unittest.TestCase):
+    """resolve_home_base() must match home_dir() exactly — it delegates to it.
+
+    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_matches_home_dir_claude_home_rung(self):
+        with _isolated_env(CLAUDE_HOME=str(self.tmp_path / "custom")):
+            self.assertEqual(resolve_home_base(), home_dir())
+            self.assertEqual(resolve_home_base(), self.tmp_path / "custom")
+
+    def test_matches_home_dir_home_rung(self):
+        with _isolated_env(HOME=str(self.tmp_path / "real_home")):
+            self.assertEqual(resolve_home_base(), home_dir())
+
+    def test_matches_home_dir_userprofile_rung(self):
+        with _isolated_env(USERPROFILE=str(self.tmp_path / "win_home")):
+            self.assertEqual(resolve_home_base(), home_dir())
+
+    def test_matches_home_dir_stdlib_rung(self):
+        fake = self.tmp_path / "stdlib_home"
+        with _isolated_env(), patch.object(Path, "home", classmethod(lambda cls: fake)):
+            self.assertEqual(resolve_home_base(), home_dir())
+
+    def test_relative_claude_home_fails_loud_same_as_home_dir(self):
+        with _isolated_env(CLAUDE_HOME="relative/sandbox"):
+            with self.assertRaises(ValueError) as cm:
+                resolve_home_base()
+            self.assertIn("CLAUDE_HOME", str(cm.exception))
+            self.assertIn("absolute", str(cm.exception))
+
+
+# ---------------------------------------------------------------------------
+# claude_home_shim — the importable seam onto the hyphenated directory
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeHomeShim(unittest.TestCase):
+    """claude_home_shim re-exports resolve_home_base/home_dir via a normal import.
+
+    This is the whole point of the shim: a caller outside claude-home/ can
+    `from claude_home_shim import resolve_home_base` with no sys.path or
+    importlib work of its own. If parity with the direct _claude_home import
+    fails, or if this test needed path surgery beyond ordinary import, the
+    shim has not done its job.
+
+    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_shim_resolve_home_base_matches_direct_import(self):
+        with _isolated_env(CLAUDE_HOME=str(self.tmp_path / "custom")):
+            self.assertEqual(claude_home_shim.resolve_home_base(), resolve_home_base())
+            self.assertEqual(claude_home_shim.resolve_home_base(), self.tmp_path / "custom")
+
+    def test_shim_home_dir_matches_direct_import(self):
+        with _isolated_env(HOME=str(self.tmp_path / "real_home")):
+            self.assertEqual(claude_home_shim.home_dir(), home_dir())
+
+    def test_shim_exports_only_the_two_names(self):
+        self.assertEqual(set(claude_home_shim.__all__), {"resolve_home_base", "home_dir"})
 
 
 # ---------------------------------------------------------------------------

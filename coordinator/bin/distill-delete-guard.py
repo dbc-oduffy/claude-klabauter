@@ -61,7 +61,40 @@ except RuntimeError as _exc:
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from coordinator_core.distill import delete_guard as _delete_guard
 from coordinator_core.distill.delete_guard import DeleteCandidate, evaluate_candidate
+
+
+def _sha_shaped_realized_by_values(candidate_paths: list[Path]) -> set[str]:
+    """Pre-scan every candidate's `realized_by:` value and return the SHA-shaped
+    subset (lower-cased), mirroring `resolve_realized_by`'s own shape dispatch
+    (inline sentinel -> skip, SHA-shaped -> collect, path-shaped -> skip) WITHOUT
+    re-deriving its resolution semantics — this only classifies shape so the
+    batched `_git_objects_exist` primitive (C29) can be warmed with the exact
+    set `resolve_realized_by` would otherwise resolve one spawn at a time.
+
+    A candidate that fails to read/parse is silently skipped here (not
+    resolved as a SHA) — `evaluate_candidate` re-reads the file itself during
+    the real evaluation pass below and is the sole source of truth for
+    outcomes; this function only feeds the batch-warm cache."""
+    shas: set[str] = set()
+    for path in candidate_paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm_split = _delete_guard.split_frontmatter(text)
+        frontmatter_text = fm_split.fm_text if fm_split is not None else ""
+        value = _delete_guard.read_fm_field_unquoted(frontmatter_text, "realized_by")
+        if not value:
+            continue
+        value = value.strip()
+        if value in _delete_guard._INLINE_SENTINELS:
+            continue
+        lowered = value.lower()
+        if _delete_guard._FULL_SHA_RE.match(lowered) or _delete_guard._SHORT_SHA_RE.match(lowered):
+            shas.add(lowered)
+    return shas
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,6 +130,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: not a file: {candidate_path}", file=sys.stderr)
             return 1
 
+    # Batch-warm the git-object-existence prefetch: one `git cat-file --batch-check`
+    # spawn (C29's `_git_objects_exist`) for the SHA-shaped `realized_by:` subset
+    # across ALL candidates, instead of one `_git_object_exists` spawn per
+    # candidate inside `resolve_realized_by`. Inline sentinels and path-shaped
+    # values never spawn git either way (see the docstring on
+    # `_sha_shaped_realized_by_values`) — this only reduces the SHA-shaped
+    # subset, conditionally, per candidate corpus composition. Passed down as
+    # `existence_map` (an OPTIONAL parameter on `resolve_realized_by` and its
+    # callers, C31) — a miss in the map still falls through to the scalar
+    # `_git_object_exists`, never treated as "does not exist" (see that
+    # function's docstring for the fail-closed-on-miss contract).
+    shas = _sha_shaped_realized_by_values(candidate_paths)
+    existence_map = _delete_guard._git_objects_exist(list(shas), repo_root)
+
     results = []
     for candidate_path in candidate_paths:
         candidate = DeleteCandidate(
@@ -104,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=repo_root,
             basis_refs=basis_refs,
         )
-        outcome = evaluate_candidate(candidate)
+        outcome = evaluate_candidate(candidate, existence_map=existence_map)
         outcome["path"] = str(candidate_path)
         results.append(outcome)
 

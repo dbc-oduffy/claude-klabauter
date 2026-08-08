@@ -450,8 +450,35 @@ def _ensure_hook(
     append_block: str,
     current_predicates: List[str],
     header: str,
+    root: Optional[str] = None,
+    outcome: Optional[List[str]] = None,
 ) -> int:
     """Idempotent install/repair of a single git hook. Always returns 0.
+
+    `root`: the worktree to install into. Defaults to `_git_root()` (the
+    process's own cwd) — the only behaviour this function had before the
+    fleet path existed, and byte-identical when the argument is omitted.
+    Passing it explicitly is what lets one invocation heal a repo other than
+    the one it is running inside; see `ensure_hooks_fleet` for why that
+    matters.
+
+    `outcome`: optional out-param. When supplied, exactly one classification
+    string is appended describing what this call actually DID —
+    `installed-absent`, `rewritten-stale`, `appended`, `already-current`,
+    `left-append-form`, `left-legacy-append-form`, `skipped-no-root`, or
+    `skipped-no-helper`. Deliberately an out-param rather than a changed
+    return type: this function's `-> int` is a process exit code consumed by
+    two entrypoints and a hook installer must never fail loudly enough to
+    block a commit, so the exit-code contract stays exactly as it was.
+
+    Why the classification exists at all (2026-08-08): a fleet audit found 12
+    of 13 registered repos carrying a wrong hook — six a stale generation
+    baked to a script path deleted when it moved into claude-klabauter, six with no
+    hook at all — and NOTHING reported it, because the only signal this
+    function ever emitted was "0". A caller could not distinguish "already
+    correct" from "just repaired a three-week-old silent breakage", so the
+    daily self-heal healed one repo and said the same nothing either way.
+    Detection is the actual defect; the install was never the hard part.
 
     current_predicates: substrings that MUST all be present for the hook to be
     judged already-current (bash-free form + correct baked path + right invoke
@@ -484,14 +511,23 @@ def _ensure_hook(
     stderr warning names the hook path and tells the operator to remove the
     stale block by hand; the function still returns 0.
     """
-    root = _git_root()
-    if not root:
+    def _note(state: str) -> int:
+        if outcome is not None:
+            outcome.append(state)
         return 0
+
+    if root is None:
+        root = _git_root()
+    if not root:
+        return _note("skipped-no-root")
 
     coord_bin = _resolve_coord_bin(bin_dir, script_name)
     helper = os.path.join(coord_bin, script_name)
     if not os.path.isfile(helper):
-        return 0  # broken coordinator install — not this helper's to diagnose.
+        # Broken coordinator install — not this helper's to diagnose. Still
+        # classified rather than silently 0: on the fleet path this is the
+        # difference between "that repo is fine" and "we could not even try".
+        return _note("skipped-no-helper")
 
     hook_path = os.path.join(root, ".git", "hooks", hook_name)
 
@@ -500,7 +536,7 @@ def _ensure_hook(
         os.makedirs(os.path.dirname(hook_path), exist_ok=True)
         _atomic_write(hook_path, fresh_body)
         _chmod_x(hook_path)
-        return 0
+        return _note("installed-absent")
 
     body = _read(hook_path)
     start_marker, end_marker = _append_markers(header)
@@ -518,8 +554,10 @@ def _ensure_hook(
                 "block by hand to pick up current fixes.",
                 file=sys.stderr,
             )
+            _chmod_x(hook_path)
+            return _note("left-legacy-append-form")
         _chmod_x(hook_path)
-        return 0
+        return _note("left-append-form")
 
     if _marker_in_noncomment(body, marker):
         # Whole-file shim host (current, or a historical stale shape —
@@ -530,32 +568,43 @@ def _ensure_hook(
         first_line = body.splitlines()[0] if body else ""
         if first_line == "#!/bin/sh" and all(p in body for p in current_predicates):
             _chmod_x(hook_path)
-            return 0
+            return _note("already-current")
         # Stale shim form → rewrite atomically to current bash-free form.
         _atomic_write(hook_path, fresh_body)
         _chmod_x(hook_path)
-        return 0
+        return _note("rewritten-stale")
 
     # Marker absent (or only in a comment) → append, preserving the existing chain.
     _atomic_write(hook_path, body + append_block + "\n")
     _chmod_x(hook_path)
-    return 0
+    return _note("appended")
 
 
 # ---------------------------------------------------------------------------
 # Public entrypoints.
 # ---------------------------------------------------------------------------
 
-def ensure_post_commit_hook(bin_dir: str) -> int:
+def ensure_post_commit_hook(
+    bin_dir: str,
+    root: Optional[str] = None,
+    outcome: Optional[List[str]] = None,
+) -> int:
     """Install/repair .git/hooks/post-commit → execs coordinator-auto-push directly.
 
     Synchronous exec, not backgrounded at the shell level: coordinator-auto-push
     (the Python trampoline into claude-klabauter's auto_push.py) self-detaches internally
     (os.fork() on POSIX, detached Popen respawn on Windows) when async is wanted,
     so the shim never needs shell-level `nohup … &`.
+
+    `root`/`outcome` are pass-throughs to `_ensure_hook` — see its docstring.
+    Both default to the pre-fleet behaviour (install into cwd's repo, report
+    nothing but an exit code).
     """
-    root = _git_root()
+    if root is None:
+        root = _git_root()
     if not root:
+        if outcome is not None:
+            outcome.append("skipped-no-root")
         return 0
     coord_bin = _resolve_coord_bin(bin_dir, "coordinator-auto-push")
     script = "coordinator-auto-push"
@@ -586,13 +635,25 @@ def ensure_post_commit_hook(bin_dir: str) -> int:
         append_block=append,
         current_predicates=current,
         header=header,
+        root=root,
+        outcome=outcome,
     )
 
 
-def ensure_prepare_commit_msg_hook(bin_dir: str) -> int:
-    """Install/repair .git/hooks/prepare-commit-msg → synchronous coordinator-prepare-commit-msg."""
-    root = _git_root()
+def ensure_prepare_commit_msg_hook(
+    bin_dir: str,
+    root: Optional[str] = None,
+    outcome: Optional[List[str]] = None,
+) -> int:
+    """Install/repair .git/hooks/prepare-commit-msg → synchronous coordinator-prepare-commit-msg.
+
+    `root`/`outcome` are pass-throughs to `_ensure_hook` — see its docstring.
+    """
+    if root is None:
+        root = _git_root()
     if not root:
+        if outcome is not None:
+            outcome.append("skipped-no-root")
         return 0
     coord_bin = _resolve_coord_bin(bin_dir, "coordinator-prepare-commit-msg")
     script = "coordinator-prepare-commit-msg"
@@ -621,4 +682,173 @@ def ensure_prepare_commit_msg_hook(bin_dir: str) -> int:
         append_block=append,
         current_predicates=current,
         header=header,
+        root=root,
+        outcome=outcome,
     )
+
+
+# ---------------------------------------------------------------------------
+# Fleet driver.
+# ---------------------------------------------------------------------------
+
+#: Outcomes that mean "this repo was WRONG and we just changed it" — the set
+#: the fleet report must never swallow. `already-current` is the silent case;
+#: the two `left-*-append-form` states are neither drift nor repair (a foreign
+#: hook chain we deliberately refuse to touch) and are reported separately.
+_HEALED_OUTCOMES = frozenset({"installed-absent", "rewritten-stale", "appended"})
+
+
+def _registry_repo_roots(bin_dir: str) -> List[tuple]:
+    """Enumerate `(key, path)` for every `repos.*` entry set on this machine.
+
+    Goes through the sanctioned `machine-local` CLI (`keys --prefix repos`,
+    then `get` per key) rather than parsing registry TOML directly — the value
+    layer is split across a tracked declarations file and a gitignored
+    per-machine file, and only the CLI knows how they compose. Best-effort:
+    any failure yields an empty list, because a hook installer must degrade to
+    "healed nothing" rather than raise on a session-boot path.
+    """
+    ml_bin = _resolve_machine_local_bin(bin_dir)
+    if not ml_bin:
+        return []
+    try:
+        out = subprocess.run(
+            [*resolve_launchable(ml_bin), "keys", "--prefix", "repos"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **no_console_creationflags(),
+        )
+    except Exception:
+        return []
+    roots = []
+    for line in (out.stdout or "").splitlines():
+        key = line.strip()
+        # `keys` prefixes advisory notes (e.g. declared-but-unset keys) to
+        # stdout; only lines that are literally a repos.* key are candidates.
+        if not key.startswith("repos.") or " " in key:
+            continue
+        val = _ml_get(ml_bin, key)
+        if val:
+            roots.append((key, val))
+    return roots
+
+
+def _classify_target(root: str) -> str:
+    """Classify a registered `repos.*` path: `worktree` | `mirror` | `missing`.
+
+    Three-way rather than the obvious boolean, because the two non-worktree
+    cases deserve opposite reporting. A `mirror` (git repo, no coordinator
+    surface) is a permanent, correct, expected exclusion — reporting it on a
+    DAILY ceremony would print the same line every day forever, which is how
+    an operator learns to scroll past the output, and this whole fix exists
+    because drift hid inside output nobody read. A `missing` target (path
+    gone, or never a git repo) is a broken registry entry: indistinguishable
+    from a mirror under a boolean, silently never healed, and exactly the
+    failure class being closed here. So: mirrors are silent, missing targets
+    speak up.
+    """
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return "missing"
+    return "worktree" if _is_coordinator_worktree(root) else "mirror"
+
+
+def _is_coordinator_worktree(root: str) -> bool:
+    """True iff `root` is a git worktree that coordinator actually commits into.
+
+    Deliberately excludes publish-target mirrors: `repos.*` also registers
+    outward OSS distribution mirrors (e.g. Claude-klabauter), which are push
+    destinations, not EM working trees — installing a session-attribution hook
+    into one would stamp trailers onto release commits that have no session
+    behind them. The discriminator is the presence of a coordinator working
+    surface (`CLAUDE.md` or `cross-repo/`), which every EM tree carries and no
+    mirror does; verified against this machine's 15 registered repos, where it
+    correctly admits 14 and rejects claude-klabauter alone.
+    """
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return False
+    return os.path.exists(os.path.join(root, "CLAUDE.md")) or os.path.isdir(
+        os.path.join(root, "cross-repo")
+    )
+
+
+def ensure_hooks_fleet(bin_dir: str) -> int:
+    """Install/repair both coordinator hooks in EVERY registered repo, and say
+    what changed. Always returns 0.
+
+    The defect this closes (2026-08-08): the per-day self-heal added to
+    `/workday-start` — itself the replacement for the boot hook killed by the
+    2026-07-15 directive — calls the two `ensure_*` entrypoints once, in the
+    process's own cwd. That heals whichever single repo the operator started
+    the day in and no other. On a 15-repo fleet the other 14 drift
+    indefinitely, and because the pre-fix installers returned a bare 0 either
+    way, the heal reported success while doing nothing for them. Measured
+    before this fix: 12 of 13 repos on the primary drive were wrong (six a
+    stale generation baked to a script path deleted when it moved into
+    claude-klabauter, six never installed at all), the oldest roughly three weeks
+    silent.
+
+    Why detection is the load-bearing half, not the install: every wrong repo
+    HAD a plausible-looking state. A file-existence check passes on all six
+    stale clones — the file was right there. A "do recent commits carry
+    trailers?" check passes on all six never-installed ones, because the
+    engine commit path (`commit_trailers`) stamps trailers programmatically
+    and independently of the hook, leaving partial coverage that reads as
+    healthy on any spot check. Only comparing installed hook CONTENT against
+    the generation this installer would write distinguishes the two failure
+    modes from health — which is exactly what `_ensure_hook`'s
+    `current_predicates` already computed and then threw away.
+    """
+    roots = _registry_repo_roots(bin_dir)
+    if not roots:
+        print(
+            "[git_hook_install] WARNING: fleet heal found no registered repos "
+            "(machine-local unavailable, or no repos.* keys set on this "
+            "machine) — healed nothing. This is not the same fact as "
+            "'every repo is current'.",
+            file=sys.stderr,
+        )
+        return 0
+
+    healed, missing = [], []
+    for key, root in sorted(roots):
+        kind = _classify_target(root)
+        if kind == "missing":
+            missing.append(f"{key} -> {root}")
+            continue
+        if kind == "mirror":
+            continue
+        for label, fn in (
+            ("prepare-commit-msg", ensure_prepare_commit_msg_hook),
+            ("post-commit", ensure_post_commit_hook),
+        ):
+            states: List[str] = []
+            fn(bin_dir, root=root, outcome=states)
+            state = states[0] if states else "unknown"
+            if state in _HEALED_OUTCOMES:
+                healed.append(f"{key} {label}: {state}")
+            elif state.startswith("skipped-") or state.startswith("left-"):
+                healed.append(f"{key} {label}: {state}")
+
+    # The common case is silent — an all-current fleet prints nothing, so this
+    # can sit on a daily ceremony without becoming noise the operator learns
+    # to scroll past. Drift is the only thing that speaks.
+    if healed:
+        print(
+            f"[git_hook_install] fleet heal repaired or flagged "
+            f"{len(healed)} hook(s) across {len(roots)} registered repo(s):",
+            file=sys.stderr,
+        )
+        for line in healed:
+            print(f"  {line}", file=sys.stderr)
+    if missing:
+        print(
+            f"[git_hook_install] fleet heal could not reach "
+            f"{len(missing)} registered target(s) — path absent or not a git "
+            f"repo, so they are silently never healed. Fix or remove the "
+            f"registry entry:",
+            file=sys.stderr,
+        )
+        for line in missing:
+            print(f"  {line}", file=sys.stderr)
+    return 0

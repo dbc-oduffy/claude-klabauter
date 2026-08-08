@@ -130,9 +130,31 @@ def compute_descendant_tip(root: str, tips: list[str]) -> str | None:
     """The candidate that is a descendant of (or equal to) every other candidate.
 
     Resolves each of `tips` to its full SHA first (deduping), then — with more
-    than one distinct candidate — walks pairwise via `git merge-base
-    --is-ancestor` to find the single tip that all others are ancestors of
-    (the furthest-forward commit across every source for the same day).
+    than one distinct candidate — resolves the dominant tip via one
+    `git rev-list --topo-order` walk over the whole candidate set plus one
+    ancestor-set walk from the leading candidate, instead of the previous
+    O(n^2) pairwise `git merge-base --is-ancestor` walk.
+
+    `git rev-list --topo-order` orders commits so a commit never precedes any
+    of its descendants: if a single candidate dominates the rest (is a
+    descendant of, or equal to, every other candidate), that candidate is
+    necessarily the first of the candidate set to appear in this ordering,
+    since every other candidate is one of its ancestors. That gives a
+    necessary-but-not-sufficient leading candidate in one spawn; a second
+    spawn (`git rev-list <leading-candidate>`, its own ancestor closure) then
+    confirms sufficiency by checking every other candidate is a member. Two
+    candidates that are mutually incomparable (diverged branches — neither an
+    ancestor of the other) fail that confirmation check and fall through to
+    the same `None` diverged-branches result the old pairwise walk returned;
+    a candidate appearing twice in `tips` was already deduped above and
+    contributes one entry to `resolved`.
+
+    Any resolved candidate SHA absent from the `--topo-order` output (it
+    should always be present as one of the walk's own start points) is
+    treated as a resolution failure and reconciled explicitly rather than
+    silently read as "not the answer" — see module test
+    `test_missing_topo_output_is_not_silently_ignored`.
+
     Returns None when no SHA resolves, or when no single candidate dominates
     all others (diverged branches on the same day — a true gap, not an
     A0-mechanical case).
@@ -148,12 +170,26 @@ def compute_descendant_tip(root: str, tips: list[str]) -> str | None:
     if len(resolved) == 1:
         return resolved[0]
 
-    for cand in resolved:
-        if all(
-            other == cand or wc.git_ok("-C", root, "merge-base", "--is-ancestor", other, cand)
-            for other in resolved
-        ):
-            return cand
+    topo_out = wc.git_out("-C", root, "rev-list", "--topo-order", *resolved)
+    topo_lines = topo_out.splitlines()
+    position = {sha: idx for idx, sha in enumerate(topo_lines)}
+
+    missing = [cand for cand in resolved if cand not in position]
+    if missing:
+        _err(
+            "ERROR: candidate SHA(s) absent from `git rev-list --topo-order` "
+            f"output (unresolved, not treated as non-dominant): {' '.join(missing)}"
+        )
+        return None
+
+    leading = min(resolved, key=position.get)
+
+    ancestor_out = wc.git_out("-C", root, "rev-list", leading)
+    ancestor_set = set(ancestor_out.splitlines())
+    ancestor_set.add(leading)
+
+    if all(other == leading or other in ancestor_set for other in resolved):
+        return leading
     return None
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -96,9 +97,15 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
         self.assertEqual(self._captured_params["format"], "markdown-list")
 
     def test_root_overrides_resolved_repo_root(self) -> None:
+        # query-records.py's `--root` handling is `os.path.abspath(args.root)`
+        # (coordinator/bin/query-records.py) -- repo_root is a filesystem path
+        # fed straight into git-touching ops, legitimately OS-native, not a
+        # POSIX-contract surface. Expect the native-normalized form.
         rc = self._run(["--type", "handoff", "--root", "/tmp/some-other-repo"])
         self.assertEqual(rc, 0)
-        self.assertEqual(self._captured_repo_root, "/tmp/some-other-repo")
+        self.assertEqual(
+            self._captured_repo_root, os.path.abspath("/tmp/some-other-repo")
+        )
 
     def test_missing_type_without_list_schemas_fails_loud(self) -> None:
         with self.assertRaises(SystemExit) as ctx:

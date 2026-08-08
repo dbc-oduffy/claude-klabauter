@@ -41,6 +41,23 @@ forward-slash scope list, and the debt ledger are all supplied by the
 CALLER (the per-repo shim) via `HomeResolutionLintEngine`'s constructor
 arguments -- this module carries no repo-specific paths or baseline data at
 all. See `HomeResolutionLintEngine` docstring for the exact contract.
+
+**Known miss -- `bare_or`'s ladder-extraction seam (`_iter_ladder_sites`),
+declared rather than papered over.** The ternary-over-locally-bound-env-read
+shape -- `claude_home = os.environ.get("CLAUDE_HOME")` on one line, then
+`(Path(claude_home) if claude_home else Path.home())` on the next -- is NOT
+extracted as a ladder site. The seam's standalone-ternary pass reasons only
+over its own `test`/`body`/`orelse` nodes and does not resolve an
+intra-function name binding back to the `os.environ.get(...)` call it was
+assigned from. The `if`/`return` guard-ladder pass is NOT under this same
+limit -- it DOES resolve a `test`/return value that is a bare `Name` bound
+by a preceding top-level assignment in the same function body (the live
+fleet's dominant guard-ladder shape actually needs this) -- see
+`HomeResolutionLintEngine._extract_guard_ladder` for the exact, narrower-
+than-general-data-flow rule it applies. Fixing the ternary form the same way
+needs the same category of statement-level data-flow work already declined
+for the `x_ok` rule's early-return guard-clause shape (see
+`find_x_ok_checks`'s own "Explicitly NOT recognised" note).
 """
 
 from __future__ import annotations
@@ -52,7 +69,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
-ENGINE_VERSION = "2026-07-28.1"
+ENGINE_VERSION = "2026-08-08.1"
 
 DEFAULT_EXCLUDED_PARTS: frozenset[str] = frozenset(
     {
@@ -66,16 +83,18 @@ DEFAULT_EXCLUDED_PARTS: frozenset[str] = frozenset(
         "scratch",
         "scratchpad",
         "cross-repo",
+        "pip",
     }
 )
 
-RULE_NAMES: tuple[str, ...] = ("x_ok", "colon_join", "forward_slash", "bare_or")
+RULE_NAMES: tuple[str, ...] = ("x_ok", "colon_join", "forward_slash", "bare_or", "rung_order")
 
 RULE_LABELS: dict[str, str] = {
     "x_ok": "os.access(..., os.X_OK)",
     "colon_join": "literal ':' PATH-list join/split",
     "forward_slash": "forward-slash-only path split",
     "bare_or": "CLAUDE_HOME/HOME or-chain with no USERPROFILE rung",
+    "rung_order": "home-resolution ladder rung out of master order",
 }
 
 RULE_REMEDIATION: dict[str, str] = {
@@ -105,6 +124,16 @@ RULE_REMEDIATION: dict[str, str] = {
         'cwd-relative path. Add os.environ.get("USERPROFILE") as a fallback '
         "rung, or delegate to Path.home(), which already honours "
         "USERPROFILE."
+    ),
+    "rung_order": (
+        "A home-resolution ladder's rungs must appear as a subsequence of "
+        "the master order CLAUDE_HOME -> HOME -> USERPROFILE -> "
+        "Path.home() -- skipping a rung is fine (CLAUDE_HOME -> USERPROFILE "
+        "-> Path.home() is valid and Windows-correct), but a transposed "
+        "rung (e.g. USERPROFILE checked before HOME), a literal '~' rung, "
+        "or an unguarded os.path.expanduser(...) rung is not. Reorder the "
+        "ladder to the master order, or replace the '~'/expanduser rung "
+        "with the correct os.environ.get(...) / Path.home() call."
     ),
 }
 
@@ -142,9 +171,34 @@ def _parse(path: Path):
         return None, None
     try:
         tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError):
+        # SyntaxError: the common case, and (on Python 3.13, this repo's dev
+        # box) also what an embedded null byte raises. ValueError: what the
+        # SAME null-byte input raises on Python 3.11, this repo's floor
+        # (requires-python = ">=3.11", pyproject.toml:12) -- a single-version
+        # read would miss this arm. RecursionError: ast.parse's documented
+        # stack-depth path on adversarial input, reachable now that
+        # `iter_py_files` widens discovery to shebang-sniffed files.
         return None, None
     return tree, source.splitlines()
+
+
+def _shebang_names_python(path: Path) -> bool:
+    """True if `path`'s first line is a `#!` shebang naming a Python
+    interpreter (`python`, `python3`, `python3.11`, a venv-relative
+    interpreter path, ...) -- anything containing `python` after the `#!`.
+    Reads only the first 256 bytes, as raw bytes rather than decoded text, so
+    a non-UTF-8 or huge file (a vendored blob, before `DEFAULT_EXCLUDED_PARTS`
+    would exclude it) is a cheap "not a match" rather than a decode error."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(256)
+    except OSError:
+        return False
+    first_line = head.split(b"\n", 1)[0]
+    if not first_line.startswith(b"#!"):
+        return False
+    return b"python" in first_line
 
 
 def _attr_or_name(node) -> str | None:
@@ -243,17 +297,44 @@ class HomeResolutionLintEngine:
         self.forward_slash_scope = tuple(forward_slash_scope)
 
     def iter_py_files(self) -> Iterable[Path]:
+        """Yields both populations, `_is_excluded`-filtered and
+        deduplicated: `*.py` files, and extensionless files whose first line
+        is a Python shebang (`coordinator/bin/archive-stamp-cli`-shaped --
+        see `state/lessons/2026-07-28-grep-include-py-hides-this-repo-s-extens-e85a40277f72.yaml`).
+        Return order stays `sorted` so baseline keys do not churn."""
         for name in self.scan_roots:
             scan_root = self.repo_root / name
             if not scan_root.is_dir():
                 continue
-            for path in sorted(scan_root.rglob("*.py")):
+            candidates: set[Path] = set()
+            for path in scan_root.rglob("*.py"):
+                if not _is_excluded(path.relative_to(scan_root), self.excluded_parts):
+                    candidates.add(path)
+            for path in scan_root.rglob("*"):
+                if path.suffix or not path.is_file():
+                    continue
                 if _is_excluded(path.relative_to(scan_root), self.excluded_parts):
                     continue
-                yield path
+                if _shebang_names_python(path):
+                    candidates.add(path)
+            yield from sorted(candidates)
 
     def scanned_file_count(self) -> int:
         return sum(1 for _ in self.iter_py_files())
+
+    def parse_failure_count(self) -> int:
+        """Count of files under `iter_py_files()` that fail to parse --
+        `_parse`'s `(OSError, UnicodeDecodeError)` read-failure arm plus its
+        `(SyntaxError, ValueError, RecursionError)` `ast.parse` arm. A
+        diagnostic independent of any rule's finding list, so a "clean" run
+        (0 findings, 0 parse failures) is distinguishable from a run that
+        silently gave up on part of the corpus. Never raises."""
+        count = 0
+        for path in self.iter_py_files():
+            tree, _ = _parse(path)
+            if tree is None:
+                count += 1
+        return count
 
     # -- Rule 1: os.access(path, os.X_OK) -- meaningless on Windows. -----
 
@@ -457,41 +538,425 @@ class HomeResolutionLintEngine:
         return isinstance(arg0, ast.Constant) and arg0.value in ("CLAUDE_HOME", "HOME")
 
     @staticmethod
-    def _chain_has_windows_rung(boolop: ast.BoolOp) -> bool:
-        for value in boolop.values:
-            dumped = ast.dump(value)
-            if "USERPROFILE" in dumped or "expanduser" in dumped:
+    def _is_path_home_call(node: ast.AST) -> bool:
+        """True only for a genuine no-arg `Path.home()` call -- an
+        `Attribute(attr="home")` whose receiver dotted-names to `Path`.
+        Structural, not textual: does not match `Path(home)` (a `Call`, not
+        an `Attribute`) even though both contain the tokens `"Path"` and
+        `"home"`."""
+        if not isinstance(node, ast.Call) or node.args or node.keywords:
+            return False
+        func = node.func
+        return isinstance(func, ast.Attribute) and func.attr == "home" and _attr_or_name(func.value) == "Path"
+
+    @staticmethod
+    def _contains_path_home_call(node: ast.AST) -> bool:
+        """Structurally walks `node` for a genuine `Path.home()` call,
+        recognising it reached through a wrapping call (`str(Path.home())`),
+        a ternary (`Path(claude_home) if claude_home else Path.home()`), a
+        path-join `BinOp` (`Path.home() / ".claude"`, both operands
+        checked -- a real fleet idiom can put the call on either side, e.g.
+        `".claude" if flag else Path.home() / suffix` nests it on the
+        `right`), an attribute chain on top of the call
+        (`Path.home().resolve()` -- `.attr` or `.method(...)` applied to a
+        `Path.home()` receiver is still the same underlying call), or nested
+        combinations of all of the above -- the shapes example-doctrine-repo's fleet
+        uses at its correct sites (guard-ladder `return Path.home() /
+        ".claude"` reduces to this same expression-level check once C4
+        extracts the returned value).
+
+        Deliberately does NOT match on token/substring coincidence -- e.g.
+        `Path(home).is_absolute()`, where `home` is an unrelated local
+        variable name, is a `Call` to `.is_absolute()` wrapping a `Call` to
+        `Path(home)`, neither of which is `Path.home()` itself, so this
+        returns `False` for it. Likewise does not walk into `ast.Subscript`
+        or arbitrary `ast.walk` -- only the specific wrapping shapes above,
+        so a `Path.home()` mentioned merely somewhere inside an unrelated
+        sibling subexpression is not mistaken for a terminal rung."""
+        if HomeResolutionLintEngine._is_path_home_call(node):
+            return True
+        if isinstance(node, ast.Call):
+            if HomeResolutionLintEngine._contains_path_home_call(node.func):
                 return True
-            if "Path" in dumped and "home" in dumped.lower():
-                return True
+            return any(HomeResolutionLintEngine._contains_path_home_call(arg) for arg in node.args)
+        if isinstance(node, ast.Attribute):
+            return HomeResolutionLintEngine._contains_path_home_call(node.value)
+        if isinstance(node, ast.BinOp):
+            return HomeResolutionLintEngine._contains_path_home_call(
+                node.left
+            ) or HomeResolutionLintEngine._contains_path_home_call(node.right)
+        if isinstance(node, ast.IfExp):
+            return HomeResolutionLintEngine._contains_path_home_call(
+                node.body
+            ) or HomeResolutionLintEngine._contains_path_home_call(node.orelse)
         return False
 
+    @staticmethod
+    def _is_environ_get_userprofile(node: ast.AST) -> bool:
+        """True only for a genuine `environ.get("USERPROFILE", ...)` call --
+        mirrors `_is_environ_get_home`'s structural shape but gated on the
+        `USERPROFILE` key specifically."""
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "get"):
+            return False
+        if _attr_or_name(func.value) != "environ":
+            return False
+        if not node.args:
+            return False
+        arg0 = node.args[0]
+        return isinstance(arg0, ast.Constant) and arg0.value == "USERPROFILE"
+
+    @staticmethod
+    def _contains_userprofile_rung(node: ast.AST) -> bool:
+        """Structurally walks `node` for a genuine `environ.get("USERPROFILE",
+        ...)` call, recognising it reached through a wrapping call or a
+        ternary -- the same expression shapes `_contains_path_home_call`
+        recognises for `Path.home()`. Replaces the old raw-source-text
+        `"USERPROFILE" in nearby` window match: a rung must structurally
+        BE (or wrap) a USERPROFILE env read, not merely sit a few lines
+        near one, to exempt a site."""
+        if HomeResolutionLintEngine._is_environ_get_userprofile(node):
+            return True
+        if isinstance(node, ast.Call):
+            return any(HomeResolutionLintEngine._contains_userprofile_rung(arg) for arg in node.args)
+        if isinstance(node, ast.IfExp):
+            return HomeResolutionLintEngine._contains_userprofile_rung(
+                node.body
+            ) or HomeResolutionLintEngine._contains_userprofile_rung(node.orelse)
+        return False
+
+    @staticmethod
+    def _is_environ_get_call(node: ast.AST) -> bool:
+        """Any `<name>.environ.get(...)` call regardless of key -- used only
+        to walk the NESTED default-arg rung of the shape-4 ladder
+        (`os.environ.get('HOME', os.environ.get('USERPROFILE', ''))`). The
+        outer call is gated by `_is_environ_get_home` (its own key must be
+        CLAUDE_HOME/HOME); an inner default-arg call is picked up as a rung
+        regardless of *its* key, so a USERPROFILE (or any other) fallback
+        key still surfaces textually as part of the site."""
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "get"):
+            return False
+        return _attr_or_name(func.value) == "environ"
+
+    @staticmethod
+    def _extract_guard_ladder(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.expr] | None:
+        """Shape 2 -- the `if`/`return` guard ladder, per the spike the
+        DOMINANT shape in this fleet. Scans `func`'s OWN top-level body
+        statements (not nested blocks) for `if <test>: return <value>`
+        guards (no `elif`/`else`) and any plain `return <value>` statement,
+        collecting each guard's `test` and return value, plus a bare
+        return's value, as rung candidates in source order.
+
+        Requires at least one `if`/`return` guard to qualify -- a bare
+        `def f(): return X` with no guard at all is not ladder-shaped and is
+        left to the BoolOp/ternary/default-arg passes instead, so a trivial
+        single-expression return body is never double-counted as a
+        function-level site (the spike's own double-report bug -- see
+        `_iter_ladder_sites`).
+
+        DOES resolve one shape of intra-function name binding -- a `test` or
+        return value that is a bare `Name` bound by a preceding top-level
+        `<name> = <expr>` statement in the SAME function body resolves to
+        `<expr>` for rung purposes (the live fleet's actual guard-ladder
+        shape: `claude_home = os.environ.get("CLAUDE_HOME")` then `if
+        claude_home: return Path(claude_home)`). This is deliberately
+        narrower than general data-flow: only a direct single-`Name`
+        assignment target, looked up by exact name, no re-assignment
+        tracking, no resolution through any OTHER expression shape (a
+        ternary's `test`/`body`/`orelse`, in particular, is NOT resolved
+        this way -- see the module docstring's declared miss for the
+        ternary-over-locally-bound-env-read shape, which this pass does not
+        share the fix for)."""
+        bindings: dict[str, ast.expr] = {}
+
+        def resolve(node: ast.expr) -> ast.expr:
+            if isinstance(node, ast.Name) and node.id in bindings:
+                return bindings[node.id]
+            return node
+
+        rungs: list[ast.expr] = []
+        saw_guard = False
+        for stmt in func.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ):
+                bindings[stmt.targets[0].id] = stmt.value
+                continue
+            if (
+                isinstance(stmt, ast.If)
+                and not stmt.orelse
+                and len(stmt.body) == 1
+                and isinstance(stmt.body[0], ast.Return)
+                and stmt.body[0].value is not None
+            ):
+                rungs.append(resolve(stmt.test))
+                rungs.append(resolve(stmt.body[0].value))
+                saw_guard = True
+                continue
+            if isinstance(stmt, ast.Return) and stmt.value is not None:
+                rungs.append(resolve(stmt.value))
+        return rungs if saw_guard else None
+
+    @staticmethod
+    def _default_arg_ladder_rungs(node: ast.AST) -> list[ast.expr] | None:
+        """Shape 4 (EM ruling -- in scope; see module docstring) -- the
+        nested default-arg ladder `os.environ.get('HOME',
+        os.environ.get('USERPROFILE', ''))`. Requires the OUTER call to
+        itself be a CLAUDE_HOME/HOME `environ.get` (`_is_environ_get_home`);
+        each nested default arg that is itself an `environ.get(...)` call
+        (`_is_environ_get_call`, any key) is unwrapped one level at a time
+        into its own rung; the innermost non-`environ.get` default value is
+        the final rung. Returns `None` for anything that is not this shape."""
+        if not (isinstance(node, ast.Call) and HomeResolutionLintEngine._is_environ_get_home(node)):
+            return None
+        if len(node.args) < 2:
+            return None
+        rungs: list[ast.expr] = [node]
+        current = node.args[1]
+        while HomeResolutionLintEngine._is_environ_get_call(current) and len(current.args) >= 2:
+            rungs.append(current)
+            current = current.args[1]
+        rungs.append(current)
+        return rungs
+
+    def _iter_ladder_sites(self, tree: ast.AST) -> list[tuple[ast.AST, list[ast.expr]]]:
+        """The single ladder-extraction seam: one `(representative_node,
+        rungs)` pair per distinct home-resolution ladder site in `tree`,
+        covering all four shapes (BoolOp `or`-chain, `if`/`return`
+        guard-ladder, ternary, nested default-arg ladder) and deduplicated
+        via a covered-node-id set so a guard-ladder function body and a
+        BoolOp/ternary/default-arg expression nested inside it are never
+        both yielded as separate sites for the same function (the spike's
+        own double-report bug: the same function reported once as an
+        expression and once as a function-body ladder).
+
+        Both `find_bare_home_or_chains` (below) and C5's `rung_order` rule
+        consume this seam, which is what keeps presence and order scoring
+        the same ladders.
+
+        Pass order is significant and coarsest-first: function-level
+        guard-ladders are claimed FIRST ("one function yields one
+        finding"), then BoolOp or-chains, then standalone ternaries, then
+        default-arg ladders -- each pass skips any node a strictly earlier
+        pass already claimed.
+
+        **Declared miss (not extracted by this seam, by design -- state the
+        limit rather than papering over it):** the
+        ternary-over-locally-bound-env-read shape (`claude_home =
+        os.environ.get("CLAUDE_HOME")` on one line, then `(Path(claude_home)
+        if claude_home else Path.home())` on the next) is NOT covered -- the
+        expression-level ternary pass below does not resolve intra-function
+        name bindings, only the literal test/body/orelse it is built from.
+        The guard-ladder pass has the same limit for the same reason (see
+        `_extract_guard_ladder`'s own docstring)."""
+        covered: set[int] = set()
+        sites: list[tuple[ast.AST, list[ast.expr]]] = []
+
+        def claim(node: ast.AST) -> None:
+            for child in ast.walk(node):
+                covered.add(id(child))
+
+        for node in ast.walk(tree):
+            if id(node) in covered or not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            rungs = self._extract_guard_ladder(node)
+            if rungs is not None:
+                sites.append((node, rungs))
+                claim(node)
+
+        for node in ast.walk(tree):
+            if id(node) in covered:
+                continue
+            if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+                sites.append((node, list(node.values)))
+                claim(node)
+
+        for node in ast.walk(tree):
+            if id(node) in covered:
+                continue
+            if isinstance(node, ast.IfExp):
+                sites.append((node, [node.test, node.body, node.orelse]))
+                claim(node)
+
+        for node in ast.walk(tree):
+            if id(node) in covered:
+                continue
+            rungs = self._default_arg_ladder_rungs(node)
+            if rungs is not None:
+                sites.append((node, rungs))
+                claim(node)
+
+        return sites
+
     def find_bare_home_or_chains(self) -> list[Finding]:
-        """AST: `os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or
-        <fallback with no Windows rung>`. A chain is exempt if it -- or the
-        three source lines immediately above/below the boolop -- mentions
-        `USERPROFILE`, `Path.home()`, or `os.path.expanduser`."""
+        """`_iter_ladder_sites`-driven: `os.environ.get("CLAUDE_HOME") or
+        os.environ.get("HOME") or <fallback with no Windows rung>`, in any
+        of that seam's four shapes. A site is considered only when one of
+        its rungs is a genuine CLAUDE_HOME/HOME `environ.get` call
+        (`_is_environ_get_home`) -- otherwise it is unrelated code, not a
+        home-resolution ladder at all. A qualifying site is exempt only when
+        one of its OWN rungs structurally contains a genuine `Path.home()`
+        call (`_contains_path_home_call`) or a genuine `environ.get`
+        USERPROFILE rung (`_contains_userprofile_rung`, an explicit fallback
+        rung the ladder itself carries -- this is also how the shape-4
+        default-arg ladder's own literal `'USERPROFILE'` key reads as
+        exempt, with no shape-specific casing needed) -- a `USERPROFILE`
+        mention merely nearby in the source (a comment, a docstring, an
+        unrelated neighbouring statement) no longer exempts anything, only
+        a rung that IS the ladder's own expression does. `expanduser` is
+        not exempting either way: an unguarded `os.path.expanduser` call is
+        the vulnerable site itself, not evidence the chain already guards
+        against it."""
         findings: list[Finding] = []
         for path in self.iter_py_files():
             tree, lines = _parse(path)
             if tree is None:
                 continue
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
+            for node, rungs in self._iter_ladder_sites(tree):
+                if not any(self._is_environ_get_home(rung) for rung in rungs):
                     continue
-                if not any(self._is_environ_get_home(v) for v in node.values):
+                if any(self._contains_path_home_call(rung) for rung in rungs):
                     continue
-                if self._chain_has_windows_rung(node):
-                    continue
-                end = node.end_lineno or node.lineno
-                window_start = max(1, node.lineno - 3)
-                window_end = min(len(lines), end + 3)
-                nearby = "\n".join(lines[window_start - 1 : window_end])
-                if "USERPROFILE" in nearby or "expanduser" in nearby or "Path.home" in nearby:
+                if any(self._contains_userprofile_rung(rung) for rung in rungs):
                     continue
                 findings.append(
                     Finding(_relpath(self.repo_root, path), node.lineno, _line_text(lines, node.lineno))
                 )
+        return findings
+
+    # -- Rule 5: ladder rungs out of the master order (C5). --------------
+
+    _RUNG_ORDER: dict[str, int] = {
+        "CLAUDE_HOME": 0,
+        "HOME": 1,
+        "USERPROFILE": 2,
+        "PATH_HOME": 3,
+    }
+
+    @staticmethod
+    def _contains_environ_get_key(node: ast.AST) -> str | None:
+        """Structurally walks `node` for a genuine `environ.get(<key>, ...)`
+        call (any string key, not just CLAUDE_HOME/HOME/USERPROFILE),
+        reached through a wrapping call or a ternary -- the same expression
+        shapes `_contains_userprofile_rung` recognises, generalised to
+        return the key itself rather than a boolean, so `rung_order` can
+        classify a rung by WHICH key it reads rather than merely whether
+        it reads one."""
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "get" and _attr_or_name(func.value) == "environ":
+                if node.args:
+                    arg0 = node.args[0]
+                    if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                        return arg0.value
+            for arg in node.args:
+                found = HomeResolutionLintEngine._contains_environ_get_key(arg)
+                if found is not None:
+                    return found
+            return None
+        if isinstance(node, ast.IfExp):
+            return HomeResolutionLintEngine._contains_environ_get_key(
+                node.body
+            ) or HomeResolutionLintEngine._contains_environ_get_key(node.orelse)
+        return None
+
+    @staticmethod
+    def _contains_expanduser_call(node: ast.AST) -> bool:
+        """Structurally walks `node` for an `expanduser(...)` call (e.g.
+        `os.path.expanduser`), reached through a wrapping call or ternary --
+        mirrors `_contains_path_home_call`'s shape, gated on the `expanduser`
+        attribute name rather than `Path.home`."""
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "expanduser":
+                return True
+            return any(HomeResolutionLintEngine._contains_expanduser_call(arg) for arg in node.args)
+        if isinstance(node, ast.IfExp):
+            return HomeResolutionLintEngine._contains_expanduser_call(
+                node.body
+            ) or HomeResolutionLintEngine._contains_expanduser_call(node.orelse)
+        return False
+
+    @classmethod
+    def _classify_rung(cls, node: ast.expr) -> str | None:
+        """Classifies one ladder rung expression into a master-order key
+        (`"CLAUDE_HOME"` / `"HOME"` / `"USERPROFILE"` / `"PATH_HOME"`), or
+        one of the two non-order terminal-shape violations (`"TILDE"` for a
+        literal `"~"`, `"EXPANDUSER"` for an unguarded
+        `os.path.expanduser(...)` rung), or `None` for a rung this rule does
+        not reason about at all (an empty-string default, an unrelated
+        expression) -- a `None` rung is silently skipped for ordering
+        purposes, same as C4's ladder-extraction seam treats an unrecognised
+        terminal.
+
+        **Key check runs BEFORE the `Path.home()` check (C5b fix).** A
+        shape-4 default-arg ladder's OUTER rung is the whole
+        `environ.get(key, default)` call node itself (see
+        `_default_arg_ladder_rungs`'s `rungs: list[ast.expr] = [node]`) --
+        when that key's own default arg nests a genuine `Path.home()` call
+        (`os.environ.get("CLAUDE_HOME", str(Path.home()))`), checking
+        `_contains_path_home_call` first mis-walked INTO that default arg
+        and misclassified the whole outer CLAUDE_HOME rung as `PATH_HOME`,
+        producing a same-rank "transposition" against the real terminal
+        rung and a false-positive report on correct code. Checking the
+        rung's own top-level `environ.get` key first (which short-circuits
+        without recursing into the default-arg branch once matched) fixes
+        the outer rung's classification without weakening the terminal
+        `Path.home()` check for rungs that genuinely are not an
+        `environ.get` call themselves."""
+        key = cls._contains_environ_get_key(node)
+        if key in cls._RUNG_ORDER:
+            return key
+        if cls._contains_path_home_call(node):
+            return "PATH_HOME"
+        if isinstance(node, ast.Constant) and node.value == "~":
+            return "TILDE"
+        if cls._contains_expanduser_call(node):
+            return "EXPANDUSER"
+        return None
+
+    def find_rung_order_violations(self) -> list[Finding]:
+        """`_iter_ladder_sites`-driven, ladder-kind-agnostic (per the spec:
+        the bootstrap ladder is the contents ladder minus its first rung, so
+        both are subsequences of one master ordering and this rule never
+        branches on which kind a site is): CLAUDE_HOME -> HOME ->
+        USERPROFILE -> Path.home(). A site is considered only when one of
+        its rungs is a genuine CLAUDE_HOME/HOME `environ.get` call (the same
+        `bare_or` gate -- otherwise it is not a home-resolution ladder at
+        all). A skipped rung mid-ladder PASSES (`CLAUDE_HOME -> USERPROFILE
+        -> Path.home()` is valid and Windows-correct) -- only a
+        transposition (a later-order rung appearing before an
+        earlier-order one) is a violation, plus the two non-order
+        terminal-shape violations (a literal `"~"` rung, an unguarded
+        `expanduser` rung). Rung PRESENCE (whether a given key appears at
+        all) stays `bare_or`'s concern, not this rule's -- this rule only
+        scores the relative order of the rungs a site actually has."""
+        findings: list[Finding] = []
+        for path in self.iter_py_files():
+            tree, lines = _parse(path)
+            if tree is None:
+                continue
+            for node, rungs in self._iter_ladder_sites(tree):
+                if not any(self._is_environ_get_home(rung) for rung in rungs):
+                    continue
+                kinds = [self._classify_rung(rung) for rung in rungs]
+                violation = any(kind in ("TILDE", "EXPANDUSER") for kind in kinds)
+                if not violation:
+                    order_seq = [self._RUNG_ORDER[kind] for kind in kinds if kind in self._RUNG_ORDER]
+                    violation = any(
+                        order_seq[i] >= order_seq[i + 1] for i in range(len(order_seq) - 1)
+                    )
+                if violation:
+                    findings.append(
+                        Finding(_relpath(self.repo_root, path), node.lineno, _line_text(lines, node.lineno))
+                    )
         return findings
 
     def run_all_rules(self) -> dict[str, list[Finding]]:
@@ -500,6 +965,7 @@ class HomeResolutionLintEngine:
             "colon_join": self.find_colon_path_joins(),
             "forward_slash": self.find_forward_slash_only_splits(),
             "bare_or": self.find_bare_home_or_chains(),
+            "rung_order": self.find_rung_order_violations(),
         }
 
 

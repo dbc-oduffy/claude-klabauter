@@ -141,8 +141,8 @@ def _target_with_subdir(tmp_path: Path, name="t") -> "publish.ResolvedTarget":
     return publish.ResolvedTarget(name=name, mode="mirror", source_dir=src, dest_dir=dst)
 
 
-def _ctx(claude-klabauter) -> "publish.PercolateEngineContext":
-    return publish.PercolateEngineContext(claude-klabauter=claude-klabauter, store={"targets": {}})
+def _ctx(claude_klabauter_engine) -> "publish.PercolateEngineContext":
+    return publish.PercolateEngineContext(engine_claude_klabauter=claude_klabauter_engine, store={"targets": {}})
 
 
 class TestIdentityCheckGateFiresOnPlantedFinding:
@@ -151,10 +151,10 @@ class TestIdentityCheckGateFiresOnPlantedFinding:
         _write_checker(target.dest_dir)
         (target.dest_dir / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         with pytest.raises(publish.EngineUnavailableError) as excinfo:
             publish.dispatch_percolate_pre_ci(
-                _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+                _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
             )
         assert "check-persona-names.py exited 1" in str(excinfo.value)
         assert "PLANTED-FINDING-SENTINEL" in str(excinfo.value)
@@ -166,9 +166,9 @@ class TestIdentityCheckGatePassesCleanTree:
         _write_checker(target.dest_dir)
         # No sentinel file -- synthetic checker exits 0.
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         publish.dispatch_percolate_pre_ci(
-            _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )  # must not raise
 
 
@@ -177,14 +177,14 @@ class TestIdentityCheckGateAbsentScriptIsALoudSkip:
         target = _target(tmp_path)
         # No `.github/scripts/check-persona-names.py` at all.
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         result = run_identity_check(str(target.dest_dir))
         assert result == {"ran": False, "skipped": True, "exit_code": None, "findings": ""}
 
         # And the gate itself must not raise -- a skip is neither a pass nor
         # a failure entry in guard_results, it is simply not present.
         publish.dispatch_percolate_pre_ci(
-            _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )
 
     def test_skip_is_printed_loudly_not_silent(self, tmp_path, capsys):
@@ -192,9 +192,9 @@ class TestIdentityCheckGateAbsentScriptIsALoudSkip:
         Even though the gate stays advisory, the skip has to be visible."""
         target = _target(tmp_path)
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         publish.dispatch_percolate_pre_ci(
-            _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )
         captured = capsys.readouterr()
         assert "WARNING" in captured.err
@@ -221,9 +221,9 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
         # pass rather than merely "did not raise" (a skip also would not
         # raise, so a clean-tree-only assertion wouldn't distinguish them).
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         publish.dispatch_percolate_pre_ci(
-            _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )  # must not raise -- and must have actually run, per the next test
 
     def test_nonzero_exit_at_repo_root_aborts_subdir_row(self, tmp_path):
@@ -232,10 +232,10 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
         _write_checker(repo_root)
         (repo_root / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         with pytest.raises(publish.EngineUnavailableError) as excinfo:
             publish.dispatch_percolate_pre_ci(
-                _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+                _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
             )
         assert "check-persona-names.py exited 1" in str(excinfo.value)
         assert "PLANTED-FINDING-SENTINEL" in str(excinfo.value)
@@ -248,11 +248,11 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
         _write_checker(target.dest_dir)  # wrong location, old buggy behavior
         (target.dest_dir / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         # The repo-root checker doesn't exist, so this is a loud skip, not a
         # run against the wrongly-placed one (which would have failed).
         publish.dispatch_percolate_pre_ci(
-            _ctx(claude-klabauter), tmp_path / "store.yaml", target, tmp_path / "src", None
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )  # must not raise -- skip, never a false failure either
 
 
@@ -273,8 +273,8 @@ class TestEndOfRunIdentityCheckLeg:
         # No `.github/scripts/check-persona-names.py` at all -- the virgin-
         # destination shape.
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         ok = publish.dispatch_end_of_run_identity_check(
             ctx, [repo_root], target_filtered=False
         )
@@ -284,8 +284,8 @@ class TestEndOfRunIdentityCheckLeg:
         repo_root = tmp_path / "repo"
         (repo_root / ".git").mkdir(parents=True)
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         ok = publish.dispatch_end_of_run_identity_check(
             ctx, [repo_root], target_filtered=True
         )
@@ -295,8 +295,8 @@ class TestEndOfRunIdentityCheckLeg:
         repo_root = tmp_path / "repo"
         (repo_root / ".git").mkdir(parents=True)
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         publish.dispatch_end_of_run_identity_check(ctx, [repo_root], target_filtered=True)
         captured = capsys.readouterr()
         assert "WARNING" in captured.err
@@ -308,8 +308,8 @@ class TestEndOfRunIdentityCheckLeg:
         _write_checker(repo_root)
         # No sentinel -- synthetic checker exits 0.
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         ok = publish.dispatch_end_of_run_identity_check(
             ctx, [repo_root], target_filtered=False
         )
@@ -325,8 +325,8 @@ class TestEndOfRunIdentityCheckLeg:
         _write_checker(repo_root)
         (repo_root / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         ok = publish.dispatch_end_of_run_identity_check(
             ctx, [repo_root], target_filtered=True
         )
@@ -347,8 +347,8 @@ class TestEndOfRunIdentityCheckLeg:
         virgin_root = tmp_path / "virgin-repo"
         (virgin_root / ".git").mkdir(parents=True)
 
-        claude-klabauter = _IdentityCheckClaudeKlabauter()
-        ctx = _ctx(claude-klabauter)
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        ctx = _ctx(claude_klabauter_engine)
         ok = publish.dispatch_end_of_run_identity_check(
             ctx, [clean_root, virgin_root], target_filtered=False
         )
@@ -407,7 +407,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: setup_dir / "store.yaml")
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _StubClaudeKlabauter())
-    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude-klabauter, store_path: {"targets": {}})
+    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude_klabauter_engine, store_path: {"targets": {}})
     monkeypatch.setattr(publish, "check_identity_file_present", lambda *a, **k: None)
     monkeypatch.setattr(publish, "check_identity_file_safe", lambda *a, **k: None)
     monkeypatch.setattr(

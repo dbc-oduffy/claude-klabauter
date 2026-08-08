@@ -115,11 +115,15 @@ def cmd_layout(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _default_settings_home() -> str:
-    return (
-        os.environ.get("COORDINATOR_SETTINGS_HOME")
-        or os.environ.get("CLAUDE_HOME")
-        or os.path.join(os.path.expanduser("~"), ".coordinator-claude-settings")
+    explicit = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.environ.get("CLAUDE_HOME")
+    if explicit:
+        return explicit
+    home = (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
     )
+    return os.path.join(home, ".coordinator-claude-settings")
 
 
 def cmd_visited_init(args: argparse.Namespace) -> int:

@@ -181,9 +181,9 @@ def _lessons_dir():
         if _same_path(root, home):
             # Meta-repo cwd → dedup scan must look in claude-klabauter, not in ~/.claude.
             # Mirrors coordinator-queue-append._output_path else-branch (stop-the-rot).
-            claude-klabauter = _claude_klabauter_root()
-            if claude-klabauter is not None:
-                return os.path.join(claude-klabauter, "state", "lessons")
+            claude_klabauter_root = _claude_klabauter_root()
+            if claude_klabauter_root is not None:
+                return os.path.join(claude_klabauter_root, "state", "lessons")
             # Claude-Klabauter unresolvable: degrade gracefully — dedup scan falls back to the
             # git-root path; the pre-check becomes a no-op (directory likely absent)
             # rather than crashing or writing to the wrong place.

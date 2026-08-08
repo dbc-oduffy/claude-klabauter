@@ -35,12 +35,19 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 # CLAUDE_HOME is a $HOME-substitute per machine-local-registry.md §4a
 # (CLAUDE_HOME=/x -> install at /x/.claude/), so the .claude suffix below is correct.
-_CLAUDE_HOME = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+_CLAUDE_HOME = (
+    os.environ.get("CLAUDE_HOME")
+    or os.environ.get("HOME")
+    or os.environ.get("USERPROFILE")
+    or str(Path.home())
+)
 _SETTINGS_HOME = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
-    os.path.expanduser("~"), ".coordinator-claude-settings"
+    os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~"),
+    ".coordinator-claude-settings",
 )
 # Durable settings-home install first, legacy ~/.claude/bin second.
 _REAL_BASES = (

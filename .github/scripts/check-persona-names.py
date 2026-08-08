@@ -75,8 +75,39 @@ from _repo import (  # noqa: E402
 )
 
 
+# Leading boundary: a non-alphanumeric predecessor, OR a backslash-escape
+# sequence such as ``\b`` / ``\t`` / ``\w``.
+#
+# WHY THE SECOND ALTERNATIVE EXISTS
+# ---------------------------------
+# The first alternative alone has a false-negative class that hid a real leak
+# until 2026-08-07. Source that ships regex or string literals writes a persona
+# name as ``\bName\b`` — and the ``b`` of the preceding escape IS alphanumeric,
+# so the plain lookbehind read it as an intra-word occurrence and skipped it.
+# Any ``\<letter>``-adjacent persona name in any payload was therefore invisible
+# to the very gate that exists to catch it.
+#
+# This does NOT weaken the intra-word rule: the escape alternative requires a
+# literal backslash immediately before the single letter, so ``MyName`` and
+# ``xxNamexx`` remain non-findings exactly as before.
+#
+# ACCEPTED FALSE-POSITIVE CLASS: the escape alternative is escape-agnostic --
+# it does not check that the single letter is one of the real Python/regex
+# escape letters (``b``, ``t``, ``n``, ``r``, ``f``, ``v``, ``s``, ``w``,
+# ``d``, ...). A single-letter-glued form that is NOT actually an escape
+# (a Windows path segment, a line-continuation backslash) can therefore also
+# fire, e.g. ``\xName`` where ``x`` merely precedes the name in a path rather
+# than acting as ``\x41``. Narrowing to the real escape-letter set would not
+# close this: ``x`` IS a real escape letter, so the cited example would still
+# fire even under a narrower alternative. This is a deliberate tradeoff, not
+# an oversight: a rare false positive here is preferred over the false
+# negative this alternative exists to close, on a fail-closed publish gate.
+# Pinned in ``test_check_persona_names_escape_adjacent.py``.
+_LEAD = r"(?:(?<![A-Za-z0-9])|(?<=\\[A-Za-z]))"
+
+
 def _tok(*fragments: str) -> str:
-    """Token pattern bounded by non-alphanumerics, so ``_`` and ``-`` separate.
+    """Token pattern bounded by non-alphanumerics (or a backslash escape).
 
     Accepts the token in FRAGMENTS, joined here at runtime. That indirection is
     load-bearing and must not be "simplified" away into a single literal:
@@ -92,7 +123,7 @@ def _tok(*fragments: str) -> str:
     The same reasoning is why the multi-word entries below are written with
     character classes between their parts rather than as plain strings.
     """
-    return rf"(?<![A-Za-z0-9]){''.join(fragments)}(?![A-Za-z0-9])"
+    return rf"{_LEAD}{''.join(fragments)}(?![A-Za-z0-9])"
 
 
 # (label, compiled pattern). Case-sensitivity is per-entry and deliberate:
@@ -122,13 +153,13 @@ BANNED: list[tuple[str, re.Pattern[str]]] = [
     ("fleet codename", re.compile(_tok("opti", "con"), re.IGNORECASE)),
     ("fleet codename", re.compile(_tok("holo", "deck"), re.IGNORECASE)),
     ("fleet codename", re.compile(_tok("del", r"phi(?:pro)?"), re.IGNORECASE)),
-    ("fleet codename", re.compile(r"(?<![A-Za-z0-9])project[-_ ]rag(?![A-Za-z0-9])", re.IGNORECASE)),
+    ("fleet codename", re.compile(rf"{_LEAD}project[-_ ]rag(?![A-Za-z0-9])", re.IGNORECASE)),
     # The meta-repo codename, in every delimiter form INCLUDING the hyphenated
     # role-id suffixes (`...-em`, `...-lead`) that the upstream glued-identifier
     # rewrite does not match. This is the specific residue the publish-side
     # guard's exemption set lets through.
     ("fleet codename", re.compile(
-        r"(?<![A-Za-z0-9])doe[-_ ]claude(?:[-_][A-Za-z]+)*(?![A-Za-z0-9])", re.IGNORECASE)),
+        rf"{_LEAD}doe[-_ ]claude(?:[-_][A-Za-z]+)*(?![A-Za-z0-9])", re.IGNORECASE)),
     # Bare capitalised org abbreviation, case-SENSITIVE — distinctive enough to
     # match safely, and it is how the codename appears in possessive prose.
     ("fleet codename", re.compile(_tok(r"DoE"))),

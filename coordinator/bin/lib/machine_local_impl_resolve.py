@@ -53,7 +53,8 @@ def claude_home() -> str:
     override = os.environ.get("CLAUDE_HOME")
     if override:
         return override
-    return os.path.join(os.path.expanduser("~"), ".claude")
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, ".claude")
 
 
 def settings_home() -> str:
@@ -61,7 +62,8 @@ def settings_home() -> str:
     ``COORDINATOR_SETTINGS_HOME`` first and falling back to
     ``${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings``.
 
-    NOTE: the fallback base is ``CLAUDE_HOME or HOME`` directly — NOT
+    NOTE: the fallback base is ``CLAUDE_HOME or HOME or USERPROFILE or
+    expanduser("~")`` directly — NOT
     ``claude_home()`` (which itself appends ``/.claude``). Using
     ``claude_home()`` here would nest settings-home one level too deep
     (``~/.claude/.coordinator-claude-settings`` instead of the canonical
@@ -80,7 +82,12 @@ def settings_home() -> str:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return override
-    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(home, ".coordinator-claude-settings")
 
 

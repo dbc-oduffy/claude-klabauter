@@ -27,6 +27,7 @@ machines may lack a PowerShell runtime.
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import stat
 import subprocess
@@ -91,7 +92,11 @@ _SCENARIOS = [
     ),
     pytest.param(
         {"COORDINATOR_SETTINGS_HOME": "", "CLAUDE_HOME": "/tmp/ladder-claude-home"},
-        os.path.join("/tmp/ladder-claude-home", ".coordinator-claude-settings"),
+        # .sh composes this via plain bash "/"-string-concat (POSIX-literal
+        # env value, no real filesystem lookup involved) -- posixpath.join
+        # matches that, unlike os.path.join which on Windows leaves the "/"
+        # prefix untouched but joins the suffix with "\".
+        posixpath.join("/tmp/ladder-claude-home", ".coordinator-claude-settings"),
         id="claude-home-honored",
     ),
     pytest.param(
@@ -123,8 +128,18 @@ def _make_fake_python3(tmp_path: Path, capture_file: Path) -> Path:
 
 
 def _derive_settings_home(reader_path: str) -> str:
-    """<settings-home>/bin/_machine_local.py -> <settings-home>."""
-    return str(Path(reader_path).parent.parent)
+    """<settings-home>/bin/_machine_local.py -> <settings-home>.
+
+    The captured reader_path came straight out of bash's own plain "/"
+    string-concat (claude-machine-local.sh composes
+    ``"$_ml_settings_home/bin/_machine_local.py"`` with no path-arithmetic
+    library involved) -- always POSIX-separated regardless of host OS. Parse
+    it with ``posixpath``, not ``pathlib.Path`` -- on Windows, ``Path()``
+    silently re-renders a POSIX-separated string with backslashes on
+    ``str()``, which broke this comparison against the (also POSIX) expected
+    literals in ``_SCENARIOS`` for every non-Windows-native input.
+    """
+    return posixpath.dirname(posixpath.dirname(reader_path))
 
 
 @pytest.mark.parametrize("env_overrides,expected_settings_home", _SCENARIOS)

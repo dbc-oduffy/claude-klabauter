@@ -91,7 +91,12 @@ def test_home_resolution_windows_userprofile_shape():
 
 
 def test_settings_json_foreign_path_is_broken():
-    finding = bg.check_settings_json(_FIXTURES / "F-foreign-path")
+    # Fixture carries a Windows-drive-shaped command path  # abs-path-ok: describing existing fixture content, not a new hardcoded path
+    # (see F-foreign-path/settings.json) — foreign only on a POSIX host.
+    # Pinned per AC-6 ("verifiable from macOS"), matching the fixture's own
+    # authored shape, so this assertion is deterministic regardless of which
+    # platform actually runs pytest.
+    finding = bg.check_settings_json(_FIXTURES / "F-foreign-path", host_is_windows=False)
     assert finding.status == bg.STATUS_BROKEN
     assert "foreign-platform" in finding.detail
 
@@ -109,7 +114,11 @@ def test_settings_json_missing_is_broken():
 
 
 def test_settings_json_clean_is_ok():
-    finding = bg.check_settings_json(_FIXTURES / "F-clean")
+    # F-clean's command uses a bare POSIX env-var reference
+    # ($COORDINATOR_CONTENT_ROOT), which is only foreign-shaped on a Windows
+    # host (see `_is_posix_env_var_shaped`) — pinned to POSIX per AC-6 for
+    # the same reason as test_settings_json_foreign_path_is_broken above.
+    finding = bg.check_settings_json(_FIXTURES / "F-clean", host_is_windows=False)
     assert finding.status == bg.STATUS_OK
 
 
@@ -244,11 +253,20 @@ def test_end_to_end_wedge_and_recover(tmp_path, monkeypatch, capsys):
     # hooks.json/coordinator-root available under tmp_path, so the
     # settings.json repair leg itself will report REPAIR FAILED — this is
     # deliberately exercised too, to prove the honest-failure path, not
-    # just the happy path).
+    # just the happy path). `run_diagnose`/`main()` classify against the
+    # AMBIENT host (no host override — that is production-correct: a real
+    # recovery run must judge THIS machine, not a pinned one), so the wedge
+    # path itself must be shaped foreign to whichever host actually runs
+    # this test, not hardcoded to one platform's shape.
+    foreign_command = (
+        "python3 /Users/pm/example-doctrine-repo/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
+        if os.name == "nt"
+        else "python3 X:/example-doctrine-repo/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
+    )
     settings_path = config_dir / "settings.json"
     settings_path.write_text(
         json.dumps({"hooks": {"SessionStart": [{"hooks": [
-            {"type": "command", "command": "python3 X:/example-doctrine-repo/coordinator/hooks/x.py"}
+            {"type": "command", "command": foreign_command}
         ]}]}}),
     )
 

@@ -207,12 +207,18 @@ def _resolve_doe_root() -> str:
     the top of this file) — settings-home machine-local pointer first, then
     the legacy ``~/.claude`` location. Returns ``""`` if neither resolves.
     No subprocess spawn; at most two plain file reads."""
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or str(Path.home())
+    )
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME", "").strip() or os.path.join(
-        os.path.expanduser("~"), ".coordinator-claude-settings"
+        home, ".coordinator-claude-settings"
     )
     for candidate in (
         os.path.join(settings_home, "machine-local", ".doe-root"),
-        os.path.join(os.path.expanduser("~"), ".claude", ".doe-root"),
+        os.path.join(home, ".claude", ".doe-root"),
     ):
         try:
             with open(candidate, encoding="utf-8") as fh:

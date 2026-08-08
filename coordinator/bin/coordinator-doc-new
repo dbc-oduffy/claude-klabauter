@@ -1168,7 +1168,28 @@ def _delegate_to_workflow_scaffold() -> None:
             sys.exit(1)
         passthrough = passthrough + ["--repo", repo_root]
     cmd = [sys.executable, delegate] + passthrough
-    result = subprocess.run(cmd, **_no_console_creationflags())
+    # Explicit capture-then-forward, not bare stdio inheritance: a parent
+    # whose OWN stdout is already a redirected pipe (the common shape for
+    # any caller that itself captures this CLI's output — see
+    # test_workflow_delegation_auto_resolves_repo_when_omitted /
+    # test_workflow_delegation_empty_repo_flag_auto_resolves) combined with
+    # `_no_console_creationflags()`'s CREATE_NO_WINDOW on the delegate spawn
+    # was observed losing the delegate's stdout/stderr entirely on Windows —
+    # the delegate itself exits 0 having written real output, but the
+    # caller's own captured stdout comes back empty. Capturing here and
+    # writing it through explicitly sidesteps whatever handle-inheritance
+    # interaction produced that, and is strictly no worse in the normal
+    # (inherited-console) case.
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        **_no_console_creationflags(),
+    )
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
     sys.exit(result.returncode)
 
 
@@ -4717,7 +4738,12 @@ def main() -> None:
     # get a stable path regardless of the cwd from which they invoked this tool.
     # When the path was not re-anchored (no git repo or explicit --out), emit as-is.
     if _anchored_repo_root:
-        print(os.path.relpath(out_path, _anchored_repo_root))
+        # POSIX-normalized: this pointer is a stable cross-cwd id (fed into
+        # sidecar_path:/markdown-link consumers, e.g. code-reviewer DONE:
+        # <path>), not a filesystem handle a caller reopens locally --
+        # os.path.relpath() returns native-separator (backslash) strings on
+        # Windows, which those downstream consumers don't expect.
+        print(os.path.relpath(out_path, _anchored_repo_root).replace(os.sep, "/"))
     else:
         print(out_path)
 

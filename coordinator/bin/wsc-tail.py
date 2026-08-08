@@ -26,7 +26,7 @@ wsc_tail.py:413-448) — NOTE these diverge from the DORMANT wsc_commit op's nam
     stage_paths        optional   (the SKILL.md's WSC_PATHS)
     trailers           optional   (caller-supplied wins verbatim, else op derives
                                    via commit.anchors)
-    governing_plan_slug, deleted_paths, kept_entries, swept_renames, lock_timeout
+    governing_plan_slug, deleted_paths, kept_entries, swept_renames
                        optional, forwarded verbatim when the caller supplies them.
     review_trail       optional   (dict, assembled from discrete `--review-*`
                                    flags — see below; forwarded to the op's
@@ -280,13 +280,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Swept renames (optional; JSON string forwarded verbatim).",
     )
     parser.add_argument(
-        "--lock-timeout",
-        dest="lock_timeout",
-        type=float,
-        default=None,
-        help="Ceremony-lock timeout override (optional).",
-    )
-    parser.add_argument(
         "--review-sha-range",
         dest="review_sha_range",
         default=None,
@@ -466,7 +459,6 @@ def _build_params(args: argparse.Namespace, sid: str) -> dict:
         "deleted_paths": args.deleted_paths,
         "kept_entries": args.kept_entries,
         "swept_renames": args.swept_renames,
-        "lock_timeout": args.lock_timeout,
         "review_trail": _build_review_trail(args),
     }
     for key, value in optional_map.items():
@@ -574,8 +566,8 @@ def main(argv: list[str]) -> int:
     # exit_code=1 -- but only AFTER a full op dispatch, so the operator reads
     # it out of a post-dispatch failure dump instead of a usage error at the
     # keyboard they are standing at. Refusing here converts the whole class
-    # into an immediate argument error, before any transport, receipt, or
-    # ceremony lock. Deliberately a plain `is a directory` test rather than a
+    # into an immediate argument error, before any transport or receipt.
+    # Deliberately a plain `is a directory` test rather than a
     # `git_native.directory_pathspecs()` call: this module's Negative-spec
     # forbids importing coordinator_core (cc_invoke.route is the sole
     # transport), and the engine-side predicate stays the load-bearing guard

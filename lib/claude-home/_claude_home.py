@@ -67,6 +67,13 @@ Importable from Python callers that prefer not to shell out:
     cfg  = claude_config_path()       # ~/.claude.json
     sh   = settings_home()            # the coordinator settings home
 
+`coordinator/lib/claude-home/` is a hyphenated directory and cannot be
+imported as a normal package. Callers outside this directory that want
+`resolve_home_base()` / `home_dir()` without hand-rolling `sys.path` or
+`importlib` work should import the sibling shim instead:
+
+    from claude_home_shim import resolve_home_base, home_dir
+
 JSON read/write helpers for ~/.claude.json (generic primitives for any
 install script that touches the config; atomic-write semantics + BOM-tolerant
 read + JSONDecodeError enriched with file path):
@@ -189,6 +196,21 @@ def home_dir() -> Path:
             return p
 
     return Path.home()
+
+
+def resolve_home_base() -> Path:
+    """Return the resolved $HOME analog — an importable alias for home_dir().
+
+    Identical resolution to home_dir() (see its docstring for the precedence
+    chain); this name exists so consumers that only need the base directory
+    have a self-describing import target next to claude_home_dir() /
+    claude_config_path() / settings_home(), without reaching for the more
+    ambiguously-named home_dir(). Additive — home_dir() is unchanged and
+    remains the canonical implementation both delegate to.
+
+    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    """
+    return home_dir()
 
 
 def claude_home_dir() -> Path:

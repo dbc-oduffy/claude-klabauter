@@ -290,7 +290,12 @@ def _read_doe_root_pointer() -> str:
     docstring already documents as accepted (each caller keeps its own copy
     rather than sharing a private helper across module boundaries)."""
     settings_home_override = os.environ.get("COORDINATOR_SETTINGS_HOME")
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or ""
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or ""
+    )
     if settings_home_override:
         settings_home_dir = settings_home_override
     elif home:
@@ -410,10 +415,12 @@ class SweepConfig:
     json_mode: bool = False
     quiet: bool = False
     projects_root: str = field(default_factory=lambda: os.path.join(
-        os.environ.get("HOME", ""), ".claude", "projects"
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or "",
+        ".claude", "projects",
     ))
     file_history_root: str = field(default_factory=lambda: os.path.join(
-        os.environ.get("HOME", ""), ".claude", "file-history"
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or "",
+        ".claude", "file-history",
     ))
     handoffs_glob: str = ""
     log_path: str = ""

@@ -123,24 +123,54 @@ Subcommands (argv[1] selects):
                  the EM's judgment call, not the gate's.
 
                  C13 (docs/plans/2026-08-05-coverage-gate-planning-artifact-
-                 class.md, AC20/AC21): ONE narrow exception carved out of the
-                 "never a hard stop" posture above. When `verdict=
-                 PARTITION-MANDATORY` AND the on-disk review-trail carries no
-                 record whose resolved range shares at least one commit with
-                 the chain's own DAG (membership, an intersection test — see
+                 class.md, AC20/AC21; narrowed 2026-08-08 by
+                 docs/plans/2026-08-08-vouch-free-review-coverage-gates.md):
+                 ONE narrow exception carved out of the "never a hard stop"
+                 posture above. When `verdict=PARTITION-MANDATORY` AND the
+                 on-disk review-trail carries no record whose resolved range
+                 shares at least one commit with the chain's own DAG
+                 (membership, an intersection test — see
                  `directives_review.chain_partition_verdict_discharged`'s own
                  docstring) and whose code-bearing intersection covers every
-                 one of the chain's code-review obligations,
-                 this subcommand REFUSES (HALT, nonzero exit) instead of
-                 communicating and returning 0 — a session cannot be told
-                 "four reviewers required," run zero, and still reach a
-                 clean terminal stamp (the verified 2026-08-05 example-doctrine-repo
-                 incident this closes). Discharge is scoped by CHAIN
-                 MEMBERSHIP, not by tip ancestry (2026-08-06 correction): a
-                 record whose range-tip merely lands later on this fleet's
-                 ONE SHARED `work/{machine}/{date}` branch than the chain tip
-                 is NOT evidence it reviewed this chain — every concurrent
-                 peer session's record satisfies that condition regardless of
+                 one of the chain's code-review obligations, the uncovered
+                 set is partitioned (`_partition_foreign_uncovered_shas`)
+                 into `own_shas` (this session's own code commits — no
+                 discharging verdict yet, but recordable: nothing refuses a
+                 review-trail write naming them) and `foreign_shas`
+                 (ancestor/predecessor commits the foreign-session guard on
+                 trail-record writes refuses to let this session record,
+                 regardless of verdict):
+                   - `own_shas` non-empty => this subcommand REFUSES (HALT,
+                     exit 1) — a session cannot be told "four reviewers
+                     required," run zero, and still reach a clean terminal
+                     stamp (the verified 2026-08-05 example-doctrine-repo incident this
+                     closes) when the gap is one it could close itself. The
+                     halt names the performable remedy: record a per-commit
+                     review-trail verdict for each `own_shas` entry via
+                     coordinator/bin/coordinator-write-review-trail.py.
+                   - `own_shas` empty (every uncovered commit is
+                     foreign/ancestor-only) => communicate-only, exit 0. No
+                     record this session writes could discharge a commit the
+                     foreign-session guard refuses to let it name, so
+                     halting here would be unsatisfiable by any means this
+                     gate documents — the diagnostic still prints the full
+                     uncovered breakdown (code/planning/foreign counts, a
+                     per-sha describe list) to stderr, it just does not stop
+                     the close.
+                   - When `chain_code_shas`/`chain_dag_shas` themselves fail
+                     to resolve (diagnostics unavailable — a different
+                     failure mode than "own commits lack a verdict," and one
+                     where the own/foreign split cannot be computed at all),
+                     this subcommand still REFUSES (HALT, exit 1)
+                     unconditionally, conservative for lack of any basis to
+                     know the gap is foreign-only; that path's message names
+                     `/handoff` as the sanctioned exit.
+                 Discharge is scoped by CHAIN MEMBERSHIP, not by tip
+                 ancestry (2026-08-06 correction): a record whose range-tip
+                 merely lands later on this fleet's ONE SHARED
+                 `work/{machine}/{date}` branch than the chain tip is NOT
+                 evidence it reviewed this chain — every concurrent peer
+                 session's record satisfies that condition regardless of
                  what it actually reviewed, which live re-verification
                  proved trivially satisfiable by unrelated peer activity and
                  unsatisfiable-by-timing for a chain with no later peer
@@ -148,8 +178,7 @@ Subcommands (argv[1] selects):
                  discharged`'s own docstring for the full incident writeup.
                  `single-reviewer-ok` and every ordinary tier=B/none case are
                  UNCHANGED — this does not restore the pre-C10 hard-block
-                 posture, it adds one discharge check on top of it. The
-                 refusal message names `/handoff` as the sanctioned exit.
+                 posture, it adds one discharge check on top of it.
 
 Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md
   (M3 chunk WSC-2). Source: example-doctrine-repo
@@ -166,16 +195,19 @@ Exit codes:
   write-trail   — propagates coordinator-write-review-trail.py's own exit
                   code verbatim (0 success, 1 missing required arg, 2 native
                   op transport/refusal failure)
-  brightline-gate — 0 (tier=B/none communicate-only, or tier=A overridden),
-                  1 (tier=A hard stop; the underlying gate could not be
-                  reached / did not emit a parseable BRIGHTLINE line; or —
-                  C13 — verdict=PARTITION-MANDATORY with no discharging
-                  review-trail verdict on disk)
+  brightline-gate — 0 (tier=B/none communicate-only, including — C13 —
+                  verdict=PARTITION-MANDATORY whose uncovered set is
+                  foreign/ancestor-only, or tier=A overridden), 1 (tier=A
+                  hard stop; the underlying gate could not be reached / did
+                  not emit a parseable BRIGHTLINE line; or — C13 —
+                  verdict=PARTITION-MANDATORY with no discharging
+                  review-trail verdict on disk AND at least one uncovered
+                  commit this session itself authored, or with diagnostics
+                  unavailable)
 """
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import os
 import re
@@ -205,13 +237,12 @@ from coordinator_core.coverage import (  # noqa: E402
     _classify_bookkeeping_shas,
     _commit_touched_paths,
     _derive_dag_chain_set,
-    _pm_vouched_waiver_shas,
 )
-from coordinator_core.session import review_trail_vouch  # noqa: E402
 from coordinator_core.workstream_complete.chain_partition_verdict_store import (  # noqa: E402
     write_verdict_record,
 )
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel  # noqa: E402
+from coordinator_core import chain_attribution  # noqa: E402
 from coordinator_core import session_attribution  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
@@ -727,197 +758,87 @@ def _resolve_foreign_session_shas(sha_range: str, session_id: str | None) -> fro
     membership_shas` injects for session/chain-scoped records (review-
     integrator finding W2).
 
-    Review: review-integrator — B2/B3 (2026-08-06, brightline-discharge
-    round4). `session_attribution.trailer_foreign_shas` is deliberately
-    EXCLUSION-based: it runs `git log --no-merges` and only flags a commit
-    foreign when its OWN trailer AFFIRMATIVELY names a different session,
-    leaving a merge commit (never enumerated at all) and an untrailered
-    commit (enumerated but never flagged) creditable to ANY spanning record
-    regardless of session. That posture was safe when membership also
-    required range-containment; under this predicate's intersection-based
-    membership it is a bypass — a peer session's wide range can credit a
-    merge or untrailered chain commit that owes review. This wrapper does
-    NOT delegate to `trailer_foreign_shas` for that reason: it walks
-    `sha_range` WITH merges included and treats every commit whose trailer
-    does not affirmatively equal `session_id` (no trailer, a different
-    trailer, or a merge with no attributable trailer) as foreign —
-    inclusion-based with respect to what it can positively attribute, never
-    crediting a commit this session cannot be shown to have authored.
+    A2 (2026-08-08, N+1 git-spawn-class/amplification-gate plan): thin
+    wrapper over `chain_attribution.unattributed_foreign_shas` (P2) —
+    migrated onto that module's STRICTER, fail-closed posture rather than
+    `session_attribution.trailer_foreign_shas` (P1) or
+    `bulk_trailer_session_map`, both of which are EXCLUSION-based and would
+    reintroduce the membership bypass this resolver was hand-written to
+    close (a merge commit, or an untrailered commit, being creditable to
+    ANY spanning record regardless of session). See
+    `coordinator_core/chain_attribution.py`'s module and function
+    docstrings for the full posture contract this delegates to: merges,
+    ambiguous multi-valued trailers, and untrailered/non-grep-attributed
+    commits are all foreign; only a commit whose trailer affirmatively
+    equals `session_id`, or an untrailered commit the same-window grep leg
+    (`--no-merges --grep=^Session-Id: <sid>$`) attributes to `session_id`,
+    is not.
 
-    Review R1 (2026-08-06): the trailer-block atom this function reads
-    (`%(trailers:key=Session-Id,valueonly)`) disagrees with the message-line
-    `--grep=^Session-Id: <sid>$` `coverage._derive_dag_chain_set` uses to
-    decide CHAIN MEMBERSHIP — git's trailer parser only reads a commit
-    message's final paragraph, so a chain-member commit whose `Session-Id:`
-    line is followed by any non-trailer line becomes permanently foreign
-    here while the chain walk still counts it as a member, making a
-    PARTITION-MANDATORY verdict on such a chain unsatisfiable by any record.
-    Before returning, this function subtracts `_grep_attributed_session_
-    shas(sha_range, session_id)` — the SAME grep the chain walk uses,
-    scoped to `sha_range` — from `foreign`. This subtracted set can be a
-    STRICT SUPERSET of what the membership derivation itself attributes to
-    this walked node (`_derive_dag_chain_set` unions this leg with a
-    stricter `legacy_leg` that excludes grep matches stamped for a
-    different walked deliverable) — reviewed and traced (F5, 2026-08-06):
-    every commit the over-subtraction can reach still carries this
-    session's own `Session-Id` trailer, inside `sha_range`, and inside
-    `chain_code`, so crediting it to this record is the correct outcome,
-    not an over-credit; the discrepancy is only about which walked node
-    owns it, a distinction no credit path here reads. This does not soften
-    the merge/untrailered tightening: `--no-merges` means a merge commit is
-    never returned by the grep leg either, so it stays foreign exactly as
-    before.
+    Same signature and call shape as before this migration — callers
+    (`_record_membership_shas`, `_partition_foreign_uncovered_shas`) are
+    unaffected. `_FOREIGN_SHAS_CACHE` and `_git_run_for_session_attribution`
+    are passed straight through as the `cache`/`run` DI seams
+    `unattributed_foreign_shas` expects, so this file's Windows subprocess
+    conventions (`CREATE_NO_WINDOW`, no shell) and existing test
+    monkeypatch hooks keep working unchanged.
 
-    Raises (propagates `session_attribution.GitLogFailed`, or a plain
-    exception if the repo root is unresolvable) rather than degrading to an
-    empty result on failure — `_record_membership_shas`'s own try/except
-    around this callable already fails the record CLOSED on any exception,
-    matching `coverage.build_reviewed_set`'s own fail-closed
+    Raises (propagates `session_attribution.GitLogFailed` — re-exported
+    unchanged by `chain_attribution` — or a plain exception if the repo
+    root is unresolvable) rather than degrading to an empty result on
+    failure — `_record_membership_shas`'s own try/except around this
+    callable already fails the record CLOSED on any exception, matching
+    `coverage.build_reviewed_set`'s own fail-closed
     `_ForeignSessionLookupError` handling for this exact narrowing. Isolated
     for test monkeypatching."""
     repo_root = _resolve_repo_root()
     if not repo_root:
         raise RuntimeError("_resolve_foreign_session_shas: repo root unresolvable")
-    key = (sha_range, session_id)
-    if key in _FOREIGN_SHAS_CACHE:
-        return _FOREIGN_SHAS_CACHE[key]
-    rc, out, err = _git_run_for_session_attribution(
-        ["git", "log", "--format=%H%x1f%(trailers:key=Session-Id,valueonly)", sha_range],
+    return chain_attribution.unattributed_foreign_shas(
+        sha_range,
+        session_id,
         repo_root,
+        _FOREIGN_SHAS_CACHE,
+        _git_run_for_session_attribution,
     )
-    if rc != 0:
-        raise session_attribution.GitLogFailed(
-            f"git log failed while resolving foreign-session commits for "
-            f"sha_range={sha_range!r}: {err.strip() or 'unknown error'}"
-        )
-    foreign: set[str] = set()
-    for line in out.splitlines():
-        if "\x1f" not in line:
-            continue
-        sha, trailer = line.split("\x1f", 1)
-        sha = sha.strip()
-        trailer = trailer.strip()
-        if not sha:
-            continue
-        if trailer != session_id:
-            foreign.add(sha)
-    foreign -= _grep_attributed_session_shas(sha_range, session_id)
-    result: frozenset[str] = frozenset(foreign)
-    _FOREIGN_SHAS_CACHE[key] = result
-    return result
 
 
-#: Module-level memo for `_resolve_vouched_shas`, keyed on
-#: `(session_id, live_vouch_candidate_shas)` (the `_pm_vouched_waiver_shas`
-#: half is session-independent and re-reads the same directory for every
-#: key — cheap, but memoized here anyway so a repeat call for the same key,
-#: common across a chain's many trail records, doesn't re-scan two
-#: directories and re-resolve the closing session id per record).
+#: Module-level memo for `_resolve_vouched_shas`, keyed on `session_id`
+#: (session-independent lookups are cheap, but memoized here anyway so a
+#: repeat call for the same key, common across a chain's many trail records,
+#: doesn't re-scan the waiver directory and re-resolve the closing session
+#: id per record).
 _VOUCHED_SHAS_CACHE: dict = {}
 
 
-def _live_review_trail_vouch_shas(
-    repo_root: str, candidate_shas: frozenset[str],
-) -> frozenset[str]:
-    """Consult the LIVE, per-session PM-granted review-trail vouch
-    (`review_trail_vouch.check_review_trail_vouch`) directly, on the
-    coverage READ side, for the CURRENT closing session — the exact same
-    predicate `review_trail_write._guard_foreign_session_range` consults at
-    write time before minting a permanent `pm-vouches/<sha>.json` waiver
-    (`_pm_vouched_waiver_shas` reads that store).
-
-    That write-side guard is gated to `scope_kind == "diff"` only
-    (`write_review_trail_entry` — `if scope_kind == "diff" and
-    caller_worktree is not None: _guard_foreign_session_range(...)`); a
-    `scope_kind == "plan"` record NEVER runs it, so a foreign commit
-    credited by a plan-scoped record never gets a waiver file minted no
-    matter how live the covering grant was. `_pm_vouched_waiver_shas`
-    alone is therefore permanently blind to a plan-scoped vouch — this
-    function closes that gap by consulting the grant directly instead of
-    depending on an artifact `scope_kind == "plan"` structurally never
-    produces (root cause: 2026-08-07, `state/subagent-share/*/
-    coordinatorexecutor-74e8304a.md`). This does not touch, weaken, or
-    duplicate the write-side guard itself — same predicate, same module,
-    called at read time instead of relying on its write-time side effect.
-
-    Scoped to `candidate_shas` (the caller's own chain-relevant sha
-    universe) — `check_review_trail_vouch` returns only the intersection of
-    `candidate_shas` and the grant's own named `shas` list, so this can
-    never credit a sha the grant does not explicitly name, and a
-    request naming nothing returns nothing rather than resolving the
-    session for no reason.
-
-    Fail-safe toward narrowing: no candidate shas, no resolvable closing
-    session id, or `check_review_trail_vouch` raising, all return an empty
-    set — mirrors `_resolve_vouched_shas`'s own posture, never toward
-    silently manufacturing coverage."""
-    if not candidate_shas:
-        return frozenset()
-    session_id = _resolve_closing_session_id(repo_root)
-    if not session_id:
-        return frozenset()
-    try:
-        vouched, _record = review_trail_vouch.check_review_trail_vouch(
-            candidate_shas, cwd=repo_root, session_id=session_id,
-        )
-    except Exception:  # noqa: BLE001 - a broken live-vouch lookup must narrow, never crash
-        return frozenset()
-    return vouched
-
-
-def _resolve_vouched_shas(
-    session_id: str | None, *, live_vouch_candidate_shas: frozenset[str] = frozenset(),
-) -> frozenset[str]:
+def _resolve_vouched_shas(session_id: str | None) -> frozenset[str]:
     """The `vouched_shas` callable `directives_review._record_membership_
-    shas` injects (2026-08-06, read-side vouch-honouring fix): unions the
-    write-side PM-vouch waiver store (`coverage._pm_vouched_waiver_shas`,
-    presence-only, honoured for ANY record regardless of which session wrote
-    it) with the gate-minted chain-ancestry waiver store
+    shas` injects (2026-08-06, read-side vouch-honouring fix): the
+    gate-minted chain-ancestry waiver store
     (`coverage._chain_ancestry_waived_shas`, scoped to `session_id` — the
     reading trail record's own session_id, i.e. the chain identity that
-    would have minted a matching waiver) — the exact same union
-    `coverage._narrow_foreign_session_scope` already performs for
-    `build_reviewed_set`'s own read path. A sha named here is exempted from
-    the foreign-session strip by `_record_membership_shas`, honouring a PM
-    vouch (or gate-minted waiver) on the coverage read side the way the
-    write side's `ForeignSessionRangeRefused` guard already names as the
-    sanctioned remedy.
-
-    2026-08-07: also unions `_live_review_trail_vouch_shas`, scoped to
-    `live_vouch_candidate_shas` (the caller's chain-relevant sha universe,
-    bound once via `functools.partial` at the `cmd_brightline_gate` call
-    site — the SAME callable signature `directives_review` injects, `(sha)
-    -> shas`, unaffected). This is the ONLY source that can credit a
-    `scope_kind == "plan"` record's foreign shas: `_pm_vouched_waiver_shas`
-    never sees them (no waiver file is ever minted for a plan-scope write —
-    see `_live_review_trail_vouch_shas`'s own docstring), and
-    `_chain_ancestry_waived_shas` is a gate-minted HALT artifact, not a
-    PM-grant one. `live_vouch_candidate_shas` defaults to the empty
-    frozenset — a caller that omits it (there are none left in this file,
-    but any future direct caller) sees byte-identical pre-2026-08-07
-    behavior, since an empty candidate set always resolves to nothing.
+    would have minted a matching waiver). A sha named here is exempted from
+    the foreign-session strip by `_record_membership_shas`, honouring a
+    gate-minted waiver on the coverage read side the way the write side's
+    `ForeignSessionRangeRefused` guard already names as the sanctioned
+    remedy.
 
     Fail-safe toward narrowing, never toward crediting: an unresolvable repo
-    root, or either underlying reader raising, returns an empty set — the
+    root, or the underlying reader raising, returns an empty set — the
     caller (`_record_membership_shas`) treats that identically to "no vouch
     exists," so the foreign strip proceeds exactly as before this resolver
-    existed. Both underlying readers (`_pm_vouched_waiver_shas`,
-    `_chain_ancestry_waived_shas`) already degrade an unreadable/absent
-    waiver directory to an empty set on their own (never raise), but this
-    wrapper does not rely on that alone — any other exception (e.g. repo
-    root resolution) is caught here too. Isolated for test monkeypatching."""
-    key = (session_id, live_vouch_candidate_shas)
+    existed. `_chain_ancestry_waived_shas` already degrades an
+    unreadable/absent waiver directory to an empty set on its own (never
+    raises), but this wrapper does not rely on that alone — any other
+    exception (e.g. repo root resolution) is caught here too. Isolated for
+    test monkeypatching."""
+    key = session_id
     if key in _VOUCHED_SHAS_CACHE:
         return _VOUCHED_SHAS_CACHE[key]
     result: frozenset[str] = frozenset()
     try:
         repo_root = _resolve_repo_root()
         if repo_root:
-            result = (
-                _pm_vouched_waiver_shas(repo_root)
-                | _chain_ancestry_waived_shas(repo_root, session_id)
-                | _live_review_trail_vouch_shas(repo_root, live_vouch_candidate_shas)
-            )
+            result = _chain_ancestry_waived_shas(repo_root, session_id)
     except Exception:  # noqa: BLE001 - a broken vouch lookup must narrow, never crash
         result = frozenset()
     _VOUCHED_SHAS_CACHE[key] = result
@@ -1609,15 +1530,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 chain_partition_uncovered_shas(
                     trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
                     narrow_foreign_shas=_resolve_foreign_session_shas,
-                    # `chain_dag_shas` (the chain's unfiltered DAG sha
-                    # universe) bounds the live-vouch candidate set — the
-                    # largest set any trail record's membership check could
-                    # ever need narrowed, so this can never credit a sha
-                    # outside this chain even when the PM grant names one.
-                    vouched_shas=functools.partial(
-                        _resolve_vouched_shas,
-                        live_vouch_candidate_shas=frozenset(str(s).lower() for s in chain_dag_shas),
-                    ),
+                    vouched_shas=_resolve_vouched_shas,
                     chain_planning_shas=_resolve_chain_planning_shas(args.from_handoff),
                 )
                 if chain_code_shas and chain_dag_shas
@@ -1634,14 +1547,6 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
         if not discharged:
-            print(
-                "HALT: brightline verdict=PARTITION-MANDATORY and the "
-                "on-disk review-trail carries no verdict that is both "
-                "non-pending and non-waived — the review this chain "
-                "mandates has not been run. This session cannot reach a "
-                "terminal stamp in this state.",
-                file=sys.stderr,
-            )
             if chain_code_shas and chain_dag_shas:
                 # 2026-08-07 rendering fix (state/audits/2026-08-07-wsc-
                 # chain-gate-counts-doc-only-commits.md): a rendering-only
@@ -1661,6 +1566,28 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 foreign_shas, own_shas = _partition_foreign_uncovered_shas(
                     uncovered, closing_session_id,
                 )
+                if own_shas:
+                    print(
+                        "HALT: brightline verdict=PARTITION-MANDATORY and "
+                        "the on-disk review-trail carries no verdict that "
+                        "is both non-pending and non-waived for at least "
+                        "one commit this session itself authored — the "
+                        "review this chain mandates has not been run. "
+                        "This session cannot reach a terminal stamp in "
+                        "this state.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        "NOTE: brightline verdict=PARTITION-MANDATORY and "
+                        "the on-disk review-trail carries no verdict that "
+                        "is both non-pending and non-waived, but every "
+                        "uncovered commit is an ancestor/foreign-session "
+                        "commit — none of them are recordable by this "
+                        "session. This is a communicate-only gate here, "
+                        "not a halt.",
+                        file=sys.stderr,
+                    )
                 print(
                     f"UNCOVERED: {len(uncovered)} of {len(chain_code_shas)} "
                     "chain code commit(s) carry no discharging review-trail "
@@ -1691,35 +1618,11 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                         "trail write: authored by a predecessor session, "
                         "and the foreign-session guard refuses any range "
                         "naming them, so no record this session writes can "
-                        "discharge them. Sanctioned exits: a PM vouch "
-                        "waiver, or /handoff.",
-                        file=sys.stderr,
-                    )
-                    # 2026-08-07 (state/audits/2026-08-07-review-gate-scoping-
-                    # predecessor-and-planning-artifacts.md, candidate fix #1):
-                    # a chain-ancestry waiver (DR-245) already exists precisely
-                    # for this case, but this subcommand only READS waivers —
-                    # it never mints them. Name the cheap remedy explicitly so
-                    # an operator does not default straight to the two
-                    # expensive sanctioned exits above when the correct next
-                    # step is one gate invocation away.
-                    #
-                    # 2026-08-07 fix (coordinator_core/ops/coverage_gate.py):
-                    # the mint's gate now keys on `result.uncovered_shas`
-                    # being non-empty, not on `result.verdict` — the verdict
-                    # answers a CODE-coverage question and the mint answers a
-                    # foreign-session-narrowing question, so an
-                    # all-planning-uncovered chain (which nets
-                    # `coverage_ratio == 1.0` / verdict=COVERED) is exactly
-                    # the case the mint needs to reach, not one it should
-                    # skip. The mint instruction below therefore applies
-                    # unconditionally here, all-planning or not.
-                    print(
-                        "REMEDY (foreign/predecessor commits): run "
-                        "`wsc-coverage-gate-runner.py coverage-gate "
-                        f"--from-handoff {args.from_handoff}` first to mint a "
-                        "chain-ancestry waiver for these commits, then retry "
-                        "this brightline-gate invocation.",
+                        "discharge them. FINDING: a record whose range ends "
+                        "in a literal `..HEAD` is rejected by the "
+                        "stored-HEAD defense before any waiver is ever "
+                        "consulted (coverage._record_range_has_stored_head) "
+                        "— this is why these commits read uncovered.",
                         file=sys.stderr,
                     )
                 if own_shas:
@@ -1731,18 +1634,36 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     )
             else:
                 print(
+                    "HALT: brightline verdict=PARTITION-MANDATORY and the "
+                    "on-disk review-trail carries no verdict that is both "
+                    "non-pending and non-waived — the review this chain "
+                    "mandates has not been run. This session cannot reach a "
+                    "terminal stamp in this state.",
+                    file=sys.stderr,
+                )
+                print(
                     "UNCOVERED: union-coverage diagnostics unavailable — "
                     "the chain's code-bearing commit set could not be "
                     "resolved, so no uncovered-commit list can be shown.",
                     file=sys.stderr,
                 )
-            print(
-                "ACTION: sanctioned exit is /handoff — hand the review to a "
-                "fresh session rather than proceeding here.",
-                file=sys.stderr,
-            )
+                print(
+                    "ACTION: sanctioned exit is /handoff — hand the review "
+                    "to a fresh session rather than proceeding here.",
+                    file=sys.stderr,
+                )
+                print(f'basis: "{basis}"', file=sys.stderr)
+                return 1
+            if own_shas:
+                print(
+                    "ACTION: record a review-trail verdict for the "
+                    "commit(s) named above via "
+                    "coordinator/bin/coordinator-write-review-trail.py "
+                    "— sanctioned exits: that, or /handoff.",
+                    file=sys.stderr,
+                )
             print(f'basis: "{basis}"', file=sys.stderr)
-            return 1
+            return 1 if own_shas else 0
 
     # tier in {B, none} — communicate loudly, never hard-stop. The EM (not
     # this script) decides reviewers_required; this only cross-checks a

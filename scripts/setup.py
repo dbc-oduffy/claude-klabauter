@@ -993,12 +993,20 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     the resolver to a dead or wrong path. Fails open (prints an advisory,
     returns None) if the helper itself is unimportable."""
     lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "lib"
+    if not (lib_dir / "read_doe_root_pointer.py").is_file():
+        # Published payload flattens: the mirror ships the helper at
+        # "<repo root>/lib" with no "coordinator/" segment. Probed as a
+        # fallback — private tree wins first.
+        lib_dir = Path(__file__).resolve().parent.parent / "lib"
     added = str(lib_dir) not in sys.path
     if added:
         sys.path.insert(0, str(lib_dir))
     try:
         from read_doe_root_pointer import coordinator_read_doe_root_pointer
     except Exception as exc:
+        # Swallows: helper missing at both probed dirs, import error inside
+        # the helper itself — advisory-only, callers fall through to the
+        # remaining rungs (see docstring: fails open).
         print(f"[ADVISORY] could not import read_doe_root_pointer helper ({exc}); skipping .doe-root pointer rung.", file=sys.stderr)
         return None
     finally:

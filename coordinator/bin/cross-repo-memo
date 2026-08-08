@@ -111,6 +111,7 @@ import subprocess
 import sys
 import textwrap
 import time as _time
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Shared memo composer — extracted to bin/lib/memo_compose.py (example-initiative tc-0 C4)
@@ -4577,7 +4578,14 @@ def _cmd_version() -> int:
     print(f"cross-repo-memo {digest} ({line_count} lines)")
     print(f"running from: {self_path}")
 
-    doe_root_file = os.path.join(os.path.expanduser("~"), ".claude", ".doe-root")
+    doe_root_file = os.path.join(
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or str(Path.home()),
+        ".claude",
+        ".doe-root",
+    )
     canonical = None
     try:
         with open(doe_root_file, "r", encoding="utf-8") as fh:

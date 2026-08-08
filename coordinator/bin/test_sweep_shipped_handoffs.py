@@ -112,7 +112,7 @@ def test_repo_root_derived_from_state_root_not_git_root():
 
         mod._resolve_repo_root = lambda: git_repo_root
         mod._resolve_state_root = lambda repo_root: state_root
-        mod._git_cat_file_e = lambda sha, cwd: True  # every SHA resolves
+        mod._batch_resolve_shipped_shas = lambda shas, cwd: {s: True for s in shas}  # every SHA resolves
 
         seen = {}
 
@@ -188,10 +188,10 @@ def test_frontmatter_selection_and_staleness():
         mod._resolve_repo_root = lambda: tmp
         mod._resolve_state_root = lambda repo_root: state_root
 
-        def fake_git_cat_file_e(sha, cwd):
-            return sha == "goodsha1"
+        def fake_batch_resolve(shas, cwd):
+            return {sha: sha == "goodsha1" for sha in shas}
 
-        mod._git_cat_file_e = fake_git_cat_file_e
+        mod._batch_resolve_shipped_shas = fake_batch_resolve
 
         seen = {}
 
@@ -348,7 +348,7 @@ def test_all_retained_no_candidates_still_returns_zero():
 
         mod._resolve_repo_root = lambda: tmp
         mod._resolve_state_root = lambda repo_root: state_root
-        mod._git_cat_file_e = lambda sha, cwd: False  # nothing resolves
+        mod._batch_resolve_shipped_shas = lambda shas, cwd: {s: False for s in shas}  # nothing resolves
 
         called = {"n": 0}
 
@@ -414,9 +414,9 @@ def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
 
         mod._resolve_repo_root = lambda: tmp
         mod._resolve_state_root = lambda repo_root: state_root
-        # _git_cat_file_e runs for real here (tmp is a real, commit-less repo,
-        # so `deadbee1` never resolves) -- exercising the actual resolvability
-        # gate, not a stand-in.
+        # _batch_resolve_shipped_shas runs for real here (tmp is a real,
+        # commit-less repo, so `deadbee1` never resolves) -- exercising the
+        # actual batch resolvability gate, not a stand-in.
 
         seen = {}
 
@@ -450,6 +450,95 @@ def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
         after = open(path, "r", encoding="utf-8").read()
         assert applied is True
         assert before == after, "re-stamping the same dead SHA must not rewrite the file"
+
+
+# ===========================================================================
+# C11 — sweep-shipped-handoffs adopts _batch_check_hex_tokens for the
+# shipped-subclass SHA-resolvability gate instead of one `cat-file -e` spawn
+# per handoff.
+# ===========================================================================
+def test_batch_resolve_shipped_shas_makes_one_batch_check_call_for_many_shas():
+    """N distinct shipped_in SHAs must resolve via exactly ONE
+    `_batch_check_hex_tokens` call, not N -- the C11 amplification fix."""
+    mod = _load_module()
+
+    calls = []
+
+    def fake_batch_check(tokens, cwd):
+        calls.append(list(tokens))
+        # every peeled token "resolves" except the one for "deadsha"
+        return {t: (None if t.startswith("deadsha") else "f" * 40) for t in tokens}
+
+    import coordinator_core.coverage as coverage_mod
+
+    orig = coverage_mod._batch_check_hex_tokens
+    coverage_mod._batch_check_hex_tokens = fake_batch_check
+    try:
+        shas = {"goodsha1", "goodsha2", "goodsha3", "deadsha1"}
+        resolved = mod._batch_resolve_shipped_shas(shas, "/some/repo")
+    finally:
+        coverage_mod._batch_check_hex_tokens = orig
+
+    assert len(calls) == 1, f"expected exactly one batch-check call, got {len(calls)}: {calls}"
+    assert len(calls[0]) == 4, f"all four distinct SHAs fed into the single call: {calls[0]}"
+    assert all(tok.endswith("^{commit}") for tok in calls[0]), (
+        f"each token must be peeled to commit ('<sha>^{{commit}}'): {calls[0]}"
+    )
+    assert resolved == {
+        "goodsha1": True,
+        "goodsha2": True,
+        "goodsha3": True,
+        "deadsha1": False,
+    }, resolved
+
+
+def test_batch_resolve_shipped_shas_treats_absent_token_as_unresolved():
+    """§ anti-scope 25: a token silently DROPPED from the batch-check return
+    (never explicitly mapped to None) must be reconciled as unresolved --
+    fail-closed, absence is never read as a resolved answer."""
+    mod = _load_module()
+
+    import coordinator_core.coverage as coverage_mod
+
+    def fake_batch_check_drops_one(tokens, cwd):
+        # Simulate a dropped/omitted entry: return a dict missing one of the
+        # requested tokens entirely (not even mapped to None).
+        return {tok: "f" * 40 for tok in tokens if not tok.startswith("droppedsha")}
+
+    orig = coverage_mod._batch_check_hex_tokens
+    coverage_mod._batch_check_hex_tokens = fake_batch_check_drops_one
+    try:
+        resolved = mod._batch_resolve_shipped_shas({"presentsha", "droppedsha"}, "/some/repo")
+    finally:
+        coverage_mod._batch_check_hex_tokens = orig
+
+    assert resolved["presentsha"] is True
+    assert resolved["droppedsha"] is False, (
+        "a token absent from the batch-check return must reconcile to unresolved, "
+        f"got {resolved!r}"
+    )
+
+
+def test_batch_resolve_shipped_shas_empty_input_makes_no_call():
+    mod = _load_module()
+
+    import coordinator_core.coverage as coverage_mod
+
+    calls = []
+
+    def fake_batch_check(tokens, cwd):
+        calls.append(tokens)
+        return {}
+
+    orig = coverage_mod._batch_check_hex_tokens
+    coverage_mod._batch_check_hex_tokens = fake_batch_check
+    try:
+        resolved = mod._batch_resolve_shipped_shas(set(), "/some/repo")
+    finally:
+        coverage_mod._batch_check_hex_tokens = orig
+
+    assert resolved == {}
+    assert calls == [], "an empty SHA set must not spawn a batch-check call at all"
 
 
 def test_c9_unresolvable_escape_stamp_failure_falls_back_to_retained():

@@ -27,6 +27,8 @@ Three markers govern it:
 | `pending_fix` | Known-broken subject, excluded from BOTH tiers. Itemized worklist: `state/audits/2026-07-22-coordinator-tests-tier-classification.md` |
 | `designed_red` | Red by design — its failure output IS the worklist, never a gate |
 
+`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py::test_burn_down_known_preexisting_amplification_sites` (G2, `2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md`) is `designed_red`: 116 pre-existing per-item git-amplification sites, itemized worklist `state/audits/2026-08-08-git-amplification-gate-known-sites.md`. The sibling standing test in the same file, `test_no_new_amplification_sites_outside_known_inventory`, is NOT `designed_red` — it is a green-at-land subset-of-frozen-inventory assertion.
+
 ## Run the whole tier at most once
 
 ~7 minutes and ~26k tests against a standing set of pre-existing failures unrelated to any given

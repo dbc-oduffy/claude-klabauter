@@ -110,8 +110,14 @@ def main() -> None:
         except reg.RegistryError as exc:
             print(str(exc), file=sys.stderr)
             sys.exit(exc.exit_code)
+        # `resolve_consumers()` intentionally returns native-separator paths
+        # (internal Path/os.path reopen-and-compare surface, confirmed by the
+        # 2026-08-07 separator-cluster pass which reverted a same-shape fix
+        # inside registry.py after it broke 9 green tests) -- normalize only
+        # here, at the CLI presentation boundary, mirroring
+        # verify-snippet-sync's `--list` fix.
         for path in consumers:
-            print(path)
+            print(str(path).replace(os.sep, "/"))
         sys.exit(0)
 
     if subcommand == "list-for":

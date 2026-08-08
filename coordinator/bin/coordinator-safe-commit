@@ -607,9 +607,30 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     if is_windows:
         win_cmdline = subprocess.list2cmdline(module_argv)
         posh_root = claude_klabauter_root.replace("'", "''")  # PowerShell single-quote escaping
+        # 2026-08-07 fix (round 3): a leading `# cmd.exe:` label line made
+        # the cmd.exe-runnable command NOT the first line of the returned
+        # string. That matters beyond readability: `subprocess.run(
+        # suggestion, shell=True, ...)` on Windows spawns via cmd.exe
+        # (Python's `shell=True` default there), and passing a string
+        # containing embedded newlines to `cmd /c` only ever executes the
+        # FIRST line — every line after the first newline is silently
+        # never run (verified: `cmd /c "REM x\necho y"` exits 0 printing
+        # nothing; `echo y` never fires). With the label first, cmd.exe
+        # tried to run the literal text `# cmd.exe:` as a command and
+        # failed with "'#' is not recognized..."; with any OTHER line
+        # first, that line — not the real command — would have been the
+        # only one to ever execute. The fix: put the live, directly-
+        # runnable cmd.exe command on line 1 with no comment ahead of it,
+        # and keep the original `# cmd.exe:`/`# PowerShell:` labelled
+        # reference block (still POSIX-`#`-commented, unchanged text) AFTER
+        # it — those lines are correctly never executed when the whole
+        # string is blindly run via cmd.exe (same "only line 1 runs"
+        # mechanism, now working FOR this shape instead of against it), and
+        # remain there as copy-paste reference text for a human reading the
+        # deny message directly.
         return (
-            "  # cmd.exe:\n"
             "  set PYTHONPATH=%s&& %s\n"
+            "  # cmd.exe:\n"
             "  # PowerShell:\n"
             "  $env:PYTHONPATH='%s'; %s"
             % (claude_klabauter_root, win_cmdline, posh_root, win_cmdline)

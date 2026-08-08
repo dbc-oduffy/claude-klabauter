@@ -115,6 +115,14 @@ if _THIS_DIR not in sys.path:
 # into lib/. Mirrors coordinator_registry.py's own _COORDINATOR_LIB_DIR.
 _CDR_COORDINATOR_LIB_DIR = os.path.join(os.path.dirname(os.path.dirname(_THIS_DIR)), "lib")
 
+# Published payload flattens: the mirror ships helper at "<repo root>/lib"
+# with no "coordinator/" segment. Three dirname()s up from _THIS_DIR
+# (bin/lib -> bin -> coordinator -> repo root), then down into lib/. Probed
+# as a fallback below — private tree wins first.
+_CDR_COORDINATOR_LIB_DIR_FLAT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(_THIS_DIR))), "lib"
+)
+
 # Published-manifest relpath (OSS flat layout). The private example-doctrine-repo-repo layout
 # nests the same relpath under `coordinator/`. Shared by the rung-1.5
 # codename-free ladder's acceptance gate below — see module docstring.
@@ -153,6 +161,8 @@ def _cdr_doe_root_pointer_rung() -> str:
     subprocess) rather than reimplementing the read — see
     coordinator_registry.py's `_mp_doe_root_pointer_rung()`, same shape."""
     lib_dir = _CDR_COORDINATOR_LIB_DIR
+    if not os.path.isfile(os.path.join(lib_dir, "read_doe_root_pointer.py")):
+        lib_dir = _CDR_COORDINATOR_LIB_DIR_FLAT
     added = lib_dir not in sys.path
     if added:
         sys.path.insert(0, lib_dir)
@@ -161,6 +171,9 @@ def _cdr_doe_root_pointer_rung() -> str:
 
         return coordinator_read_doe_root_pointer()
     except Exception:
+        # Swallows: helper missing at both probed dirs, import error inside
+        # the helper itself, or any runtime failure in the read — all
+        # collapse to "no pointer configured" by contract (never-raise).
         return ""
     finally:
         if added:

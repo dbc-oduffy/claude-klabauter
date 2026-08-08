@@ -115,7 +115,12 @@ def _resolve_cs_lib(plugin_root: Path) -> "Path | None":
     direct = plugin_root / "lib" / "coordinator-session.sh"
     if direct.is_file():
         return direct
-    doe_root_file = Path(os.environ.get("CLAUDE_HOME", os.path.expanduser("~"))) / ".claude" / ".doe-root"
+    doe_root_file = Path(
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    ) / ".claude" / ".doe-root"
     try:
         doe_root_text = doe_root_file.read_text(encoding="utf-8").strip()
     except OSError:
@@ -171,8 +176,14 @@ def main() -> None:
         cs_lib=_resolve_cs_lib(plugin_root),
     )
 
+    # `run()`'s SyncOutcome.lines carry native-OS separators for verify/--fix
+    # (an internal Path/os.path reopen-and-compare surface, deliberately not
+    # normalized -- see coordinator_core/snippet_sync/verify.py's --list
+    # block). `--list` output is a display/consumer-enumeration surface, not
+    # a filesystem handle a caller reopens, so normalize it to POSIX here at
+    # the CLI boundary rather than in the engine.
     for line in outcome.lines:
-        print(line)
+        print(Path(line).as_posix() if mode == "--list" else line)
     for line in outcome.stderr_lines:
         print(line, file=sys.stderr)
     sys.exit(outcome.exit_code)

@@ -107,7 +107,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
             raise KeyError(name)
 
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
-    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude-klabauter, path: {})
+    monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda engine_claude_klabauter, path: {})
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: tmp_path / "store.yaml")
     monkeypatch.setattr(publish, "resolve_percolate_identity_path", lambda setup_dir: tmp_path / "id")
     monkeypatch.setattr(publish, "check_identity_file_present", lambda path, setup_dir: tmp_path / "id")

@@ -33,10 +33,28 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from git_hook_install import ensure_prepare_commit_msg_hook  # noqa: E402
+from git_hook_install import (  # noqa: E402
+    ensure_hooks_fleet,
+    ensure_prepare_commit_msg_hook,
+)
 
 
 def main() -> int:
+    # `--fleet` heals BOTH coordinator hooks across every registered repo
+    # rather than only the process's own cwd. Added 2026-08-08: the daily
+    # self-heal on /workday-start was single-repo scoped, so 12 of 13 repos
+    # drifted for weeks while the heal reported success. Argument-parsed by
+    # hand rather than via argparse — this runs on the session-boot path and
+    # must never exit non-zero on an unrecognized argument.
+    if "--fleet" in sys.argv[1:]:
+        try:
+            return ensure_hooks_fleet(_BIN_DIR)
+        except Exception as exc:  # never block a session start
+            print(
+                f"coordinator-ensure-prepare-commit-msg-hook --fleet: {exc}",
+                file=sys.stderr,
+            )
+            return 0
     try:
         return ensure_prepare_commit_msg_hook(_BIN_DIR)
     except Exception as exc:  # never block a session start

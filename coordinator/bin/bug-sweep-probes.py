@@ -80,7 +80,7 @@ def _find_language_files(root: Path) -> list[str]:
         for filename in sorted(filenames):
             if filename.endswith(_LANGUAGE_EXTENSIONS):
                 rel = os.path.relpath(os.path.join(dirpath, filename), root)
-                hits.append(rel)
+                hits.append(rel.replace(os.sep, "/"))
                 if len(hits) >= _LANGUAGE_HEAD_LIMIT:
                     return hits
     return hits

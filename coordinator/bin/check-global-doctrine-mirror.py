@@ -170,7 +170,12 @@ def _claude_home() -> str:
     """Resolve `~/.claude`, honoring CLAUDE_HOME per the documented
     `${CLAUDE_HOME:-$HOME}/.claude` convention (matches
     coordinator/bin/count-distill-backlog.py's `_resolve_root()`)."""
-    base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    base = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(base, ".claude")
 
 

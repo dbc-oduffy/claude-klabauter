@@ -111,6 +111,120 @@ def _machine_local_argv(ml_bin: str) -> list[str]:
     return [ml_bin]
 
 
+def _ml_bin_invocable(path: str) -> bool:
+    """True if `path` (already known to be an existing file) is something
+    this OS would actually launch directly, i.e. answers "will invoking this
+    succeed" rather than "does this exist" — the question the bare-form
+    presence gate in `_resolve_doe_clone` actually needs.
+
+    Mirrors `coordinator_core.win_portability.is_executable`'s predicate
+    (kept inline, not imported — see the caller's comment / this module's
+    own STANDALONE constraint documented on `_machine_local_argv`):
+
+    POSIX: `os.access(path, os.X_OK)` is meaningful here — real exec-bit
+    query, not the Windows F_OK degradation this fix exists to avoid.
+
+    Windows: NTFS has no exec bit, so X_OK always lies "yes" for any
+    existing file. The real predicate is PATHEXT-resolvability: a file
+    whose own extension is in PATHEXT is directly launchable; an
+    extensionless file (this repo's own bareword CLI shim shape, e.g.
+    `machine-local`) is NOT what CreateProcess launches on its own —
+    Windows would need a PATHEXT-suffixed sibling for that, and this
+    predicate is asked about `path` itself, not a sibling.
+    """
+    if os.name != "nt":
+        return os.access(path, os.X_OK)
+    pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")
+    exts = {ext.upper() for ext in pathext.split(";") if ext}
+    _, suffix = os.path.splitext(path)
+    return suffix.upper() in exts
+
+
+def _resolve_claude_bin() -> str | None:
+    """Resolve the `claude` binary on PATH.
+
+    `shutil.which("claude")` on Windows only matches PATHEXT-suffixed
+    candidates (.EXE/.CMD/.BAT/...) per CPython's implementation — unlike
+    POSIX, it never also tries the bare, extensionless name. A real
+    npm-global `claude` install commonly ships BOTH a `.cmd`/`.ps1` Windows
+    wrapper AND a bare, shebang-launched entry point with no extension.
+    Calling `shutil.which("claude")` for the whole PATH first (as a
+    two-pass "try which, then fall back to a bare-name scan" shape) gets
+    PATH-order precedence wrong: a `.cmd` match several directories further
+    along PATH would win over a bare match in an EARLIER directory, because
+    the fallback pass never runs at all once `shutil.which` succeeds
+    anywhere. Walk PATH ourselves, one directory at a time, checking both
+    the PATHEXT-suffixed candidates AND the bare name before moving to the
+    next directory — this preserves PATH order across both candidate
+    shapes, matching POSIX PATH-search semantics instead of Windows'
+    extension-only default.
+
+    Review: code-reviewer (Finding 1) — this is the SAME PATH/PATHEXT walk as
+    `coordinator_core.launchable.which_path_ordered` (used by
+    `coordinator_core.ops.coordinator_complete_entry._which_render_rollup_shim`
+    for the identical CPython gap). Not delegated to that shared helper here
+    because this file is installed STANDALONE (see `_machine_local_argv`
+    above) and cannot import `coordinator_core` — genuinely can't be the same
+    *callable*. Kept as a deliberate, explicitly-linked duplicate instead: a
+    future PATHEXT-ordering fix belongs in `which_path_ordered` first, then
+    mirrored here by hand; this docstring is the pointer that makes the
+    "also update the standalone copy" step discoverable instead of silently
+    skipped.
+    """
+    pathext = os.environ.get("PATHEXT", "").split(os.pathsep) if os.name == "nt" else []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidates = [os.path.join(directory, "claude" + ext) for ext in pathext]
+        candidates.append(os.path.join(directory, "claude"))
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+def _claude_exec_argv(claude_bin: str) -> list[str]:
+    """Build the argv PREFIX (interpreter + script, or just the binary) used
+    to exec a resolved `claude` binary.
+
+    Mirrors `_machine_local_argv`'s shebang-awareness above. A bare,
+    extensionless match reached only via `_resolve_claude_bin`'s manual PATH
+    fallback is typically a shebang-launched script (`#!/usr/bin/env node`
+    or similar) — `os.execv` cannot launch that directly on native Windows
+    (CreateProcess cannot exec a non-PE file; WinError 193 "is not a valid
+    Win32 application"), so the real-exec leg would still never actually
+    reach `claude` even once resolved. Read the file's first line; a
+    shebang gets resolved to its named interpreter via PATH (POSIX kernel
+    semantics, done in userspace here) and prefixed. A `.exe`/`.cmd`/`.bat`
+    match (the common case `shutil.which` returns) is left unchanged —
+    Windows resolves those natively via CreateProcess/cmd.exe association.
+    """
+    try:
+        with open(claude_bin, "r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return [claude_bin]
+
+    if not first_line.startswith("#!"):
+        return [claude_bin]
+
+    shebang_parts = first_line[2:].strip().split()
+    if not shebang_parts:
+        return [claude_bin]
+
+    interpreter_name = os.path.basename(shebang_parts[0])
+    interpreter_args = shebang_parts[1:]
+    if interpreter_name == "env" and interpreter_args:
+        interpreter_name = interpreter_args[0]
+        interpreter_args = interpreter_args[1:]
+
+    interpreter = shutil.which(interpreter_name)
+    if not interpreter:
+        return [claude_bin]
+
+    return [interpreter, *interpreter_args, claude_bin]
+
+
 def _resolve_home_for_clone_shim() -> str | None:
     """CLAUDE_HOME -> HOME -> USERPROFILE, first non-empty wins — mirrors
     coordinator_core.install._shared.require_home's env-var order (kept
@@ -194,8 +308,18 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
         ml_argv = _machine_local_argv(ml_bin)
         # Sibling form: [sys.executable, <impl>] — _machine_local_argv already
         # proved <impl> is a file, and sys.executable is this running process.
-        # Bare form: [ml_bin] — that path is the thing exec'd, so it must be.
-        if ml_argv == [ml_bin] and not (os.path.isfile(ml_bin) and os.access(ml_bin, os.X_OK)):
+        # Bare form: [ml_bin] — that path is the thing exec'd directly by
+        # subprocess.run below, so the real question is "will this OS actually
+        # launch this path", not merely "does it exist". `os.access(ml_bin,
+        # os.X_OK)` answers the wrong question on Windows — NTFS has no exec
+        # bit, so X_OK there silently degrades to F_OK (existence-only) and
+        # would pass an extensionless non-invocable file. `_ml_bin_invocable`
+        # below mirrors `coordinator_core.win_portability.is_executable`'s
+        # predicate (POSIX mode-bit check / Windows PATHEXT-resolvability
+        # check) inline, NOT imported: this wrapper is installed STANDALONE
+        # and cannot import coordinator_core (see `_machine_local_argv`'s own
+        # docstring, same constraint, same reason).
+        if ml_argv == [ml_bin] and not (os.path.isfile(ml_bin) and _ml_bin_invocable(ml_bin)):
             sys.stderr.write(f"claude-doe: machine-local not found at {ml_bin} and not on PATH\n")
             sys.stderr.write("  Remediation: run /coordinator:install (Phase 3) to install machine-local\n")
             return None
@@ -392,12 +516,29 @@ def main(argv: list[str]) -> int:
     if os.environ.get("CLAUDE_DOE_NO_EXEC", "0") == "1":
         return 0
 
-    claude_bin = shutil.which("claude")
+    claude_bin = _resolve_claude_bin()
     if not claude_bin:
         sys.stderr.write("claude-doe: claude: command not found\n")
         return 127
 
-    os.execv(claude_bin, ["claude", "--plugin-dir", doe_coordinator, *passthrough_args])
+    exec_prefix = _claude_exec_argv(claude_bin)
+    full_argv = [*exec_prefix, "--plugin-dir", doe_coordinator, *passthrough_args]
+
+    if len(exec_prefix) > 1:
+        # Shebang-interpreter case (see `_claude_exec_argv`): `os.execv` on
+        # Windows builds its command line via a raw, unquoted join — a
+        # resolved interpreter path containing a space in one of its
+        # directory components (a stock Git-for-Windows install path is one
+        # common example) gets split mid-path and the launch fails ("No
+        # such file or directory" from the misparsed remainder).
+        # `subprocess.run` handles Windows argv quoting correctly, so use it
+        # here instead and propagate its exit code — not a literal process
+        # replacement, but observably equivalent for this wrapper's callers
+        # (same stdio, same final exit code).
+        result = subprocess.run(full_argv)
+        return result.returncode
+
+    os.execv(exec_prefix[0], full_argv)
     return 1  # pragma: no cover - unreachable, execv replaces the process on success
 
 
