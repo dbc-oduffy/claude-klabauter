@@ -24,7 +24,6 @@ Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -272,45 +271,39 @@ def test_write_chunk_table_atomic_and_write_confined(git_repo):
 
 def test_op_handler_missing_target_root_raises():
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_chunk_table({"run_id": "r1"}, None))
+        _cartography_chunk_table({"run_id": "r1"}, None)
 
 
 def test_op_handler_missing_run_id_raises(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_chunk_table({"target_root": str(git_repo)}, None))
+        _cartography_chunk_table({"target_root": str(git_repo)}, None)
 
 
 def test_op_handler_unsafe_run_id_raises(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(
-            _cartography_chunk_table(
-                {"target_root": str(git_repo), "run_id": "../escape"}, None
-            )
+        _cartography_chunk_table(
+            {"target_root": str(git_repo), "run_id": "../escape"}, None
         )
 
 
 def test_op_handler_happy_path_no_emit(git_repo):
-    result = asyncio.run(
-        _cartography_chunk_table(
-            {"target_root": str(git_repo), "run_id": "r1", "systems": _SYSTEMS},
-            None,
-        )
+    result = _cartography_chunk_table(
+        {"target_root": str(git_repo), "run_id": "r1", "systems": _SYSTEMS},
+        None,
     )
     assert "chunk_table_path" not in result
     assert result["buckets"]["systemA"]["files"] == ["systemA/bar.py", "systemA/foo.py"]
 
 
 def test_op_handler_emit_writes_file(git_repo):
-    result = asyncio.run(
-        _cartography_chunk_table(
-            {
-                "target_root": str(git_repo),
-                "run_id": "r1",
-                "systems": _SYSTEMS,
-                "emit": True,
-            },
-            None,
-        )
+    result = _cartography_chunk_table(
+        {
+            "target_root": str(git_repo),
+            "run_id": "r1",
+            "systems": _SYSTEMS,
+            "emit": True,
+        },
+        None,
     )
     assert result["chunk_table_path"] == "state/scratch/cartography-chunk-table/r1/chunk-table.json"
     written = git_repo / result["chunk_table_path"]
@@ -327,16 +320,14 @@ def test_op_handler_emit_reply_omits_the_bulk_payload(git_repo):
     the artifact and ALSO returning it would leave that failure mode intact.
     The reduction is read back from chunk_table_path; the reply stays small.
     """
-    result = asyncio.run(
-        _cartography_chunk_table(
-            {
-                "target_root": str(git_repo),
-                "run_id": "r1",
-                "systems": _SYSTEMS,
-                "emit": True,
-            },
-            None,
-        )
+    result = _cartography_chunk_table(
+        {
+            "target_root": str(git_repo),
+            "run_id": "r1",
+            "systems": _SYSTEMS,
+            "emit": True,
+        },
+        None,
     )
     assert "buckets" not in result
     assert "unbucketed" not in result
@@ -359,74 +350,64 @@ def test_op_handler_emit_reply_omits_the_bulk_payload(git_repo):
 
 def test_op_handler_oversized_threshold_bool_rejected(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(
-            _cartography_chunk_table(
-                {
-                    "target_root": str(git_repo),
-                    "run_id": "r1",
-                    "oversized_threshold": True,
-                },
-                None,
-            )
+        _cartography_chunk_table(
+            {
+                "target_root": str(git_repo),
+                "run_id": "r1",
+                "oversized_threshold": True,
+            },
+            None,
         )
 
 
 def test_op_handler_oversized_threshold_negative_rejected(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(
-            _cartography_chunk_table(
-                {
-                    "target_root": str(git_repo),
-                    "run_id": "r1",
-                    "oversized_threshold": -1,
-                },
-                None,
-            )
+        _cartography_chunk_table(
+            {
+                "target_root": str(git_repo),
+                "run_id": "r1",
+                "oversized_threshold": -1,
+            },
+            None,
         )
 
 
 def test_op_handler_oversized_threshold_zero_rejected(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(
-            _cartography_chunk_table(
-                {
-                    "target_root": str(git_repo),
-                    "run_id": "r1",
-                    "oversized_threshold": 0,
-                },
-                None,
-            )
+        _cartography_chunk_table(
+            {
+                "target_root": str(git_repo),
+                "run_id": "r1",
+                "oversized_threshold": 0,
+            },
+            None,
         )
 
 
 def test_op_handler_oversized_threshold_non_int_rejected(git_repo):
     with pytest.raises(ValueError):
-        asyncio.run(
-            _cartography_chunk_table(
-                {
-                    "target_root": str(git_repo),
-                    "run_id": "r1",
-                    "oversized_threshold": "5",
-                },
-                None,
-            )
+        _cartography_chunk_table(
+            {
+                "target_root": str(git_repo),
+                "run_id": "r1",
+                "oversized_threshold": "5",
+            },
+            None,
         )
 
 
 def test_op_handler_oversized_threshold_valid_bumps_version_and_retained_on_emit(git_repo):
     """Confirms the module docstring's claim that `oversized` is never
     stripped from an emitting call's reply (unlike buckets/unbucketed)."""
-    result = asyncio.run(
-        _cartography_chunk_table(
-            {
-                "target_root": str(git_repo),
-                "run_id": "r1",
-                "systems": _SYSTEMS,
-                "emit": True,
-                "oversized_threshold": 1,
-            },
-            None,
-        )
+    result = _cartography_chunk_table(
+        {
+            "target_root": str(git_repo),
+            "run_id": "r1",
+            "systems": _SYSTEMS,
+            "emit": True,
+            "oversized_threshold": 1,
+        },
+        None,
     )
     assert result["schema_version"] == SCHEMA_VERSION_OVERSIZED
     assert "oversized" in result

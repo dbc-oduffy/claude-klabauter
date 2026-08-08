@@ -120,9 +120,8 @@ from typing import List, Optional
 
 from coordinator_core.install.step_zero_emit import emit_line
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
 _PROBE_TIMEOUT_SECS = 10.0
 _NETWORK_PROBE_TIMEOUT_SECS = 8.0
 
@@ -152,7 +151,7 @@ def _run(argv: List[str], *, timeout: float = _PROBE_TIMEOUT_SECS, input_text: O
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return None
@@ -496,7 +495,7 @@ def probe_clone_auth() -> str:  # noqa: C901 — faithful port of a genuinely br
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                **_NO_CONSOLE,
+                **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
             ls_remote = None

@@ -60,6 +60,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional, Union
 
@@ -85,7 +86,7 @@ def _run(
         text=True,
         stdin=subprocess.DEVNULL,
         timeout=timeout,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

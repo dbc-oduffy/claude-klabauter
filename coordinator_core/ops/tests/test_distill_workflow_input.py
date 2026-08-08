@@ -151,12 +151,12 @@ def test_validate_catches_wiki_slugs_wrong_type():
 
 def test_handler_raises_on_missing_manifest():
     with pytest.raises(ValueError, match="manifest"):
-        _run(_handler({"repo_root": "/repo"}, repo_root=None))
+        _handler({"repo_root": "/repo"}, repo_root=None)
 
 
 def test_handler_raises_on_missing_repo_root():
     with pytest.raises(ValueError, match="repo_root"):
-        _run(_handler({"manifest": _sample_manifest()}, repo_root=None))
+        _handler({"manifest": _sample_manifest()}, repo_root=None)
 
 
 def test_dispatch_message_smoke():

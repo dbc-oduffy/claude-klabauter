@@ -132,7 +132,7 @@ from coordinator_core.bash_guards.block_stash_destruction import (
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 #: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
 #: nothing at runtime; matches the sibling identity-gated hard-denies
 #: (`block_subagent_commit`, `block_subagent_destructive_action`) it is
@@ -272,7 +272,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     # Deliberately no try/except -- fail-CLOSED-on-exception is the
     # dispatcher's job for hard-deny guards.
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}

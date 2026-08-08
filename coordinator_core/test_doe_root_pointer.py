@@ -50,7 +50,7 @@ def _write_registry(settings_home_dir, filename, key, value):
     reg_dir.mkdir(parents=True, exist_ok=True)
     path = reg_dir / filename
     existing = path.read_text() if path.exists() else ""
-    path.write_text(existing + f'\n"{key}" = "{value}"\n')
+    path.write_text(existing + f"\n\"{key}\" = '{value}'\n")
     return reg_dir
 
 
@@ -163,3 +163,54 @@ def test_registry_and_both_pointer_files_absent_returns_empty(monkeypatch, tmp_p
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-empty"))
     assert drp.read_doe_root_pointer() == ""
+
+
+# --- settings_home_override set, no home resolvable (CLAUDE_HOME/HOME/ --------
+# --- USERPROFILE all unset): the durable rung still applies, gated ------------
+# --- independently of home; the legacy rung stays unreachable without home. ---
+
+
+def test_override_only_no_home_still_resolves_durable_pointer(monkeypatch, tmp_path):
+    """Pins the settings_home_override-set/home-unset state: the durable rung
+    (settings_home() is override-driven, home-independent) must still resolve
+    even though the shared delegate helper's own home-gate would refuse to run
+    at all in this state — see read_doe_root_pointer's home-vs-no-home branch."""
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    settings_home_dir = tmp_path / "settings-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+    expected = tmp_path / "from-durable-override-only"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    (settings_home_dir / "machine-local" / ".doe-root").write_text(str(expected) + "\n")
+    assert drp.read_doe_root_pointer() == str(expected)
+
+
+def test_override_only_no_home_no_durable_pointer_returns_empty(monkeypatch, tmp_path):
+    """Same state as above but with no durable pointer file present: the
+    legacy rung must NOT be reached (it requires a resolvable home), so the
+    result is "" rather than an accidental read of a real machine's legacy
+    pointer."""
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
+    assert drp.read_doe_root_pointer() == ""
+
+
+def test_userprofile_only_reaches_legacy_rung_via_shared_helper(monkeypatch, tmp_path):
+    """Pins the home-present, delegate-reached state on the Windows-shaped
+    USERPROFILE-only rung: the local `home` computation and the shared
+    helper's internally-recomputed home use the identical
+    ``CLAUDE_HOME or HOME or USERPROFILE or ""`` expression, so a
+    USERPROFILE-only environment must resolve through the delegate exactly
+    like a CLAUDE_HOME/HOME-set one does."""
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".claude" / ".doe-root").write_text("/tmp/from-userprofile\n")
+    assert drp.read_doe_root_pointer() == "/tmp/from-userprofile"

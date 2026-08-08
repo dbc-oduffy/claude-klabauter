@@ -70,7 +70,7 @@ def _project_goal_artifact_to_wire(a: dict[str, Any]) -> dict[str, Any]:
 def _base_authoring_artifact() -> dict[str, Any]:
     return {
         "goal_id": "2026-W29-close-the-loop",
-        "repo": "dbc-example-operator/.example-doctrine-mirror-repo",
+        "repo": "dbc-oduffy/.example-doctrine-mirror-repo",
         "coordinator_root_path": ".",
         "period": "week",
         "period_value": "2026-W29",
@@ -80,7 +80,7 @@ def _base_authoring_artifact() -> dict[str, Any]:
         "status": "active",
         "provenance": {
             "source_kind": "coordinator_artifact",
-            "repo": "dbc-example-operator/.example-doctrine-mirror-repo",
+            "repo": "dbc-oduffy/.example-doctrine-mirror-repo",
             "ref": None,
             "path": "state/goals/2026-W29.yaml",
             "observed_at": "2026-07-13T08:00:01Z",
@@ -222,7 +222,7 @@ def test_two_distinct_repos_same_machine_produce_distinct_independently_valid_go
     repo_a = {
         **_base_authoring_artifact(),
         "goal_id": "2026-W29-repo-a-goal",
-        "repo": "dbc-example-operator/example-retrieval-repo",
+        "repo": "dbc-oduffy/example-retrieval-repo",
         "declared_by_machine": "machine-b",
         "period": "week",
         "period_value": "2026-W29",
@@ -230,7 +230,7 @@ def test_two_distinct_repos_same_machine_produce_distinct_independently_valid_go
     repo_b = {
         **_base_authoring_artifact(),
         "goal_id": "2026-W29-repo-b-goal",
-        "repo": "dbc-example-operator/claude-klabauter",
+        "repo": "dbc-oduffy/claude-klabauter",
         "declared_by_machine": "machine-b",
         "period": "week",
         "period_value": "2026-W29",
@@ -252,7 +252,7 @@ def test_two_distinct_repos_same_machine_produce_distinct_independently_valid_go
 def test_non_meta_repo_week_goal_not_cross_repo_aggregate_sentinel():
     artifact = {
         **_base_authoring_artifact(),
-        "repo": "dbc-example-operator/example-cockpit-repo",
+        "repo": "dbc-oduffy/example-cockpit-repo",
         "period": "week",
         "period_value": "2026-W29",
     }
@@ -265,13 +265,13 @@ def test_emitted_machine_goal_same_repo_different_machine_is_distinct_declaratio
     from_machine_b = {
         **_base_authoring_artifact(),
         "goal_id": "2026-W29-shared-repo-goal-b",
-        "repo": "dbc-example-operator/example-retrieval-repo",
+        "repo": "dbc-oduffy/example-retrieval-repo",
         "declared_by_machine": "machine-b",
     }
     from_machine_a = {
         **_base_authoring_artifact(),
         "goal_id": "2026-W29-shared-repo-goal-machine-a",
-        "repo": "dbc-example-operator/example-retrieval-repo",
+        "repo": "dbc-oduffy/example-retrieval-repo",
         "declared_by_machine": "machine-a",
     }
 

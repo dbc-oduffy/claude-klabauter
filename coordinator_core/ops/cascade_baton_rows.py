@@ -76,7 +76,6 @@ from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
     _OPEN,
     _all_spine_ids,
     _commit_required_chunk_ids,
-    _commit_subject,
     _committed_chunk_shas,
     _committed_id_covers_spine_id,
     _find_row_spans,
@@ -86,6 +85,7 @@ from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
     _parse_spine_rows,
     _row_disposition,
     _row_span_containing,
+    _run_git,
     _stamp_rows_in_body,
 )
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -235,6 +235,71 @@ def _assert_row_stamp_fidelity(
     return None
 
 
+def _batch_commit_subjects(repo_root: Path, shas: set) -> Dict[str, str]:
+    """One `git log` call resolving every `sha` in `shas` to its own commit
+    subject line, replacing what would otherwise be a per-row
+    `_commit_subject` spawn inside `resolve_baton_rows`'s row loop (this
+    chunk's N+1 site -- a baton with many resolvable rows previously spawned
+    once per row).
+
+    This is an OBJECT question (commit metadata at caller-supplied SHAs, not
+    a range), so it batches unconditionally -- same posture as C13's
+    `_batch_commit_timestamps` (`coordinator/bin/reap-orphaned-in-flight-
+    handoffs.py`, commit 0df3818bc) and `emit/sections/handoffs.
+    _resolve_shipped_in_dates`, whose reconciliation shape this mirrors
+    rather than re-deriving: one `--no-walk=unsorted --ignore-missing` call,
+    prefix-matched output lines back to the requested SHA set via an
+    explicit `matched` set, never trusting output-row-count as a proxy for
+    "every requested sha resolved".
+
+    `--ignore-missing` exits 0 with an unresolvable sha simply ABSENT from
+    stdout -- an unrecognized ref, a sha outside a shallow clone's fetched
+    history, or a since-rewritten history. Absence is never read as
+    resolved: a sha with no matching output line is simply absent from the
+    returned map, and `resolve_baton_rows` falls back to the exact same
+    `f"commit {sha} (subject unavailable)"` placeholder `_commit_subject`
+    itself used, for a resolved-but-failed-lookup sha and a positively
+    absent one alike -- fail-closed, and honest either way.
+
+    Delimiter/parse contract (fork-adjudication.md § 10.3, `%x1f` is the
+    house idiom for an untrusted-content field boundary): `%H%x1f%s` per
+    commit -- one line per commit, since `%s` is git's own first-line-only
+    subject and cannot itself contain `\\n`. Split each line on the FIRST
+    `\\x1f` only (`str.partition`, not `str.split` with no maxsplit) so a
+    stray `0x1f` byte inside a subject corrupts only the subject value, never
+    shifts the sha field before it. Whole-stdout is never `.strip()`ped --
+    only `\\r` is stripped and the string is split on `\\n` -- since
+    `str.strip()` treats `\\x1f` as whitespace and could otherwise eat a
+    delimiter at either edge.
+    """
+    if not shas:
+        return {}
+    ordered = sorted({str(s) for s in shas})
+    try:
+        result = _run_git(
+            ["log", "--no-walk=unsorted", "--ignore-missing", "--format=%H%x1f%s", *ordered],
+            repo_root,
+        )
+    except (OSError, ValueError):
+        return {}
+    stdout = result.stdout or ""
+    if result.returncode != 0 or not stdout.strip():
+        return {}
+
+    subjects: Dict[str, str] = {}
+    matched: set = set()
+    for line in stdout.replace("\r", "").split("\n"):
+        if "\x1f" not in line:
+            continue
+        full, _, subject = line.partition("\x1f")
+        for raw in ordered:
+            if raw not in matched and full[: len(raw)] == raw:
+                subjects[raw] = subject
+                matched.add(raw)
+                break
+    return subjects
+
+
 def resolve_baton_rows(
     candidate_path: Path,
     deliverable_id: str,
@@ -329,7 +394,6 @@ def resolve_baton_rows(
         )
         if sha is not None:
             updates[chunk_id] = sha
-            details[chunk_id] = _commit_subject(repo_root, sha)
         else:
             unresolved.append(
                 {
@@ -343,6 +407,16 @@ def resolve_baton_rows(
 
     if not updates:
         return {"spine_status": "located", "advanced": [], "unresolved": unresolved}
+
+    # N+1 fix: one batched `git log` for every row's covering-commit subject,
+    # rather than one `_commit_subject` spawn per resolved row (see
+    # `_batch_commit_subjects`'s own docstring for the reconciliation
+    # contract). A sha absent from the batch result -- never conflated with
+    # a resolved subject -- falls back to the same placeholder
+    # `_commit_subject` itself used on a git-read failure.
+    subjects = _batch_commit_subjects(repo_root, set(updates.values()))
+    for chunk_id, sha in updates.items():
+        details[chunk_id] = subjects.get(sha, f"commit {sha} (subject unavailable)")
 
     def mutate(old_text: str) -> str:
         located_inner = locate_fenced_block(old_text)

@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.ops.ceremony.records_query import query_records
+from coordinator_core.win_portability import no_console_creationflags
 
 _HELP_TEXT = """query-completions.sh — Query completion-log entries.
 
@@ -184,6 +185,7 @@ def _detect_root(specified: Optional[str]) -> Path:
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         return Path.cwd()

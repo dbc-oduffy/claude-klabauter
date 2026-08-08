@@ -219,7 +219,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from coordinator_core.subagent_sandbox.engine import _SESSION_ID_FORMAT_RE
 
@@ -229,6 +229,65 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 #: `f"{MARKER_PREFIX}{session_id}"`; matching on read is by this same
 #: prefix, not exact equality -- see module docstring.
 MARKER_PREFIX = "allow-xrepo-write-"
+
+#: PER-PROCESS MEMO for `resolve_gitdir()` -- chunk C2,
+#: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md.
+#: Fixes all three bump-guard call sites (`bump_foreign_repo_write.py`,
+#: `bump_outside_repo_write.py`, `write_guards/bump_out_of_repo_tool_write.py`)
+#: with ZERO call-site edits, because every one of them already routes
+#: through this module's `resolve_gitdir()`.
+#:
+#: CONTRACT (binding for C2b, which may consume this memo directly):
+#:   - Key: `_gitdir_memo_key(cwd)` -- the ABSOLUTE, `os.path.abspath`-
+#:     normalized form of `cwd`, with `cwd is None` resolved against
+#:     `os.getcwd()` at call time (matching what a bare `subprocess.run(...,
+#:     cwd=None)` itself would use as its working directory). Two distinct
+#:     string spellings of the same directory (a trailing slash, a mixed
+#:     separator on Windows, a symlink NOT resolved -- deliberately not
+#:     `Path.resolve()`, which would also collapse distinct symlinked
+#:     worktree probe dirs that legitimately want independent entries) key
+#:     identically once `abspath`-normalized; two different concrete
+#:     directories never collide.
+#:   - Value: `Optional[Path]`, the exact return value `resolve_gitdir()`
+#:     would otherwise have recomputed -- a hit `None` is cached identically
+#:     to a hit `Path`, since a fail-open "no repo here" answer for a given
+#:     cwd is exactly as stable within one process as a resolved gitdir is.
+#:   - Lifetime: PROCESS-SCOPED ONLY, never persisted, never shared across
+#:     processes. Claude-klabauter is spawn-per-call with no resident daemon (plan
+#:     anti-scope item 18) -- this dict is created fresh, and dies, with
+#:     every process. This is the ceiling for this chunk, not a starting
+#:     point for a cross-process cache.
+#:   - Invalidation: NONE within a process. A single command-type invocation
+#:     never changes which directory is or isn't a git repo out from under
+#:     itself mid-call; if that assumption is ever untrue for a caller, that
+#:     caller must not share this memo (call `reset_gitdir_memo()` first, or
+#:     bypass via a private `resolve_gitdir.__wrapped__`-style escape --
+#:     neither exists today because no in-tree caller has needed one).
+#:   - Test-only reset: `reset_gitdir_memo()`, below -- clears the memo so
+#:     a test can force `resolve_gitdir()` to re-spawn. Production callers
+#:     never call it.
+_GITDIR_MEMO: Dict[str, Optional[Path]] = {}
+
+
+def _gitdir_memo_key(cwd: Optional[str]) -> str:
+    """Normalizes `cwd` into `_GITDIR_MEMO`'s key shape -- see that dict's
+    docstring comment for the full contract. Never raises: `os.path.abspath`
+    on a `str` cwd or on `os.getcwd()`'s own return value cannot fail for
+    the inputs this module ever passes it."""
+    return os.path.abspath(cwd) if cwd else os.path.abspath(os.getcwd())
+
+
+def reset_gitdir_memo() -> None:
+    """TEST-ONLY escape hatch: clears `_GITDIR_MEMO` so a test can force the
+    next `resolve_gitdir()` call to re-spawn `git rev-parse --git-dir`
+    instead of returning a memoized answer. No production caller in this
+    package calls this -- the memo's contract is "process-scoped, never
+    invalidated" (see `_GITDIR_MEMO`'s docstring comment); this function
+    exists solely so a test that mutates a directory's git-repo status
+    mid-test (e.g. `git init`-ing a path already probed) is not silently
+    poisoned by an earlier probe's cached answer.
+    """
+    _GITDIR_MEMO.clear()
 
 
 def resolve_gitdir(cwd: Optional[str] = None) -> Optional[Path]:
@@ -243,7 +302,27 @@ def resolve_gitdir(cwd: Optional[str] = None) -> Optional[Path]:
     `coordinator_core.git.commit_trailers._resolve_git_dir` and
     `coordinator_core.write_guards.block_subagent_plan_body_write._resolve_git_dir`
     rather than inventing a third variant of the same nine lines.
+
+    PER-PROCESS MEMOIZED (chunk C2) -- see `_GITDIR_MEMO`'s docstring
+    comment above for the full contract. A repeated call with an
+    (abspath-normalized) equal `cwd` returns the prior answer without a
+    second spawn; this is transparent to every existing caller, including
+    the three bump-guard call sites this chunk fixes with zero edits to any
+    of them.
     """
+    memo_key = _gitdir_memo_key(cwd)
+    if memo_key in _GITDIR_MEMO:
+        return _GITDIR_MEMO[memo_key]
+    resolved = _resolve_gitdir_uncached(cwd)
+    _GITDIR_MEMO[memo_key] = resolved
+    return resolved
+
+
+def _resolve_gitdir_uncached(cwd: Optional[str]) -> Optional[Path]:
+    """The actual `git rev-parse --git-dir` spawn -- unmemoized. Split out of
+    `resolve_gitdir()` so every one of its several fail-open return points
+    stores into `_GITDIR_MEMO` exactly once, at the single call site above,
+    rather than each needing its own memo-write."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
@@ -322,8 +401,19 @@ def clear_line(gitdir: Path, session_id: str) -> str:
     """The exact, copy-pasteable clear command a deny message prints --
     `touch <resolved-gitdir>/allow-xrepo-write-<session-id>`. No stamping
     step, no race: session scoping holds by construction because the
-    basename itself carries the identity (see module docstring)."""
-    return f"touch {marker_path(gitdir, session_id)}"
+    basename itself carries the identity (see module docstring).
+
+    POSIX separators, always, including on Windows. The operator pastes this
+    into a shell -- `!`-prefixed in the harness -- and that shell is bash. A
+    native `WindowsPath` renders `<drive>:\\<repo>\\.git\\allow-...`, where
+    every separator is a bash escape character: the touch silently succeeds
+    against a single mangled filename with the separators eaten, in the
+    CURRENT directory; the marker never lands in the gitdir, and it denies
+    again with the identical message. Observed live 2026-08-07. Forward
+    slashes are accepted by every Windows API and by `touch`, so the POSIX
+    form is correct on both platforms rather than a Windows special case.
+    """
+    return f"touch {marker_path(gitdir, session_id).as_posix()}"
 
 
 def marker_present(gitdir: Optional[Path], session_id: str) -> bool:

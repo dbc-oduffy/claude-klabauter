@@ -68,6 +68,7 @@ import fnmatch
 import os
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import Optional, Sequence, Tuple
 
@@ -112,7 +113,7 @@ def _run_git(args: Sequence[str]) -> Optional[str]:
             ["git", *args],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )  # popup-safe-env-suppressed
     except OSError as exc:
         # Review: code-reviewer (Finding 1) — replaced a stringified fragment

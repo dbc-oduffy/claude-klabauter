@@ -125,8 +125,14 @@ def resolve_claude_klabauter_clone() -> str:
     if ml_bin is None:
         return ""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
-            [ml_bin, "get", "repos.claude_klabauter"], capture_output=True, text=True, check=False
+            [ml_bin, "get", "repos.claude_klabauter"],
+            capture_output=True,
+            text=True,
+            check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         return ""

@@ -50,9 +50,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Tuple, Union
 
-__all__ = ["tracked_files"]
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+__all__ = ["tracked_files"]
 
 
 def tracked_files(repo_root: Union[str, Path], pathspec: str = ".") -> Tuple[str, ...]:
@@ -82,7 +82,7 @@ def _tracked_files_cached(repo_root: str, pathspec: str) -> Tuple[str, ...]:
             capture_output=True,
             timeout=10,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ()

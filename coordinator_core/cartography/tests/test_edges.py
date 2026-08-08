@@ -36,7 +36,6 @@ Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-stra
 from __future__ import annotations
 
 import ast
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -277,14 +276,14 @@ def test_completeness_marker_present_even_with_no_files(tmp_path):
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_edges({"files": ["mod.py"]}))
+        _cartography_edges({"files": ["mod.py"]})
 
 
 def test_op_missing_files_raises_value_error(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_edges({"target_root": str(root)}))
+        _cartography_edges({"target_root": str(root)})
 
 
 def test_op_happy_path(tmp_path):
@@ -292,9 +291,7 @@ def test_op_happy_path(tmp_path):
     root.mkdir()
     _write(root, "mod.py", "import os\n")
 
-    result = asyncio.run(
-        _cartography_edges({"target_root": str(root), "files": ["mod.py"]})
-    )
+    result = _cartography_edges({"target_root": str(root), "files": ["mod.py"]})
 
     assert result["static_only"] is True
     assert len(result["edges"]) == 1
@@ -332,9 +329,7 @@ def test_op_guards_target_root_before_build_edges_is_called(tmp_path, monkeypatc
     monkeypatch.setattr(op_mod, "build_edges", _should_not_be_called)
 
     with pytest.raises(PathEscapeError):
-        asyncio.run(
-            _cartography_edges({"target_root": str(root), "files": ["mod.py"]})
-        )
+        _cartography_edges({"target_root": str(root), "files": ["mod.py"]})
 
     assert calls == ["guard"]
 
@@ -738,19 +733,17 @@ def test_c15_count_references_unchanged_on_collision_fixture(tmp_path):
         "import pkg.target\n",
     )
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "pkg.target",
-                "files": [
-                    "pkg/__init__.py",
-                    "pkg/target.py",
-                    "pkg/relative_importer.py",
-                    "absolute_importer.py",
-                ],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "pkg.target",
+            "files": [
+                "pkg/__init__.py",
+                "pkg/target.py",
+                "pkg/relative_importer.py",
+                "absolute_importer.py",
+            ],
+        }
     )
 
     # Only the absolute importer's edge matches "pkg.target" by exact
@@ -899,17 +892,15 @@ def test_c7_op_wires_path_system_map_through_to_boundary_labelling(tmp_path):
     _write(root, "sysa/__init__.py", "")
     _write(root, "sysa/caller.py", "import os\n")
 
-    result = asyncio.run(
-        _cartography_edges(
-            {
-                "target_root": str(root),
-                "files": ["sysa/__init__.py", "sysa/caller.py"],
-                "path_system_map": {
-                    "sysa/__init__.py": "sysa",
-                    "sysa/caller.py": "sysa",
-                },
-            }
-        )
+    result = _cartography_edges(
+        {
+            "target_root": str(root),
+            "files": ["sysa/__init__.py", "sysa/caller.py"],
+            "path_system_map": {
+                "sysa/__init__.py": "sysa",
+                "sysa/caller.py": "sysa",
+            },
+        }
     )
     caller_entry = next(e for e in result["edges"] if e["path"] == "sysa/caller.py")
     import_edge = next(
@@ -929,14 +920,12 @@ def test_c7_count_references_unaffected_by_boundary_param(tmp_path):
     _write(root, "sysa/caller.py", "import sysb\n")
     _write(root, "sysb/__init__.py", "")
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "sysb",
-                "files": ["sysa/__init__.py", "sysa/caller.py", "sysb/__init__.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "sysb",
+            "files": ["sysa/__init__.py", "sysa/caller.py", "sysb/__init__.py"],
+        }
     )
     assert result == {
         "reference_count": 1,

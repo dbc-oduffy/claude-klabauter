@@ -7,7 +7,6 @@ docstring for the op-key/contract this covers:
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 import time
@@ -178,7 +177,7 @@ def test_handler_uses_dispatch_repo_root_and_default_threshold(tmp_path):
     old_epoch = int(time.time()) - 3600
     _commit_file(root, "f.txt", "x", when=f"{old_epoch} +0000")
 
-    result = asyncio.run(_handler({}, repo_root=root))
+    result = _handler({}, repo_root=root)
 
     assert result["ok"] is True
     assert result["message"] is None
@@ -190,7 +189,7 @@ def test_handler_honors_explicit_quiet_threshold_seconds_param(tmp_path):
     now = str(int(time.time()))
     _commit_file(root, "f.txt", "x", when=f"{now} +0000")
 
-    result = asyncio.run(_handler({"quiet_threshold_seconds": 300}, repo_root=root))
+    result = _handler({"quiet_threshold_seconds": 300}, repo_root=root)
 
     assert result["ok"] is False
     assert result["seconds_since_last_commit"] < 300

@@ -78,6 +78,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
+    "chain_ancestry_waivers.reap":            "coordinator_core.ops.reap_chain_ancestry_waivers",
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
     "memo.transition":                        "coordinator_core.ops.memo_transition",
     "handoff.transition":                     "coordinator_core.ops.handoff_transition",
@@ -263,4 +264,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "priority.set":                           "coordinator_core.ops.priority_set",
     "priority.drain":                         "coordinator_core.ops.priority_drain",
     "write_surface.emit_manifest":            "coordinator_core.ops.write_surface_manifest",
+    # diagnostics.* — the three write-free transport-failure probes; one shared
+    # owning module, same many-keys-one-value shape as the hooks.* entries above.
+    # Spec: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
+    "diagnostics.always_succeeds":            "coordinator_core.ops.diagnostics_probes",
+    "diagnostics.always_refuses":             "coordinator_core.ops.diagnostics_probes",
+    "diagnostics.always_structural_pin":      "coordinator_core.ops.diagnostics_probes",
 }

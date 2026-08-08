@@ -27,17 +27,96 @@ EM write a sizing-object at all?) and the sizing-object's own YAML body (is it a
 unblocked route?) — plus a bounded scan of the transcript for evidence the resolved room
 was actually entered.
 
-Both judgment halts are EXEMPT and this is the correctness core, not an edge case:
-    - `fork` non-null (`cut_to_fit` / `raise_appetite`) means the appetite/estimate
-      diverged and the PM has not yet picked a resolution — a genuine open question,
-      not a route the EM merely failed to act on.
+Three judgment halts are EXEMPT and this is the correctness core, not an edge case:
+    - An OPEN APPETITE FORK is `appetite_exceeded` in `detents` with `fork` still
+      null — the appetite/estimate diverged and the PM has not yet picked a
+      resolution. That is a genuine open question, not a route the EM merely
+      failed to act on.
+
+      Read the DETENT, never `fork`'s nullity. `coordinator_core.sizing_assemble.
+      route()` emits `fork: None` ALWAYS — it is the sizing skill's resolution
+      slot, filled only once the PM has actually picked `cut_to_fit` vs
+      `raise_appetite` — and that module's own negative-spec names this exact
+      misread: "Setting `fork` here to either enum value pre-emptively would
+      misread as 'engine already decided' to any caller checking `fork is not
+      None` as its divergence test." An earlier version of this op WAS that
+      caller: it required `fork is None` to fire, which is the shape every
+      unresolved appetite fork has by construction, so it fired on every one of
+      them — the precise failure mode the exemption exists to prevent. The
+      divergence signal is `appetite_exceeded` in `detents`, full stop.
+
+      `fork` non-null (the PM HAS picked) is also treated as silence here. That
+      is deliberate and asymmetric: the halt is closed, so a fire would be
+      defensible, but staying silent keeps this criteria function purely
+      false-positive-removing and costs only a missed nudge — the cheap
+      direction this module already accepts everywhere else.
+    - An OPEN POST-SIZE PROMPT (`_post_size_prompt_open`, added alongside appetite
+      leaving the front of sizing — see "Decision: the post-size prompt exemption
+      is unbounded" below) is `post_size_prompt_pending` in `detents` with `fork`
+      still null — the sizing lobby delivered a size at M or above with no
+      appetite stated, asked the PM the open "shall we go with that, split it,
+      cut it, what's up?" question, and the PM has not yet answered. Same shape
+      as the appetite fork above, same reasoning, same asymmetric silence-on-
+      resolved posture — a sibling predicate, not a fold-in, because the two
+      halts are genuinely distinct questions that merely happen to share a
+      resolution slot (`fork`).
     - `route: pm-decision` with `xl_exit: null` means the PM has not yet chosen among
       the four XL exits — `xl_exit: null` NEVER means accept. This case is already
       excluded by construction here: the route allow-list below is `{plan,
       spec-dispatch, dispatch}`, and `pm-decision` is not a member of it, so a
       `pm-decision` sizing-object never reaches the fork/xl_exit checks at all.
-A hook that nudged the EM through either judgment halt would be worse than no hook —
+A hook that nudged the EM through any judgment halt would be worse than no hook —
 it would train the EM to grind past the PM's genuine decision points.
+
+Decision: the post-size prompt exemption is unbounded, not freshness-bounded.
+    `_post_size_prompt_open` never expires on its own — there is no clock check
+    against how long the prompt has been pending. This was a live, answered
+    question (source plan's own "Ask 3"), not an oversight, for reasons specific
+    to THIS hook's own substrate:
+        - Session-scoping already bounds the hook's reach. This op's candidate
+          set is `_find_sizing_candidate` -> `_session_touched_sizing_files`
+          (via `touched.txt`) — it only ever considers sizing-objects the
+          CURRENT session touched, never one forgotten across sessions. Combined
+          with the fire-once-per-session sentinel (`_claim_fire`), the exemption
+          discharges at session end: the object leaves the candidate set the
+          moment the session that wrote it stops. The residual cost is real but
+          bounded to one session's turn-ends — a session that writes an M+
+          sizing, asks the open question, and wanders off gets no further nudge
+          THAT session, and the next session touching the object re-evaluates
+          fresh.
+        - `_runtime_threshold_minutes` (above) is deliberately NOT reused as a
+          freshness bound here, even though it looks like an available clock.
+          It bounds DISPATCH runtime against a dispatch row's `dispatched_at`
+          timestamp in `dispatched-agents.txt` — an answer to "is this specific
+          subagent dispatch still plausibly running," nothing else. No
+          sizing-object clock exists to bound against: `sizing-object.schema.json`
+          carries no created/updated timestamp, and inventing a freshness bound
+          would mean a new schema field, a file mtime (destroyed by clone), or a
+          per-object `git log` shell-out on the session hot path — the last of
+          which is break-class on Windows per this repo's own CLAUDE.md. There is
+          no cheap clock to reuse, so unbounded is not laziness — it is what the
+          substrate actually supports.
+        - Reconciled against `state/memo-outbox/sent/
+          sizing-lobby-advisory-discharges-on-being-seen-not-on-a-route.md`, which
+          requires an advisory to discharge on a route being taken, not on being
+          seen: at first read, an unbounded exemption that lifts at session end
+          looks like it discharges on a clock rather than an action. It does not
+          conflict once the object of the test is placed correctly. The exemption
+          itself is not the advisory — it is a SUPPRESSION of the M+ prompt
+          advisory while a genuine PM halt is open. The advisory it guards still
+          discharges exactly on the route being taken: the EM routes the object,
+          `status` flips to `routed`, and the object leaves `_matches_criteria`
+          outright (the `status == "sized"` clause). Session-scoping bounds the
+          HOOK'S REACH (which sizing-objects it ever considers this run), not the
+          ADVISORY'S DISCHARGE CONDITION (what ends its nudging) — two different
+          things, and the doctrine's test is about the latter.
+        - Symmetric with `_appetite_fork_open`, which is already unbounded on
+          this exact same substrate and has been since this hook shipped. A
+          freshness bound on the post-size prompt alone would make two
+          structurally identical halts (both detent-keyed, both `fork`-resolved,
+          both session-scoped by the same candidate-set mechanism) behave
+          differently for no stated reason. Unbounded here is consistency with
+          established precedent in this same function, not a new concession.
 
 Room-invocation evidence is route-shaped, not one-size-fits-all:
     - `route: plan` and `route: spec-dispatch` both resolve to `coordinator:plan`
@@ -66,6 +145,34 @@ don't apply" — i.e. silence, the opposite fallback — because misreading `for
 `xl_exit` as null when they are not is exactly the false-positive this op must never
 produce.
 
+Negative-spec, generalised: an open halt needs a positive, producer-emitted
+signal, never an inference from a missing value. This is the general form of
+the rule; `fork` (below) is the worked example it was originally filed
+against, not the whole rule. A halt is "open" only when the producer
+(`sizing_assemble.route()`) has affirmatively written a detent naming it —
+`appetite_exceeded` or `post_size_prompt_pending` in `detents` — never by
+noticing that some other field happens to be absent or null, because absence
+is the shape EVERY sizing-object has by construction whether or not the halt
+in question ever fired.
+    - The worked example: `fork` is null on both sides of the appetite-fork
+      question — before the halt exists at all, and while it is genuinely
+      open — so `fork is None` cannot distinguish them. An earlier version of
+      this op read `fork is None` as its divergence test and fired on every
+      open fork, the precise failure this exemption exists to prevent (see
+      above). The fix was to key on the DETENT, not `fork`'s nullity.
+    - The near-miss this generalisation is filed FROM, not merely alongside:
+      example-doctrine-repo's first draft of the post-size-prompt exemption proposed detecting
+      the new halt from the ABSENCE of `appetite` in the sizing-object — since
+      appetite absence is exactly the shape the post-size prompt flow produces.
+      That is the fork misread one field over: appetite absence is the shape
+      EVERY M+ object has once appetite leaves the front of sizing, whether or
+      not the open-question flow ever ran, exactly as `fork is None` was the
+      shape every appetite fork had whether open or resolved. Two engineers,
+      hours apart, reached for a nullity/absence read despite both having read
+      the fork-specific version of this rule — which is the evidence the rule
+      was filed too narrowly the first time, and why it is restated here in its
+      general form rather than left as a second one-off case note.
+
 Negative-spec:
     - Never fires on a subagent's Stop (agent_id present) or when stop_hook_active is set,
       matching the sibling's loop-guard posture verbatim.
@@ -74,11 +181,27 @@ Negative-spec:
     - Never fires on `status: routed` (already handed off) or `status: draft` / `superseded`.
     - Not a general "did the EM finish the sizing lobby" auditor — it matches only the
       exact shape of the observed incident.
-    - The **sizing->room** seam's routable set (`_ROUTABLE_ROUTES`) only ever names the
-      sizing-lobby's own three routes (plan, spec-dispatch, dispatch) — `execute-plan` is
-      not a sizing-object route at all and cannot reach that seam's code by construction.
-      `"execute-plan" not in _ROUTABLE_ROUTES` is pinned by its own test so this stays true
-      even as the module grows.
+    - The **sizing->room** seam's routable set (`_ROUTABLE_ROUTES`) is not a fixed
+      three-item list to be extended as the lobby grows rooms — it names the RULE
+      "routes whose room an EM can enter without a PM utterance," and only routes
+      meeting that rule belong in it. `execute-plan` is not a sizing-object route at
+      all and cannot reach that seam's code by construction; `"execute-plan" not in
+      _ROUTABLE_ROUTES` is pinned by its own test so this stays true even as the
+      module grows. `goal-setting` and `roadmap` are excluded by the same rule for a
+      different reason: both are PM-gated rooms, not EM-enterable ones — per example-doctrine-repo
+      `coordinator/skills/goal-setting/SKILL.md` and `coordinator/skills/roadmap-planning/
+      SKILL.md`, each carrying a frontmatter `description: "PM-GATED. ..."` — so
+      falsifiable by grepping those two files, not by memory. `shape` is the one
+      exception worth naming precisely: it is PM-COLLABORATIVE, not frontmatter-gated
+      the same way, so "PM-gated" as a blanket label overstates its own posture even
+      though it is likewise excluded here. Example-doctrine-repo separately accepted the
+      `goal_setting_pm_gated` detent (chunk body, this plan), which means this
+      exclusion is no longer the ONLY line holding the PM-gate boundary for
+      `goal-setting` — it is now a second, independent guard, though it was designed
+      as the sole line of defense had example-doctrine-repo declined that detent. Caveat: the RULE's
+      truth for `goal-setting` and `roadmap` rests on frontmatter living in ANOTHER
+      REPO (example-doctrine-repo), so no test in this repo can pin it — if example-doctrine-repo ever un-gates
+      either skill, this exclusion becomes silently wrong until someone notices.
     - The **plan->execute-plan** seam (second seam, live as of this module's second seam
       addition — see "Seam naming" below) NEVER fires on the pre-execute PM authorization
       gate: a plan with NO `execution_authorized_by` in its frontmatter is never a nudge
@@ -281,9 +404,33 @@ def _get_arrival_check():
 # coordinator/schemas/sizing-object.schema.json, example-doctrine-repo repo).
 # ---------------------------------------------------------------------------
 
+# Membership rule, not a fixed count: routes whose room an EM can enter WITHOUT a
+# PM utterance. `goal-setting` and `roadmap` are excluded because example-doctrine-repo's
+# `coordinator/skills/{goal-setting,roadmap-planning}/SKILL.md` frontmatter marks
+# each `description: "PM-GATED. ..."` — see the module docstring's Negative-spec
+# section for the full account, including why "PM-gated" is not the right blanket
+# label for every excluded route (`shape` is PM-collaborative, not frontmatter-
+# gated) and the caveat that this rule's truth for goal-setting/roadmap rests on
+# another repo's frontmatter, unpinnable by any test here.
 _ROUTABLE_ROUTES = frozenset({"plan", "spec-dispatch", "dispatch"})
 
 _SIZING_PATH_RE = re.compile(r"^state/sizings/[^/]+\.ya?ml$")
+
+# The appetite<->estimate divergence signal. `coordinator_core.sizing_assemble.
+# route()` emits this detent and leaves `fork` null; `fork` is filled later, by
+# the sizing skill, once the PM has picked. So THIS is the field to read for
+# "is an appetite fork open" — never `fork`'s nullity, which is null on both
+# sides of that question. Kept as a named constant so the coupling to
+# `sizing_assemble.DETENT_ENUM` is greppable from either side.
+_APPETITE_DIVERGENCE_DETENT = "appetite_exceeded"
+
+# The post-size, M+ open-appetite-question halt. `coordinator_core.sizing_assemble.
+# route()` emits this detent (appetite absent, resized t-shirt M/L/XL) and leaves
+# `fork` null — the PM has not yet answered the open "shall we go with that or
+# split/cut/what's up?" question. Same shape as `_APPETITE_DIVERGENCE_DETENT`
+# above: read the DETENT, never `fork`'s nullity. Kept as a named constant so the
+# coupling to `sizing_assemble.DETENT_ENUM` is greppable from either side.
+_POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 
 # route -> the coordinator:plan skill both plan-shaped routes resolve to.
 _SKILL_BY_ROUTE = {
@@ -449,7 +596,8 @@ _NUDGE_MESSAGE_TEMPLATE = """\
 [nudge] route: {route} is resolved and unblocked — {action} now.
 
 [nudge] {sizing_path} recorded status: sized, route: {route}, with no judgment
-[nudge] halt open (fork: null, xl_exit: null) — the sizing lobby already did the work of
+[nudge] halt open — no appetite_exceeded detent awaiting your PM's cut-vs-raise call, and
+[nudge] no open XL exit — so the sizing lobby already did the work of
 [nudge] picking the room. Narrating the route and ending the turn without invoking it buys
 [nudge] nothing: the round trip back to your operator costs a turn and the route will not
 [nudge] change.
@@ -691,16 +839,69 @@ def _load_sizing_object(repo_root: str, rel_path: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _appetite_fork_open(obj: dict) -> bool:
+    """Return True iff `obj` carries an UNRESOLVED appetite<->estimate fork.
+
+    Open means: the lobby recorded the divergence (`appetite_exceeded` in
+    `detents`) and the PM has not yet filled the resolution slot (`fork` still
+    null). Reading the detent — not `fork`'s nullity — is the whole point; see
+    the module docstring's judgment-halt section for why the inverse test fired
+    on every appetite fork by construction.
+
+    A malformed/absent `detents` (not a list) reads as "cannot prove no fork is
+    open" -> True -> silence, matching `_load_sizing_object`'s own
+    fail-toward-silence posture on every hard-exemption read.
+    """
+    detents = obj.get("detents")
+    if not isinstance(detents, list):
+        return True
+    return _APPETITE_DIVERGENCE_DETENT in detents and obj.get("fork") is None
+
+
+def _post_size_prompt_open(obj: dict) -> bool:
+    """Return True iff `obj` carries an UNRESOLVED post-size, M+ appetite question.
+
+    Open means: the lobby recorded the pending prompt (`post_size_prompt_pending`
+    in `detents`) and the PM has not yet filled the resolution slot (`fork` still
+    null). A sibling halt to `_appetite_fork_open`, kept as a SEPARATE predicate
+    rather than folding into it — two distinct halts, two distinct names, per
+    this module's own convention of one named predicate per halt. Reading the
+    detent — never `fork`'s nullity — is the whole point; see the module
+    docstring's "Negative-spec, generalised" section for the general rule this
+    instantiates, and `_appetite_fork_open`'s own docstring for the original
+    incident this shape is modeled on.
+
+    A malformed/absent `detents` (not a list) reads as "cannot prove no prompt
+    is open" -> True -> silence, byte-matching `_appetite_fork_open`'s own
+    fail-toward-silence handling.
+    """
+    detents = obj.get("detents")
+    if not isinstance(detents, list):
+        return True
+    return _POST_SIZE_PROMPT_DETENT in detents and obj.get("fork") is None
+
+
 def _matches_criteria(obj: dict) -> bool:
     """Return True iff `obj` is a genuinely unblocked, unrouted sizing-object.
 
-    All four hold: status sized, route in the routable set, and both judgment
-    halts (fork, xl_exit) still null. `route: pm-decision` is excluded purely by
-    not being in `_ROUTABLE_ROUTES` — see module docstring.
+    All of: status sized, route in the routable set, no open appetite fork
+    (`_appetite_fork_open`), no open post-size prompt (`_post_size_prompt_open`),
+    no already-picked fork, and `xl_exit` still null. `route: pm-decision` is
+    excluded purely by not being in `_ROUTABLE_ROUTES` — see module docstring.
+
+    The `xl_exit is None` clause is UNREACHABLE-BY-CONSTRUCTION belt, not the
+    live guard, and is deliberately NOT rewritten in `_appetite_fork_open`'s
+    detent-keyed shape: `sizing_assemble.route()` appends `pm_decision_pending`
+    only when the resolved route is `pm-decision`, which the route allow-list
+    above already excludes, so no routable sizing-object can carry an open XL
+    halt. It is retained against a hand-edited record, where silence is the
+    safe direction anyway.
     """
     return (
         obj.get("status") == "sized"
         and obj.get("route") in _ROUTABLE_ROUTES
+        and not _appetite_fork_open(obj)
+        and not _post_size_prompt_open(obj)
         and obj.get("fork") is None
         and obj.get("xl_exit") is None
     )

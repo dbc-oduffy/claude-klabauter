@@ -71,6 +71,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import date
 from typing import List, Optional, Tuple
@@ -111,7 +112,7 @@ def _resolve_inbox_dir(cwd: Optional[str] = None) -> str:
             stdin=subprocess.DEVNULL,
             # Review: code-reviewer -- A4 Windows console-flash suppression, matching
             # the pattern already used in generate_exec_summary.py (same slice).
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return os.path.join(cwd, "cross-repo", "inbox")

@@ -58,6 +58,7 @@ import os
 import re
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional, Tuple
 
@@ -204,7 +205,7 @@ def parse_with_ps51(ps51_exe: str, ps1_path: str) -> Tuple[int, str]:
             text=True,
             timeout=_PS_PARSE_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(f"skip: parse_with_ps51: result = subprocess.run( failed: {exc}", file=sys.stderr)

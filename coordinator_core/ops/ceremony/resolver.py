@@ -57,8 +57,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.coverage import _get_handoff_consumed_by as get_handoff_consumed_by
 from coordinator_core.ops.fleet._common import rel_id
+from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 
@@ -232,6 +234,7 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         _LOG.warning("detect_git_provenance_consumed: git %s failed: %s", args[0] if args else "?", exc)
@@ -376,14 +379,17 @@ def detect_git_provenance_consumed(
         # only checked in its else-branch — a candidate that is BOTH
         # malformed AND foreign-consumed must surface the spoof diagnostic
         # (names the real consumer), not the generic "no predecessor:" one.
-        # DR-084 transitional: prefer claimed_by, fall back to the retired
-        # consumed_by for consumer-repo corpora not yet migrated (restored
-        # 2026-07-23 — see coordinator_core/ops/emit/sections/handoffs.py module
-        # docstring for the exit condition). A raw consumed_by-only read
-        # would DISARM this spoof guard against the migrated corpus — every
-        # claimed record reads as empty, the guard never fires, and a handoff
-        # claimed by a different session passes as unclaimed.
-        claimant = str(fm.get("claimed_by") or fm.get("consumed_by") or "").strip()
+        # Ledger-first (C4, see docs/plans/2026-08-07-claim-state-ledger-first
+        # -authoritative-read.md): a raw mirror-only read of claimed_by/
+        # consumed_by DISARMS this guard on the branch-switch-revert desync
+        # claim_state.py's module docstring names — the ledger still holds a
+        # live foreign claim, the mirror reverted to unclaimed, and this
+        # candidate would be silently adopted as sid's own predecessor.
+        # resolve_claim_state is ledger-first with mirror fallback, so a
+        # foreign ledger claim still fires this guard even when the mirror
+        # disagrees.
+        claim_state = resolve_claim_state(abs_path, repo_root=worktree_root)
+        claimant = str(claim_state.holder or "").strip()
         if claimant and claimant != sid:
             warnings.append(
                 f"detect_git_provenance_consumed: restoration-commit spoof "

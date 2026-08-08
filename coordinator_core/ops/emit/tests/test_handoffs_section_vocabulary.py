@@ -10,7 +10,9 @@ also ingests from. Old-vocabulary input (``status: active``/``consumed``,
 UP to the new wire vocabulary at ingest (see ``sections/handoffs.py``'s
 ``_STATUS_RECOGNIZED``/``_DEPLOYMENT_RECOGNIZED`` module docstring for the
 named exit condition); a genuinely unrecognized value (neither old nor new
-vocabulary) still hard-aborts the whole emit. ``status: superseded`` remains
+vocabulary) is per-record quarantined into ``malformed``, not raised — see
+the "unrecognized values are per-record quarantined" section below.
+``status: superseded`` remains
 recognized and still maps to ``claimed`` — a SEPARATE, permanently-
 grandfathered 2026-06-26 retirement, not part of the DR-084 axis this module
 covers.
@@ -283,11 +285,11 @@ def test_deployment_state_abandoned_with_successor_coerces_to_continued(
 
 
 # ---------------------------------------------------------------------------
-# unrecognized values hard-abort the whole emit (not a per-record quarantine)
+# unrecognized values are per-record quarantined (not a whole-emit hard-abort)
 # ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
-def test_unrecognized_status_value_hard_aborts(mock_qr, tmp_path: Path) -> None:
+def test_unrecognized_status_value_quarantines_record(mock_qr, tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
 
     def query_records(ctx_arg, record_type):
@@ -300,12 +302,16 @@ def test_unrecognized_status_value_hard_aborts(mock_qr, tmp_path: Path) -> None:
 
     mock_qr.side_effect = query_records
 
-    with pytest.raises(ValueError, match="unrecognized handoff status"):
-        handoffs_section.collect(ctx)
+    records, malformed = handoffs_section.collect(ctx)
+
+    assert records == []
+    assert len(malformed) == 1
+    assert malformed[0]["path"] == "state/handoffs/x.md"
+    assert "not-a-real-status" in malformed[0]["reason"]
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
-def test_unrecognized_deployment_state_value_hard_aborts(mock_qr, tmp_path: Path) -> None:
+def test_unrecognized_deployment_state_value_quarantines_record(mock_qr, tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
 
     def query_records(ctx_arg, record_type):
@@ -318,5 +324,40 @@ def test_unrecognized_deployment_state_value_hard_aborts(mock_qr, tmp_path: Path
 
     mock_qr.side_effect = query_records
 
-    with pytest.raises(ValueError, match="unrecognized handoff deployment_state"):
-        handoffs_section.collect(ctx)
+    records, malformed = handoffs_section.collect(ctx)
+
+    assert records == []
+    assert len(malformed) == 1
+    assert malformed[0]["path"] == "state/handoffs/x.md"
+    assert "not-a-real-deployment-state" in malformed[0]["reason"]
+
+
+@patch("coordinator_core.ops.emit.sections.handoffs._query_records")
+def test_unrecognized_value_quarantines_only_the_bad_record(mock_qr, tmp_path: Path) -> None:
+    """One record with an unrecognized deployment_state must not take out the rest of
+    the corpus — the good record is still emitted, the bad one is quarantined."""
+    ctx = _make_ctx(tmp_path)
+
+    def query_records(ctx_arg, record_type):
+        if record_type == "handoff":
+            return [
+                {
+                    "path": "state/handoffs/good.md",
+                    "frontmatter": _base_handoff_fm(deployment_state="ready_to_fire"),
+                },
+                {
+                    "path": "state/handoffs/bad.md",
+                    "frontmatter": _base_handoff_fm(deployment_state="record"),
+                },
+            ]
+        return []
+
+    mock_qr.side_effect = query_records
+
+    records, malformed = handoffs_section.collect(ctx)
+
+    assert len(records) == 1
+    assert records[0]["provenance"]["path"] == "state/handoffs/good.md"
+    assert len(malformed) == 1
+    assert malformed[0]["path"] == "state/handoffs/bad.md"
+    assert "record" in malformed[0]["reason"]

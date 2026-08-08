@@ -274,11 +274,14 @@ def _canon(path: str) -> str:
 def _git_repo_root(cwd: str) -> str:
     """Return `git rev-parse --show-toplevel` output for cwd, or "" on failure."""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=cwd,
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _git_repo_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

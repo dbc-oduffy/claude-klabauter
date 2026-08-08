@@ -85,18 +85,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
     _read_backpointer_subagent_type,
     emit_kind_resolution_failure_signal,
     operator_override_note,
 )
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 PRIORITY = 40
 
 #: Escape-hatch env var -- checked BEFORE identity resolution (reference hook
@@ -234,9 +236,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
-    # Tool-name guard -- this hook fires on Bash only (reference hook 85-94).
+    # Tool-name guard -- this hook fires on Bash (reference hook 85-94) and,
+    # per C5's PowerShell conversion, on the dialect-neutral residue reached
+    # via PowerShell -- see the TARGET-DETECTION axis below for what that
+    # residue is and where it records SILENT instead of a guess. Any other
+    # tool_name (including unrecognised) is out of this guard's remit
+    # entirely, same as before this conversion.
     tool_name = payload.get("tool_name") or ""
-    if tool_name != "Bash":
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect not in (Dialect.BASH, Dialect.POWERSHELL):
         return None
 
     # ------------------------------------------------------------------
@@ -308,7 +316,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     else:
         # Normalize CRLF -> LF (reference hook 180-182).
         cmd_norm = cmd.replace("\r", "")
-        unambiguous_write = _has_unambiguous_write(cmd_norm)
+        if dialect is Dialect.POWERSHELL:
+            # Only idiom (1) is dialect-neutral: `>`/`>>` are the SAME
+            # operator characters in PowerShell as in POSIX, so
+            # `_REDIRECT_RE` needs no PowerShell-specific edit and keeps
+            # ruling correctly. Idioms (2)-(4) (`sed -i`, `tee`, `cp`/`mv`/
+            # `dd`) are POSIX verbs with no recognized PowerShell cmdlet
+            # equivalent here (`New-Item`, `Set-Content`, `Add-Content`,
+            # `Copy-Item`, `Move-Item`) -- a PowerShell command that misses
+            # idiom (1) is NOT a confirmed clean verdict, it is unparsed
+            # residue, so it is recorded SILENT (per AC1/AC3) rather than
+            # silently returned as a clean "no write detected" the way the
+            # bash leg's own doubt->allow default would otherwise read.
+            unambiguous_write = bool(_REDIRECT_RE.search(cmd_norm))
+            if not unambiguous_write:
+                record_silent(
+                    "block_subagent_plan_body_bash_write",
+                    "PowerShell command matched no dialect-neutral idiom; "
+                    "sed/tee/cp/mv/dd idioms are POSIX-only and cannot rule "
+                    "out an equivalent cmdlet write (New-Item/Set-Content/"
+                    "Add-Content/Copy-Item/Move-Item)",
+                )
+        else:
+            unambiguous_write = _has_unambiguous_write(cmd_norm)
 
     # Any doubt -> fail OPEN (allow). Only an unambiguous match denies
     # (reference hook 249-250).

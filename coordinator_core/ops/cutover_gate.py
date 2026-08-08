@@ -210,11 +210,13 @@ Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
 from __future__ import annotations
 
 import ast
+import asyncio
 import datetime
 import inspect
 import json
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
@@ -1038,7 +1040,7 @@ def resolve_cutover_schema(
         encoding="utf-8",
         timeout=30,
         stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         raise CutoverSchemaResolutionError(
@@ -1180,7 +1182,7 @@ def _reverify_test_node_id(ref: str, repo_roots: Mapping[str, Path]) -> tuple[bo
                 timeout=120,
                 stdin=subprocess.DEVNULL,
                 env=pytest_child_env(),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return False, f"test-node-id {ref!r}: re-run under {root} failed to invoke: {exc}"
@@ -1205,7 +1207,7 @@ def _reverify_commit_sha(ref: str, repo_roots: Mapping[str, Path]) -> tuple[bool
                 text=True,
                 timeout=15,
                 stdin=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -1339,9 +1341,9 @@ async def _reverify_confirmed_consumer(
         return False, f"{consumer_id}: verified_by.ref is empty"
 
     if kind == "test-node-id":
-        ok, detail = _reverify_test_node_id(ref, repo_roots)
+        ok, detail = await asyncio.to_thread(_reverify_test_node_id, ref, repo_roots)
     elif kind == "commit-sha":
-        ok, detail = _reverify_commit_sha(ref, repo_roots)
+        ok, detail = await asyncio.to_thread(_reverify_commit_sha, ref, repo_roots)
     elif kind == "probe-op-key":
         ok, detail = await _reverify_probe_op_key(ref, repo_root)
     elif kind == "sibling-commitment-ref":

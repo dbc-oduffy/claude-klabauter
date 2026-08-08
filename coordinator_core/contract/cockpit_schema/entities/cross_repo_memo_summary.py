@@ -62,7 +62,7 @@ class CrossRepoMemoSummary(BaseModel):
     `from_` and `to`, which are the memo's authored cross-repo endpoints
     (the originating EM and the destination repo, as written in the memo
     frontmatter). A memo authored by `.example-doctrine-mirror-repo` to `example-repo` read
-    from the `.example-doctrine-mirror-repo` tree has `repo: "dbc-example-operator/.example-doctrine-mirror-repo"`,
+    from the `.example-doctrine-mirror-repo` tree has `repo: "dbc-oduffy/.example-doctrine-mirror-repo"`,
     `from: ".example-doctrine-mirror-repo"`, `to: "example-repo"`.
     """
     coordinator_root_path: _NonEmptyStr

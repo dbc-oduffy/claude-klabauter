@@ -43,8 +43,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
+    """Run an async coroutine synchronously — no pytest-asyncio needed.
+
+    Some handlers exercised here are plain ``def`` (no ``await`` in their
+    body) and already resolve to a plain value by the time they reach here;
+    pass those through unchanged.
+    """
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +415,7 @@ class TestInitiativesServeFailClosed:
         """
         from coordinator_core.ops.initiatives_serve import _handler as _initiatives_handler
 
-        result = _run(_initiatives_handler(params={}, repo_root=None))
+        result = _initiatives_handler(params={}, repo_root=None)
 
         assert result == {"initiatives": []}, (
             f"expected {{'initiatives': []}} when repo_root=None; got {result}"
@@ -908,11 +915,9 @@ class TestBlockedByDependentsOp:
         )
 
         common_dir = worktree / ".git"
-        result = _run(
-            _handoff_blocked_by_dependents(
-                params={"candidate": str(candidate)},
-                repo_root=common_dir,
-            )
+        result = _handoff_blocked_by_dependents(
+            params={"candidate": str(candidate)},
+            repo_root=common_dir,
         )
 
         _assert_five_key_shape(result)
@@ -932,11 +937,9 @@ class TestBlockedByDependentsOp:
         )
 
         common_dir = worktree / ".git"
-        result = _run(
-            _handoff_blocked_by_dependents(
-                params={"candidate": str(candidate)},
-                repo_root=common_dir,
-            )
+        result = _handoff_blocked_by_dependents(
+            params={"candidate": str(candidate)},
+            repo_root=common_dir,
         )
 
         _assert_five_key_shape(result)
@@ -965,11 +968,9 @@ class TestBlockedByDependentsOp:
         os.chmod(handoff_dir, 0o000)
         try:
             common_dir = worktree / ".git"
-            result = _run(
-                _handoff_blocked_by_dependents(
-                    params={"candidate": str(candidate)},
-                    repo_root=common_dir,
-                )
+            result = _handoff_blocked_by_dependents(
+                params={"candidate": str(candidate)},
+                repo_root=common_dir,
             )
         finally:
             os.chmod(handoff_dir, original_mode)
@@ -986,9 +987,7 @@ class TestBlockedByDependentsOp:
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
 
         common_dir = worktree / ".git"
-        result = _run(
-            _handoff_blocked_by_dependents(params={}, repo_root=common_dir)
-        )
+        result = _handoff_blocked_by_dependents(params={}, repo_root=common_dir)
 
         _assert_five_key_shape(result)
         assert result["state"] == "indeterminate"
@@ -997,10 +996,8 @@ class TestBlockedByDependentsOp:
     def test_no_repo_root_yields_indeterminate(self) -> None:
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
 
-        result = _run(
-            _handoff_blocked_by_dependents(
-                params={"candidate": "/does/not/matter"}, repo_root=None
-            )
+        result = _handoff_blocked_by_dependents(
+            params={"candidate": "/does/not/matter"}, repo_root=None
         )
 
         _assert_five_key_shape(result)
@@ -1017,10 +1014,8 @@ class TestBlockedByDependentsOp:
         outside.write_text("---\nstub_id: escapee\n---\n\nBody.\n", encoding="utf-8")
 
         common_dir = worktree / ".git"
-        result = _run(
-            _handoff_blocked_by_dependents(
-                params={"candidate": str(outside)}, repo_root=common_dir
-            )
+        result = _handoff_blocked_by_dependents(
+            params={"candidate": str(outside)}, repo_root=common_dir
         )
 
         _assert_five_key_shape(result)

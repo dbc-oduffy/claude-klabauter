@@ -49,9 +49,14 @@ Negative-spec (do NOT "fix" mid-port):
       message) — a prefix-sharing artifact-id (e.g. querying `hnd-abc` against
       a commit carrying `Resolves: hnd-abc-def456`) would false-positive-match
       under substring comparison alone. Each candidate is re-checked via the
-      exact-value primitive (parse_resolves_trailer.run, C4) and kept only on
-      a true `==` match against artifact_id — never on substring containment.
-      This mirrors bash oracle review finding (code-reviewer F1/P1).
+      exact-value primitive and kept only on a true `==` match against
+      artifact_id — never on substring containment. This mirrors bash oracle
+      review finding (code-reviewer F1/P1). C19: the exact-value check now
+      runs primarily against ONE batched `git log --no-walk --ignore-missing`
+      call (`_batch_primary_trailers`) instead of spawning
+      `parse_resolves_trailer.run` per candidate; a candidate whose primary
+      trailer is absent/empty still falls back to that per-commit primitive
+      one at a time, preserving its case-insensitive fallback rung unchanged.
     - Does NOT store, cache, or stamp a roll-up result anywhere.
     - Does NOT collapse "unknown" into "not-shipped".
     - Read-only. Never mutates the repo.
@@ -61,6 +66,7 @@ from __future__ import annotations
 
 import io
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from contextlib import redirect_stdout
 from typing import List
@@ -93,7 +99,7 @@ def _run_git(args: List[str]) -> subprocess.CompletedProcess:
         ["git"] + args,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -112,13 +118,87 @@ def _candidate_shas(artifact_id: str) -> List[str]:
     return [line for line in r.stdout.split("\n") if line.strip() != ""]
 
 
+def _batch_primary_trailers(shas: List[str]) -> dict:
+    """Resolve the PRIMARY `Resolves:` trailer values for a batch of candidate
+    commit SHAs in ONE ``git log`` call, replacing the per-candidate
+    ``parse_resolves_trailer.run`` spawn pair.
+
+    This is an OBJECT question (trailer content at a caller-supplied SHA),
+    not a RANGE question — ``git log --no-walk`` resolves each argv SHA
+    independently and never merges them into one ancestry/reachability set
+    expression, so it batches unconditionally (Anti-scope 1/2/4; the forbidden
+    shape is ``git rev-list A..B C..D``, not this). Mirrors
+    ``emit/sections/handoffs._resolve_shipped_in_dates``'s
+    ``--no-walk=unsorted --ignore-missing`` shape and C13's
+    ``_batch_commit_timestamps`` precedent (Anti-scope 25's reconciliation
+    reference), not re-derived here.
+
+    ``--ignore-missing`` makes an unresolvable SHA silently ABSENT from
+    stdout (exit 0) rather than an error. Each record is delimited by a
+    literal ``\\x1e`` (record separator) so a multi-value ``Resolves:``
+    trailer's own embedded newlines never get mistaken for a record
+    boundary; within a record, ``\\x1f`` (unit separator) splits the full
+    40-char SHA from its trailer-value lines. A requested SHA absent from
+    the returned dict (never resolved, or resolved with zero trailer lines)
+    is the caller's signal to fall back to the per-commit primitive — the
+    same "absent means try the fallback" contract the original per-candidate
+    ``parse_resolves_trailer.run`` had for an empty primary result.
+    """
+    if not shas:
+        return {}
+    ordered = sorted(set(shas))
+    record_sep = "\x1e"
+    unit_sep = "\x1f"
+    r = _run_git(
+        [
+            "log",
+            "--no-walk=unsorted",
+            "--ignore-missing",
+            f"--format=%H{unit_sep}%(trailers:key=Resolves,valueonly){record_sep}",
+            *ordered,
+        ]
+    )
+    if r.returncode != 0 or not r.stdout:
+        return {}
+
+    result: dict = {}
+    for record in r.stdout.split(record_sep):
+        record = record.strip("\n")
+        if not record:
+            continue
+        head, _, rest = record.partition(unit_sep)
+        full_sha = head.strip()
+        if not full_sha:
+            continue
+        values = [line for line in rest.split("\n") if line.strip() != ""]
+        result[full_sha] = values
+    return result
+
+
 def _resolving_shas(artifact_id: str) -> List[str]:
-    resolving: List[str] = []
-    for candidate_sha in _candidate_shas(artifact_id):
+    candidates = _candidate_shas(artifact_id)
+    if not candidates:
+        return []
+
+    primary_map = _batch_primary_trailers(candidates)
+    resolved: dict = {}
+    fallback_needed: List[str] = []
+    for candidate_sha in candidates:
+        values = primary_map.get(candidate_sha)
+        if values:
+            resolved[candidate_sha] = artifact_id in values
+        else:
+            # Absent or empty primary result -- mirrors the original
+            # per-candidate parse_resolves_trailer.run's own primary-then-
+            # fallback rung (Negative-spec: the case-insensitive fallback
+            # asymmetry is inherited, not fixed here).
+            fallback_needed.append(candidate_sha)
+
+    for candidate_sha in fallback_needed:
         candidate_ids, _rc = _parse_resolves_run(candidate_sha)
-        if artifact_id in candidate_ids:
-            resolving.append(candidate_sha)
-    return resolving
+        resolved[candidate_sha] = artifact_id in candidate_ids
+
+    return [sha for sha in candidates if resolved.get(sha)]
 
 
 def _shipped_rc(resolving_shas: List[str]) -> int:

@@ -51,9 +51,11 @@ from coordinator_core.session import liveness as _session_liveness
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lib path resolution — RETAINED for the ceremony_lock test that imports
-# _lib_path, and for callers that still want the on-disk successor path (e.g.
-# diagnostics). Production liveness no longer shells to any coordinator-
+# Lib path resolution — RETAINED for its own dedicated coverage in
+# tests/test_liveness.py (test_lib_path_*), for the contract
+# hooks/session_heartbeat.py cites, and for callers that still want the
+# on-disk successor path (e.g. diagnostics). Production liveness no longer
+# shells to any coordinator-
 # session lib — it delegates to the native session.* port above. The
 # 3-rung __file__-walk + resolve-coordinator-clone subprocess ladder this
 # function used to run is GONE: coordinator-session.sh was retired
@@ -107,8 +109,19 @@ def _lib_path() -> Optional[str]:
 # callers (session.reap) take two sequential fresh reads of the SAME claim_path
 # for TOCTOU detection, and caching would silently defeat that race check.
 # ---------------------------------------------------------------------------
+#
+# The cache key is the RESOLVED SESSIONS DIR, not a bare timestamp (break-class
+# fix, 2026-08-07; cross-repo memo `2026-08-07-example-doctrine-repo-em-scoped-commit-
+# calls-a-live-peer-dead-and-reapable`). This function is zero-arg and resolves
+# its registry from the PROCESS cwd, so in a process that touches two repos --
+# ordinary in a fleet where one engine serves sibling clones -- an unkeyed
+# cache served repo A's live set as the answer for repo B for up to the TTL.
+# Every one of B's live peers then reads not-live, which downstream renders as
+# a confident DEAD verdict on a live session. Keying on the sessions dir makes
+# a cross-repo hit a MISS rather than a wrong answer; an unresolvable dir
+# (empty key) is cached separately and equally correctly.
 _LIVE_IDS_CACHE_TTL_SEC = 2.0
-_live_ids_cache: Optional[Tuple[float, FrozenSet[str]]] = None
+_live_ids_cache: Optional[Tuple[str, float, FrozenSet[str]]] = None
 
 
 def _reset_live_ids_cache() -> None:
@@ -138,12 +151,16 @@ def resolve_live_session_ids() -> FrozenSet[str]:
     """
     global _live_ids_cache
     now = time.monotonic()
+    try:
+        key = _session_core.sessions_dir(None) or ""
+    except Exception:
+        key = ""
     if _live_ids_cache is not None:
-        cached_at, cached_value = _live_ids_cache
-        if now - cached_at < _LIVE_IDS_CACHE_TTL_SEC:
+        cached_key, cached_at, cached_value = _live_ids_cache
+        if cached_key == key and now - cached_at < _LIVE_IDS_CACHE_TTL_SEC:
             return cached_value
     result = _resolve_live_session_ids_uncached()
-    _live_ids_cache = (now, result)
+    _live_ids_cache = (key, now, result)
     return result
 
 
@@ -243,7 +260,7 @@ def cs_claim_holder_live(claim_path: str) -> bool:
         was never actually "indeterminate", it was silently promoted to
         "definitely dead". EVERY current caller of this function (session.reap,
         ops.fleet.archive_handoffs, ops.handoff_reconcile,
-        ops.ceremony.ceremony_lock, ops.fleet.archive_actioned_memos) now
+        ops.fleet.archive_actioned_memos) now
         wraps this call in its own try/except and fails closed toward
         "assume alive, do not reap/archive/reclaim" on any exception — so the
         indeterminate case is handled at the call site, with the fallback

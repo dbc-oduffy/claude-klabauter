@@ -89,7 +89,7 @@ def scan_unresolved_ubt_records(caller_worktree: Path) -> List[str]:
 
 
 @register_op("review_trail.scan_unresolved_ubt")
-async def _scan_unresolved_ubt_handler(
+def _scan_unresolved_ubt_handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC ``review_trail.scan_unresolved_ubt`` handler.

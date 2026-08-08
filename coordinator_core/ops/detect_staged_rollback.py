@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -136,7 +137,7 @@ def _run_git(args: Sequence[str], cwd: str, env: Optional[dict] = None) -> subpr
         capture_output=True,
         text=True,
         env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -255,6 +256,135 @@ def _path_history(
     return history
 
 
+def _batch_path_history(
+    repo_root: str,
+    paths: Sequence[str],
+    env: Optional[dict] = None,
+) -> Dict[str, List[Tuple[str, str, str]]]:
+    """ONE `git log --format=%H<SEP>%s --raw --no-renames --no-abbrev -z --
+    <path1> <path2> ...` walk resolving every *paths* entry's full commit
+    history (most-recent-first, unbounded — no `-n<limit>` here; see below
+    for why) in a single subprocess invocation, batching what
+    `find_rollback_candidates` used to spend one `_path_history` spawn per
+    staged path on.
+
+    Shape: multi-pathspec / object-membership (the safe side of § Anti-scope
+    2), NOT range batching — `-- pathA pathB ...` asks "every commit
+    touching ANY of these paths" (union/OR semantics), the exact same shape
+    `draft_plan_aging._batch_git_commit_epochs` (C14, `bd6d14afc`) already
+    landed for its own N+1 fix; adapted here from a single first-touch-wins
+    epoch per path to a full per-path history list. No reachability/ancestry
+    arithmetic (`A..B`, `--not`) is used anywhere in this query, so § Anti-
+    scope 1/2's range-batching trap does not apply.
+
+    Deliberately UNBOUNDED (no `-n<limit>` on the git invocation itself,
+    unlike single-path `_path_history`'s `-n<limit>`): applying a git-level
+    `-n` to a multi-pathspec query caps the number of commits in the
+    INTERLEAVED walk across every requested path combined, not per path — a
+    path touched only by old commits could be starved to zero history while
+    a frequently-touched sibling path consumes the whole window. Every
+    commit touching ANY requested path is read once; the per-path cap
+    (`limit`, HISTORY_DEPTH_LIMIT by default) is applied in memory instead,
+    once each path's own list reaches that length no further commits are
+    appended to it (but the shared walk still proceeds for the other
+    paths — same complexity bound as before, `HISTORY_DEPTH_LIMIT` commits
+    per requested path, just re-homed from a `git log -n` argument to a
+    Python-side counter).
+
+    Returns `{path: [(commit_hash, subject, blob_sha), ...]}` — a *paths*
+    entry present in this dict but with an EMPTY list means git found no
+    commit touching it at all (never committed, or unreadable-by-git); an
+    entry present with a non-empty list is capped at `limit`. On any
+    subprocess failure/timeout/non-zero exit, returns `{}` (every requested
+    path reads as absent — same fail-open posture as `_batch_git_commit_epochs`
+    and as a `_path_history` per-path invocation failure, which already
+    returned `[]` for that one path).
+
+    § Anti-scope 25 reconciliation (caller-side, see
+    `find_rollback_candidates`): a path ABSENT from this dict, or present
+    with an empty list, is read as "no history found for this path" and the
+    caller treats it as NOT a rollback candidate — the same outcome a
+    single-path `_path_history` failure/empty-result already produced before
+    this batching change. Failure direction: this function detects
+    rollbacks, so a path wrongly resolved to "no history" SUPPRESSES a
+    rollback finding that should have fired, never fabricates one — no
+    regression from the pre-batch per-path behavior, which had the identical
+    fail-open shape one path at a time. Reference shape for the
+    absence-reconciliation pattern (cited, not re-derived):
+    `coordinator_core/ops/emit/sections/handoffs.py`'s
+    `_resolve_shipped_in_dates` (prefix-match plus a `matched` set).
+    """
+    if not paths:
+        return {}
+    try:
+        result = _run_git(
+            [
+                "log",
+                f"--format=%H{_FIELD_SEP}%s",
+                "--raw",
+                "--no-renames",
+                "--no-abbrev",
+                "-z",
+                "--",
+                *paths,
+            ],
+            cwd=repo_root,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0 or not result.stdout:
+        return {}
+
+    wanted = set(paths)
+    history: Dict[str, List[Tuple[str, str, str]]] = {}
+
+    tokens = result.stdout.split("\0")
+    if tokens and tokens[-1] == "":
+        tokens = tokens[:-1]
+
+    # State-machine parse, driven by SHAPE (a rawline token always starts
+    # with ":" once its possible leading "\n" cushion is stripped; a header
+    # token never does) rather than hash-length/charset heuristics — a
+    # single commit touching MULTIPLE requested paths emits multiple
+    # rawline/path pairs back-to-back before the next header (empirically
+    # confirmed against this repo's own history; see this module's test
+    # fixtures), which a fixed-stride triple-grouping (`_path_history`'s
+    # single-path assumption) cannot parse.
+    current_commit: Optional[str] = None
+    current_subject: Optional[str] = None
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        stripped = token.lstrip("\n")
+        if stripped.startswith(":"):
+            # A raw-diff rawline/path pair for the CURRENT commit.
+            if current_commit is None or i + 1 >= len(tokens):
+                i += 1
+                continue
+            path = tokens[i + 1]
+            i += 2
+            if path not in wanted:
+                continue
+            parts = stripped[1:].split(" ")
+            if len(parts) != 5:
+                continue
+            _old_mode, _new_mode, _old_sha, new_sha, _status = parts
+            bucket = history.setdefault(path, [])
+            if len(bucket) < HISTORY_DEPTH_LIMIT:
+                bucket.append((current_commit, current_subject, new_sha))
+            continue
+        # A commit-header token: "<hash><SEP><subject>".
+        if _FIELD_SEP not in stripped:
+            # Malformed/unexpected record shape — skip rather than mis-parse.
+            i += 1
+            continue
+        current_commit, current_subject = stripped.split(_FIELD_SEP, 1)
+        i += 1
+
+    return history
+
+
 def find_rollback_candidates(
     repo_root: str, env: Optional[dict] = None
 ) -> List[RollbackCandidate]:
@@ -266,11 +396,18 @@ def find_rollback_candidates(
     never treated as a match target (see module docstring's threshold
     rationale); the NEAREST older match (smallest depth) is recorded, since
     that is the state actually being restored to.
+
+    History is resolved via ONE batched `_batch_path_history` walk over all
+    staged paths (not one `_path_history` spawn per path — the N+1 this
+    function used to pay) — see that function's docstring for the
+    multi-pathspec shape and the § Anti-scope 25 absence-reconciliation it
+    guarantees.
     """
     staged = _staged_blobs(repo_root, env=env)
+    all_history = _batch_path_history(repo_root, list(staged.keys()), env=env)
     candidates: List[RollbackCandidate] = []
     for path, staged_blob in staged.items():
-        history = _path_history(repo_root, path, env=env)
+        history = all_history.get(path, [])
         if len(history) < 2:
             continue
         for depth, (commit_hash, subject, blob) in enumerate(history):

@@ -29,12 +29,16 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Sequence
 
 from dataclasses import dataclass, field
+
+from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.ops import configure_git
 
 from coordinator_core.install._shared import (
     RequireHomeError,
@@ -344,6 +348,160 @@ def render_disposition_report(report: UninstallDispositionReport, *, dry_run: bo
             lines.append(f"        manual command: {record.manual_command}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# git-config reversal leg (C6) — net-new: `uninstall_legs` had NO git-config
+# reversal machinery before this chunk (install only ever PUT git-config
+# keys on a machine, via `configure_git._SETTINGS`; nothing took them back
+# off). Reverses one `unset_group` of `GitSetting` records as an atomic
+# unit — today's only caller is the Windows-only help-browser triple
+# (`help.format` -> `web.browser` -> `browser.noop.cmd`, `unset_group=
+# "help-browser"`) — honouring four reviewer-integrated constraints (see
+# spec backlink) all at once:
+#
+#   1. SCOPE — every unset runs in the scope the `GitSetting` record itself
+#      declares (`configure_git._resolve_scope`, `is_global=False` — a
+#      `scope="global"` record is ALWAYS global regardless of invocation),
+#      never a literal `--global`/`` in this module. `git config --unset`
+#      with no scope flag defaults to LOCAL, so a caller-supplied
+#      `config_get`/`config_unset` that received the wrong scope would
+#      silently target the wrong config file — this leg always threads the
+#      declared scope tuple through to both seams, never omits it.
+#   2. ORDER — the group is walked in `configure_git._SETTINGS`'s own
+#      declaration order, never re-sorted: `help.format` -> `web.browser`
+#      -> `browser.noop.cmd`, which makes the unsafe `web.browser=noop`
+#      without `browser.noop.cmd` intermediate unreachable at every prefix.
+#   3. ATOMICITY x VALUE-MATCH — unset only when the live value still
+#      matches what the installer set (`current == setting.value`);
+#      otherwise SKIP (`attempted_ok=None`, `deliberately-not-reversed`) —
+#      a SKIP does NOT abort the group. A non-SKIP failure (any exit other
+#      than 0, or exit 5 outside the declared scope — see constraint 4)
+#      DOES abort every remaining group member as `cannot-reverse-safely`
+#      with a `manual_command`, never `reversed`.
+#   4. EXIT-CODE — `git config --unset` on an already-absent key exits 5;
+#      since this leg always calls `config_unset` with the record's own
+#      declared scope (constraint 1), an observed exit 5 here is
+#      necessarily "absent in the declared scope" and is treated as
+#      success (`reversed`). Any other non-zero exit aborts the group
+#      (constraint 3).
+#
+# `config_get`/`config_unset` are injectable seams (default to
+# `configure_git._git_config_get` / this module's own
+# `_git_config_unset_scoped`) purely so tests can stub the git subprocess
+# boundary without touching a real git config anywhere, machine-local or
+# repo-local.
+#
+# Spec backlink: docs/plans/2026-08-07-git-help-browser-settings-shape.md § C6
+# ---------------------------------------------------------------------------
+
+
+def _git_config_unset_scoped(scope: Sequence[str], key: str) -> int:
+    """Run ``git config <scope> --unset <key>`` and return its raw exit
+    code (never raises; an ``OSError`` spawning git itself is reported as
+    exit 1, a genuine failure, never conflated with git's own exit 5
+    already-absent signal)."""
+    try:
+        res = subprocess.run(
+            ["git", "config", *scope, "--unset", key],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return 1
+    return res.returncode
+
+
+def uninstall_reverse_git_config_group(
+    unset_group: str,
+    *,
+    settings: "Sequence[configure_git.GitSetting]" = configure_git._SETTINGS,
+    config_get: Callable[[Sequence[str], str], "str | None"] = configure_git._git_config_get,
+    config_unset: Callable[[Sequence[str], str], int] = _git_config_unset_scoped,
+) -> tuple[DispositionRecord, ...]:
+    """Reverse every ``GitSetting`` in ``settings`` sharing
+    ``unset_group``, honouring unset-as-a-unit (see module-section
+    docstring above for the four constraints this enforces). Returns one
+    ``DispositionRecord`` per group member, in the group's own declared
+    order — always classified via ``classify_entry_disposition`` (this
+    leg is a caller of that TOTAL function, not a fourth disposition
+    source)."""
+
+    group_settings = [s for s in settings if s.unset_group == unset_group]
+
+    records: list[DispositionRecord] = []
+    aborted = False
+    for setting in group_settings:
+        scope, scope_label = configure_git._resolve_scope(setting, False)
+        entry = WriteSurfaceEntry(
+            kind="git-config-key", key=setting.key, unset_group=unset_group
+        )
+
+        if aborted:
+            records.append(
+                classify_entry_disposition(
+                    entry,
+                    attempted_ok=False,
+                    reason=(
+                        f"skipped — an earlier member of unset_group "
+                        f"{unset_group!r} failed non-recoverably; the remainder "
+                        "of the group is aborted rather than left partially "
+                        "reversed (ATOMICITY)."
+                    ),
+                    manual_command=(
+                        f"git config {' '.join(scope)} --unset {setting.key}".strip()
+                    ),
+                )
+            )
+            continue
+
+        current = config_get(scope, setting.key)
+        if current != setting.value:
+            records.append(
+                classify_entry_disposition(
+                    entry,
+                    attempted_ok=None,
+                    reason=(
+                        f"value-match SKIP — current {scope_label} value "
+                        f"{current!r} does not match what this installer set "
+                        f"({setting.value!r}); leaving the operator's own value "
+                        "in place."
+                    ),
+                )
+            )
+            continue
+
+        rc = config_unset(scope, setting.key)
+        if rc in (0, 5):
+            records.append(
+                classify_entry_disposition(
+                    entry,
+                    attempted_ok=True,
+                    reason=(
+                        f"unset {scope_label} {setting.key}"
+                        + (" (already absent — exit 5, success)" if rc == 5 else "")
+                    ),
+                )
+            )
+        else:
+            aborted = True
+            records.append(
+                classify_entry_disposition(
+                    entry,
+                    attempted_ok=False,
+                    reason=(
+                        f"git config --unset exited {rc} for {scope_label} "
+                        f"{setting.key}"
+                    ),
+                    manual_command=(
+                        f"git config {' '.join(scope)} --unset {setting.key}".strip()
+                    ),
+                )
+            )
+
+    return tuple(records)
 
 
 _NO_RECEIPT_MESSAGE = (
@@ -811,6 +969,16 @@ def uninstall_remove_shim() -> bool:
         # above), inlined here so an editor changing HOME derivation for
         # the other two legs doesn't reflexively "fix" this one to match
         # and silently change behavior.
+        # Review: code-reviewer — `_resolve_rc_path()` is called here with no
+        # `os.name == "nt"` guard, asymmetric with the writer
+        # (`write_shell_rc_guard_block`, shell_rc_guard.py) which early-returns
+        # on native Windows before ever calling it. What makes this harmless
+        # TODAY is not a platform check on this leg -- it's that the derived
+        # `$HOME/.bashrc`/`.zshrc` essentially never exists on native Windows,
+        # so the `rc_file.is_file()` guard below degrades this to a no-op. A
+        # future change to `_resolve_rc_path()` that returns something
+        # real-but-wrong on native Windows would have no platform check here
+        # to catch it before the strip runs.
         ("CLAUDE_KLABAUTER_CLONE", [_resolve_rc_path()]),
         ("CLAUDE_CLI_PATH", applicable_rc_files(Path(claude_home))),
         ("SETTINGS_HOME_BIN", applicable_rc_files(Path(claude_home))),

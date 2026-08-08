@@ -173,10 +173,7 @@ from typing import Dict, List, Optional, Tuple
 from coordinator_core import resolve_coordinator_clone
 from coordinator_core.install import gen_settings_hooks
 from coordinator_core.ops import gen_claude_doe_shim, gen_doe_root_pointer
-from coordinator_core.win_portability import is_executable
-
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE_KW: Dict[str, int] = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 _DEFAULT_TIMEOUT = 60
 
@@ -243,7 +240,7 @@ def _run(
             timeout=timeout,
             input=input_text,
             **stdin_kw,
-            **_NO_CONSOLE_KW,
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired as exc:
         return subprocess.CompletedProcess(

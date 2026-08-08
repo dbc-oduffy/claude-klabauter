@@ -71,6 +71,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
 
 _PLAN_STEM_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9.-]+$")
 _BACKLINK_LINE_RE = re.compile(r"spec.?backlink", re.IGNORECASE)
@@ -137,6 +138,7 @@ def _resolve_root(explicit_root: Optional[str]) -> Optional[str]:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _resolve_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -214,6 +216,7 @@ def _fix_file(full_path: str, src: str, dst: str) -> bool:
     proc = subprocess.run(
         [perl, "-i", "-pe", r's/\Q$ENV{SRC}\E/$ENV{DST}/g if /spec.?backlink/i', full_path],
         env=env, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     if proc.returncode == 0:
         # DR-276: declared AFTER the in-place perl edit lands.

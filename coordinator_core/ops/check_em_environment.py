@@ -81,7 +81,7 @@ def _resolve_effort(proj: Path, user_claude: Path) -> tuple[Optional[str], Optio
     return None, None
 
 
-_MODEL_RE = re.compile(r'"model":"([^"]*)"')
+_MODEL_RE = re.compile(r'"model":\s*"([^"]*)"')
 
 
 def _latest_model(path: Path) -> str:

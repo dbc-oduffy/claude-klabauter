@@ -193,6 +193,40 @@ class TestRepoScoping:
         assert guard.check(_payload("git checkout -b fix/foo")) is None
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 1): this guard gates on
+    `token_matches_binary(tokens[0], "git")` -- the external `git` exe,
+    byte-identical in both shell dialects. A PowerShell-typed caller invokes
+    the SAME `git checkout -b <name>`/`git switch -c <name>` argv; the
+    dialect-flavored surface is the STATEMENT SEPARATOR (`;`, PowerShell's
+    idiomatic chain operator, vs bash's `&&`) and the env-assignment prefix
+    shape (`$env:NAME = 'value';`, vs bash `NAME=value`). Both route through
+    the SAME `resolve_command_positions` tokenizer today (no `_dialect.py`
+    wiring exists in this module -- confirmed by grep), so this pins that
+    the verdict does not change when the surrounding shell idiom does.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 1 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_denies(self):
+        # PowerShell's own statement separator is `;`, not `&&` -- a
+        # PowerShell-typed compound command chains this way idiomatically.
+        _reason(guard.check(_payload("Get-Location; git checkout -b bad-name")))
+
+    def test_dollar_env_prefix_powershell_style_fails_open_same_as_bash(self):
+        # PowerShell's env-var READ syntax ($env:NAME) starting the target
+        # name argument is unreadable to this guard exactly like bash's
+        # unexpanded $VAR -- both fail open via `_looks_unsafe` (name
+        # starts with "$"), never manufacturing a deny from a token this
+        # guard cannot evaluate.
+        assert guard.check(_payload('git checkout -b "$env:BRANCH_NAME"')) is None
+
+    def test_canonical_daily_branch_still_passes_under_semicolon_chain(self):
+        assert guard.check(
+            _payload("Get-Location; git checkout -b work/machine-b/2026-07-13")
+        ) is None
+
+
 class TestFailOpenOnUnreadableName:
     def test_unexpanded_shell_variable_passes(self):
         assert guard.check(_payload('git checkout -b "$BRANCH"')) is None

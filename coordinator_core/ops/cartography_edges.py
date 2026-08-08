@@ -105,7 +105,7 @@ from coordinator_core.cartography.edges import build_edges
 
 
 @register_op("cartography.edges")
-async def _cartography_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.edges" handler.
 
     Args (via params):
@@ -148,7 +148,7 @@ async def _cartography_edges(params: dict, repo_root: Optional[Path] = None) -> 
 
 
 @register_op("cartography.count_references")
-async def _cartography_count_references(
+def _cartography_count_references(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "cartography.count_references" handler.

@@ -203,7 +203,7 @@ def cluster_records(
 
 
 @register_op("queue.cluster")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> list[dict]:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> list[dict]:
     """Handler for the 'queue.cluster' op.
 
     Params:

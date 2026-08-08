@@ -128,6 +128,10 @@ from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +148,6 @@ _ALLOWED_SUBTREES = ("cross-repo", "state")
 # an interactive prompt never blocks on the daemon's inherited stdin, and CREATE_NO_WINDOW
 # so Windows callers don't flash a console per memo transition.
 _GIT_TIMEOUT_SECS = 30
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _containment_check(memo: str) -> Path:
@@ -177,7 +180,7 @@ def _containment_check(memo: str) -> Path:
         text=True,
         stdin=subprocess.DEVNULL,
         timeout=_GIT_TIMEOUT_SECS,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
     if result.returncode != 0 or not result.stdout.strip():
         raise ValueError(

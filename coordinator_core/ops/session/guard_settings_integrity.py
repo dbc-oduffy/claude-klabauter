@@ -95,6 +95,7 @@ Source: retired coordinator/hooks/scripts/guard-settings-integrity.sh
 from __future__ import annotations
 import sys
 
+import asyncio
 import filecmp
 import json
 import datetime as _dt
@@ -104,14 +105,19 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.ipc import register_op
 from coordinator_core.resolve_coordinator_clone import (
     ResolveCoordinatorCloneError,
     resolve_content_root,
 )
-from coordinator_core._settings_home import settings_home
+from coordinator_core._settings_home import machine_local_dir, settings_home
+from coordinator_core.ops.session.hook_delivery_manifest import (
+    HookDeliveryManifest,
+    RetiredGuard,
+    read_hook_delivery_manifest,
+)
 
 _SNAPSHOT_NAME = ".settings-last-good.json"
 _CLOBBER_BAK_NAME = ".settings-clobbered.bak"
@@ -136,6 +142,22 @@ _DOEROOT_NAME = ".doe-root"
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 _HOOKS_JSON_REL = ("hooks", "hooks.json")
 _SCRIPT_TOKEN_RE = re.compile(r"(\S*\.(?:py|sh|mjs|js))\b")
+_TAIL_KEY_RE = re.compile(r"(?:^|/)([^/]+/[^/]+)$")
+
+# Box-drawing banner border width -- single source of truth for the five
+# `top`/`bot` construction sites in this module (Review: coordinator:
+# code-reviewer, P3). Pure hoist: `_banner_top()`/`_banner_bottom()` produce
+# byte-identical output to the prior per-site `"╔" + ("═" * 66) + "╗"`
+# literal at every call site -- no rendered banner text changes.
+_BANNER_BORDER_WIDTH = 66
+
+
+def _banner_top() -> str:
+    return "╔" + ("═" * _BANNER_BORDER_WIDTH) + "╗"
+
+
+def _banner_bottom() -> str:
+    return "╚" + ("═" * _BANNER_BORDER_WIDTH) + "╝"
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +333,35 @@ def _hook_layer_reachable(settings_data: dict) -> bool:
 def is_inline_install(config_dir: Path) -> bool:
     """A example-doctrine-repo `--plugin-dir` install has no `enabledPlugins` legitimately.
 
-    Reads `{config_dir}/.doe-root` directly. Strips ONLY a trailing CR/LF —
-    NOT a blanket whitespace strip, which would clobber embedded spaces in a
+    Reads the `.doe-root` pointer off one of two rungs, migrated rung
+    first:
+
+      1. `<settings-home>/machine-local/.doe-root`
+         (`coordinator_core._settings_home.machine_local_dir()`) — the
+         canonical home since the 2026-08-01 migration off `{config_dir}/
+         .doe-root`, which was machine-local state living in a git-tracked
+         cross-machine repo (a Mac writing `/Users/...` and a Windows box
+         writing `X:\\...` committing over each other for weeks). Consulted
+         ONLY when `_settings_home_scoped_to(config_dir, settings_home())`
+         is True — i.e. `config_dir` is a direct sibling of the resolved
+         settings home, the shape `settings_home()`'s own default
+         construction produces. This function's `config_dir` is
+         CALLER-supplied and can legitimately differ from the machine's
+         real settings home (a test's `tmp_path`, a non-default install
+         layout); consulting the migrated rung unconditionally would make
+         the answer for an arbitrary `config_dir` partly determined by
+         ambient machine state — the exact scope-escape hazard this
+         module's rung-3 known-good-backup lookup was fixed for on
+         2026-08-01 (see `_settings_home_scoped_to` and the "Restore
+         rungs" section's 2026-08-01 scope-escape note). When not scoped,
+         the migrated rung is treated as absent, not consulted at all.
+      2. `{config_dir}/.doe-root` (legacy) — read only when the migrated
+         rung's file is not present (regardless of the migrated rung's
+         content: an empty/blank migrated pointer FILE still suppresses
+         this rung, it does not fall through).
+
+    Strips ONLY a trailing CR/LF from whichever rung answers — NOT a
+    blanket whitespace strip, which would clobber embedded spaces in a
     Windows path like "C:\\Users\\me\\OneDrive - Company Name\\example-doctrine-repo".
 
     Public because it is a cross-module seam, not an internal helper:
@@ -326,7 +375,7 @@ def is_inline_install(config_dir: Path) -> bool:
     Negative spec: this is a LIVE existence probe, not a pointer read. A
     stale `.doe-root` naming a directory that no longer exists returns
     False, which is what keeps the probe's true-positive (destroyed clone)
-    detection intact.
+    detection intact — on EITHER rung.
 
     Spec backlink: DR-117 (example-doctrine-repo, maintainer signals may classify,
     never diagnose) — this predicate CLASSIFIES an install shape
@@ -334,6 +383,20 @@ def is_inline_install(config_dir: Path) -> bool:
     is to never read its `False` branch as a health verdict.
     """
     doeroot_file = config_dir / _DOEROOT_NAME
+    try:
+        home = settings_home()
+    except Exception:
+        home = None
+    if home is not None and _settings_home_scoped_to(config_dir, home):
+        # Review: coordinator:code-reviewer (P3) — build the migrated candidate
+        # from the already-bound `home` rather than calling machine_local_dir(),
+        # which internally re-resolves settings_home() a second time for the
+        # same path; on this SessionStart boot path resolution cost is a
+        # first-order concern (see module docstring).
+        migrated_candidate = home / "machine-local" / _DOEROOT_NAME
+        if migrated_candidate.is_file():
+            doeroot_file = migrated_candidate
+
     if not doeroot_file.is_file():
         return False
     try:
@@ -493,8 +556,8 @@ def _marketplace_dirs(settings_data: dict) -> dict:
 
 
 def _banner_unreachable_plugins(keys: list[str], settings_data: dict | None = None) -> str:
-    top = "╔" + ("═" * 66) + "╗"
-    bot = "╚" + ("═" * 66) + "╝"
+    top = _banner_top()
+    bot = _banner_bottom()
     lines = ["", top, _BANNER_UNREACHABLE_HEADER, "║"]
     for key in keys:
         lines.append(f"║      {key}")
@@ -562,6 +625,21 @@ def _banner_unreachable_plugins(keys: list[str], settings_data: dict | None = No
 
 
 @dataclass(frozen=True)
+class ResurrectedDecision:
+    """A settings.json-side entry naming a guard the manifest marks
+    deliberately `retired` -- distinct from both an ordinary duplicate and
+    an ordinary settings-only entry, because the settings.json config
+    predates the retirement ruling and silently outranks it. `script` is
+    the resolved absolute path when one is available, else the raw tail
+    key (same display-fallback convention as `duplicated_scripts`/
+    `settings_only_scripts`)."""
+
+    id: str
+    script: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class HookDeliveryReport:
     """Per-surface reachability + entry counts for the two hook-delivery
     paths, plus the resolved-script overlap between them (the actual
@@ -570,7 +648,15 @@ class HookDeliveryReport:
     separate hazard signal: resolved script paths declared on the
     settings.json surface ONLY -- the scripts that would be silently lost
     (never erroring, never logged) if the `hooks` key were deleted on the
-    assumption the two surfaces are fully redundant."""
+    assumption the two surfaces are fully redundant.
+
+    `manifest_state`/`manifest_detail`/`manifest_unaccounted` carry the
+    hook-delivery manifest's (C1/C2) read result for this boot --
+    `"absent"` when no manifest was consulted at all (e.g. the plugin side
+    is not present, or `hooks.json` carries no `x-effective-delivery`
+    block), mirroring `HookDeliveryManifest.state`'s five-state contract.
+    `resurrected_decisions` is the third comparator outcome (AC6),
+    distinct from `duplicated_scripts` and `settings_only_scripts`."""
 
     plugin_present: bool
     plugin_resolvable: bool
@@ -580,14 +666,43 @@ class HookDeliveryReport:
     settings_entry_count: int
     duplicated_scripts: List[str]
     settings_only_scripts: List[str] = field(default_factory=list)
+    content_root_error: Optional[str] = None
+    manifest_state: str = "absent"
+    manifest_detail: str = ""
+    manifest_unaccounted: Tuple[str, ...] = ()
+    resurrected_decisions: Tuple[ResurrectedDecision, ...] = ()
+
+    @property
+    def degraded(self) -> bool:
+        """True iff BOTH delivery surfaces are live AND the hook-delivery
+        manifest is not in state `ok` -- mirrors `indeterminate`'s exact
+        discriminator shape (`content_root_error is not None and
+        settings_present`), reusing the same "both surfaces must be live
+        or the verdict is noise" posture rather than inventing a second
+        one. With only one surface live there is nothing that can
+        double-fire, so a degraded banner there is pure noise on every
+        machine in the fleet that has not taken an emitter yet; with both
+        live and no usable (`ok`) manifest, the check genuinely cannot
+        answer whether a script delivered behind a fan-in carrier
+        collides with a settings-side entry, and staying silent there is
+        the exact false-green conflation this property exists to kill."""
+        return (
+            self.plugin_present
+            and self.settings_present
+            and self.manifest_state != "ok"
+        )
 
     @property
     def double_fire(self) -> bool:
         """True iff both delivery surfaces are live (present + resolvable)
         AND at least one script-shaped hook command resolves to the SAME
-        file on disk under both. Two live surfaces with zero actual command
-        overlap (e.g. a partial migration) are NOT double-fire -- report
-        honestly rather than assuming full duplication from mere presence."""
+        script (see `duplicated_scripts` -- matched by root-independent tail
+        key, not exact absolute path alone; see `_tail_key`'s docstring for
+        why exact-path-only under-detects). Two live surfaces with zero
+        actual command overlap (e.g. a partial migration) are NOT
+        double-fire -- report honestly rather than assuming full
+        duplication from mere presence. Never True while `indeterminate`
+        is True (`indeterminate` implies `plugin_present` is False)."""
         return (
             self.plugin_present
             and self.plugin_resolvable
@@ -596,28 +711,91 @@ class HookDeliveryReport:
             and len(self.duplicated_scripts) > 0
         )
 
+    @property
+    def indeterminate(self) -> bool:
+        """True iff the coordinator content root could not be resolved at
+        all (`content_root_error` set) while settings.json still declares a
+        `hooks` block -- in this shape the plugin-side hooks.json could not
+        even be LOCATED (its path is `<content_root>/hooks/hooks.json`), so
+        a `plugin_present=False` / zero-overlap result here is a resolution
+        FAILURE, not evidence the two surfaces are actually disjoint.
+        `format_hook_delivery_banner` must render an explicit indeterminate
+        banner in this case, never the confident "nothing is firing twice
+        today" disjoint verdict nor silence -- see this predicate's spec
+        backlink for the confirmed incident this closes: a SessionStart call
+        and an interactive re-run resolved the coordinator content root to
+        two different (each individually valid) rungs of
+        `resolve_content_root`'s ladder, and the resulting false "TWO
+        HOOK-DELIVERY SURFACES...DECLARING DIFFERENT SCRIPTS" banner hid a
+        real 22-script double-fire. `duplicated_scripts`'s tail-key matching
+        (see `_tail_key`) independently closes the "two different but BOTH
+        resolvable roots" half of that incident; this predicate closes the
+        "root does not resolve at all" half, which tail-key matching cannot
+        by itself fix (an unresolvable root means plugin-side hooks.json
+        can't be read, so there are no plugin-side commands to match
+        against at any granularity)."""
+        return self.content_root_error is not None and self.settings_present
 
-def _resolved_script_paths(commands: List[str], content_root: Optional[str]) -> set:
-    """Best-effort absolute, normalized path for every script-shaped command
-    in `commands` -- the join key used to detect the SAME script declared on
-    both delivery surfaces despite their command strings being textually
-    distinct (one `${CLAUDE_PLUGIN_ROOT}`-relative, one pre-baked absolute).
-    Non-script commands and unresolvable tokens are silently skipped (same
-    "identify what we can, never guess" posture as `_script_commands_resolve`
-    above -- this must never crash or false-positive on a command shape it
-    doesn't recognize)."""
-    out: set = set()
+
+def _tail_key(token: str) -> Optional[str]:
+    """Root-independent join key for a script-shaped hook command token --
+    its last two path segments (e.g. `scripts/foo.py`, lower-cased),
+    taken from the RAW token text BEFORE any `${CLAUDE_PLUGIN_ROOT}`
+    substitution or filesystem resolution.
+
+    Review: coordinator:code-reviewer (P3) -- the `scripts/foo.py` example
+    above corrects a stale three-segment example (`hooks/scripts/foo.py`)
+    that never matched `_TAIL_KEY_RE`'s actual two-segment capture. Doc-only
+    fix: the join width (last two segments) did not change.
+
+    Confirmed defect this closes (see `HookDeliveryReport.indeterminate`'s
+    docstring for the sibling half): exact absolute-path comparison alone
+    (the pre-fix `_resolved_script_paths`-only approach) reported ZERO
+    overlap for a live incident with a real 22-script double-fire, because
+    the plugin-side and settings-side resolutions had landed on two
+    different (each individually valid) rungs of `resolve_content_root`'s
+    ladder -- e.g. a dev registry `live_path` clone vs. a `CLAUDE_PLUGIN_ROOT`
+    the harness sets at SessionStart pointing at a distinct, equally-live
+    mirror of the SAME hooks tree. Both sides enumerate the same script
+    NAMES under the same `hooks/scripts/` layout even when their absolute
+    roots differ, so the tail is the invariant this detector actually needs
+    to compare on; the absolute path remains useful only for DISPLAY once a
+    match is found (a resolvable absolute path reads better in the banner
+    than a raw tail string).
+
+    Returns None for a token with no recognizable two-segment tail (should
+    not happen for anything `_extract_script_token` matched, but never
+    guessed at -- same "identify what we can, never guess" posture as
+    every other helper in this section)."""
+    normalized = token.replace("\\", "/")
+    match = _TAIL_KEY_RE.search(normalized)
+    return match.group(1).lower() if match else None
+
+
+def _tail_keys_map(commands: List[str], content_root: Optional[str]) -> dict:
+    """tail-key -> set of resolved absolute paths (when resolvable) for
+    every script-shaped command in `commands`. Pairs the root-independent
+    grouping key (`_tail_key`) with whatever absolute resolution happens to
+    be available, so a match found via the tail fallback can still be
+    reported with a real path in the banner rather than the bare tail
+    string. A key maps to an empty set (never absent) when no command
+    sharing that tail resolved to an absolute path -- callers fall back to
+    the tail string itself for display in that case."""
+    out: dict = {}
     for command in commands:
         token = _extract_script_token(command)
         if token is None:
             continue
-        resolved = _resolve_script_token(token, content_root)
-        if resolved is None:
+        key = _tail_key(token)
+        if key is None:
             continue
-        try:
-            out.add(str(resolved.resolve()))
-        except OSError:
-            out.add(str(resolved))
+        bucket = out.setdefault(key, set())
+        resolved = _resolve_script_token(token, content_root)
+        if resolved is not None:
+            try:
+                bucket.add(str(resolved.resolve()))
+            except OSError:
+                bucket.add(str(resolved))
     return out
 
 
@@ -638,15 +816,18 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         )
         config_dir = Path(raw)
 
+    content_root_error: Optional[str] = None
     try:
         content_root = resolve_content_root()
-    except ResolveCoordinatorCloneError:
+    except ResolveCoordinatorCloneError as exc:
         content_root = None
+        content_root_error = str(exc)
 
     # --- plugin side: coordinator/hooks/hooks.json under the resolved
     # content root, same resolver `_plugin_side_reachable` uses above. ---
     plugin_present = False
     plugin_commands: List[str] = []
+    plugin_data: Optional[dict] = None
     if content_root is not None:
         hooks_json = Path(content_root, *_HOOKS_JSON_REL)
         if hooks_json.is_file():
@@ -678,13 +859,104 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         settings_commands, content_root
     )
 
+    # Hook-delivery manifest (C1/C2): read the `x-effective-delivery` block
+    # out of the ALREADY-PARSED `plugin_data` -- no second resolve, no
+    # second file read. `declared_script_keys` is the plugin-side's own
+    # script-shaped commands, tail-key normalized, so the manifest's
+    # exhaustiveness/`stale` check (C1) sees exactly what `hooks.json`
+    # itself declares.
+    declared_script_keys: List[str] = []
+    for command in plugin_commands:
+        token = _extract_script_token(command)
+        if token is None:
+            continue
+        key = _tail_key(token)
+        if key is not None:
+            declared_script_keys.append(key)
+    manifest: HookDeliveryManifest = read_hook_delivery_manifest(
+        plugin_data, declared_script_keys
+    )
+
+    # Overlap is computed on the root-independent tail key (`_tail_key`),
+    # not exact absolute path alone -- see `_tail_key`'s docstring for the
+    # confirmed incident this closes: two individually-valid but distinct
+    # content-root resolutions make exact-path comparison under-detect real
+    # duplication. An exact-path match is a subset of a tail-key match (same
+    # absolute path implies same tail), so this is a strict widening, not a
+    # behavior change for the common (single content root) case.
+    #
+    # Join step (C3, Review: staff-eng finding 0): with the manifest in
+    # state `ok`, BOTH sides' tail keys are further normalized into an
+    # EFFECTIVE GUARD SET before differencing -- a carrier tail key expands
+    # to its declared guard ids, a non-carrier tail key that matches a
+    # guard's `script` field (the manifest's `script_index`, probed for
+    # BOTH sides, not settings-only) resolves to that guard's id, and
+    # anything else is identity. AC4 pins state != `ok` (including
+    # `absent`) to identity-only -- byte-identical to the pre-manifest
+    # filename comparison.
     duplicated: List[str] = []
     settings_only: List[str] = []
+    resurrected: List[ResurrectedDecision] = []
     if plugin_present and settings_present:
-        plugin_paths = _resolved_script_paths(plugin_commands, content_root)
-        settings_paths = _resolved_script_paths(settings_commands, content_root)
-        duplicated = sorted(plugin_paths & settings_paths)
-        settings_only = sorted(settings_paths - plugin_paths)
+        plugin_tail_map = _tail_keys_map(plugin_commands, content_root)
+        settings_tail_map = _tail_keys_map(settings_commands, content_root)
+
+        retired_by_script: Dict[str, RetiredGuard] = {
+            r.script: r for r in manifest.retired
+        }
+        # Resurrected-decision entries (AC6): a settings-side tail key that
+        # names a guard the manifest marks `retired` -- distinct from both
+        # a duplicate and a settings-only entry, pulled out of the
+        # settings-side map BEFORE the duplicate/settings-only difference
+        # below so it is not double-counted into either.
+        resurrected_settings_keys: Set[str] = set()
+        for key, paths in settings_tail_map.items():
+            retired_guard = retired_by_script.get(key)
+            if retired_guard is None:
+                continue
+            resurrected_settings_keys.add(key)
+            display = sorted(paths)[0] if paths else key
+            resurrected.append(
+                ResurrectedDecision(
+                    id=retired_guard.id, script=display, reason=retired_guard.reason
+                )
+            )
+        settings_tail_map = {
+            key: paths
+            for key, paths in settings_tail_map.items()
+            if key not in resurrected_settings_keys
+        }
+
+        def _expand_guard_map(tail_map: Dict[str, set]) -> Dict[str, set]:
+            expanded: Dict[str, set] = {}
+            for tail_key, paths in tail_map.items():
+                if manifest.state == "ok" and tail_key in manifest.carriers:
+                    guard_ids = {g.id for g in manifest.carriers[tail_key]}
+                elif manifest.state == "ok" and tail_key in manifest.script_index:
+                    guard_ids = {manifest.script_index[tail_key]}
+                else:
+                    guard_ids = {tail_key}
+                for guard_id in guard_ids:
+                    bucket = expanded.setdefault(guard_id, set())
+                    bucket.update(paths)
+            return expanded
+
+        plugin_guard_map = _expand_guard_map(plugin_tail_map)
+        settings_guard_map = _expand_guard_map(settings_tail_map)
+        overlap_keys = set(plugin_guard_map) & set(settings_guard_map)
+
+        duplicated_set: set = set()
+        for key in overlap_keys:
+            paths = settings_guard_map[key] or plugin_guard_map[key]
+            duplicated_set.update(paths or {key})
+        duplicated = sorted(duplicated_set)
+
+        settings_only_set: set = set()
+        for key, paths in settings_guard_map.items():
+            if key in overlap_keys:
+                continue
+            settings_only_set.update(paths or {key})
+        settings_only = sorted(settings_only_set)
 
     return HookDeliveryReport(
         plugin_present=plugin_present,
@@ -695,15 +967,123 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         settings_entry_count=len(settings_commands),
         duplicated_scripts=duplicated,
         settings_only_scripts=settings_only,
+        content_root_error=content_root_error,
+        manifest_state=manifest.state,
+        manifest_detail=manifest.detail,
+        manifest_unaccounted=manifest.unaccounted,
+        resurrected_decisions=tuple(resurrected),
     )
+
+
+def _standalone_degraded_banner(report: HookDeliveryReport) -> str:
+    """Rendered only when BOTH surfaces are live, the manifest is not `ok`
+    (`report.degraded`), and there is otherwise nothing else to say
+    (no duplicate/settings-only/resurrected finding) -- the exact shape
+    that would previously have returned `""`, which is the false-green
+    conflation AC4 exists to kill. `stale` gets its own, more specific
+    rendering naming the unaccounted-for command (C1's exhaustiveness
+    contract); every other non-`ok` state (`absent`, `malformed`,
+    `version-unsupported`) shares the generic degraded rendering."""
+    top = _banner_top()
+    bot = _banner_bottom()
+    if report.manifest_state == "stale":
+        unaccounted = (
+            report.manifest_unaccounted[0]
+            if report.manifest_unaccounted
+            else "(unknown)"
+        )
+        return "\n".join(
+            [
+                "",
+                top,
+                "║  ?  HOOK-DELIVERY MANIFEST IS STALE",
+                "║",
+                f"║  hooks.json declares {unaccounted!r}, which the delivery",
+                "║  manifest does not account for as a carrier, direct, or retired",
+                "║  entry -- this check's verdict is not confident in either",
+                "║  direction.",
+                "║",
+                "║  This is DETECT-ONLY -- nothing was changed.",
+                bot,
+                "",
+            ]
+        )
+    return "\n".join(
+        [
+            "",
+            top,
+            "║  ?  HOOK-DELIVERY DUPLICATION CHECK IS DEGRADED (no usable manifest)",
+            "║",
+            "║  Both hook-delivery surfaces are live on this machine, but no",
+            "║  usable delivery manifest is present -- this check compared",
+            "║  filenames only and cannot see guards delivered behind a fan-in",
+            "║  carrier, so a clean result here is not evidence nothing fires",
+            "║  twice.",
+            "║",
+            "║  This is DETECT-ONLY -- nothing was changed.",
+            bot,
+            "",
+        ]
+    )
+
+
+def _resurrected_decisions_banner(report: HookDeliveryReport) -> str:
+    """Rendered STANDALONE when `report.resurrected_decisions` is non-empty
+    and neither `double_fire` nor `settings_only_scripts` also fires (see
+    `format_hook_delivery_banner`'s early-return branch). When a resurrected
+    finding co-occurs with `double_fire`/`settings_only_scripts`, it is
+    rendered ADDITIVELY inside `format_hook_delivery_banner`'s own pinned
+    body instead of via this function (EM decision, C4 item 3) -- a
+    resurrected decision is worse than an ordinary duplicate or
+    settings-only entry (a config frozen before a retirement ruling
+    silently outranks the ruling), so it must not be suppressed behind a
+    less severe finding dominating the banner. Distinct from both a
+    duplicate and a settings-only finding: names each resurrected entry,
+    quotes the manifest's (already-sanitized, per C1/C2) reason, and states
+    plainly that the action is removing that specific stale entry -- NOT
+    the kill-switch, since these guards were deliberately retired, not
+    accidentally duplicated."""
+    top = _banner_top()
+    bot = _banner_bottom()
+    decisions = report.resurrected_decisions
+    k = len(decisions)
+    noun = "entry" if k == 1 else "entries"
+    lines = [
+        "",
+        top,
+        f"║  ⛔ {k} settings.json {noun} name a guard the manifest marks RETIRED",
+        "║",
+        "║  A settings.json config frozen before a retirement ruling silently",
+        "║  outranks it -- each entry below is running a guard that was",
+        "║  deliberately stood down, not accidentally duplicated:",
+        "║",
+    ]
+    for decision in decisions:
+        lines.append(f"║      {decision.script}  (id: {decision.id})")
+        lines.append(f"║          reason: {decision.reason}")
+    lines.append("║")
+    lines.append("║  This is DETECT-ONLY -- nothing was changed.")
+    lines.append(
+        "║  Action: remove that specific stale settings.json entry (NOT the"
+    )
+    lines.append(
+        "║  kill-switch -- these guards were deliberately retired, not"
+    )
+    lines.append("║  accidentally duplicated).")
+    lines.append(bot)
+    lines.append("")
+    return "\n".join(lines)
 
 
 def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
     """Render the hook-delivery banner -- empty string (silent) unless
-    `report.double_fire` is True OR `report.settings_only_scripts` is
-    non-empty. Leads with the actionable conclusion, not a data dump, and
-    names the exact remediation rather than merely the condition (dispatch
-    brief requirements #2 and #3).
+    `report.double_fire` is True, `report.settings_only_scripts` is
+    non-empty, `report.resurrected_decisions` is non-empty, or
+    `report.degraded` is True (the false-green-preventing standalone
+    degraded/stale rendering, see `_standalone_degraded_banner`). Leads
+    with the actionable conclusion, not a data dump, and names the exact
+    remediation rather than merely the condition (dispatch brief
+    requirements #2 and #3).
 
     Review: code-reviewer (Finding 1) -- the settings-only danger section
     used to be nested entirely inside the `double_fire`-only early return,
@@ -716,12 +1096,71 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
     that; this is a rendering fix, not a semantics change. When both
     conditions hold (overlap AND settings-only scripts), today's behaviour
     -- the double-fire lead line plus the danger section -- is unchanged.
+
+    EM decision (C4, item 3): a resurrected-decision finding renders
+    ADDITIVELY when it co-occurs with `double_fire`/`settings_only_scripts`
+    -- appended after the existing pinned body, never replacing it -- rather
+    than being suppressed behind the less-severe finding the way C3
+    originally scoped it. Resurrected-alone still renders via
+    `_resurrected_decisions_banner` in the early-return branch above.
+
+    Golden-diff scope, narrowed (C3, Review: staff-eng finding 2): under
+    manifest state `ok`, every rendering below is byte-for-byte identical
+    to before this chunk. Under any other manifest state, exactly two
+    lines become hedged (the disjoint-case lead line and the
+    settings-only removal-instruction line) -- every other line, including
+    the `double_fire=True` banner and the `indeterminate` banner, is
+    untouched.
     """
+    top = _banner_top()
+    bot = _banner_bottom()
+    if report.indeterminate:
+        # Required fix #2 (see `HookDeliveryReport.indeterminate`'s
+        # docstring): a machine where the coordinator content root does not
+        # resolve at all must never render a confident negative -- neither
+        # silence (the pre-fix behavior: `plugin_present=False` made both
+        # `double_fire` and `settings_only_scripts` empty, so the old early
+        # return above fired and said nothing) nor the disjoint "nothing is
+        # firing twice today" banner. Report the check as unable to run and
+        # name the unresolved variable/error verbatim.
+        error_line = (report.content_root_error or "").splitlines()[0] if report.content_root_error else "(no detail)"
+        return "\n".join(
+            [
+                "",
+                top,
+                "║  ?  HOOK-DELIVERY DUPLICATION CHECK IS INDETERMINATE",
+                "║",
+                "║  settings.json declares a `hooks` block, but the coordinator",
+                "║  content root could not be resolved on this machine -- so",
+                "║  plugin-side hooks.json could not even be located, and this check",
+                f"║  cannot tell you whether hooks are firing twice or not:",
+                f"║      settings.json's `hooks` block: {report.settings_entry_count} entries",
+                "║",
+                f"║  Unresolved: {error_line}",
+                "║",
+                "║  This is DETECT-ONLY -- nothing was changed.",
+                "║  Action: fix coordinator content-root resolution on this machine",
+                "║  (re-run the installer or /coordinator:setup), then re-check --",
+                "║  this could be masking a real hooks-firing-twice condition.",
+                bot,
+                "",
+            ]
+        )
+    degraded_applicable = report.degraded
+    resurrected = report.resurrected_decisions
     if not report.double_fire and not report.settings_only_scripts:
+        # Golden-diff scope, narrowed (C3): the double_fire=True and
+        # settings-only banners below are byte-for-byte pinned except for
+        # the two named hedged lines -- resurrected-decision and standalone
+        # degraded/stale findings therefore get their OWN dedicated
+        # rendering here, ahead of the empty-string fallback, rather than
+        # being spliced into a pinned banner's body.
+        if resurrected:
+            return _resurrected_decisions_banner(report)
+        if degraded_applicable:
+            return _standalone_degraded_banner(report)
         return ""
     n = len(report.duplicated_scripts)
-    top = "╔" + ("═" * 66) + "╗"
-    bot = "╚" + ("═" * 66) + "╝"
     if report.double_fire:
         lines = [
             "",
@@ -743,7 +1182,18 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
         # Disjoint case (Review: code-reviewer, Finding 1): both surfaces are
         # live but declare no overlapping scripts, so nothing is firing
         # twice today -- the lead line says so instead of the false
-        # "FIRING TWICE" claim.
+        # "FIRING TWICE" claim. Golden-diff scope, narrowed (C3): this
+        # unqualified claim is a real, verified absence of duplication only
+        # under manifest state `ok` -- a non-`ok` state hedges instead,
+        # since the check compared filenames only and cannot see guards
+        # delivered behind a fan-in carrier.
+        if report.manifest_state == "ok":
+            disjoint_lead_line = "║  -- nothing is firing twice today:"
+        else:
+            disjoint_lead_line = (
+                "║  -- no two files collide; guards delivered behind a fan-in"
+                " carrier were not compared:"
+            )
         lines = [
             "",
             top,
@@ -751,7 +1201,7 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
             "║",
             "║  Both the plugin-side hooks.json and settings.json's `hooks` block",
             "║  are live on this machine, but they declare no overlapping scripts",
-            "║  -- nothing is firing twice today:",
+            disjoint_lead_line,
             f"║      plugin-side hooks.json:        {report.plugin_entry_count} entries",
             f"║      settings.json's `hooks` block: {report.settings_entry_count} entries",
             "║",
@@ -764,9 +1214,19 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
         for script in report.settings_only_scripts:
             lines.append(f"║      {script}")
         lines.append("║")
-        lines.append(
-            "║  Deleting the `hooks` key would stop these running entirely --"
-        )
+        if report.manifest_state == "ok":
+            lines.append(
+                "║  Deleting the `hooks` key would stop these running entirely --"
+            )
+        else:
+            # Golden-diff scope, narrowed (C3): hedged under any non-`ok`
+            # manifest state -- this check cannot rule out that a
+            # "settings-only" script is actually delivered behind a
+            # fan-in carrier the manifest failed to describe.
+            lines.append(
+                "║  Deleting the `hooks` key would stop these running entirely,"
+                " AS FAR AS THIS CHECK CAN TELL WITHOUT A DELIVERY MANIFEST --"
+            )
         lines.append(
             "║  silently, with nothing erroring and nothing logged -- because"
         )
@@ -824,6 +1284,41 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
             "║  removing settings.json's `hooks` key -- no kill-switch action is"
         )
         lines.append("║  needed here, since nothing is double-firing today.")
+    if resurrected:
+        # EM decision (C4, item 3): resurrected decisions are worse than a
+        # duplicate or a settings-only entry -- a config frozen before a
+        # retirement ruling silently outranks the ruling -- so a co-
+        # occurring resurrected finding must not be suppressed behind
+        # `double_fire`/`settings_only_scripts` dominating the banner body.
+        # ADDITIVE ONLY: appended after the existing pinned body above,
+        # never replacing or rewording it, so every golden-diff-pinned line
+        # above (the `double_fire=True` banner, the disjoint banner, the
+        # settings-only danger section) stays byte-identical. The
+        # standalone case (resurrected alone, nothing else firing) still
+        # renders via `_resurrected_decisions_banner` above and is
+        # untouched by this block.
+        k = len(resurrected)
+        noun = "entry" if k == 1 else "entries"
+        lines.append("║")
+        lines.append(
+            f"║  ⛔ Additionally, {k} settings.json {noun} name a guard the"
+        )
+        lines.append(
+            "║  manifest marks RETIRED -- a config frozen before the ruling"
+        )
+        lines.append("║  silently outranks it:")
+        lines.append("║")
+        for decision in resurrected:
+            lines.append(f"║      {decision.script}  (id: {decision.id})")
+            lines.append(f"║          reason: {decision.reason}")
+        lines.append("║")
+        lines.append(
+            "║  Action: remove that specific stale settings.json entry (NOT the"
+        )
+        lines.append(
+            "║  kill-switch -- these guards were deliberately retired, not"
+        )
+        lines.append("║  accidentally duplicated).")
     lines.append(bot)
     lines.append("")
     return "\n".join(lines)
@@ -899,8 +1394,8 @@ def _banner_restored(restored_from: str, clobber_bak: Path, *, least_trusted: bo
     rungs" section docstring's accepted-risk note above
     `_known_good_backup_candidates`). The operator must be able to tell
     which rung fired from the banner alone, not have to go read source."""
-    top = "╔" + ("═" * 66) + "╗"
-    bot = "╚" + ("═" * 66) + "╝"
+    top = _banner_top()
+    bot = _banner_bottom()
     provenance_note = (
         "║\n"
         "║  NOTE: this restore came from an operator-placed backup file (matched\n"
@@ -1662,12 +2157,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     config_dir_param = params.get("config_dir")
     config_dir = Path(config_dir_param) if config_dir_param else None
-    text = evaluate_settings_integrity(config_dir)
+    text = await asyncio.to_thread(evaluate_settings_integrity, config_dir)
     return {"text": text}
 
 
 @register_op("session.guard_hooks_kill_switch_detail")
-async def _handler_kill_switch_detail(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler_kill_switch_detail(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'session.guard_hooks_kill_switch_detail' handler -- the
     on-demand door named by the routine boot router line's `_KS_DETAIL_COMMAND`
     (`python3 -m coordinator_core.invoke session.guard_hooks_kill_switch_detail

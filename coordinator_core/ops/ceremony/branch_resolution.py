@@ -51,6 +51,7 @@ import logging
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -267,7 +268,7 @@ def _git_run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
             capture_output=True,
             text=True,
             timeout=30,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
             stdin=subprocess.DEVNULL,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:

@@ -161,7 +161,7 @@ def _enumerate_outbox_candidates(worktree_root: Path) -> list:
 
 
 @register_op("memo.list_outbox")
-async def _memo_list_outbox(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _memo_list_outbox(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'memo.list_outbox' COMPUTE_ONLY UDS op handler.
 
     Enumerate every draft memo in the CALLING repo's own

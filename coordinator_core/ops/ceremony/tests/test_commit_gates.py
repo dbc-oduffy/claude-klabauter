@@ -399,6 +399,33 @@ def test_dirty_tree_gate_eol_phantom_skipped(tmp_path):
     assert outcome.unattributable == []
 
 
+def test_dirty_tree_gate_batched_phantom_filter_preserves_per_path_resolution(tmp_path):
+    """C1 (docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-
+    amplification-gate.md): the EOL-phantom filter now runs ONE batched
+    `git diff --name-only` over every tracked-unstaged candidate instead of
+    one `git diff --quiet` per porcelain line. This pins that the batch
+    still resolves per-path correctly: a real edit right next to a
+    same-content rewrite (phantom) in the SAME batch must not cross-
+    contaminate -- the real edit stays unattributable, the phantom stays
+    skipped."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "phantom.txt", "same content")
+    _seed_file(repo, "real-edit.txt", "original content")
+    _git(["add", "--", "phantom.txt", "real-edit.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # phantom.txt: rewritten with IDENTICAL content -- a phantom, absent from
+    # `git diff --name-only`'s output.
+    (repo / "phantom.txt").write_text("same content", encoding="utf-8")
+    # real-edit.txt: genuinely changed -- present in `git diff --name-only`'s
+    # output, and has no attributable owner.
+    (repo / "real-edit.txt").write_text("changed content", encoding="utf-8")
+
+    outcome = dirty_tree_gate(repo)
+    assert outcome.passed is False
+    assert outcome.unattributable == ["real-edit.txt"]
+
+
 def test_dirty_tree_gate_known_concurrent_owner_skipped(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")

@@ -125,11 +125,14 @@ def list_tracked_files(
     if scope:
         cmd.append("--")
         cmd.extend(scope)
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         cmd,
         cwd=root,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         raise RuntimeError(

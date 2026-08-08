@@ -79,12 +79,15 @@ _CHERRY_PICK_MAX_COMMITS = 3
 
 
 def default_run_git(args: list[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
+    from coordinator_core.win_portability import no_console_creationflags
+
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
         check=False,
+        **no_console_creationflags(),
     )
 
 
@@ -181,7 +184,7 @@ def list_worktrees(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
 
 
 def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> bool:
-    proc = run_git(["status", "--porcelain"], Path(worktree_path))
+    proc = run_git(["--no-optional-locks", "status", "--porcelain"], Path(worktree_path))
     return bool(proc.stdout.strip())
 
 

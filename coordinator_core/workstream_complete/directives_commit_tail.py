@@ -113,9 +113,10 @@ from typing import Any, Iterable, NamedTuple, Optional
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as _memo_lifecycle
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 
 def _directive(

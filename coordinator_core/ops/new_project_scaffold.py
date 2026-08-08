@@ -63,7 +63,7 @@ Negative-spec (faithful oracle-bug repro — do NOT silently "fix"):
 
 Timeout/stdin/CREATE_NO_WINDOW triad (per the safe-tier verification wave's addendum —
 hard rule, not oracle fidelity): every subprocess.run call in this module carries
-timeout=<secs>, stdin=subprocess.DEVNULL, and creationflags=_CREATIONFLAGS. The bash
+timeout=<secs>, stdin=subprocess.DEVNULL, and **_CREATIONFLAGS. The bash
 oracle had none of these (unbounded `git`/pnpm/render-tree calls, inherited stdin, and
 on Windows a console-window popup per child process) — a hung child pnpm/git process
 would otherwise block this module indefinitely, and each child would flash a console
@@ -84,7 +84,10 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "new-project-scaffold.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
 
@@ -104,7 +107,6 @@ _PNPM_TEST_TIMEOUT = 300
 # Windows-portability triad, addendum rule A4 — suppresses the console-window
 # popup every child subprocess would otherwise flash on Windows. Matches the
 # sibling ops in this wave (migrate_cross_repo_layout.py, orphan_branch_sweep.py).
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _resolve_machine_local() -> Optional[str]:
@@ -149,7 +151,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: machine-local invocation failed: {exc}", file=sys.stderr)
@@ -222,7 +224,7 @@ def _register_repo(project_name: str, target: str) -> int:
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: machine-local set repos.{slug} failed: {exc}", file=sys.stderr)
@@ -241,15 +243,21 @@ def _register_repo(project_name: str, target: str) -> int:
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: machine-local get repos.{slug} verification failed: {exc}", file=sys.stderr)
         return 1
     stored = verify.stdout.strip()
-    if verify.returncode != 0 or stored != target_abs:
+    # The registry round-trips repos.* values through machine-local as
+    # POSIX-separated strings regardless of platform (registry contract,
+    # not a scaffold decision) -- os.path.abspath() on Windows returns
+    # native backslashes, so compare both sides POSIX-normalized rather
+    # than raw, or every registration on Windows fails verification.
+    target_posix = target_abs.replace(os.sep, "/")
+    if verify.returncode != 0 or stored != target_posix:
         print(
-            f"{_PROG}: repos.{slug} registration verify mismatch: expected {target_abs!r}, got {stored!r}",
+            f"{_PROG}: repos.{slug} registration verify mismatch: expected {target_posix!r}, got {stored!r}",
             file=sys.stderr,
         )
         return 1
@@ -340,7 +348,7 @@ def _git_init_main(target: str) -> int:
             timeout=_GIT_TIMEOUT,
             stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         primary_ok = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -354,7 +362,7 @@ def _git_init_main(target: str) -> int:
             ["git", "init", target, "--quiet"],
             timeout=_GIT_TIMEOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: git init failed: {exc}", file=sys.stderr)
@@ -367,7 +375,7 @@ def _git_init_main(target: str) -> int:
             ["git", "-C", target, "symbolic-ref", "HEAD", "refs/heads/main"],
             timeout=_GIT_TIMEOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: git symbolic-ref failed: {exc}", file=sys.stderr)
@@ -381,7 +389,7 @@ def _run_smoke_step(cmd: List[str], cwd: str, timeout: int, label: str) -> int:
     place the oracle overrides the underlying child's exit code)."""
     try:
         proc = subprocess.run(
-            cmd, cwd=cwd, timeout=timeout, stdin=subprocess.DEVNULL, creationflags=_CREATIONFLAGS
+            cmd, cwd=cwd, timeout=timeout, stdin=subprocess.DEVNULL, **_CREATIONFLAGS
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"ERROR: {label} failed -- scaffold is incomplete", file=sys.stderr)
@@ -458,7 +466,7 @@ def main(argv: List[str]) -> int:
                     [*resolve_launchable(render_tree), template_src, staging, f"PROJECT_NAME={project_name}"],
                     timeout=_RENDER_TREE_TIMEOUT,
                     stdin=subprocess.DEVNULL,
-                    creationflags=_CREATIONFLAGS,
+                    **_CREATIONFLAGS,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 print(f"{_PROG}: render-template-tree.sh invocation failed: {exc}", file=sys.stderr)

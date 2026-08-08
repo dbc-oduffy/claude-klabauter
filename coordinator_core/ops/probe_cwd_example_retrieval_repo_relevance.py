@@ -115,7 +115,11 @@ def _resolve_home_base() -> Tuple[str, Optional[str]]:
         if not os.environ.get("COORDINATOR_SETTINGS_HOME"):
             override = os.path.join(test_home, ".coordinator-claude-settings")
         return test_home, override
-    return os.environ.get("HOME", os.path.expanduser("~")), None
+    return (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    ), None
 
 
 @contextlib.contextmanager
@@ -148,11 +152,14 @@ def _resolve_effective_cwd() -> str:
     git_bin = shutil.which("git")
     if git_bin:
         try:
+            from coordinator_core.win_portability import no_console_creationflags
+
             result = subprocess.run(
                 [git_bin, "rev-parse", "--show-toplevel"],
                 capture_output=True,
                 text=True,
                 check=False,
+                **no_console_creationflags(),
             )
             if result.returncode == 0:
                 top = result.stdout.strip()
@@ -271,11 +278,14 @@ def _whoami_project_kind() -> str:
         "    print('')\n"
     )
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             [py, "-c", script],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _whoami_project_kind: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

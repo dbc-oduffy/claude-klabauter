@@ -69,15 +69,25 @@ _TERMINAL_DEPLOYMENT_STATES = HANDOFF_TERMINAL_DEPLOYMENT
 _GIT_ENV_IDENTITY_PREFIXES: tuple = ("GIT_AUTHOR_", "GIT_COMMITTER_")
 
 # Session-identity env vars consumed by the example-doctrine-repo prepare-commit-msg hook to
-# resolve the Session-Id: commit trailer (env ladder: CLAUDE_SESSION_ID ->
-# CLAUDE_CODE_SESSION_ID -> .git/coordinator-sessions/.current-session-id
-# sentinel).  These are OPAQUE identity strings, not GIT_* execution-redirect
+# resolve the Session-Id: commit trailer (env-only ladder:
+# COORDINATOR_SESSION_ID -> CLAUDE_SESSION_ID -> CLAUDE_CODE_SESSION_ID; the
+# `.current-session-id` sentinel tier was removed KS-1, 2026-08-07).  This
+# allowlist forwards all three, ordered to match the precedence
+# coordinator_core.session.core.resolve_session_id() / SESSION_ENV_PRECEDENCE
+# actually applies — a caller relying on COORDINATOR_SESSION_ID to set the
+# trailer inside a fleet git subprocess previously fell through to
+# CLAUDE_SESSION_ID instead (fixed here).
+# These are OPAQUE identity strings, not GIT_* execution-redirect
 # vectors (unlike GIT_SSH_COMMAND / GIT_EXEC_PATH / GIT_PROXY_COMMAND /
 # GIT_TEMPLATE_DIR), so forwarding them does not relax the git-execution
 # security perimeter this allowlist exists to protect.  The downstream reader
 # (coverage.py) UUID-shape-validates the trailer value before any `git grep`
 # interpolation, so a malformed value cannot become a shell-injection vector.
-_SESSION_ID_ENV_KEYS: tuple = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
+_SESSION_ID_ENV_KEYS: tuple = (
+    "COORDINATOR_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ID",
+)
 
 # Named reason (D1, 2026-07-28 fleet-git-env-hardening finding): `git commit`
 # (not just read-only git) execs THIS repo's own prepare-commit-msg and
@@ -285,10 +295,11 @@ def _make_git_env(*, idx_path: Optional[str] = None) -> dict:
     """Build a hardened allowlist env for git subprocess calls.
 
     Forwards HOME, PATH, GIT_AUTHOR_*/GIT_COMMITTER_* identity vars, the
-    two session-identity vars (CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID)
-    consumed by the prepare-commit-msg hook to stamp the real Session-Id:
-    trailer instead of falling through to a stale sentinel value, and the
-    D1 extra-forward set (_EXTRA_FORWARD_ENV_KEYS — see its comment) needed
+    three session-identity vars (COORDINATOR_SESSION_ID, CLAUDE_SESSION_ID,
+    CLAUDE_CODE_SESSION_ID) consumed by the prepare-commit-msg hook to stamp
+    the real Session-Id: trailer instead of falling through to a stale
+    sentinel value, and the D1 extra-forward set
+    (_EXTRA_FORWARD_ENV_KEYS — see its comment) needed
     by this repo's own prepare-commit-msg/post-commit hooks and by native
     Windows git itself, since `git commit` execs those hooks two processes
     down. Strips execution-redirect vectors: GIT_SSH_COMMAND, GIT_EXEC_PATH,
@@ -692,24 +703,17 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
 # Claim class subdirectory names (mirrors cs_reap_stale_claims no-arg coverage).
 _CLAIM_SUBDIRS: tuple = ("handoff-claims", "memo-claims", "plan-claims")
 
-
-def _sessions_dir(common_dir: Path) -> Path:
-    """Return the coordinator-sessions dir: <common_dir>/coordinator-sessions/.
-
-    The sessions dir lives inside the git dir (common_dir), NOT the worktree.
-    """
-    return common_dir / "coordinator-sessions"
-
-
-def handoff_claim_dir(common_dir: Path, handoff_path: Path) -> Path:
-    """Derive the handoff claim-lock dir for a given handoff path.
-
-    <common_dir>/coordinator-sessions/handoff-claims/<handoff_path.name> —
-    the SAME key session.reap._reap_orphaned_claims sweeps (_CLAIM_SUBDIRS[0]).
-    Single source of truth for both archive_handoffs._is_terminal Check 4
-    (liveness read) and session.reap (liveness read + TOCTOU-guarded rm).
-    """
-    return _sessions_dir(common_dir) / _CLAIM_SUBDIRS[0] / handoff_path.name
+# `_sessions_dir` / `handoff_claim_dir` re-homed to `coordinator_core.claim_state`
+# (2026-08-07, claim-state-ledger-first-authoritative-read plan, C1) — that leaf
+# module is now the single source of truth for the handoff-claim-dir
+# convention, so a new canonical ledger-first claim accessor can depend on it
+# without importing anything under `coordinator_core.ops.*` (see
+# `claim_state.py`'s own module docstring for the import-cycle rationale).
+# Re-exported here, unchanged in behavior, for this module's existing
+# importers (`baton_assemble/apply.py`, `ops/handoff_close_origin_stub.py`,
+# `ops/handoff_reconcile.py`, `ops/fleet/archive_handoffs.py`,
+# `ops/session/reap.py`, `ops/session/record_pickup.py`).
+from coordinator_core.claim_state import _sessions_dir, handoff_claim_dir  # noqa: E402,F401
 
 
 def plan_claim_dir(common_dir: Path, plan_path: Path) -> Path:

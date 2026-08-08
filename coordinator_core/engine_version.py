@@ -76,12 +76,15 @@ def resolve_engine_sha() -> str | None:
         # Review: code-reviewer (Finding 1) — bounded timeout so a blocked/locked
         # git process degrades to None instead of hanging the per-op invocation
         # budget indefinitely.
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "-C", str(engine_dir), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             timeout=5,
             env=scoped_git_env(),
+            **no_console_creationflags(),
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None

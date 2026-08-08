@@ -1985,15 +1985,12 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
 # ---------------------------------------------------------------------------
 
 class TestCarriedItemsShape:
-    # Review: code-reviewer (P2, accepted) — these fixtures keep `carry_count`
-    # solely because the vendored handoff.schema.json still lists it in
-    # carried_items[].required (byte-drift-pinned, cannot be edited here); its
-    # removal was requested by cross-repo memo 2026-08-06. Until that lands,
-    # dropping carry_count from a fixture makes it genuinely schema-invalid —
-    # the base-schema `required` check would fire at
-    # carried_items[N].carry_count, invisible to these tests' exact-field
-    # (`e['field'] == 'carried_items'`) assertions. Remove carry_count from
-    # these fixtures once the vendored schema drops the requirement.
+    # handoff.schema.json 7.0.0 (DR-278) dropped `carry_count` from both
+    # `carried_items[].required` and `.properties` — it is no longer part of
+    # the schema at all. Fixtures below that still carry a `carry_count` key
+    # keep it only as inert legacy data (see test_legacy_carry_count_is_inert):
+    # `carried_items[]` has no `additionalProperties: false`, so its presence
+    # or absence is schema-neutral. No fixture here relies on it being present.
     def test_absent_carried_items_ok(self):
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'carried_items' for e in errors)
@@ -2055,10 +2052,10 @@ class TestCarriedItemsShape:
         """Direct unit test of `_cf_carried_items_shape` — the cross-field rule
         itself, called directly rather than through `validate_frontmatter` —
         proving an entry with NO `carry_count` returns no error from this rule.
-        This is the behavior DR-268 introduced (carry depth is never validated);
-        the base-schema `required` check on the vendored (drift-pinned)
-        handoff.schema.json can mask this at the `validate_frontmatter` level,
-        so it must be exercised here where that masking cannot happen."""
+        This is the behavior DR-268 introduced (carry depth is never
+        validated); calling the cross-field rule directly keeps this test
+        independent of the base-schema `required` check regardless of what
+        the vendored handoff.schema.json currently requires."""
         fm = {'carried_items': [
             {'carry_id': 'cf-x-333333', 'description': 'x', 'disposition': 'carried'},
         ]}

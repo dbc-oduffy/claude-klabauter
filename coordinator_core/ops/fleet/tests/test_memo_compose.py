@@ -33,11 +33,13 @@ from coordinator_core.ops.fleet.memo_compose import (
     derive_prose_summary,
 )
 from coordinator_core.ops.fleet.memo_draft import _memo_draft
-from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -132,24 +134,23 @@ class TestValidateComposeParams:
 
     def test_valid_params(self):
         result = _validate_compose_params({"dry_run": False, "topic": "t", "body": "b", "summary": "s"})
-        assert result == (False, "t", "b", "s")
+        assert result == (False, "t", "b", "s", None, None)
 
-    def test_explicit_summary_over_cap_fails_loud(self, capsys):
-        """2026-07-22 body-drop verdict memo (cross-repo/inbox/2026-07-22-
-        claude-central-em-snippet-sync-adoption-and-body-drop-verdict.md):
-        an EXPLICITLY authored summary over _SUMMARY_MAX_CHARS must fail
-        loud here — BEFORE _memo_compose ever rewrites the draft — never
-        silently truncated mid-sentence."""
+    def test_explicit_summary_over_cap_warns_and_substitutes(self, capsys):
+        """2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-
+        memo-summary-cap-warn-at-draft.md § C4): an EXPLICITLY authored
+        summary over _SUMMARY_MAX_CHARS no longer fails loud here — it is
+        set aside (never truncated) and the summary slot is sentineled to
+        None so the handler falls through to derive_prose_summary(body)."""
         long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
         result = _validate_compose_params(
             {"dry_run": True, "topic": "t", "body": "b", "summary": long_summary}
         )
-        assert result["exit_code"] == 1
-        stderr = capsys.readouterr().err
-        assert str(_SUMMARY_MAX_CHARS) in stderr
-        assert long_summary not in stderr, (
-            "error must not echo the full over-cap summary back"
-        )
+        dry_run, topic, body, summary, advisory, original = result
+        assert (dry_run, topic, body, summary) == (True, "t", "b", None)
+        assert advisory is not None
+        assert str(_SUMMARY_MAX_CHARS) in advisory
+        assert original == long_summary  # echoed back verbatim, in full
 
     def test_explicit_summary_at_cap_passes(self):
         """A summary exactly AT the cap is valid — the gate is strictly-greater-than."""
@@ -157,7 +158,17 @@ class TestValidateComposeParams:
         result = _validate_compose_params(
             {"dry_run": False, "topic": "t", "body": "b", "summary": at_cap_summary}
         )
-        assert result == (False, "t", "b", at_cap_summary)
+        assert result == (False, "t", "b", at_cap_summary, None, None)
+
+    def test_placeholder_summary_resolves_to_absent(self):
+        """AC5: a placeholder-valued summary (memo.draft's ruler) is ABSENT,
+        not an explicit value — validation resolves it to None so the handler
+        falls through to derive_prose_summary(body) rather than length-checking
+        or writing the ruler into a delivered memo."""
+        result = _validate_compose_params(
+            {"dry_run": False, "topic": "t", "body": "b", "summary": SUMMARY_PLACEHOLDER}
+        )
+        assert result == (False, "t", "b", None, None, None)
 
 
 # ===========================================================================
@@ -241,10 +252,44 @@ class TestActRewritesDraft:
         split = split_frontmatter(target.read_text(encoding="utf-8"))
         assert read_fm_field(split.fm_text, "summary") == '"Explicit summary wins."'
 
-    def test_explicit_summary_over_cap_leaves_draft_untouched(self, tmp_path):
-        """End-to-end: _memo_compose fails loud (exit_code:1) on an over-cap
-        explicit summary and does NOT rewrite the draft file — the former
-        `[:_SUMMARY_MAX_CHARS - 1] + "…"` silent clamp is gone."""
+    def test_explicit_summary_over_cap_substitutes_and_warns(self, tmp_path):
+        """End-to-end (2026-08-07 PM ruling, AC9/AC10): _memo_compose SUCCEEDS
+        on an over-cap explicit summary — the body-derived summary is written
+        in its place, an advisory names the actual length and the cap, and
+        the author's original text is echoed back verbatim. Never truncated:
+        no prefix of the 163-char original appears in the emitted summary
+        (the former `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is gone)."""
+        sender = _draft_first(tmp_path)
+        common_dir = sender / ".git"
+        target = sender / "state" / "memo-outbox" / "some-topic.md"
+
+        body = "Derived summary sentence lands here. More body follows.\n"
+        long_summary = "S" * 163
+        result = _run(_memo_compose(
+            {
+                "dry_run": False, "topic": "some-topic", "body": body,
+                "summary": long_summary,
+            },
+            repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        acted = result["acted"][0]
+        assert acted["summary"] == "Derived summary sentence lands here."
+        assert acted["summary_cap_advisory"] is not None
+        assert str(_SUMMARY_MAX_CHARS) in acted["summary_cap_advisory"]
+        assert acted["summary_over_cap_original"] == long_summary
+
+        split = split_frontmatter(target.read_text(encoding="utf-8"))
+        written_summary = read_fm_field(split.fm_text, "summary")
+        assert written_summary == '"Derived summary sentence lands here."'
+        # No truncation — no prefix of the over-cap original ever reaches
+        # the emitted summary field (substitution, not clamping).
+        assert long_summary[:20] not in written_summary
+
+    def test_explicit_summary_over_cap_and_underivable_body_refuses(self, tmp_path, capsys):
+        """C4: over-cap explicit summary + a body with no derivable prose has
+        nothing to substitute — refuse (DEC-1), never deliver an empty
+        summary, and name BOTH conditions in the message."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
         target = sender / "state" / "memo-outbox" / "some-topic.md"
@@ -253,12 +298,16 @@ class TestActRewritesDraft:
         long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
         result = _run(_memo_compose(
             {
-                "dry_run": False, "topic": "some-topic", "body": "new body",
+                "dry_run": False, "topic": "some-topic",
+                "body": "## Heading\n<!-- comment -->\n\n",
                 "summary": long_summary,
             },
             repo_root=common_dir,
         ))
         assert result["exit_code"] == 1
+        stderr = capsys.readouterr().err
+        assert "over cap" in stderr
+        assert "no derivable prose" in stderr
         assert target.read_text(encoding="utf-8") == before  # untouched
 
     def test_status_not_draft_is_setup_error(self, tmp_path):
@@ -304,6 +353,49 @@ class TestActRewritesDraft:
 
         result = _run(_memo_compose(
             {"dry_run": False, "topic": "some-topic", "body": "## Heading\n<!-- comment -->\n"},
+            repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 1
+        assert target.read_text(encoding="utf-8") == before  # untouched
+
+    def test_placeholder_summary_derives_from_derivable_body(self, tmp_path):
+        """AC5/AC6 direction 1: placeholder summary + a derivable body →
+        derived summary is written, the ruler never reaches the delivered
+        draft."""
+        sender = _draft_first(tmp_path)
+        common_dir = sender / ".git"
+
+        result = _run(_memo_compose(
+            {
+                "dry_run": False, "topic": "some-topic",
+                "body": "## Heading\n\nA derivable prose sentence.\n",
+                "summary": SUMMARY_PLACEHOLDER,
+            },
+            repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+
+        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        content = target.read_text(encoding="utf-8")
+        split = split_frontmatter(content)
+        assert read_fm_field(split.fm_text, "summary") == '"A derivable prose sentence."'
+        assert SUMMARY_PLACEHOLDER not in content
+
+    def test_placeholder_summary_with_underivable_body_still_refuses(self, tmp_path):
+        """AC5/AC6 direction 2: placeholder summary + an underivable body still
+        hits DEC-1's resolved-empty refusal, unweakened — the sentinel routes
+        to derivation, not around DEC-1."""
+        sender = _draft_first(tmp_path)
+        common_dir = sender / ".git"
+        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        before = target.read_text(encoding="utf-8")
+
+        result = _run(_memo_compose(
+            {
+                "dry_run": False, "topic": "some-topic",
+                "body": "## Heading\n<!-- comment -->\n",
+                "summary": SUMMARY_PLACEHOLDER,
+            },
             repo_root=common_dir,
         ))
         assert result["exit_code"] == 1

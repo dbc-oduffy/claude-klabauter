@@ -71,6 +71,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -127,7 +128,7 @@ def _machine_local_get(key: str) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

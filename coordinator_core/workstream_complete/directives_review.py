@@ -1059,19 +1059,21 @@ def _record_membership_shas(
     sees byte-identical behavior to before this parameter existed.
 
     `vouched_shas`, optional, is `(session_id) -> iterable-of-shas` — the
-    read side of the write side's `ForeignSessionRangeRefused` vouch escape
-    hatch (`coordinator_core.ops.review_trail_write._guard_foreign_session_
-    range`'s PM-vouch relaxation, `_PM_VOUCH_WAIVER_DIRNAME`) plus the
-    gate-minted chain-ancestry waiver store (`chain_ancestry_waivers.py`),
-    unioned by the caller exactly as `coverage._narrow_foreign_session_scope`
-    already unions them for its own build_reviewed_set path. A sha this
-    callable names is subtracted OUT of the foreign-strip set BEFORE it is
-    removed from `raw` — i.e. a foreign-attributed commit that is vouched (or
-    carries a matching chain-ancestry waiver) is NOT narrowed away, mirroring
-    the write side's own "vouch is the sanctioned remedy" contract. Any
-    failure resolving the vouched set (the callable raises) is treated as "no
-    vouch" — fail-safe toward narrowing, never toward silently manufacturing
-    coverage.
+    read side of the write side's `ForeignSessionRangeRefused` escape hatch
+    (`coordinator_core.ops.review_trail_write._guard_foreign_session_range`'s
+    chain-ancestry-waiver relaxation), sourced from the gate-minted
+    chain-ancestry waiver store (`chain_ancestry_waivers.py`). 2026-08-08
+    (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2): the
+    PM-vouch evidence source this parameter formerly also carried
+    (`review_trail_write._PM_VOUCH_WAIVER_DIRNAME`,
+    `coordinator_core/session/review_trail_vouch.py`) is deleted outright —
+    this parameter's NAME and CALLABLE SIGNATURE are unchanged, it now
+    carries only chain-ancestry waivers. A sha this callable names is
+    subtracted OUT of the foreign-strip set BEFORE it is removed from
+    `raw` — i.e. a foreign-attributed commit carrying a matching
+    chain-ancestry waiver is NOT narrowed away. Any failure resolving the
+    waived set (the callable raises) is treated as "no waiver" — fail-safe
+    toward narrowing, never toward silently manufacturing coverage.
 
     `chain_planning_sha_set`, optional, is the PLANNING-classified subset of
     `chain_code_sha_set` (2026-08-07 correction — see `_NON_CODE_SCOPE_KINDS`'s
@@ -1310,8 +1312,8 @@ def chain_partition_verdict_discharged(
     `vouched_shas`, optional, is threaded straight through to
     `chain_partition_uncovered_shas` / `_record_membership_shas` — see the
     latter's docstring for its shape and fail-safe posture (a sha carrying a
-    PM vouch or a matching gate-minted chain-ancestry waiver is not narrowed
-    out of a discharging record's contribution).
+    matching gate-minted chain-ancestry waiver is not narrowed out of a
+    discharging record's contribution).
 
     `chain_planning_shas`, optional, is threaded straight through to
     `chain_partition_uncovered_shas` — the PLANNING-classified subset of

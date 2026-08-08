@@ -123,7 +123,8 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
+
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
 # one-shot install phases can be slow (pip installs in ensure-coordinator-venv)
 # but must never hang the orchestrator forever on a wedged child.
@@ -214,7 +215,7 @@ def _run(cmd: Sequence[str], env: Optional[Dict[str, str]] = None) -> int:
             env=env,
             stdin=subprocess.DEVNULL,
             timeout=_SUBPROCESS_TIMEOUT,
-            creationflags=_CREATE_NO_WINDOW,
+            **no_console_creationflags(),
         )
         return result.returncode
     except subprocess.TimeoutExpired:
@@ -405,7 +406,7 @@ def _run_compileall(interp: str, pkg_root: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=120,
-        creationflags=_CREATE_NO_WINDOW,
+        **no_console_creationflags(),
     )
 
 
@@ -426,7 +427,12 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
     is retained, tried last.
     """
     if os.name == "nt":
-        home = os.environ.get("CLAUDE_HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
+        home = (
+            os.environ.get("CLAUDE_HOME")
+            or os.environ.get("HOME")
+            or os.environ.get("USERPROFILE")
+            or os.path.expanduser("~")
+        )
         for cand in (
             os.path.join(home, ".coordinator-claude-settings", "bin", "claude-home.cmd"),
             os.path.join(home, ".claude", "bin", "claude-home.cmd"),
@@ -481,7 +487,7 @@ def _resolve_coordinator_live_path() -> str:
                 text=True,
                 stdin=subprocess.DEVNULL,
                 timeout=_SUBPROCESS_TIMEOUT,
-                creationflags=_CREATE_NO_WINDOW,
+                **no_console_creationflags(),
                 check=True,
             )
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -507,7 +513,7 @@ def _is_windows_host() -> bool:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=10,
-            creationflags=_CREATE_NO_WINDOW,
+            **no_console_creationflags(),
         )
         uname = result.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
@@ -669,7 +675,7 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
                 text=True,
                 stdin=subprocess.DEVNULL,
                 timeout=30,
-                creationflags=_CREATE_NO_WINDOW,
+                **no_console_creationflags(),
             )
             return result.stdout.replace("\r", "").strip()
         except (OSError, subprocess.TimeoutExpired):
@@ -707,7 +713,7 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
                     text=True,
                     stdin=subprocess.DEVNULL,
                     timeout=10,
-                    creationflags=_CREATE_NO_WINDOW,
+                    **no_console_creationflags(),
                 )
                 if result.stdout.strip():
                     tool_path = result.stdout.strip()

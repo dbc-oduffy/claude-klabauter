@@ -9,8 +9,6 @@ invocation idempotency check per AC7.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 # ---- Import guard: fires @register_op side-effect for both ops. ----
@@ -23,10 +21,6 @@ from coordinator_core.ops.parse_cli_args import (
     parse_date_flags,
     parse_flag,
 )
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 # ---- registration ----
@@ -129,21 +123,21 @@ def test_parse_date_flags_is_idempotent_across_two_invocations():
 
 
 def test_handler_parse_flag_basic():
-    result = _run(_handler_parse_flag(
+    result = _handler_parse_flag(
         {"arguments": "--root /tmp/foo", "flag_names": ["--root", "--target"]}
-    ))
+    )
     assert result == {"value": "/tmp/foo", "matched_flag": "--root"}
 
 
 def test_handler_parse_flag_missing_params_default_empty():
-    result = _run(_handler_parse_flag({}))
+    result = _handler_parse_flag({})
     assert result == {"value": None, "matched_flag": None}
 
 
 def test_handler_parse_flag_double_invocation_is_byte_identical():
     params = {"arguments": "--root /tmp/foo", "flag_names": ["--root"]}
-    first = _run(_handler_parse_flag(dict(params)))
-    second = _run(_handler_parse_flag(dict(params)))
+    first = _handler_parse_flag(dict(params))
+    second = _handler_parse_flag(dict(params))
     assert first == second
 
 
@@ -151,22 +145,22 @@ def test_handler_parse_flag_double_invocation_is_byte_identical():
 
 
 def test_handler_parse_date_flags_basic():
-    result = _run(_handler_parse_date_flags({"arguments": "--for-date 2026-07-22 --only"}))
+    result = _handler_parse_date_flags({"arguments": "--for-date 2026-07-22 --only"})
     assert result == {"for_date": "2026-07-22", "only": True}
 
 
 def test_handler_parse_date_flags_missing_params_default_empty():
-    result = _run(_handler_parse_date_flags({}))
+    result = _handler_parse_date_flags({})
     assert result == {"for_date": None, "only": False}
 
 
 def test_handler_parse_date_flags_only_without_for_date_raises():
     with pytest.raises(ValueError):
-        _run(_handler_parse_date_flags({"arguments": "--only"}))
+        _handler_parse_date_flags({"arguments": "--only"})
 
 
 def test_handler_parse_date_flags_double_invocation_is_byte_identical():
     params = {"arguments": "--for-date 2026-07-22"}
-    first = _run(_handler_parse_date_flags(dict(params)))
-    second = _run(_handler_parse_date_flags(dict(params)))
+    first = _handler_parse_date_flags(dict(params))
+    second = _handler_parse_date_flags(dict(params))
     assert first == second

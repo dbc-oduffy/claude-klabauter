@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
 
 _DEFAULT_AGE_SEC = 120
 _DEFAULT_MAINT_AGE_SEC = 600
@@ -117,6 +118,7 @@ def _git_absolute_git_dir(cwd: Optional[Path] = None) -> Optional[Path]:
             capture_output=True,
             text=True,
             cwd=cwd,
+            **no_console_creationflags(),
         )
     except OSError:
         return None
@@ -133,6 +135,7 @@ def _git_common_dir(git_dir: Path, cwd: Optional[Path] = None) -> Path:
             capture_output=True,
             text=True,
             cwd=cwd,
+            **no_console_creationflags(),
         )
     except OSError:
         return git_dir

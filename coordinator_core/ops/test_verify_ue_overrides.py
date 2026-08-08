@@ -54,15 +54,15 @@ _FULLY_ENABLED = {
 
 
 def _setup_success_tree(tmp_path):
-    example-game-repo = tmp_path / "example-game-repo-repo"
+    example_game_repo_dir = tmp_path / "example-game-repo-repo"
     example_retrieval_repo = tmp_path / "example-retrieval-repo-repo"
     home = tmp_path / "home"
-    for d in (example-game-repo, example_retrieval_repo, home):
+    for d in (example_game_repo_dir, example_retrieval_repo, home):
         d.mkdir(parents=True, exist_ok=True)
-    _write_settings(str(example-game-repo / ".claude" / "settings.json"), _FULLY_ENABLED)
+    _write_settings(str(example_game_repo_dir / ".claude" / "settings.json"), _FULLY_ENABLED)
     _write_settings(str(example_retrieval_repo / ".claude" / "settings.json"), _FULLY_ENABLED)
     _write_settings(str(home / ".claude" / "settings.json"), _FULLY_ENABLED)
-    return example-game-repo, example_retrieval_repo, home
+    return example_game_repo_dir, example_retrieval_repo, home
 
 
 def _write_fake_ml_stub(path) -> None:
@@ -139,14 +139,14 @@ def test_missing_directory_fails_loud(monkeypatch, tmp_path, capsys):
 
 
 def test_missing_settings_json(monkeypatch, tmp_path, capsys):
-    example-game-repo = tmp_path / "example-game-repo-repo"
+    example_game_repo_dir = tmp_path / "example-game-repo-repo"
     example_retrieval_repo = tmp_path / "example-retrieval-repo-repo"
     home = tmp_path / "home"
-    for d in (example-game-repo, example_retrieval_repo, home):
+    for d in (example_game_repo_dir, example_retrieval_repo, home):
         d.mkdir(parents=True, exist_ok=True)
     ml_bin = _make_ml_bin(
         tmp_path,
-        {"repos.example_game_workbench_repo": str(example-game-repo), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        {"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setattr(vuo.shutil, "which", lambda *_a, **_k: ml_bin)
     monkeypatch.setenv("HOME", str(home))
@@ -158,15 +158,15 @@ def test_missing_settings_json(monkeypatch, tmp_path, capsys):
 
 
 def test_wrong_key_value(monkeypatch, tmp_path, capsys):
-    example-game-repo, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(
-        str(example-game-repo / ".claude" / "settings.json"),
+        str(example_game_repo_dir / ".claude" / "settings.json"),
         {"example-game-repo-control@example-game-workbench-repo": False, "example-game-repo@example-game-workbench-repo": True,
          "game-dev@example-game-workbench-repo": True},
     )
     ml_bin = _make_ml_bin(
         tmp_path,
-        {"repos.example_game_workbench_repo": str(example-game-repo), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        {"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setattr(vuo.shutil, "which", lambda *_a, **_k: ml_bin)
     monkeypatch.setenv("HOME", str(home))
@@ -178,14 +178,14 @@ def test_wrong_key_value(monkeypatch, tmp_path, capsys):
 
 
 def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
-    example-game-repo, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(
-        str(example-game-repo / ".claude" / "settings.json"),
+        str(example_game_repo_dir / ".claude" / "settings.json"),
         {"example-game-repo-control@example-game-workbench-repo": True, "example-game-repo@example-game-workbench-repo": True},
     )
     ml_bin = _make_ml_bin(
         tmp_path,
-        {"repos.example_game_workbench_repo": str(example-game-repo), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        {"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setattr(vuo.shutil, "which", lambda *_a, **_k: ml_bin)
     monkeypatch.setenv("HOME", str(home))
@@ -196,10 +196,10 @@ def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
 
 
 def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
-    example-game-repo, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     ml_bin = _make_ml_bin(
         tmp_path,
-        {"repos.example_game_workbench_repo": str(example-game-repo), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        {"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setattr(vuo.shutil, "which", lambda *_a, **_k: ml_bin)
     monkeypatch.setenv("HOME", str(home))
@@ -210,16 +210,16 @@ def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
 
 
 def test_success_all_expected(monkeypatch, tmp_path, capsys):
-    example-game-repo, example_retrieval_repo, home = _setup_success_tree(tmp_path)
-    example-sim-repo = tmp_path / "example-sim-repo-repo"
-    example-sim-repo.mkdir()
-    _write_settings(str(example-sim-repo / ".claude" / "settings.json"), _FULLY_ENABLED)
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    example_sim_repo_dir = tmp_path / "example-sim-repo-repo"
+    example_sim_repo_dir.mkdir()
+    _write_settings(str(example_sim_repo_dir / ".claude" / "settings.json"), _FULLY_ENABLED)
     ml_bin = _make_ml_bin(
         tmp_path,
         {
-            "repos.example_game_workbench_repo": str(example-game-repo),
+            "repos.example_game_workbench_repo": str(example_game_repo_dir),
             "repos.example_retrieval_repo": str(example_retrieval_repo),
-            "repos.example-sim-repo": str(example-sim-repo),
+            "repos.example-sim-repo": str(example_sim_repo_dir),
         },
     )
     monkeypatch.setattr(vuo.shutil, "which", lambda *_a, **_k: ml_bin)

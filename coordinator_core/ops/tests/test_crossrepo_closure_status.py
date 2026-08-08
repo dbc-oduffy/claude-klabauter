@@ -26,7 +26,6 @@ Plan: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C15 
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
@@ -36,10 +35,6 @@ from coordinator_core.ops.crossrepo_closure_status import (
     collect_memo_records,
     compute_closure_status,
 )
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 def _memo(worktree_root: Path, rel_dir: str, memo_id: str) -> None:
@@ -187,7 +182,7 @@ def test_handler_smoke_no_disk_write(tmp_path: Path, monkeypatch) -> None:
     )
 
     before = {p for p in tmp_path.rglob("*") if p.is_file()}
-    result = _run(_handler({}, repo_root=tmp_path / ".git"))
+    result = _handler({}, repo_root=tmp_path / ".git")
     after = {p for p in tmp_path.rglob("*") if p.is_file()}
     assert before == after  # pure read + compute; no artifact written
 
@@ -199,7 +194,7 @@ def test_handler_smoke_no_disk_write(tmp_path: Path, monkeypatch) -> None:
 
 def test_handler_requires_repo_root() -> None:
     try:
-        _run(_handler({}, repo_root=None))
+        _handler({}, repo_root=None)
     except ValueError as exc:
         assert "repo_root is None" in str(exc)
     else:

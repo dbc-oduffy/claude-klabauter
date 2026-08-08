@@ -451,6 +451,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, TypeVar
 from coordinator_core.archival import reverse_membership
 from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, handoff_edges, resolve_target, walk_forward
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
@@ -1685,6 +1686,198 @@ async def _handle_gate_cascade(
         })
 
 
+def _read_mirror_desync_fields(handoff_path: Path) -> "Optional[Dict[str, Optional[str]]]":
+    """C9 AC16 conjuncts 3+4 — live re-read of the mirror's `claimed_by` /
+    `consumed_by` / `status` fields, independent of the (possibly stale)
+    in-memory handoff dict this loop iterates over.
+
+    Returns `None` on any read error (fail-closed-to-no-fire — AC16); returns
+    a dict with `None` values for genuinely-absent fields on a clean read.
+    Mirrors `claim_state._read_mirror_claim`'s dual-tolerant `claimed_by`-
+    wins-over-`consumed_by` read shape and 4 KiB read cap, but exposes
+    `status` too (which that helper does not, since C1's own accessor has no
+    need of it) and is intentionally NOT reused from that module — C1's own
+    import-discipline docstring restricts `coordinator_core.claim_state` to a
+    narrow dependency set that this op's own import graph already satisfies
+    independently, and this op needs one extra field that accessor does not
+    expose.
+    """
+    try:
+        with open(handoff_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read(4096)
+    except OSError:
+        return None
+
+    def _clean(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        return value if value and value.lower() not in ("null", "none") else None
+
+    return {
+        "claimed_by": _clean(read_fm_field_unquoted(content, "claimed_by")),
+        "consumed_by": _clean(read_fm_field_unquoted(content, "consumed_by")),
+        "status": _clean(read_fm_field_unquoted(content, "status")),
+    }
+
+
+async def _ledger_mirror_desync_check(
+    handoff: Dict[str, Any],
+    common_dir: Path,
+) -> "tuple[str, str, Optional[str], Optional[str]]":
+    """C9 admission gate — AC16: fires only when ALL of (1) the ledger claim
+    dir exists, (2) `cs_claim_holder_live` returns True, (3) the mirror
+    carries no `claimed_by` AND no `consumed_by`, (4) the mirror `status` is
+    `open`. Reuses the ledger-probe pattern already established by this
+    module's `_ancestor_liveness_blocked` (`handoff_claim_dir` +
+    `asyncio.to_thread(cs_claim_holder_live, ...)`, fail-closed-to-keep
+    degrade).
+
+    Returns `(outcome, reason, ledger_holder, ledger_claimed_at)`:
+      "not_admitted" — a conjunct cleanly failed (no read error); the caller
+          falls through to the ordinary routing untouched — this is the
+          benign, overwhelmingly common case (most open handoffs simply are
+          not ledger-vs-mirror desynced).
+      "read_error"   — a read error (or an unthreadable ledger `claimed_at` —
+          see below) was hit while evaluating a conjunct; the caller
+          surfaces (AC16 no-op-and-surface), never fires.
+      "admitted"     — all four conjuncts hold and the ledger's `claimed_at`
+          is readable; the caller may fire (or dry-run no-op) the delegated
+          re-stamp.
+
+    A ledger claim dir with a live holder but an unreadable/absent
+    `claimed_at` file (the writer, `session/claims.py::_write_claim_meta`,
+    always writes it immediately after `session_id` in the same claim, so
+    this is a degenerate/corrupted-fixture case, not a reachable steady
+    state) is folded into the "read_error" outcome rather than treated as a
+    fifth admission conjunct: threading anything other than the ledger's own
+    `claimed_at` as `at` would corrupt the exact field this leg exists to
+    repair (see the C9 chunk brief's `at`-parameter hard constraint), so an
+    unreadable `claimed_at` must degrade to no-op-and-surface exactly like
+    any other conjunct read error, never fire with a substitute value.
+    """
+    handoff_path_raw = handoff.get("_path")
+    if not handoff_path_raw:
+        return "not_admitted", "no _path on handoff", None, None
+    handoff_path = Path(handoff_path_raw)
+
+    claim_dir = handoff_claim_dir(common_dir, handoff_path)
+    try:
+        dir_exists = claim_dir.is_dir()
+    except OSError as exc:
+        return "read_error", f"ledger claim dir stat failed: {exc}", None, None
+    if not dir_exists:
+        return "not_admitted", "no ledger claim dir", None, None
+
+    try:
+        holder_live = await asyncio.to_thread(cs_claim_holder_live, str(claim_dir))
+    except Exception as exc:
+        return "read_error", f"cs_claim_holder_live raised: {exc}", None, None
+    if not holder_live:
+        return "not_admitted", "ledger claim dir holder not live", None, None
+
+    try:
+        session_id = (claim_dir / "session_id").read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return "read_error", f"ledger session_id read failed: {exc}", None, None
+    if not session_id:
+        return "not_admitted", "ledger session_id empty", None, None
+
+    try:
+        ledger_claimed_at = (claim_dir / "claimed_at").read_text(encoding="utf-8").strip() or None
+    except OSError as exc:
+        return "read_error", f"ledger claimed_at read failed: {exc}", None, None
+    if ledger_claimed_at is None:
+        return (
+            "read_error",
+            "ledger claimed_at empty/absent — cannot thread as `at` without "
+            "risking corruption of the field this leg exists to repair",
+            None, None,
+        )
+
+    mirror_fields = _read_mirror_desync_fields(handoff_path)
+    if mirror_fields is None:
+        return "read_error", "mirror re-read failed", None, None
+    if mirror_fields["claimed_by"] or mirror_fields["consumed_by"]:
+        return "not_admitted", "mirror already carries a claim", None, None
+    if mirror_fields["status"] != "open":
+        return (
+            "not_admitted",
+            f"mirror status={mirror_fields['status']!r} != 'open'",
+            None, None,
+        )
+
+    return "admitted", "ledger live-holder desync detected", session_id, ledger_claimed_at
+
+
+async def _handle_ledger_mirror_desync(
+    handoff: Dict[str, Any],
+    ledger_holder: str,
+    ledger_claimed_at: str,
+    worktree_root: Path,
+    repo_root: Path,
+    dry_run: bool,
+    reconciled: List[Dict[str, Any]],
+) -> None:
+    """C9 — repair a detected ledger-vs-mirror claim desync on a live holder
+    (the branch-switch-revert incident this plan's Problem section
+    documents) by DELEGATING the mirror re-stamp to `handoff.transition
+    verb=claim` — see AC6/AC10. This function NEVER writes
+    `state/handoffs/*.md` frontmatter itself (DR-212 sanctions exactly three
+    ops for that: `handoff.transition`, `handoff.stamp`, `handoff.normalize`
+    — this is not one of them) and NEVER writes the ledger (AC7 — the ledger
+    is already correct; only the mirror lags).
+
+    Passes the LEDGER's `claimed_at` through as `at` — never the current
+    wall-clock time — so the re-stamped mirror's `claimed_at` matches the
+    ledger's byte-for-byte; re-stamping with wall-clock time would itself
+    corrupt the exact field this leg exists to repair.
+
+    A raised exception from the delegated `handoff.transition` call is
+    caught here (mirrors `_handle_auto_ship`'s own per-handoff error
+    isolation) — this leg still writes nothing itself in that case (AC10),
+    and the reconcile pass continues to the remaining open handoffs rather
+    than aborting.
+    """
+    handoff_id = handoff.get("id")
+    rel_path = _rel_path(worktree_root, handoff["_path"])
+
+    entry: Dict[str, Any] = {
+        "handoff_id": handoff_id,
+        "handoff_path": rel_path,
+        "action": "ledger_mirror_desync_reclaim",
+        "ledger_holder": ledger_holder,
+        "ledger_claimed_at": ledger_claimed_at,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        entry["applied"] = False
+        reconciled.append(entry)
+        return
+
+    try:
+        result = await _handoff_transition_handler(
+            {
+                "verb": "claim",
+                "handoff_path": rel_path,
+                "session_id": ledger_holder,
+                "at": ledger_claimed_at,
+            },
+            repo_root,
+        )
+    except Exception as exc:
+        entry["applied"] = False
+        entry["error"] = f"handoff.transition raised: {exc}"
+        reconciled.append(entry)
+        return
+
+    entry["applied"] = bool(result.get("applied"))
+    entry["exit_code"] = result.get("exit_code")
+    entry["message"] = result.get("message") or result.get("error")
+    reconciled.append(entry)
+
+
 @register_op("handoff.reconcile_open")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'handoff.reconcile_open' handler — enumerate open handoffs, decide,
@@ -2022,6 +2215,31 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "narrow / surface / not-cleared) has no branch for this value "
                 f"-- full gate_verdict={gate_verdict!r}"
             )
+
+        # C9 — before the terminal surface fall-through, check for a ledger-
+        # vs-mirror claim desync on a live holder (the branch-switch-revert
+        # incident this plan's Problem section documents) and repair it BY
+        # DELEGATION when admitted — see AC6/AC7/AC9/AC10/AC16.
+        desync_outcome, desync_reason, desync_holder, desync_claimed_at = (
+            await _ledger_mirror_desync_check(handoff, repo_root)
+        )
+        if desync_outcome == "admitted":
+            await _handle_ledger_mirror_desync(
+                handoff, desync_holder, desync_claimed_at, worktree_root,
+                repo_root, dry_run, reconciled,
+            )
+            continue
+        if desync_outcome == "read_error":
+            surfaced.append({
+                "handoff_id": handoff_id,
+                "reason": (
+                    "C9 ledger/mirror desync check hit a read error on an "
+                    "admission conjunct — degraded to no-op-and-surface "
+                    f"(AC16, never to fire): {desync_reason}"
+                ),
+                "evidence": [],
+            })
+            continue
 
         # Below the C2 auto-ship bar and not awaiting_gate -> surface.
         surfaced.append({

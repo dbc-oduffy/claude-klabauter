@@ -1746,7 +1746,7 @@ _KNOWN_PARAM_KEYS = frozenset(
 
 
 @register_op("records.query")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "records.query" handler.

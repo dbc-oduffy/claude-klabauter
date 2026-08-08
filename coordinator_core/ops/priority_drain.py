@@ -541,7 +541,7 @@ def drain(*, set_by: str = _DEFAULT_SET_BY) -> Dict[str, list]:
 
 
 @register_op("priority.drain")
-async def _priority_drain(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _priority_drain(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'priority.drain' handler — drains the priority-intent inbox.
 
     MUTATING (writes zero-or-more ``<central-state>/priority-ledger/*.yaml``

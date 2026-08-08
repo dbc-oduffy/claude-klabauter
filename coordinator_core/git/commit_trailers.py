@@ -21,7 +21,7 @@ is NOT changed to import this module -- it is a `sh`-invoked, extensionless
 entrypoint script installed verbatim into `.git/hooks/`, not a package
 member, and editing a live hook script mid-session on a tree other agents
 are actively committing into is its own hazard independent of this dedup.
-Its resolution logic (session-id three-tier ladder + UUID fail-safe +
+Its resolution logic (session-id two-tier env ladder + UUID fail-safe +
 deliverable-id lookup + idempotent trailer-line check) is mirrored here
 verbatim; a change to one must be mirrored in the other by hand until the
 hook script itself is refactored to import this module. That residual
@@ -73,6 +73,7 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.git import repo_root as _repo_root_seam
+from coordinator_core.session import core as _session_core
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -96,22 +97,37 @@ def _resolve_git_dir(cwd: Union[str, Path]) -> str:
 
 
 def _resolve_session_id(git_dir: str) -> str:
-    """Three-tier ladder, verbatim parity with the hook: legacy env ->
-    platform env -> sentinel file under `git_dir` (no subprocess)."""
-    sid = os.environ.get("CLAUDE_SESSION_ID", "").strip()
-    if sid:
-        return sid
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    if sid:
-        return sid
-    if git_dir:
-        sentinel = os.path.join(git_dir, "coordinator-sessions", ".current-session-id")
-        try:
-            with open(sentinel, encoding="utf-8") as fh:
-                return fh.read().strip()
-        except Exception:
-            return ""
-    return ""
+    """Delegates to ``coordinator_core.session.core.resolve_session_id``
+    (KS-6, 2026-08-07): the full 3-tier ``SESSION_ENV_PRECEDENCE`` ladder
+    (``COORDINATOR_SESSION_ID``, ``CLAUDE_SESSION_ID``,
+    ``CLAUDE_CODE_SESSION_ID``), widened from the prior 2-tier (legacy env
+    -> platform env) chain to match the canonical reference -- see
+    ``SESSION_ENV_PRECEDENCE``'s own docstring for the prior break-class
+    defect two disagreeing copies of this ladder caused.
+
+    Tier 3->4 (the `<git_dir>/coordinator-sessions/.current-session-id`
+    sentinel file, plus its liveness gate `_sentinel_session_live`) was
+    REMOVED here, not merely gated -- KS-1. Two independent reasons: (1) it
+    is unsound by construction under this fleet's concurrency, documented
+    as last-writer-wins in `coordinator_core/bash_guards
+    /guard_inprocess_search.py` ~L84 -- ~18 concurrent sessions on one
+    shared worktree means even a freshly-written sentinel hands session A
+    the id of whichever session wrote last, so a liveness gate only makes
+    it confidently wrong rather than obviously wrong; (2) its writer,
+    `session-init.py` (example-doctrine-repo SessionStart hook), was deleted by PM
+    directive 2026-07-15 ("full-kill-keep-fast-orientation") -- no
+    production writer survives anywhere. `git_dir` is accepted (and
+    resolved by callers) purely for the Deliverable-Id lookups below, which
+    still need it. `_sentinel_session_live` (added by dd6ffcbcc to gate
+    this now-deleted tier) was removed alongside it -- do not restore
+    either without a new writer for the sentinel file.
+
+    Mirrored by hand in `coordinator/bin/coordinator-prepare-commit-msg`'s
+    own `_resolve_session_id` (that script cannot cheaply import
+    `coordinator_core` on its hot commit-hook path) -- this function,
+    delegating to `core.resolve_session_id`, is that mirror's source of
+    truth; a change here must be mirrored there too."""
+    return _session_core.resolve_session_id()
 
 
 def _resolve_doe_root() -> str:

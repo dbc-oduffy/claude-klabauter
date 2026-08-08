@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from coordinator_core.ops.whoami_run_tests import main
+from coordinator_core.win_portability import no_console_creationflags
 
 
 class _FakeCompleted:
@@ -26,8 +27,11 @@ class _FakeCompleted:
 def test_provisions_venv_when_sentinel_absent(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, check=False, cwd=None, env=None):
+    suppression_kwargs: list[dict] = []
+
+    def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         calls.append(list(cmd))
+        suppression_kwargs.append(kwargs)
         if cmd[:3] == ["python3", "-m", "venv"]:
             Path(cmd[3]).mkdir(parents=True, exist_ok=True)
         return _FakeCompleted(0)
@@ -42,6 +46,9 @@ def test_provisions_venv_when_sentinel_absent(tmp_path: Path) -> None:
     assert len(calls) == 5
     assert calls[0][:3] == ["python3", "-m", "venv"]
     assert calls[-1][1:3] == ["-m", "pytest"]
+    # Every spawn is suppressed -- pins whoami_run_tests to console-popup suppression.
+    expected = no_console_creationflags()
+    assert all(kwargs == expected for kwargs in suppression_kwargs)
 
 
 def test_skips_provisioning_when_sentinel_present(tmp_path: Path) -> None:
@@ -50,9 +57,11 @@ def test_skips_provisioning_when_sentinel_present(tmp_path: Path) -> None:
     (venv / ".deps-installed").touch()
 
     calls: list[list[str]] = []
+    suppression_kwargs: list[dict] = []
 
-    def _fake_run(cmd, check=False, cwd=None, env=None):
+    def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         calls.append(list(cmd))
+        suppression_kwargs.append(kwargs)
         return _FakeCompleted(0)
 
     with patch("coordinator_core.ops.whoami_run_tests.subprocess.run", side_effect=_fake_run):
@@ -62,6 +71,7 @@ def test_skips_provisioning_when_sentinel_present(tmp_path: Path) -> None:
     assert len(calls) == 1
     assert calls[0][1:3] == ["-m", "pytest"]
     assert calls[0][-1] == "tests/test_machine.py"
+    assert suppression_kwargs[0] == no_console_creationflags()
 
 
 def test_pytest_nonzero_exit_passes_through(tmp_path: Path) -> None:
@@ -69,7 +79,7 @@ def test_pytest_nonzero_exit_passes_through(tmp_path: Path) -> None:
     venv.mkdir()
     (venv / ".deps-installed").touch()
 
-    def _fake_run(cmd, check=False, cwd=None, env=None):
+    def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         return _FakeCompleted(4)
 
     with patch("coordinator_core.ops.whoami_run_tests.subprocess.run", side_effect=_fake_run):
@@ -79,7 +89,7 @@ def test_pytest_nonzero_exit_passes_through(tmp_path: Path) -> None:
 
 
 def test_provisioning_failure_removes_half_built_venv_and_returns_1(tmp_path: Path) -> None:
-    def _fake_run(cmd, check=False, cwd=None, env=None):
+    def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         if cmd[:3] == ["python3", "-m", "venv"]:
             # Simulate venv creation succeeding on disk (as real `python3 -m venv` would)
             (tmp_path / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
@@ -99,7 +109,7 @@ def test_default_base_dir_is_cwd(tmp_path: Path, monkeypatch) -> None:
     venv.mkdir()
     (venv / ".deps-installed").touch()
 
-    def _fake_run(cmd, check=False, cwd=None, env=None):
+    def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         assert cwd == str(tmp_path)
         return _FakeCompleted(0)
 

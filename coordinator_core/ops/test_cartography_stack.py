@@ -26,7 +26,6 @@ inventory.md § Wave 2 "detect" cluster (detect-project-stack).
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -54,13 +53,13 @@ def test_op_registered_under_exact_key():
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError, match="target_root"):
-        asyncio.run(_cartography_stack({}))
+        _cartography_stack({})
 
 
 def test_op_empty_tree_returns_empty_lists(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
-    result = asyncio.run(_cartography_stack({"target_root": str(root)}))
+    result = _cartography_stack({"target_root": str(root)})
     assert result["languages"] == []
     assert result["test_frameworks"] == []
     assert result["configs"] == []
@@ -161,14 +160,14 @@ def test_idempotent_second_invocation_is_byte_identical(tmp_path):
     (root / "tests").mkdir()
     (root / "pytest.ini").write_text("", encoding="utf-8")
 
-    first = asyncio.run(_cartography_stack({"target_root": str(root)}))
-    second = asyncio.run(_cartography_stack({"target_root": str(root)}))
+    first = _cartography_stack({"target_root": str(root)})
+    second = _cartography_stack({"target_root": str(root)})
     assert first == second
 
 
 def test_nonexistent_target_root_degrades_to_empty_results(tmp_path):
     missing = tmp_path / "does-not-exist"
-    result = asyncio.run(_cartography_stack({"target_root": str(missing)}))
+    result = _cartography_stack({"target_root": str(missing)})
     assert result["languages"] == []
     assert result["test_frameworks"] == []
     assert result["configs"] == []

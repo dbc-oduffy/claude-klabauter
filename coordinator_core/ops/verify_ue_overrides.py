@@ -48,7 +48,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import home_dir, settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 # Plugins required to be enabled in every UE-context settings.json.
 _EXPECTED_KEYS = (
@@ -116,6 +116,7 @@ def _ml_get(ml_bin: str, key: str) -> Optional[str]:
             encoding="utf-8",
             errors="replace",
             timeout=20,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _ml_get: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -165,7 +166,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
         )
         print("Remediation: verify your coordinator install — see", file=sys.stderr)
         print(
-            "  ~/.claude/plugins/coordinator/docs/wiki/"
+            "  ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
             "machine-local-registry.md § Verifying registry health",
             file=sys.stderr,
         )
@@ -228,7 +229,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
                 file=sys.stderr,
             )
             print(
-                "  Remediation: ~/.claude/plugins/coordinator/docs/wiki/"
+                "  Remediation: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
                 "machine-local-registry.md § Verifying registry health",
                 file=sys.stderr,
             )

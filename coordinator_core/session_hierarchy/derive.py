@@ -27,10 +27,17 @@ NOT emitted here — completeness-honesty is a documented invariant of this
 projection, not a gap to "fix" in this module.
 
 Negative-spec:
-- Does NOT read any file or resolve any path — this is a pure function over
-  already-queried ``{path, frontmatter}`` record lists. I/O (query-records
-  equivalent + atomic write) lives in
-  ``coordinator_core.ops.session_hierarchy_derive``.
+- Does NOT re-implement handoff enumeration or the atomic write — the
+  query-records equivalent + atomic write still live in
+  ``coordinator_core.ops.session_hierarchy_derive``. The claim-bridge read
+  (``_claimed_by``) IS a read: it routes through
+  ``coordinator_core.claim_state.resolve_claim_state`` (ledger-first, DR-084
+  dual-tolerant mirror fallback) rather than growing a second ledger reader
+  here — see this plan's C6b chunk
+  (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md). The
+  already-queried in-memory ``frontmatter`` dict remains the final fallback
+  when the ledger-first read itself fails (unreadable path, no repo_root),
+  so a record never regresses below what the pre-migration pure read saw.
 - Does NOT sort session records or workstream nodes independently — emission
   order is session records first, then workstream nodes appended (jq's
   ``$session_records + $workstream_nodes``), preserved exactly since C3/C4
@@ -51,7 +58,10 @@ Port of: derive-session-hierarchy.sh (example-doctrine-repo f0aa2d56, 2026-07-16
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from coordinator_core.claim_state import resolve_claim_state
 
 # jq: test("blitz|mise-en-place|bug-blitz"; "i") — case-insensitive substring match.
 _BLITZ_RE = re.compile(r"blitz|mise-en-place|bug-blitz", re.IGNORECASE)
@@ -68,14 +78,43 @@ def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def _claimed_by(fm: Dict[str, Any]) -> Optional[Any]:
-    """Dual-tolerant read of the claim-bridge field: new ``claimed_by``
-    preferred, falls back to the retired ``consumed_by`` name (DR-084
-    transitional tolerance, restored 2026-07-23 — consumer-repo corpora are
-    not yet migrated; see coordinator_core/ops/emit/sections/handoffs.py
-    module docstring for the exit condition)."""
-    claimed = fm.get("claimed_by")
-    return claimed if claimed is not None else fm.get("consumed_by")
+def _claimed_by(
+    path: str,
+    fm: Dict[str, Any],
+    *,
+    repo_root: Optional[Path] = None,
+) -> Optional[Any]:
+    """Ledger-first read of the claim-bridge field, routed through the one
+    shared accessor (``coordinator_core.claim_state.resolve_claim_state``) —
+    a dead/desynced ledger holder degrades to the tracked-frontmatter mirror,
+    never silently drops the bridge (this plan's own 2026-08-07 branch-switch
+    desync incident: a live ledger claim with a reverted mirror used to make
+    a fully-worked session vanish from this projection).
+
+    ``repo_root``, when supplied, is joined onto ``path`` (a repo-relative
+    string, matching ``query_records``'s record shape) to build the absolute
+    path the accessor needs; omitted, ``path`` is passed through as-is and
+    ``resolve_claim_state`` falls back to its own cwd-relative resolution.
+
+    Falls back to the already-queried, DR-084 dual-tolerant in-memory ``fm``
+    read (new ``claimed_by`` preferred, retired ``consumed_by`` name as
+    fallback — restored 2026-07-23, see
+    coordinator_core/ops/emit/sections/handoffs.py module docstring for the
+    exit condition) whenever the accessor itself cannot resolve anything
+    (unreadable path, no ledger, no mirror) — a record here never regresses
+    below what the pre-migration pure read already had in hand.
+    """
+    mirror_fallback = fm.get("claimed_by")
+    if mirror_fallback is None:
+        mirror_fallback = fm.get("consumed_by")
+
+    abs_path = (Path(repo_root) / path) if repo_root is not None else Path(path)
+    try:
+        state = resolve_claim_state(abs_path, repo_root=repo_root)
+    except Exception:
+        return mirror_fallback
+
+    return state.holder if state.holder is not None else mirror_fallback
 
 
 def _jq_truthy(value: Any) -> bool:
@@ -106,6 +145,8 @@ def derive(
     handoffs_active: List[Dict[str, Any]],
     handoffs_archived: List[Dict[str, Any]],
     created_by_session: str = "",
+    *,
+    repo_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Derive the session-hierarchy record list from queried handoff records.
 
@@ -116,6 +157,13 @@ def derive(
         created_by_session: ``CS_SESSION_ID`` env value, or ``""`` if unset.
             Non-empty triggers the conditional ``system.created_by_session``
             merge on every emitted record (jq: ``if ($session | length) > 0``).
+        repo_root: optional, forwarded to ``_claimed_by``'s ledger-first
+            accessor to resolve each record's repo-relative ``path`` to an
+            absolute one. The current caller
+            (``coordinator_core.ops.session_hierarchy_derive``) does not pass
+            this yet; omitted, the accessor falls back to its own
+            cwd-relative resolution, with the in-memory frontmatter mirror as
+            the final fallback (see ``_claimed_by`` docstring).
 
     shell-doc-ok: quotes the jq oracle's own filter expression, where `$session`
     is a jq variable rather than a shell expansion.
@@ -132,12 +180,14 @@ def derive(
     pred_lookup: Dict[str, Optional[str]] = {}
     for rec in all_handoffs:
         fm = rec.get("frontmatter") or {}
-        pred_lookup[_basename(rec["path"])] = _claimed_by(fm)
+        pred_lookup[_basename(rec["path"])] = _claimed_by(rec["path"], fm, repo_root=repo_root)
 
     # jq: $all | [.[] | select(.frontmatter.consumed_by != null)] — ported as
     # claimed_by-preferred, consumed_by-fallback per the dual-tolerant read rule.
     consumed = [
-        rec for rec in all_handoffs if _claimed_by(rec.get("frontmatter") or {}) is not None
+        rec
+        for rec in all_handoffs
+        if _claimed_by(rec["path"], rec.get("frontmatter") or {}, repo_root=repo_root) is not None
     ]
 
     session_records: List[Dict[str, Any]] = []
@@ -161,7 +211,7 @@ def derive(
             parent_session_id = pred_lookup.get(pred) or None
 
         record: Dict[str, Any] = {
-            "session_id": _claimed_by(fm),
+            "session_id": _claimed_by(path, fm, repo_root=repo_root),
             "session_type": session_type,
             "workstream": fm.get("workstream") or "unknown",
             "parent_session_id": parent_session_id,

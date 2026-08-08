@@ -566,6 +566,69 @@ class TestDirtyFilesUnder:
         assert safe_commit_offer._dirty_files_under("sub", cwd=str(repo)) == []
 
 
+class TestDirtyFilesUnderBatch:
+    """C16 — the batched sibling of `_dirty_files_under`. § Anti-scope 25:
+    a directory entry with nothing dirty under it must come back as a
+    PRESENT key with an empty list, never be silently dropped."""
+
+    def test_matches_per_entry_results_of_the_single_path_form(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "sub").mkdir()
+        (repo / "sub" / "a.py").write_text("a")
+        (repo / "other").mkdir()
+        (repo / "other" / "b.py").write_text("b")
+        (repo / "outside.py").write_text("o")
+
+        batched = safe_commit_offer._dirty_files_under_batch(
+            ["sub/", "other/"], cwd=str(repo)
+        )
+
+        assert batched["sub/"] == safe_commit_offer._dirty_files_under("sub", cwd=str(repo))
+        assert batched["other/"] == safe_commit_offer._dirty_files_under("other", cwd=str(repo))
+
+    def test_clean_directory_is_a_present_key_with_empty_list_not_absent(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "sub").mkdir()
+        (repo / "clean").mkdir()
+        (repo / "sub" / "a.py").write_text("a")
+
+        batched = safe_commit_offer._dirty_files_under_batch(
+            ["sub/", "clean/"], cwd=str(repo)
+        )
+
+        assert "clean/" in batched
+        assert batched["clean/"] == []
+        assert batched["sub/"] == ["sub/a.py"]
+
+    def test_empty_input_returns_empty_ordered_dict(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert safe_commit_offer._dirty_files_under_batch([], cwd=str(repo)) == {}
+
+    def test_duplicate_dir_entries_collapse_to_one_key(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / "sub").mkdir()
+        (repo / "sub" / "a.py").write_text("a")
+
+        batched = safe_commit_offer._dirty_files_under_batch(
+            ["sub/", "sub/"], cwd=str(repo)
+        )
+
+        assert list(batched.keys()) == ["sub/"]
+        assert batched["sub/"] == ["sub/a.py"]
+
+    def test_git_failure_fails_closed_every_value_empty(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        (repo / "sub").mkdir()
+        (repo / "sub" / "a.py").write_text("a")
+
+        def _boom(*args, **kwargs):
+            raise OSError("no git")
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        batched = safe_commit_offer._dirty_files_under_batch(["sub/"], cwd=str(repo))
+        assert batched == {"sub/": []}
+
+
 # ---------------------------------------------------------------------------
 # (e) auto_commit_session — the mutating half, no confirmation
 # ---------------------------------------------------------------------------
@@ -591,6 +654,38 @@ class TestAutoCommitSession:
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         ).stdout
         assert status == ""  # nothing left dirty
+
+    def test_commit_group_calls_the_sync_handler_without_awaiting_it(self, tmp_path):
+        """Regression guard, 2026-08-07: `_commit_group` awaited the dict
+        `ceremony.scoped_git_commit`'s handler returns, so EVERY invocation
+        of `safe-commit-offer` died with `TypeError: object dict can't be
+        used in 'await' expression` (cross-repo/inbox/2026-08-07-project-
+        rag-em-safe-commit-offer-await-dict-typeerror.md). That op's handler
+        is a plain sync `def` deliberately (3241c7c95) -- pinned here, since
+        the call site now depends on it: if the op is ever made `async`
+        again, this fails loudly rather than the composer failing silently
+        at every session close."""
+        import inspect
+
+        from coordinator_core.ipc import get_op_handler
+
+        handler = get_op_handler("ceremony.scoped_git_commit")
+        assert handler is not None
+        assert not inspect.iscoroutinefunction(handler)
+
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["a.py"], "message": "regression guard"}, "mine"
+            )
+        )
+        assert result["committed"] is True
+        assert result["error"] is None
+        assert result["commit_failed"] is False
 
     def test_default_grouping_subject_stays_bounded_body_carries_the_list(self, tmp_path):
         """Regression guard for the enumerated-filenames-in-subject shape:
@@ -724,7 +819,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        async def fake_handler(params):
+        def fake_handler(params):
             return {
                 "committed": False,
                 "sha": None,
@@ -758,7 +853,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        async def fake_handler(params):
+        def fake_handler(params):
             return {
                 "committed": False,
                 "sha": None,
@@ -804,7 +899,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        async def fake_handler(params):
+        def fake_handler(params):
             return {"committed": False, "error": "some validation error"}
 
         monkeypatch.setattr(
@@ -827,7 +922,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        async def fake_handler(params):
+        def fake_handler(params):
             return {
                 "committed": False,
                 "commit_failed": False,
@@ -938,7 +1033,7 @@ class TestMain:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        async def fake_handler(params):
+        def fake_handler(params):
             return {
                 "committed": False,
                 "commit_failed": True,

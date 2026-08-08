@@ -104,7 +104,7 @@ def reject_orphan_strip_entries(records_path: str, strip_list_path: str) -> Dict
 
 
 @register_op("lessons.filter_undated_universal")
-async def _lessons_filter_undated_universal(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _lessons_filter_undated_universal(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC `lessons.filter_undated_universal` handler.
 
     Params:
@@ -120,7 +120,7 @@ async def _lessons_filter_undated_universal(params: dict, repo_root: Optional[Pa
 
 
 @register_op("lessons.reject_orphan_strip_entries")
-async def _lessons_reject_orphan_strip_entries(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _lessons_reject_orphan_strip_entries(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC `lessons.reject_orphan_strip_entries` handler.
 
     Params:

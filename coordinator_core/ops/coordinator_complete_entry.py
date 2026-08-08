@@ -125,7 +125,7 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
-from coordinator_core.launchable import resolve_launchable
+from coordinator_core.launchable import resolve_launchable, which_path_ordered
 from coordinator_core.ops._git_root_util import git_root
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.ceremony.wsc_disposition import (
@@ -141,6 +141,10 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session_ledger import aggregate_chain_loe as _agg_loe_mod
 from coordinator_core.session import core as _session_core
 from coordinator_core.loe_thresholds import compute_tshirt_nullable as _compute_tshirt_nullable
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _VALID_NATURES = ("roadmap", "bugfix", "tech-debt", "infra")
 _GOVERNING_PLAN_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -153,7 +157,6 @@ _SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # bounded timeout + stdin guard, never present in the bash oracle (which had
 # no such protection), per the porter-brief addendum rule 2.
 _SUBPROCESS_TIMEOUT_SECS = 20
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _NULL_LOE_BLOCK = (
     "loe:\n"
@@ -727,6 +730,32 @@ def _resolve_loe_block(disposition: str, consumed_handoff: str) -> str:
     return loe if loe else _NULL_LOE_BLOCK
 
 
+def _which_render_rollup_shim() -> str:
+    """PATH lookup for the ``coordinator-render-rollup.sh`` test shim.
+
+    `shutil.which("coordinator-render-rollup.sh")` never finds it on
+    Windows: CPython's `shutil.which` only probes `cmd + ext` for each
+    `PATHEXT` entry when `cmd` itself doesn't already end in one of those
+    extensions, and `.sh` is not a `PATHEXT` member — so it silently builds
+    candidates like `coordinator-render-rollup.sh.COM`,
+    `coordinator-render-rollup.sh.EXE`, ... none of which exist, and never
+    even tries the literal `coordinator-render-rollup.sh` filename. That
+    made the PATH-first shim rung this function exists to preserve (see
+    module docstring) permanently unreachable on Windows — a shim any test
+    prepends to PATH is silently never found, and every call falls through
+    to the in-process branch regardless of what a test set up.
+
+    Delegates to the shared `coordinator_core.launchable.which_path_ordered`
+    walk with `extensions=[]` (bare-name-only — the filename already carries
+    its own `.sh` extension, so no `PATHEXT` candidate should ever be
+    appended to it). Same underlying CPython gap `_resolve_claude_bin` in
+    `coordinator/bin/claude-doe` guards against; that site can't import this
+    module (installed standalone) and keeps its own PATHEXT-aware walk
+    in sync by hand — see its docstring.
+    """
+    return which_path_ordered("coordinator-render-rollup.sh", extensions=[]) or ""
+
+
 def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     """AC4 — fail-open at every stage; never raises, never aborts the write."""
     if not governing_plan_slug:
@@ -766,7 +795,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     # invocation exactly); otherwise fall through to the faster in-process
     # call to the already-ported Python module (the production path, where no
     # such shim exists on PATH).
-    shim = shutil.which("coordinator-render-rollup.sh")
+    shim = _which_render_rollup_shim()
     if shim:
         # Review: code-reviewer — bare shebang exec was a Windows regression
         # (the retired oracle explicitly named `bash`; a bare-path exec has no
@@ -780,7 +809,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
         except (OSError, subprocess.TimeoutExpired):
             print(f"skip: _resolve_rollup_sentence: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

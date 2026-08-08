@@ -27,7 +27,6 @@ Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -67,10 +66,6 @@ assert _OP_NAME in _REGISTRY, (
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
 
 
 def _seed_initiative(
@@ -155,7 +150,7 @@ class TestInitiativeServeSet:
     def test_empty_store_directory_absent(self, tmp_path):
         """No state/initiatives/ directory → empty initiatives list."""
         common_dir = _make_git_repo(tmp_path / "repo")
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"initiatives": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
@@ -163,7 +158,7 @@ class TestInitiativeServeSet:
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "initiatives").mkdir(parents=True)
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"initiatives": []}
 
     def test_single_active_ongoing_initiative(self, tmp_path):
@@ -173,7 +168,7 @@ class TestInitiativeServeSet:
         ini_dir = repo_root / "state" / "initiatives"
         _seed_initiative(ini_dir, "python-core.yaml", id_val="python-core", label="Python Core")
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         assert len(result["initiatives"]) == 1
         entry = result["initiatives"][0]
@@ -197,7 +192,7 @@ class TestInitiativeServeSet:
             target_date="2026-09-30",
         )
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         assert len(result["initiatives"]) == 1
         entry = result["initiatives"][0]
@@ -219,7 +214,7 @@ class TestInitiativeServeSet:
             target_date=None,
         )
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         entry = result["initiatives"][0]
         assert entry["target_date"] is None
@@ -233,7 +228,7 @@ class TestInitiativeServeSet:
         _seed_initiative(ini_dir, "b-second.yaml", id_val="second", label="Second")
         _seed_initiative(ini_dir, "a-first.yaml", id_val="first", label="First")
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         ids = [e["id"] for e in result["initiatives"]]
         assert ids == ["first", "second"]  # sorted by filename a-first < b-second
@@ -246,7 +241,7 @@ class TestInitiativeServeSet:
         _seed_initiative(ini_dir, "bad.yaml", id_val=None, label="Has Label")
         _seed_initiative(ini_dir, "good.yaml", id_val="good", label="Good")
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         ids = [e["id"] for e in result["initiatives"]]
         assert ids == ["good"]
@@ -259,7 +254,7 @@ class TestInitiativeServeSet:
         _seed_initiative(ini_dir, "nolabel.yaml", id_val="no-label", label=None)
         _seed_initiative(ini_dir, "valid.yaml", id_val="valid", label="Valid")
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         ids = [e["id"] for e in result["initiatives"]]
         assert ids == ["valid"]
@@ -277,7 +272,7 @@ class TestInitiativeServeSet:
             status="complete",  # rejected canonical-3 value (not in canonical-4)
         )
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         entry = result["initiatives"][0]
         assert entry["status"] is None
@@ -297,7 +292,7 @@ class TestInitiativeServeSet:
                 status=status,
             )
 
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
 
         returned_statuses = {e["id"]: e["status"] for e in result["initiatives"]}
         for status in ("active", "paused", "shipped", "abandoned"):
@@ -305,6 +300,6 @@ class TestInitiativeServeSet:
 
     def test_repo_root_none_returns_empty(self):  # Review: code-reviewer — no_ctx_repo_root fragment is a dead transition-time artifact; ctx fully stripped
         """repo_root=None → empty list without raising."""
-        result = _run(_handler({}, repo_root=None))
+        result = _handler({}, repo_root=None)
         assert result == {"initiatives": []}
 

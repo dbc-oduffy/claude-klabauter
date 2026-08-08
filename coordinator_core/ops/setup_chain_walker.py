@@ -42,7 +42,9 @@ Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase
 
 Exit codes (parity-critical — matches the bash oracle exactly):
     0   success (DAG root — no deps to check; or all deps satisfied)
-    1   hard probe failure (--preflight / full-install prereq gate) or
+    1   hard probe failure (--preflight / full-install prereq gate, OR a
+        --check-mode hard dep that is present but fails its own functional
+        probe — present-but-broken, Defect A fix 2026-08-07) or
         unreadable/corrupt manifest, or missing scripts/lib assets
     90  non-interactive/non-TTY hard dep missing, no override flag pair
     91  user declined (interactive double-confirm)
@@ -74,10 +76,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.install import prereq_probe
 from coordinator_core.install.manifest_reader import _dep_to_record
+from coordinator_core.machine_resolver import registry_get
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 
 _SCRIPT_VERSION = "1.0.0"
 _SCRIPT_NAME = "coordinator-claude setup"
@@ -125,6 +132,28 @@ def resolve_manifest_path(repo_root: Path, err=None) -> Path | None:
         file=err,
     )
     return None
+
+
+def _loaded_manifest_repo_id(manifest_path: Path | None) -> str:
+    """Read the ``repo_id`` field out of the LOADED manifest, for the
+    ``--check``/``--preflight`` banners (Defect B part 3). Replaces the prior
+    hardcoded ``coordinator-claude`` literal, which is what hid Defect B's
+    wrong-tree walk: the banner claimed ``repo: coordinator-claude``
+    regardless of which manifest was actually loaded, so a walk that had
+    silently fallen back to `<claude-klabauter-root>/coordinator`'s OWN manifest
+    (`repo_id: claude-klabauter`) still announced itself as walking
+    coordinator-claude. Returns a bracketed diagnostic placeholder — never
+    the stale literal — when ``manifest_path`` is None or the field/file is
+    unreadable, so a caller can never mistake the placeholder for a real
+    repo id."""
+    if manifest_path is None:
+        return "(no manifest resolved)"
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "(manifest unreadable)"
+    repo_id = data.get("repo_id", "")
+    return str(repo_id) if repo_id else "(repo_id absent from manifest)"
 
 
 def _normalize_dep(dep: dict[str, Any]) -> dict[str, Any]:
@@ -256,7 +285,72 @@ def _upstream_url_dir_name(upstream_url: str) -> str:
     return name
 
 
-def _sibling_fallback(sibling_root: Path, sibling_dir: str, upstream_url: str) -> Path | None:
+def _engine_tree_root() -> Path:
+    """The claude-klabauter engine's own checkout root (this module's own tree),
+    resolved the same way ``_self_resolve_walker_roots`` USED to guess the
+    walked repo's root before Defect B's fix — kept here only as the
+    rejection floor for ``_sibling_fallback``: a name-matched candidate that
+    IS the engine's own tree (or lives under it) is never a legitimate
+    coordinator-claude sibling and must not be silently accepted just
+    because a directory happens to exist at that name."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _functional_probe_ok(
+    candidate: Path,
+    probe_kind: str,
+    probe_args: dict[str, Any],
+    timeout: int = 30,
+) -> bool:
+    """True iff ``probe_kind`` succeeds against ``candidate``. Shared probe
+    evaluator, reused by ``_sibling_fallback`` to vet a name-matched
+    candidate BEFORE accepting it (Defect B) — a bare directory-name match
+    is not proof the candidate is a working install of the dep; it must pass
+    the dep's own functional probe, same as the ``sibling_path`` a normal
+    (non-fallback) resolution produces.
+
+    Deliberately silent (no err logging, no "unknown probe kind" warning) —
+    a rejected fallback candidate is an expected, unremarkable outcome
+    (`_sibling_fallback` just tries the next candidate / reports missing),
+    not a diagnostic-worthy event the way an ACCEPTED dep's own final probe
+    failure is."""
+    if probe_kind == "sibling_dir_exists":
+        return candidate.is_dir()
+    if probe_kind == "file_exists":
+        rel_path = str(probe_args.get("path", ""))
+        return (candidate / rel_path).is_file()
+    if probe_kind == "file_exists_any":
+        rel_paths = probe_args.get("paths", []) or []
+        return any((candidate / str(rel_path)).is_file() for rel_path in rel_paths)
+    if probe_kind == "python_import":
+        expr = str(probe_args.get("expr", ""))
+        try:
+            res = subprocess.run(
+                [sys.executable, "-c", expr],
+                cwd=os.getcwd(),
+                capture_output=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+                **_CREATIONFLAGS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return res.returncode == 0
+    if probe_kind == "command_succeeds":
+        cmd = str(probe_args.get("cmd", ""))
+        return command_succeeds_native(cmd, timeout)
+    return False
+
+
+def _sibling_fallback(
+    sibling_root: Path,
+    sibling_dir: str,
+    upstream_url: str,
+    probe_kind: str = "",
+    probe_args: dict[str, Any] | None = None,
+    repo_root: Path | None = None,
+    timeout: int = 30,
+) -> Path | None:
     """Resolve a dep whose declared ``sibling_dir_name`` is not on disk, by
     trying the other names the same repo is legitimately cloned under.
 
@@ -274,9 +368,32 @@ def _sibling_fallback(sibling_root: Path, sibling_dir: str, upstream_url: str) -
     forcing every consumer into a dual-identity manifest: the declared
     ``sibling_dir_name`` keeps working for anyone who already has that clone.
 
-    Returns None when no candidate exists on disk — the caller reports the dep
-    missing rather than proceeding on an unverified path.
+    Defect B hardening (2026-08-07): a name-matched candidate is no longer
+    accepted on directory-existence alone. Two additional gates apply before
+    a candidate is returned:
+
+    - It must satisfy the dep's OWN functional probe (``probe_kind``/
+      ``probe_args``) — a directory that merely happens to share a plausible
+      name but fails every probe path is not a legitimate resolution; the
+      caller (``dep_probe``) must see ``missing``, never manufacture
+      ``present``/``present-but-broken`` out of a coincidental name match.
+      Skipped only when ``probe_kind`` is empty (back-compat for direct
+      callers that don't have probe info to hand — none of this module's own
+      call sites do that anymore).
+    - It must not BE the claude-klabauter engine's own tree, nor a subdirectory of it,
+      nor the walked repo's own ``repo_root`` (or a subdirectory of that) —
+      the exact coincidental match (`<claude-klabauter-root>/coordinator` resolving as
+      a "sibling" of itself) that manufactured Defect A's "found but broken"
+      contradiction out of "not found here".
+
+    Returns None when no candidate exists on disk and passes both gates —
+    the caller reports the dep missing rather than proceeding on an
+    unverified path.
     """
+    probe_args = probe_args or {}
+    engine_tree = _engine_tree_root().resolve()
+    repo_root_resolved = repo_root.resolve() if repo_root is not None else None
+
     candidates: list[str] = []
     if sibling_dir.endswith("-claude"):
         candidates.append(sibling_dir[: -len("-claude")])
@@ -287,8 +404,25 @@ def _sibling_fallback(sibling_root: Path, sibling_dir: str, upstream_url: str) -
         if not name:
             continue
         candidate = sibling_root / name
-        if candidate.is_dir():
-            return candidate
+        if not candidate.is_dir():
+            continue
+        candidate_resolved = candidate.resolve()
+        if candidate_resolved == engine_tree:
+            continue
+        try:
+            candidate_resolved.relative_to(engine_tree)
+            continue  # candidate is a subdirectory of the engine's own tree
+        except ValueError:
+            pass
+        if repo_root_resolved is not None:
+            try:
+                candidate_resolved.relative_to(repo_root_resolved)
+                continue  # candidate IS (or is under) the walked repo's own root
+            except ValueError:
+                pass
+        if probe_kind and not _functional_probe_ok(candidate, probe_kind, probe_args, timeout):
+            continue
+        return candidate
     return None
 
 
@@ -308,7 +442,7 @@ def _run_probe_argv(argv: list[str], timeout: int) -> bool:
             capture_output=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _run_probe_argv: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -416,6 +550,9 @@ def dep_probe(
     sibling_dir = str(dep.get("sibling_dir_name", ""))
     sibling_path, via_override = _resolve_dep_root(dep_id, sibling_dir, manifest_path, repo_root, argv=argv)
 
+    probe_kind = dep.get("functional_probe_kind", "")
+    probe_args_early = dep.get("functional_probe_args", {}) or {}
+
     # Step 1: implicit sibling_dir_exists probe (nested-layout "-claude"-strip
     # fallback) — skipped when the root came from the override ladder
     # (_resolve_dep_root's via_override contract: a bad override path is
@@ -425,14 +562,18 @@ def dep_probe(
         if via_override:
             return "missing"
         resolved = _sibling_fallback(
-            repo_root.parent, sibling_dir, str(dep.get("upstream_url", ""))
+            repo_root.parent,
+            sibling_dir,
+            str(dep.get("upstream_url", "")),
+            probe_kind=probe_kind,
+            probe_args=probe_args_early,
+            repo_root=repo_root,
+            timeout=timeout,
         )
         if resolved is None:
             return "missing"
         sibling_path = resolved
-
-    probe_kind = dep.get("functional_probe_kind", "")
-    probe_args = dep.get("functional_probe_args", {}) or {}
+    probe_args = probe_args_early
 
     if probe_kind == "sibling_dir_exists":
         return "present"
@@ -452,7 +593,7 @@ def dep_probe(
                 capture_output=True,
                 timeout=timeout,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
         except (OSError, subprocess.TimeoutExpired):
             print(f"skip: dep_probe: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -506,7 +647,14 @@ def dep_probe_all(
         # to serve.
         sibling_path, via_override = _resolve_dep_root(dep_id, sibling_dir, manifest_path, repo_root, argv=argv)
         if not via_override and not sibling_path.is_dir():
-            resolved = _sibling_fallback(repo_root.parent, sibling_dir, str(upstream_url))
+            resolved = _sibling_fallback(
+                repo_root.parent,
+                sibling_dir,
+                str(upstream_url),
+                probe_kind=str(dep.get("functional_probe_kind", "")),
+                probe_args=dep.get("functional_probe_args", {}) or {},
+                repo_root=repo_root,
+            )
             if resolved is not None:
                 sibling_path = resolved
 
@@ -857,6 +1005,17 @@ Usage: python3 scripts/setup.sh [OPTIONS]
                              Both flags required together; one alone exits 93.
   --accept-no-git-auth       Suppress semi-hard exit (94) from clone_auth probe.
                              Standalone flag — does not pair with dep-risk flags.
+  --coordinator-root <path>  Override ladder rung 1 for the coordinator-claude
+                             repo root to walk (rung 2: $COORDINATOR_CLAUDE_ROOT;
+                             no registry rung -- repos.coordinator_claude is a
+                             RETIRED key that names the publish mirror, not a
+                             working checkout). Every candidate must clear two
+                             gates: not a registered publish.mirrors.*.path
+                             entry, and positive evidence of a real
+                             coordinator-claude plugin source checkout. Only
+                             consulted by the `python3 -m` entry point when
+                             the trampoline's own env vars
+                             (COORDINATOR_SETUP_REPO_ROOT/_LIB_DIR) are unset.
 
 Exit codes: 0=ok  90=non-TTY/missing-dep  91=user-declined
             92=agent-direct  93=incomplete-override-pair
@@ -894,6 +1053,7 @@ def parse_args(argv: list[str], out=None, err=None) -> dict[str, Any]:
         "last_status": False,
         "i_am_agent": False,
         "run_chain_preinstall": False,
+        "coordinator_root": "",
     }
 
     i = 0
@@ -952,6 +1112,14 @@ def parse_args(argv: list[str], out=None, err=None) -> dict[str, Any]:
             flags["accept_no_git_auth"] = True
         elif arg == "--i-am-agent":
             flags["i_am_agent"] = True
+        elif arg == "--coordinator-root":
+            if i + 1 >= len(argv):
+                print("ERROR: --coordinator-root requires a path argument.", file=err)
+                raise _SetupError(1)
+            flags["coordinator_root"] = argv[i + 1]
+            i += 1
+        elif arg.startswith("--coordinator-root="):
+            flags["coordinator_root"] = arg[len("--coordinator-root=") :]
         else:
             print(f"ERROR: Unknown argument: {arg}", file=err)
             print("Run with --help for usage.", file=err)
@@ -965,30 +1133,203 @@ def parse_args(argv: list[str], out=None, err=None) -> dict[str, Any]:
 # main
 # ---------------------------------------------------------------------------
 
-def _self_resolve_walker_roots() -> tuple[Path, Path] | None:
-    """Fallback resolution of (repo_root, lib_dir) for the `python3 -m
+_COORDINATOR_ROOT_LADDER_REMEDIATION = (
+    "  1. --coordinator-root <path>\n"
+    "  2. $COORDINATOR_CLAUDE_ROOT\n"
+    "  3. engine.working_repos.example_doctrine_repo registry key\n"
+    "  (repos.coordinator_claude stays RETIRED -- it names the publish-mirror\n"
+    "  location, never a working checkout; see publish.mirrors.<name>.path in\n"
+    "  the machine-local registry for the mirror this repo actually resolves\n"
+    "  that key to. `engine.working_repos.example_doctrine_repo` is written by example-doctrine-repo's own\n"
+    "  installer / self-heal, never by claude-klabauter -- claude-klabauter only reads this\n"
+    "  namespace. Absent: `machine-local set engine.working_repos.example_doctrine_repo\n"
+    "  <path>`.)\n"
+    "  Every rung additionally requires the candidate to (a) NOT be a\n"
+    "  registered publish.mirrors.*.path entry, and (b) show positive\n"
+    "  evidence of a real coordinator-claude plugin source checkout\n"
+    "  (.claude-plugin/plugin.json plus commands/ or hooks/)."
+)
+
+
+def _is_publish_mirror(path: Path) -> bool:
+    """True iff `path` resolves under (or equals) any registered
+    `publish.mirrors.*.path` entry in the machine-local registry.
+
+    Reuses the SAME mirror-identification mechanism the cross-repo write
+    guard already uses to recognize `X:\\coordinator-claude` as a publish
+    mirror (`coordinator_core.bash_guards._write_bump_applicability.
+    target_is_publish_destination`) rather than inventing a second one here
+    -- see that module's own docstring for the closed-set membership test
+    (`publish.mirrors.<name>.path`, never a path-pattern guess).
+
+    Fails open (`False`) when the registry has no `publish.mirrors.*`
+    entries at all -- the OSS case, where this predicate must be a pure
+    no-op and never a new failure mode -- or when the check itself raises
+    for any reason (mirrors `target_is_publish_destination`'s own fail-open
+    contract one level up)."""
+    try:
+        from coordinator_core.bash_guards._write_bump_applicability import (
+            target_is_publish_destination,
+        )
+    except ImportError:
+        return False
+    try:
+        return target_is_publish_destination(str(path))
+    except Exception:
+        return False
+
+
+def _looks_like_coordinator_claude_source(path: Path) -> bool:
+    """Positive evidence `path` is an actual coordinator-claude plugin
+    source checkout, not a bare directory: a plugin manifest
+    (`.claude-plugin/plugin.json`) AND at least one of `commands/`,
+    `hooks/` present. Required before any candidate is accepted (Defect
+    fix 2026-08-07, requirement 2) -- a directory that merely exists is not
+    proof it is coordinator-claude."""
+    if not (path / ".claude-plugin" / "plugin.json").is_file():
+        return False
+    return (path / "commands").is_dir() or (path / "hooks").is_dir()
+
+
+def _resolve_coordinator_root_ladder(
+    argv: list[str] | None = None, err=None
+) -> tuple[Path, str] | None:
+    """Resolve the coordinator-claude repo root to walk — the DAG-ROOT repo
+    this module probes deps FOR, never assumed to be colocated with the
+    claude-klabauter engine (Defect B), and never a registered publish mirror
+    (Defect fix 2026-08-07). Ladder, in priority order:
+
+        1. --coordinator-root <path> / --coordinator-root=<path> (this argv)
+        2. $COORDINATOR_CLAUDE_ROOT
+        3. `engine.working_repos.example_doctrine_repo` registry key (via
+           `coordinator_core.machine_resolver.registry_get` — never a
+           `machine-local` subprocess), passed through C1a's shape
+           derivation (`coordinator_core.coordinator_root.
+           _resolve_plugin_root_for_machine_local`) before being offered as
+           a candidate.
+
+    The machine-local registry rung previously read `repos.coordinator_claude`
+    — that key is RETIRED (2026-06-30 registry-publish-vs-working-targets
+    migration) and, on operator machines that still carry it, resolves
+    straight to the publish mirror location, which `_is_publish_mirror`
+    exists to reject; it is never repointed. `engine.working_repos.example_doctrine_repo`
+    is a DIFFERENT, live-registered key that DOES name a coordinator-claude
+    WORKING checkout generically on this fleet (verified live: the raw
+    registered value is a repo root one directory ABOVE the actual plugin
+    source, which is why the C1a shape derivation is applied before the
+    value is offered as a candidate — the raw value alone carries no
+    `.claude-plugin/plugin.json`, no `commands/`, no `hooks/`, and would
+    never pass gate 2 below). Absent key, empty value, or a derivation that
+    returns `None` is a rung MISS, not an error — fail-open, so an OSS
+    single-tree box with no such key behaves byte-identically to today.
+    This rung is written by example-doctrine-repo's own installer / self-heal via
+    `machine-local set engine.working_repos.example_doctrine_repo <path>` — claude-klabauter only
+    reads this namespace, never writes another repo's registry entry.
+
+    Every candidate from any rung must clear TWO gates, in order, before
+    it is accepted:
+        1. `_is_publish_mirror` — a registered publish mirror is a generated
+           downstream copy, never a walkable source checkout.
+        2. `_looks_like_coordinator_claude_source` — positive evidence of an
+           actual coordinator-claude plugin source checkout.
+    A candidate that fails either gate is reported (to `err`) and rejected
+    — the ladder does NOT silently fall through to a lower-priority
+    candidate that failed a gate; only the first candidate that clears both
+    gates is returned.
+
+    Returns `(candidate, rung_label)` — `rung_label` names which rung
+    resolved it, printed by every `--check`/`--preflight`/full-install
+    banner per requirement 5 ("every resolution PASS must print the
+    resolved path AND the rung that produced it"). Returns `None` when no
+    rung resolves to a candidate that clears both gates — the caller (
+    `_self_resolve_walker_roots` / `main`) reports a real diagnostic with
+    the ladder as remediation instead of falling back to a location-derived
+    guess (the guess was the root cause of Defect B: it coincidentally
+    matched `<claude-klabauter-root>/coordinator`, claude-klabauter's OWN plugin-source mirror,
+    not any real coordinator-claude checkout).
+    """
+    err = sys.stderr if err is None else err
+    effective_argv = sys.argv[1:] if argv is None else argv
+
+    candidates: list[tuple[Path, str]] = []
+    i = 0
+    while i < len(effective_argv):
+        tok = effective_argv[i]
+        if tok == "--coordinator-root" and i + 1 < len(effective_argv):
+            candidates.append((Path(effective_argv[i + 1]), "--coordinator-root flag"))
+            break
+        if tok.startswith("--coordinator-root="):
+            candidates.append((Path(tok[len("--coordinator-root=") :]), "--coordinator-root flag"))
+            break
+        i += 1
+
+    env_val = os.environ.get("COORDINATOR_CLAUDE_ROOT", "")
+    if env_val:
+        candidates.append((Path(env_val), "$COORDINATOR_CLAUDE_ROOT env"))
+
+    registry_val = registry_get("engine.working_repos.example_doctrine_repo")
+    if registry_val:
+        derived = _resolve_plugin_root_for_machine_local(Path(registry_val))
+        if derived is not None:
+            candidates.append((derived, "engine.working_repos.example_doctrine_repo registry key"))
+
+    for candidate, rung in candidates:
+        if _is_publish_mirror(candidate):
+            print(
+                f"  [coordinator-root ladder] {rung}: {candidate} is a registered "
+                "publish mirror (publish.mirrors.*.path) -- rejected, not a working checkout.",
+                file=err,
+            )
+            continue
+        if not _looks_like_coordinator_claude_source(candidate):
+            print(
+                f"  [coordinator-root ladder] {rung}: {candidate} does not look like a "
+                "coordinator-claude plugin source checkout (missing .claude-plugin/plugin.json "
+                "plus commands/ or hooks/) -- rejected.",
+                file=err,
+            )
+            continue
+        return candidate, rung
+
+    return None
+
+
+def _self_resolve_walker_roots(
+    argv: list[str] | None = None, err=None
+) -> tuple[Path, Path, str] | None:
+    """Fallback resolution of (repo_root, lib_dir, rung) for the `python3 -m
     coordinator_core.ops.setup_chain_walker` entry point, used only when the
     trampoline's env vars are absent.
 
     A module path is an interface and a file path is an implementation
     detail — consumers pinned to `coordinator/scripts/setup.py` cannot stop
     pinning it until the module form actually runs, so `__main__` has to
-    resolve both roots itself. The canonical layout is the only one it
-    resolves: `<claude-klabauter-root>/coordinator` and `<claude-klabauter-root>/coordinator/scripts/lib`.
-    Returns None when that layout is not present, so the caller reports a
-    real diagnostic instead of proceeding on a guessed root.
+    resolve both roots itself. Defect B (2026-08-07): the root MUST come from
+    `_resolve_coordinator_root_ladder` (an explicit override, never a guess
+    derived from this module's own on-disk location) — see that function's
+    docstring for the ladder and why the old location-derived guess was
+    wrong. Returns None when the ladder resolves to nothing, or resolves to
+    a path that is not an actual directory on disk, so the caller reports a
+    real diagnostic instead of proceeding on an unverified root.
 
     Negative-spec: this never re-derives lib_dir when the env vars ARE set.
     The trampoline deliberately sets lib_dir to SCRIPT_DIR/lib rather than
     repo_root/scripts/lib, because the shadow-copy fixtures in
     `coordinator/tests/preflight/` invoke a copy of it from a directory not
     literally named "scripts" — env precedence is what keeps those green.
+    lib_dir is NOT required to exist here (the C11 de-bash cutover retired
+    the `scripts/lib/prereq_probe.sh` bridge this module used to require —
+    the only remaining lib_dir consumer, `dep_consent_banner.txt`, already
+    tolerates absence with a built-in default banner).
     """
-    coordinator_tree = Path(__file__).resolve().parents[2] / "coordinator"
-    lib_dir = coordinator_tree / "scripts" / "lib"
-    if not lib_dir.is_dir():
+    resolved = _resolve_coordinator_root_ladder(argv, err=err)
+    if resolved is None:
         return None
-    return coordinator_tree, lib_dir
+    coordinator_tree, rung = resolved
+    if not coordinator_tree.is_dir():
+        return None
+    lib_dir = coordinator_tree / "scripts" / "lib"
+    return coordinator_tree, lib_dir, rung
 
 
 def main(argv: list[str], out=None, err=None) -> int:
@@ -1010,17 +1351,20 @@ def main(argv: list[str], out=None, err=None) -> int:
     if repo_root_env and lib_dir_env:
         repo_root = Path(repo_root_env)
         lib_dir = Path(lib_dir_env)
+        coordinator_root_rung = "trampoline env (COORDINATOR_SETUP_REPO_ROOT/COORDINATOR_SETUP_LIB_DIR)"
     else:
-        resolved = _self_resolve_walker_roots()
+        resolved = _self_resolve_walker_roots(argv, err=err)
         if resolved is None:
             print(
                 "ERROR: cannot resolve the chain-walker roots. Set "
-                "COORDINATOR_SETUP_REPO_ROOT and COORDINATOR_SETUP_LIB_DIR, or "
-                "invoke from a claude-klabauter checkout where coordinator/scripts/lib exists.",
+                "COORDINATOR_SETUP_REPO_ROOT and COORDINATOR_SETUP_LIB_DIR, "
+                "or resolve the coordinator-claude root to walk via one of, "
+                "in priority order:",
                 file=err,
             )
+            print(_COORDINATOR_ROOT_LADDER_REMEDIATION, file=err)
             return 1
-        repo_root, lib_dir = resolved
+        repo_root, lib_dir, coordinator_root_rung = resolved
 
     try:
         flags = parse_args(list(argv), out=out, err=err)
@@ -1072,15 +1416,19 @@ def main(argv: list[str], out=None, err=None) -> int:
 
         # --check mode: read-only dep probe.
         if flags["check"]:
+            manifest_path = resolve_manifest_path(repo_root, err=err)
+            manifest_repo_id = _loaded_manifest_repo_id(manifest_path)
+
             print("==========================================================", file=out)
             print(f"  {_CHAIN_BANNER}", file=out)
             print("==========================================================", file=out)
-            print("  repo:         coordinator-claude", file=out)
+            print(f"  repo:         {manifest_repo_id}", file=out)
             print(f"  repo_root:    {repo_root}", file=out)
+            print(f"  root rung:    {coordinator_root_rung}", file=out)
+            print(f"  manifest:     {manifest_path if manifest_path is not None else '(not found)'}", file=out)
             print("  mode:         --check (read-only, no state written)", file=out)
             print("", file=out)
 
-            manifest_path = resolve_manifest_path(repo_root, err=err)
             if manifest_path is None:
                 print("", file=err)
                 print(f"  {_CHAIN_BANNER}: no manifest to probe — exiting 0 (check-only mode).", file=out)
@@ -1102,6 +1450,9 @@ def main(argv: list[str], out=None, err=None) -> int:
                         print(f"  WARNING: soft dep {dep_id} present-but-broken — continuing (warn-and-continue).", file=err)
                         print("    Override: re-run with --skip-dep-check --accept-missing-deps-risk to suppress.", file=err)
                         all_satisfied = False
+                    else:
+                        print(f"ERROR: hard dep [{dep_id}] is present but its functional probe failed.", file=err)
+                        raise _SetupError(1)
                 elif status == "missing":
                     if severity == "soft":
                         print("", file=err)
@@ -1120,21 +1471,25 @@ def main(argv: list[str], out=None, err=None) -> int:
             elif all_satisfied:
                 print(f"  {_CHAIN_BANNER}: all deps satisfied.", file=out)
             else:
-                print(f"  {_CHAIN_BANNER}: soft dep(s) absent — proceeding (soft dep warn-and-continue).", file=out)
+                print(f"  {_CHAIN_BANNER}: soft dep(s) absent or present-but-broken — proceeding (soft dep warn-and-continue).", file=out)
             print("==========================================================", file=out)
             raise _SetupError(0)
 
         # --preflight mode.
         if flags["preflight"]:
+            manifest_path = resolve_manifest_path(repo_root, err=err)
+            manifest_repo_id = _loaded_manifest_repo_id(manifest_path)
+
             print("==========================================================", file=err)
             print(f"  {_CHAIN_BANNER}", file=err)
             print("==========================================================", file=err)
-            print("  repo:         coordinator-claude", file=err)
+            print(f"  repo:         {manifest_repo_id}", file=err)
             print(f"  repo_root:    {repo_root}", file=err)
+            print(f"  root rung:    {coordinator_root_rung}", file=err)
+            print(f"  manifest:     {manifest_path if manifest_path is not None else '(not found)'}", file=err)
             print("  mode:         --preflight (read-only; dep probes + env prereq probes)", file=err)
             print("", file=err)
 
-            manifest_path = resolve_manifest_path(repo_root, err=err)
             if manifest_path is None:
                 print("", file=err)
                 print(f"  {_CHAIN_BANNER}: no manifest found — skipping dep probes.", file=err)
@@ -1153,6 +1508,7 @@ def main(argv: list[str], out=None, err=None) -> int:
         print("==========================================================", file=out)
         print("  repo:      coordinator-claude", file=out)
         print(f"  repo_root: {repo_root}", file=out)
+        print(f"  root rung: {coordinator_root_rung}", file=out)
         print("", file=out)
 
         phase_zero_flags = {

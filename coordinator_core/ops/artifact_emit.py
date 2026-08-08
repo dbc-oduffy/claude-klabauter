@@ -29,7 +29,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 
 @register_op("artifact.emit")
-async def _artifact_emit(params: dict, repo_root=None) -> dict:
+def _artifact_emit(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'artifact.emit' handler — produce the cockpit-emission.json artifact.
 
     Params (all optional):

@@ -111,6 +111,7 @@ import pytest
 
 from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 from coordinator_core.ops.ceremony import tail_ops
+from coordinator_core.ops.fleet._common import main_worktree_root
 
 
 def _run(coro) -> Any:
@@ -699,6 +700,7 @@ def test_render_handoff_tracker_write_is_atomic_no_temp_file_left(tmp_path):
     guard) file is left behind after a successful render."""
     worktree_root = tmp_path / "repo"
     worktree_root.mkdir()
+    (worktree_root / ".git").mkdir()
     state_root = tmp_path / "repo" / "state"
 
     with (
@@ -853,6 +855,7 @@ def test_fire_tracker_and_roadmap_detached_records_spawn_failure(tmp_path):
 def test_render_handoff_tracker_success_stamps_tracker_regen(tmp_path):
     worktree_root = tmp_path / "repo"
     worktree_root.mkdir()
+    (worktree_root / ".git").mkdir()
     state_root = worktree_root / "state"
 
     with (
@@ -874,6 +877,7 @@ def test_render_handoff_tracker_success_stamps_tracker_regen(tmp_path):
 def test_render_handoff_tracker_failure_does_not_stamp(tmp_path):
     worktree_root = tmp_path / "repo"
     worktree_root.mkdir()
+    (worktree_root / ".git").mkdir()
 
     with patch(
         "coordinator_core.ops.ceremony.renderers.render_repo_section",
@@ -887,6 +891,8 @@ def test_render_handoff_tracker_failure_does_not_stamp(tmp_path):
 
 def test_refresh_roadmap_callout_success_stamps_roadmap_callout(tmp_path):
     worktree_root = tmp_path / "repo"
+    worktree_root.mkdir()
+    (worktree_root / ".git").mkdir()
     handoff_dir = worktree_root / "state" / "handoffs"
     handoff_dir.mkdir(parents=True)
     handoff_path = handoff_dir / "2026-07-22-example.md"
@@ -905,6 +911,8 @@ def test_refresh_roadmap_callout_success_stamps_roadmap_callout(tmp_path):
 
 def test_refresh_roadmap_callout_all_skipped_does_not_stamp(tmp_path):
     worktree_root = tmp_path / "repo"
+    worktree_root.mkdir()
+    (worktree_root / ".git").mkdir()
     handoff_dir = worktree_root / "state" / "handoffs"
     handoff_dir.mkdir(parents=True)
     handoff_path = handoff_dir / "2026-07-22-example.md"
@@ -931,8 +939,33 @@ def test_coverage_gate_covered_stamps_coverage_gate(tmp_path):
     with patch.object(tail_ops, "get_op_handler", return_value=_handler):
         _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
 
-    statuses = hl.liveness_status(str(common_dir))
+    statuses = hl.liveness_status(str(main_worktree_root(common_dir)))
     assert statuses[hl.COVERAGE_GATE] == hl.STATUS_FRESH
+
+
+def test_coverage_gate_covered_stamp_is_readable_by_check_stale_detailed(tmp_path):
+    """AC10: the COVERAGE_GATE stamp must be visible to the ACTUAL reader --
+    `orientation/regenerate_cache.py`'s `check_stale_detailed(str(repo_root))` -- not
+    merely retargeted to the right path in isolation. A stamp that only `liveness_status`
+    can see but the real reader cannot would still be a dead signal."""
+    common_dir = _make_common_dir(tmp_path)
+    repo_root = main_worktree_root(common_dir)
+
+    async def _handler(params: dict, repo_root=None) -> dict:
+        return {"verdict_line": "VERDICT=COVERED range=abc..def", "exit_code": 0, "notes": []}
+
+    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
+        _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
+
+    # A negative threshold means "any recorded stamp, however fresh, counts as stale" --
+    # the only way to positively prove the reader SEES a stamp (an absent/never-stamped
+    # class is silently skipped and would ALSO yield an empty list at a normal threshold,
+    # which would not distinguish "found and fresh" from "never found").
+    stale_messages = hl.check_stale_detailed(
+        str(repo_root), classes=[hl.COVERAGE_GATE], stale_threshold_s=-1.0
+    )
+    assert len(stale_messages) == 1
+    assert stale_messages[0][0] == hl.COVERAGE_GATE
 
 
 def test_coverage_gate_indeterminate_does_not_stamp(tmp_path):
@@ -944,5 +977,5 @@ def test_coverage_gate_indeterminate_does_not_stamp(tmp_path):
     with patch.object(tail_ops, "get_op_handler", return_value=_handler):
         _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
 
-    statuses = hl.liveness_status(str(common_dir))
+    statuses = hl.liveness_status(str(main_worktree_root(common_dir)))
     assert statuses[hl.COVERAGE_GATE] == hl.STATUS_NEVER_STAMPED

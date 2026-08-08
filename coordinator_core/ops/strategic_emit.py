@@ -61,7 +61,7 @@ from coordinator_core.ops.strategic.emit_writer import emit_strategic_feed
 
 
 @register_op("strategic.emit")
-async def _strategic_emit(params: dict, repo_root=None) -> dict:
+def _strategic_emit(params: dict, repo_root=None) -> dict:
     """JSON-RPC "strategic.emit" handler.
 
     Required params: target_root. See module docstring "Wire params" / "Reply fields".

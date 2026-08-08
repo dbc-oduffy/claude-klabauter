@@ -1090,6 +1090,20 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # own header: "All production ops are listed explicitly; a missing entry is an
     # oversight, not a silent promotion."
     "write_surface.emit_manifest":              "none",
+    # diagnostics.* — "none", and here that value is exact rather than merely
+    # closest-fitting: these three probes read no state at all (not a path, not an
+    # env var, not a param), so there is genuinely no per-request repo key to
+    # derive and _origin_worktree is not required. Same class as ping, one step
+    # purer — ping is the nearest precedent and the honest analogy.
+    # Scope-table caveat, stated so a reader does not over-read this row: "none"
+    # keys REPO STATE, not write-freedom (install.write_identity_file is "none"
+    # and writes a file). The write-free-by-construction property these ops exist
+    # for is carried by OP_CLASSIFICATION=COMPUTE_ONLY plus the module's own
+    # empty import surface, not by this table.
+    # Spec: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
+    "diagnostics.always_succeeds":              "none",
+    "diagnostics.always_refuses":               "none",
+    "diagnostics.always_structural_pin":        "none",
 }
 
 # ---------------------------------------------------------------------------

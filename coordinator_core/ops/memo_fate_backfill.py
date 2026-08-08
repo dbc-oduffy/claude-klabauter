@@ -280,7 +280,7 @@ def backfill_fates(
 
 
 @register_op("memo.fate_backfill")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "memo.fate_backfill" handler — COMPUTE_ONLY, no writes.
 
     Params:

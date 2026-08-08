@@ -7,7 +7,6 @@ from-fence-inventory.md § Wave 2).
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import sys
 from pathlib import Path
@@ -179,7 +178,7 @@ def test_handler_returns_unresolved_under_repo_root(tmp_path: Path) -> None:
     git_common_dir = worktree / ".git"
     git_common_dir.mkdir()
 
-    result = asyncio.run(_scan_unresolved_ubt_handler({}, repo_root=git_common_dir))
+    result = _scan_unresolved_ubt_handler({}, repo_root=git_common_dir)
 
     assert result == {"unresolved": [str(pending)]}
 
@@ -245,5 +244,5 @@ def test_main_usage_error_on_missing_flag_value(argv: list[str]) -> None:
 
 
 def test_handler_with_no_repo_root_returns_empty(tmp_path: Path) -> None:
-    result = asyncio.run(_scan_unresolved_ubt_handler({}, repo_root=None))
+    result = _scan_unresolved_ubt_handler({}, repo_root=None)
     assert result == {"unresolved": []}

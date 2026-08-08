@@ -164,6 +164,53 @@ def test_not_shipped_resolving_commit_ahead_of_origin_main(tmp_path, monkeypatch
     assert lines[1:] == [sha]
 
 
+def test_multiple_resolving_commits_batched_order_preserved(git_repo, monkeypatch, capsys):
+    """C19: several candidates resolve the SAME artifact-id -- the batched
+    primary-trailer lookup must still find every one of them and preserve
+    the original (git log --all, reverse-chron) candidate order, exactly
+    as the old per-candidate loop did.
+    """
+    monkeypatch.chdir(git_repo)
+    sha1 = _commit(git_repo, "first resolving commit\n\nResolves: multi-artifact-1\n")
+    _commit(git_repo, "unrelated commit in between")
+    sha2 = _commit(git_repo, "second resolving commit\n\nResolves: multi-artifact-1\n")
+
+    rc = main(["multi-artifact-1"])
+    captured = capsys.readouterr()
+    lines = captured.out.strip().splitlines()
+    assert rc == 0
+    assert lines[0] == "unknown-error"
+    assert lines[1:] == [sha2, sha1]
+
+
+def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, monkeypatch):
+    """C19: the primary-trailer lookup across N candidates must cost ONE
+    `git log` spawn, not one per candidate -- pinning the fix against
+    regressing back to the N-spawn shape.
+    """
+    from coordinator_core.ops import rollup_derive
+
+    monkeypatch.chdir(git_repo)
+    _commit(git_repo, "resolving 1\n\nResolves: spawn-count-artifact\n")
+    _commit(git_repo, "resolving 2\n\nResolves: spawn-count-artifact\n")
+    _commit(git_repo, "resolving 3\n\nResolves: spawn-count-artifact\n")
+
+    calls = []
+    real_run_git = rollup_derive._run_git
+
+    def _counting_run_git(args):
+        calls.append(args)
+        return real_run_git(args)
+
+    monkeypatch.setattr(rollup_derive, "_run_git", _counting_run_git)
+
+    resolving = rollup_derive._resolving_shas("spawn-count-artifact")
+
+    assert len(resolving) == 3
+    batch_calls = [c for c in calls if "--no-walk=unsorted" in c]
+    assert len(batch_calls) == 1
+
+
 def test_unknown_error_when_origin_main_missing(tmp_path, monkeypatch, capsys):
     """No 'origin' remote at all -> envelope.main rc=2 -> propagated as unknown-error, not not-shipped."""
     work = tmp_path / "work"

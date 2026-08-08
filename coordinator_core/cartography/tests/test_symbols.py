@@ -29,7 +29,6 @@ Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-stra
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -241,14 +240,14 @@ def test_emitted_path_is_target_root_relative_posix(tmp_path):
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_symbols({"files": ["mod.py"]}))
+        _cartography_symbols({"files": ["mod.py"]})
 
 
 def test_op_missing_files_raises_value_error(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_symbols({"target_root": str(root)}))
+        _cartography_symbols({"target_root": str(root)})
 
 
 def test_op_happy_path(tmp_path):
@@ -256,9 +255,7 @@ def test_op_happy_path(tmp_path):
     root.mkdir()
     _write(root, "mod.py", "def f():\n    pass\n")
 
-    result = asyncio.run(
-        _cartography_symbols({"target_root": str(root), "files": ["mod.py"]})
-    )
+    result = _cartography_symbols({"target_root": str(root), "files": ["mod.py"]})
 
     assert len(result["files"]) == 1
     assert result["files"][0]["path"] == "mod.py"
@@ -293,8 +290,6 @@ def test_op_guards_target_root_before_build_symbols_is_called(tmp_path, monkeypa
     monkeypatch.setattr(op_mod, "build_symbols", _should_not_be_called)
 
     with pytest.raises(PathEscapeError):
-        asyncio.run(
-            _cartography_symbols({"target_root": str(root), "files": ["mod.py"]})
-        )
+        _cartography_symbols({"target_root": str(root), "files": ["mod.py"]})
 
     assert calls == ["guard"]

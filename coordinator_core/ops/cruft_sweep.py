@@ -133,6 +133,7 @@ from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # Constants — mirror bash oracle literals
@@ -346,6 +347,7 @@ def _delete_path(target: Path) -> bool:
             ["rm", "-rf", str(target)],
             timeout=_DELETE_TIMEOUT_SECS,
             capture_output=True,
+            **no_console_creationflags(),
         )
         if result.returncode != 0:
             return False
@@ -486,6 +488,7 @@ def _is_untracked(repo_root: Path, path: Path) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
             capture_output=True, timeout=10,
+            **no_console_creationflags(),
         )
         if r.returncode != 0:
             return True
@@ -505,6 +508,7 @@ def _is_untracked(repo_root: Path, path: Path) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", rel],
             capture_output=True, timeout=10,
+            **no_console_creationflags(),
         )
         if r.returncode == 0:
             return False  # tracked
@@ -515,6 +519,85 @@ def _is_untracked(repo_root: Path, path: Path) -> bool:
     # Not tracked (either check-ignore or plain untracked) — both treated as
     # untracked per the oracle's fall-through.
     return True
+
+
+def _batch_is_untracked_dirs(repo_root: Path, dirs: Sequence[Path]) -> dict:
+    """Batched replacement for a per-directory `_is_untracked` loop.
+
+    Query shape established first: `sweep_scratch`'s per-candidate question
+    is "is ANY tracked file present under this directory pathspec" — a
+    worktree-index membership question, not a range/reachability one. `git
+    ls-files -- <pathspec1> <pathspec2> ...` resolves each pathspec
+    independently (object/pathspec batching, safe per § Anti-scope 1/2/4 —
+    this is not `git rev-list A..B C..D`'s forbidden single set-expression
+    shape), so every directory's tracked-or-not answer can be read off one
+    combined `git ls-files` invocation instead of one `git ls-files
+    --error-unmatch <dir>` spawn per directory.
+
+    A `dirs` entry absent from the tracked-file output is read as
+    "untracked" — the same reconciliation discipline as
+    `emit/sections/handoffs.py::_resolve_shipped_in_dates` (prefix-match
+    plus an explicit membership decision, § Anti-scope 25): here "absent"
+    correctly means "no tracked file under this dir", matching the
+    single-item oracle's own fall-through (a git failure, or a
+    --error-unmatch miss, both read as untracked).
+
+    Returns {str(dir): is_untracked_bool} for every entry in `dirs`.
+    """
+    import shutil as _shutil
+
+    if not dirs:
+        return {}
+    if _shutil.which("git") is None:
+        return {str(d): True for d in dirs}
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
+            capture_output=True, timeout=10,
+            **no_console_creationflags(),
+        )
+        if r.returncode != 0:
+            return {str(d): True for d in dirs}
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"_batch_is_untracked_dirs: git rev-parse --git-dir failed for {repo_root}: {sys.exc_info()[1]}", file=sys.stderr)
+        return {str(d): True for d in dirs}
+
+    rels: dict = {}
+    for d in dirs:
+        try:
+            rels[str(d)] = rel_id(d, repo_root)
+        except ValueError:
+            rels[str(d)] = str(d)
+
+    pathspecs = sorted(set(rels.values()))
+    tracked_files: List[str] = []
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--"] + pathspecs,
+            capture_output=True, text=True, timeout=30,
+            **no_console_creationflags(),
+        )
+        if r.returncode == 0:
+            tracked_files = r.stdout.splitlines()
+        else:
+            print(
+                f"_batch_is_untracked_dirs: git ls-files exited {r.returncode} for {repo_root}: "
+                f"{(r.stderr or '').strip()}",
+                file=sys.stderr,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"_batch_is_untracked_dirs: git ls-files failed for {repo_root}: {sys.exc_info()[1]}", file=sys.stderr)
+        # tracked_files stays [] — every dir below is then reported
+        # untracked, mirroring the single-item oracle's own except-clause
+        # fall-through ("Not tracked ... per the oracle's fall-through").
+
+    result: dict = {}
+    for d in dirs:
+        rel = rels[str(d)]
+        prefix = rel.rstrip("/") + "/"
+        is_tracked = any(f == rel or f.startswith(prefix) for f in tracked_files)
+        result[str(d)] = not is_tracked
+    return result
 
 
 def _is_orphan_name_match(name: str) -> bool:
@@ -561,6 +644,7 @@ def _is_inside_git_work_tree(repo_root: Path) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "--is-inside-work-tree"],
             capture_output=True, text=True, timeout=10,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -577,10 +661,70 @@ def _is_git_ignored(repo_root: Path, name: str) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "check-ignore", "-q", "--", name],
             capture_output=True, timeout=10,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return r.returncode == 0
+
+
+def _batch_git_ignored_names(repo_root: Path, names: Sequence[str]) -> set:
+    """Batched replacement for a per-child `_is_git_ignored` loop.
+
+    Query shape established first: `sweep_empty_toplevel_dirs`'s per-child
+    question is "does this top-level name match a `.gitignore` pattern" —
+    `git check-ignore` is natively stdin-fed (`--stdin`, one name per line),
+    so this is a single-call primitive, not `check-ignore -q -- <name>` run
+    once per child. This is object/name batching, not range batching — each
+    stdin line resolves independently, so § Anti-scope 1/2/4's forbidden
+    set-expression shape does not apply here.
+
+    `git check-ignore --stdin` prints ONLY the names that ARE ignored (one
+    per line) — per § Anti-scope 25, a `names` entry absent from that output
+    is read as "not ignored", matching the single-item oracle's own
+    fail-open-to-"not ignored" behavior on any git failure (see
+    `_is_git_ignored`'s docstring: "an unignorable-to-verify path is treated
+    as NOT ignored"). Non-fatal `check-ignore` failure (including the
+    documented "no name matched" returncode 1) returns an empty set for the
+    same reason.
+
+    Returns the set of `names` entries git-ignore-matched.
+    """
+    import shutil as _shutil
+
+    if not names:
+        return set()
+    if _shutil.which("git") is None:
+        return set()
+    try:
+        # bytes I/O, NOT text=True: on Windows, text-mode input translates a
+        # bare "\n" to "\r\n" on write, and `check-ignore --stdin` reads
+        # stdin as literal newline-delimited pathnames -- a trailing "\r"
+        # left on each line either fails to match a real ignore pattern or
+        # (worse) is silently absorbed into a directory-pattern match,
+        # corrupting the ignored-name set either way. Encode/decode by hand
+        # to force LF regardless of platform.
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "--stdin"],
+            input=("\n".join(names) + "\n").encode("utf-8"),
+            capture_output=True, timeout=30,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"_batch_git_ignored_names: git check-ignore --stdin failed for {repo_root}: {sys.exc_info()[1]}", file=sys.stderr)
+        return set()
+    # returncode 0 = at least one match, 1 = no matches (not an error), any
+    # other code = treated as a failure -> fail open to "not ignored", same
+    # posture as the single-item helper.
+    if r.returncode not in (0, 1):
+        print(
+            f"_batch_git_ignored_names: git check-ignore --stdin exited {r.returncode} for {repo_root}: "
+            f"{(r.stderr or b'').decode('utf-8', errors='replace').strip()}",
+            file=sys.stderr,
+        )
+        return set()
+    stdout_text = r.stdout.decode("utf-8", errors="replace")
+    return {line for line in stdout_text.splitlines() if line}
 
 
 def _scan_empty_subtree(root: Path) -> Tuple[bool, int]:
@@ -924,6 +1068,7 @@ def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10,
+            **no_console_creationflags(),
         )
         if r.returncode == 0 and r.stdout.strip():
             return Path(r.stdout.strip())
@@ -993,6 +1138,16 @@ def sweep_scratch(
     wd = _Watchdog(watchdog_ceiling_secs)
     wd_cnt = 0
 
+    # One batched `git ls-files` pass over every auto-prune-named candidate,
+    # instead of one `git ls-files --error-unmatch` spawn per directory once
+    # the loop below reaches its tracked-by-git gate. Over-inclusive by
+    # design (a dir later skipped by an earlier gate, or dropped by the
+    # watchdog, still has an entry here) — that costs nothing beyond a dict
+    # lookup, and keeps this a single query shape independent of loop state.
+    untracked_by_dir = _batch_is_untracked_dirs(
+        repo_root, [d for d in all_dirs if _is_auto_prune_name(d.name)]
+    )
+
     for dir_path in all_dirs:
         if not wd.check():
             _banner(
@@ -1054,7 +1209,7 @@ def sweep_scratch(
                                    emit_fn=emit_fn)
                 continue
 
-            if not _is_untracked(repo_root, dir_path):
+            if not untracked_by_dir.get(dir_str, True):
                 if json_mode:
                     size_bytes = _dir_size_bytes(dir_path)
                     emit_jsonl("scratch", dir_str, dir_name, size_bytes, mtime,
@@ -1366,6 +1521,19 @@ def sweep_empty_toplevel_dirs(
     wd = _Watchdog(watchdog_ceiling_secs)
     wd_cnt = 0
 
+    # One batched `git check-ignore --stdin` pass over every candidate name
+    # not already excluded by the cheap in-memory gates above, instead of
+    # one `check-ignore -q -- <name>` spawn per top-level child inside the
+    # loop below. Over-inclusive is harmless here too — a name later
+    # dropped by the watchdog still has an entry, costing only a set lookup.
+    ignore_candidate_names = [
+        c.name for c in children
+        if not c.name.startswith(".")
+        and c.name not in _ORPHAN_HARD_EXCLUDE_NAMES
+        and c.name not in whitelist_set
+    ]
+    ignored_names = _batch_git_ignored_names(repo_root, ignore_candidate_names)
+
     for child in children:
         if not wd.check():
             _banner(
@@ -1382,7 +1550,7 @@ def sweep_empty_toplevel_dirs(
             continue
         if name in _ORPHAN_HARD_EXCLUDE_NAMES or name in whitelist_set:
             continue
-        if _is_git_ignored(repo_root, name):
+        if name in ignored_names:
             continue
 
         is_empty, max_mtime = _scan_empty_subtree(child)
@@ -1454,6 +1622,107 @@ def sweep_empty_toplevel_dirs(
 # ---------------------------------------------------------------------------
 
 
+def _run_all_phases(
+    class_: str,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    days: int,
+    scratch_age_days: int,
+    projects_root: Path,
+    file_history_root: Path,
+    handoffs_dir: Optional[Path],
+    log_path: Optional[Path],
+    repo_root_override: Optional[Path],
+    parent_roots: List[Path],
+    whitelist: Iterable[str],
+    settings_home: Optional[Path],
+    emit_fn: Optional[EmitFn],
+) -> dict:
+    """Run every requested sweep phase (blocking) and return the totals dict.
+
+    Module-level (not a nested closure of `_run_handler`) precisely so
+    `_run_handler` invokes it through exactly one `asyncio.to_thread` hop
+    (see call site) — a nested `def` here would still be visible to the
+    async-handler-discipline gate's one-level indirection scan, which walks
+    an `AsyncFunctionDef`'s full AST subtree (nested function bodies
+    included) regardless of a later, separate `asyncio.to_thread` wrapping.
+    """
+    harness_bytes = harness_items = 0
+    scratch_bytes = scratch_items = 0
+    sandbox_bytes = sandbox_items = 0
+    orphans_bytes = orphans_items = 0
+
+    if class_ in ("harness", "all"):
+        blocklist: set = set()
+        if handoffs_dir:
+            blocklist, blocklist_complete = build_uuid_blocklist(handoffs_dir)
+            # --- Tier 2 (behaviour change -- PM sign-off required) ---
+            # BEHAVIOUR CHANGE (2026-07-22, break-class fix): fail closed
+            # rather than silently sweeping with a narrowed protected set.
+            if not blocklist_complete and apply:
+                raise BlocklistIncompleteError(
+                    f"UUID blocklist scan of {handoffs_dir} was incomplete "
+                    "(unreadable handoff file(s) — see stderr warnings); "
+                    "aborting harness --apply rather than deleting state "
+                    "on an incomplete protected-UUID set"
+                )
+            # --- end Tier 2 ---
+        harness_bytes, harness_items = sweep_harness(
+            projects_root, file_history_root, days, blocklist,
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+    if class_ in ("scratch", "all"):
+        scratch_bytes, scratch_items = sweep_scratch(
+            repo_root_override, scratch_age_days,
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+        sandbox_bytes, sandbox_items = sweep_subagent_sandbox_files(
+            repo_root_override,
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+    if class_ in ("orphans", "all"):
+        orphans_bytes, orphans_items = sweep_orphans(
+            parent_roots, whitelist,
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, settings_home=settings_home, emit_fn=emit_fn,
+        )
+    empty_dirs_bytes = empty_dirs_items = 0
+    if class_ in ("empty-dirs", "all"):
+        # NET-NEW class (see module docstring) — no bash-oracle
+        # counterpart, so unlike SUBAGENT_SANDBOX above there is no
+        # oracle-omission precedent to faithfully reproduce: folded into
+        # the grand total by this façade's own design, not the oracle's.
+        empty_dirs_bytes, empty_dirs_items = sweep_empty_toplevel_dirs(
+            repo_root_override, whitelist,
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+
+    return {
+        "harness": {"bytes": harness_bytes, "items": harness_items},
+        "scratch": {"bytes": scratch_bytes + sandbox_bytes, "items": scratch_items + sandbox_items},
+        "orphans": {"bytes": orphans_bytes, "items": orphans_items},
+        "empty_dirs": {"bytes": empty_dirs_bytes, "items": empty_dirs_items},
+        # Grand-total components, kept separate from the display-oriented
+        # "scratch" bucket above. cruft-sweep.sh's grand-total banner
+        # (lines 1525-1526) is HARNESS + SCRATCH + ORPHANS only — it never
+        # folds SUBAGENT_SANDBOX_BYTES/ITEMS in, even though the sandbox
+        # reap runs alongside every scratch/all invocation and gets its
+        # own separate log row. Review: code-reviewer (ops-records-cruft-
+        # hierarchy F4) — total_bytes/total_items previously derived from
+        # the sandbox-folded "scratch" bucket, diverging from the oracle's
+        # 1 GB reclaimable-space advisory threshold. EMPTY_DIRS is folded
+        # into this facade's grand total (its own net-new design choice,
+        # not an oracle mirror).
+        "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes,
+        "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items,
+    }
+
+
 @register_op("cruft_sweep.run")
 async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC cruft_sweep.run handler — MUTATING when apply=True.
@@ -1509,81 +1778,6 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     records: List[dict] = []
     emit_fn = (lambda rec: records.append(rec)) if json_mode else None
 
-    def _run_all() -> dict:
-        harness_bytes = harness_items = 0
-        scratch_bytes = scratch_items = 0
-        sandbox_bytes = sandbox_items = 0
-        orphans_bytes = orphans_items = 0
-
-        if class_ in ("harness", "all"):
-            blocklist: set = set()
-            if handoffs_dir:
-                blocklist, blocklist_complete = build_uuid_blocklist(handoffs_dir)
-                # --- Tier 2 (behaviour change -- PM sign-off required) ---
-                # BEHAVIOUR CHANGE (2026-07-22, break-class fix): fail closed
-                # rather than silently sweeping with a narrowed protected set.
-                if not blocklist_complete and apply:
-                    raise BlocklistIncompleteError(
-                        f"UUID blocklist scan of {handoffs_dir} was incomplete "
-                        "(unreadable handoff file(s) — see stderr warnings); "
-                        "aborting harness --apply rather than deleting state "
-                        "on an incomplete protected-UUID set"
-                    )
-                # --- end Tier 2 ---
-            harness_bytes, harness_items = sweep_harness(
-                projects_root, file_history_root, days, blocklist,
-                apply=apply, json_mode=json_mode, quiet=quiet,
-                log_path=log_path, emit_fn=emit_fn,
-            )
-        if class_ in ("scratch", "all"):
-            scratch_bytes, scratch_items = sweep_scratch(
-                repo_root_override, scratch_age_days,
-                apply=apply, json_mode=json_mode, quiet=quiet,
-                log_path=log_path, emit_fn=emit_fn,
-            )
-            sandbox_bytes, sandbox_items = sweep_subagent_sandbox_files(
-                repo_root_override,
-                apply=apply, json_mode=json_mode, quiet=quiet,
-                log_path=log_path, emit_fn=emit_fn,
-            )
-        if class_ in ("orphans", "all"):
-            orphans_bytes, orphans_items = sweep_orphans(
-                parent_roots, whitelist,
-                apply=apply, json_mode=json_mode, quiet=quiet,
-                log_path=log_path, settings_home=settings_home, emit_fn=emit_fn,
-            )
-        empty_dirs_bytes = empty_dirs_items = 0
-        if class_ in ("empty-dirs", "all"):
-            # NET-NEW class (see module docstring) — no bash-oracle
-            # counterpart, so unlike SUBAGENT_SANDBOX above there is no
-            # oracle-omission precedent to faithfully reproduce: folded into
-            # the grand total by this façade's own design, not the oracle's.
-            empty_dirs_bytes, empty_dirs_items = sweep_empty_toplevel_dirs(
-                repo_root_override, whitelist,
-                apply=apply, json_mode=json_mode, quiet=quiet,
-                log_path=log_path, emit_fn=emit_fn,
-            )
-
-        return {
-            "harness": {"bytes": harness_bytes, "items": harness_items},
-            "scratch": {"bytes": scratch_bytes + sandbox_bytes, "items": scratch_items + sandbox_items},
-            "orphans": {"bytes": orphans_bytes, "items": orphans_items},
-            "empty_dirs": {"bytes": empty_dirs_bytes, "items": empty_dirs_items},
-            # Grand-total components, kept separate from the display-oriented
-            # "scratch" bucket above. cruft-sweep.sh's grand-total banner
-            # (lines 1525-1526) is HARNESS + SCRATCH + ORPHANS only — it never
-            # folds SUBAGENT_SANDBOX_BYTES/ITEMS in, even though the sandbox
-            # reap runs alongside every scratch/all invocation and gets its
-            # own separate log row. Review: code-reviewer (ops-records-cruft-
-            # hierarchy F4) — total_bytes/total_items previously derived from
-            # the sandbox-folded "scratch" bucket, diverging from the oracle's
-            # 1 GB reclaimable-space advisory threshold. EMPTY_DIRS is folded
-            # into this facade's grand total (its own net-new design choice,
-            # not an oracle mirror).
-            "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes,
-            "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items,
-        }
-
     if not try_acquire_lock(lock_dir):
         # Contention — another run owns the work; exit "0 silently" (bash
         # oracle semantics) rather than raising or blocking.
@@ -1599,7 +1793,19 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return empty_result
 
     try:
-        totals = await asyncio.to_thread(_run_all)
+        # AC-3 (async-handler-discipline): `_run_all_phases` is a module-level
+        # (not nested) plain `def` so the whole phase dispatch — including its
+        # own bare `sweep_scratch(...)` os.walk-reaching call — is reached ONLY
+        # through this single `asyncio.to_thread` hop, never via a closure the
+        # gate's one-level indirection scan would otherwise walk into as if it
+        # were still directly in `_run_handler`'s body.
+        totals = await asyncio.to_thread(
+            _run_all_phases,
+            class_, apply, json_mode, quiet, days, scratch_age_days,
+            projects_root, file_history_root, handoffs_dir, log_path,
+            repo_root_override, parent_roots, whitelist, settings_home,
+            emit_fn,
+        )
     finally:
         release_lock(lock_dir)
 

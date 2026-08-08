@@ -59,6 +59,7 @@ below for the calling convention and the loop-reentrancy caveat this repoint int
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -106,55 +107,30 @@ _QUERY_FAILED_REASON_PREFIX = "records.query op query failed"
 
 
 def _invoke_records_query_sync(params: dict, repo_root: Path) -> dict:
-    """Drive the async ``records.query`` op handler to completion synchronously.
+    """Drive the ``records.query`` op handler to completion synchronously.
 
-    ``coordinator_core.ops.records_query._handler`` is declared ``async def`` to satisfy
-    the op-registry's handler signature, but its body contains NO actual ``await`` — it is
-    pure synchronous filesystem/frontmatter logic. That matters here because this section's
-    ``collect(ctx)`` can be invoked two ways:
+    ``coordinator_core.ops.records_query._handler`` is a plain ``def`` — pure
+    synchronous filesystem/frontmatter logic with no actual suspension point —
+    so it is called directly here regardless of whether this section's
+    ``collect(ctx)`` is invoked standalone or from inside the already-running
+    event loop driving ``artifact.emit`` (``ops/artifact_emit.py``).
 
-      1. Standalone (tests, ad-hoc scripts) — no event loop is running. ``asyncio.run()``
-         works normally.
-      2. From inside the ``artifact.emit`` JSON-RPC op (``ops/artifact_emit.py``), which is
-         itself ``async def`` and calls ``envelope.emit()`` (hence this section's
-         ``collect()``) SYNCHRONOUSLY on the already-running event loop (per ipc.py's
-         "async handlers run on the event loop" contract — no ``asyncio.to_thread`` wraps
-         this call path). ``asyncio.run()`` raises ``RuntimeError: asyncio.run() cannot be
-         called from a running event loop`` in this case.
-
-    Case 2 is handled by manually driving the coroutine's generator protocol
-    (``coro.send(None)`` / catch ``StopIteration``) instead of using ``asyncio.run()`` —
-    safe and loop-agnostic PROVIDED the handler never actually suspends. If a future change
-    to ``_handler`` introduces a real ``await`` (e.g. wraps blocking I/O in
-    ``asyncio.to_thread``), the coroutine will yield instead of raising ``StopIteration``,
-    and this function raises loudly rather than silently returning wrong/partial data —
-    that failure is the signal for a caller to wire this back through
-    ``asyncio.to_thread`` or a real ``await`` chain instead.
+    Guards against a future regression where ``records_query._handler`` grows
+    an actual ``await``: a coroutine returned here would otherwise propagate
+    as opaque "data" into the emit envelope, or fail downstream with a poor
+    diagnostic. The coroutine is closed before raising so it never emits an
+    "never awaited" warning.
     """
-    # asyncio deferred to first use here (not module scope) — this is the only function
-    # in the module touching the asyncio namespace at runtime; a module-scope
-    # `import asyncio` dragged asyncio.base_events (~7ms) into every eager op import
-    # even for callers that never call collect()/_invoke_records_query_sync. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
-    import asyncio
-
-    coro = _records_query_handler(params=params, repo_root=repo_root)
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop — standalone invocation.
-        return asyncio.run(coro)
-
-    try:
-        coro.send(None)
-    except StopIteration as exc:
-        return exc.value
-    raise RuntimeError(
-        "records.query op handler unexpectedly suspended (awaited) while being driven "
-        "synchronously from inside a running event loop — the no-await assumption in "
-        "_invoke_records_query_sync no longer holds; this call site needs "
-        "asyncio.to_thread or a proper await chain."
-    )
+    result = _records_query_handler(params=params, repo_root=repo_root)
+    if asyncio.iscoroutine(result):
+        result.close()
+        raise RuntimeError(
+            "records_query._handler has become a coroutine again (expected a plain "
+            "synchronous return). _invoke_records_query_sync calls it directly and "
+            "requires a synchronous handler — either restore a coroutine-driving shim "
+            "here or make records_query._handler synchronous again."
+        )
+    return result
 
 
 def _query_records(ctx: EmitContext, record_type: str) -> "tuple[list[dict], Optional[str]]":

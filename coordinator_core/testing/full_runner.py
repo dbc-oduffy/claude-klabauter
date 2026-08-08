@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -45,27 +44,6 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.testing.collect import ALL_FAMILIES, Suite, discover
 from coordinator_core.testing import suite_mutex
 from coordinator_core.testing.run import DEFAULT_TIMEOUT, SuiteResult, overall_ok, run_suites
-
-#: How long a second full_runner waits for the mutex before proceeding
-#: unserialized. Sized against a real full run (minutes, not seconds) so a
-#: genuinely queued run waits rather than racing, while a holder that is
-#: stale-but-not-yet-reclaimable cannot wedge a run indefinitely.
-_MUTEX_WAIT_SECS: float = 600.0
-
-
-def _mutex_owner() -> str:
-    """Mutex owner id for this runner process.
-
-    Prefers the coordinator session id so the guard's deny text names
-    something an operator can act on ("held by <session>"), falling back to
-    the pid when no session is in scope -- an anonymous owner still
-    serializes correctly, it just reads less well in the deny.
-    """
-    for var in ("CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID"):
-        value = os.environ.get(var, "").strip()
-        if value:
-            return value
-    return "full_runner-pid-%d" % os.getpid()
 
 logger = logging.getLogger(__name__)
 
@@ -198,18 +176,19 @@ def main(argv: list[str]) -> int:
     #
     # Waiting, not failing, is deliberate: a second runner blocked here is a
     # queued run, and aborting it would turn a resource control into a
-    # correctness-irrelevant failure. ``_MUTEX_WAIT_SECS`` bounds the wait so
-    # a stale-but-not-yet-reclaimable holder cannot wedge a run forever; a
-    # timed-out acquire proceeds unserialized rather than refusing, matching
-    # the fail-OPEN posture the guard's own mutex leg takes.
-    owner = _mutex_owner()
+    # correctness-irrelevant failure. ``suite_mutex.MUTEX_WAIT_SECS`` bounds
+    # the wait so a stale-but-not-yet-reclaimable holder cannot wedge a run
+    # forever; a timed-out acquire proceeds unserialized rather than
+    # refusing, matching the fail-OPEN posture the guard's own mutex leg
+    # takes.
+    owner = suite_mutex.mutex_owner("full_runner")
     start = time.monotonic()
-    with suite_mutex.held(owner, "full_runner", timeout=_MUTEX_WAIT_SECS) as acquired:
+    with suite_mutex.held(owner, "full_runner", timeout=suite_mutex.MUTEX_WAIT_SECS) as acquired:
         if not acquired:
             current = suite_mutex.holder() or {}
             print(
                 "[WARN] suite mutex held by %s for %ss — proceeding unserialized"
-                % (current.get("owner", "<unknown>"), int(_MUTEX_WAIT_SECS)),
+                % (current.get("owner", "<unknown>"), int(suite_mutex.MUTEX_WAIT_SECS)),
                 file=sys.stderr,
             )
         results = run_suites(suites, repo_root=repo_root, timeout=args.timeout, jobs=args.jobs)

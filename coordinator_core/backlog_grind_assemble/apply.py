@@ -154,6 +154,7 @@ from coordinator_core.backlog_grind_assemble import directives as bga_directives
 from coordinator_core.backlog_grind_assemble import readers_blitz as readers_bug_blitz
 from coordinator_core.backlog_grind_assemble.verifier import HAIKU_VERIFIER_CLI
 from coordinator_core.contract import apply_base
+from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.session.grant import write_tier_u_grant
 
 # ---------------------------------------------------------------------------
@@ -234,13 +235,17 @@ def _commit_one(repo_root: Path, paths: list[str], message: str) -> Optional[str
     `commit` (never `git add -A`/a bare `git commit`) — `apply` runs
     against a shared concurrent-EM working tree that may already carry a
     sibling session's own files staged, and a whole-tree add/commit would
-    sweep those into this run's commit. Returns the new commit's SHA, or
-    `None` when there was nothing staged for `paths` (a clean no-op, not a
-    failure)."""
+    sweep those into this run's commit. The `add` and `commit` calls are
+    each wrapped in `coordinator_core.git_lock_retry.run_with_lock_retry`,
+    so `.git/index.lock` contention from a sibling session's concurrent
+    commit retries with bounded backoff instead of crashing this run on
+    first contention; any other git failure still raises on the first
+    attempt. Returns the new commit's SHA, or `None` when there was
+    nothing staged for `paths` (a clean no-op, not a failure)."""
     if not paths:
         return None
     pathspec = ["--", *paths]
-    add_proc = _run_git(["add", *pathspec], repo_root)
+    add_proc = run_with_lock_retry(lambda: _run_git(["add", *pathspec], repo_root))
     if add_proc.returncode != 0:
         raise RuntimeError(
             f"git add {paths} failed (rc={add_proc.returncode}): "
@@ -249,7 +254,9 @@ def _commit_one(repo_root: Path, paths: list[str], message: str) -> Optional[str
     unchanged = _run_git(["diff", "--cached", "--quiet", *pathspec], repo_root)
     if unchanged.returncode == 0:
         return None
-    commit_proc = _run_git(["commit", "-m", message, *pathspec], repo_root)
+    commit_proc = run_with_lock_retry(
+        lambda: _run_git(["commit", "-m", message, *pathspec], repo_root)
+    )
     if commit_proc.returncode != 0:
         raise RuntimeError(
             f"git commit {paths} failed (rc={commit_proc.returncode}): "

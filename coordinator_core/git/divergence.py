@@ -24,7 +24,7 @@ from __future__ import annotations
 import subprocess
 from typing import List, Optional, Tuple
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.win_portability import no_console_creationflags
 
 
 class DivergenceCheckFailed(Exception):
@@ -57,7 +57,7 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0) -
             errors="replace",
             cwd=cwd,
             timeout=timeout,
-            creationflags=_CREATIONFLAGS,
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         return -1, ""

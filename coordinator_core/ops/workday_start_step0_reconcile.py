@@ -53,6 +53,8 @@ import os
 import subprocess
 import sys
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 def _run(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -60,6 +62,7 @@ def _run(args: list[str], env: dict[str, str] | None = None) -> subprocess.Compl
         capture_output=True,
         text=True,
         env=env,
+        **no_console_creationflags(),
     )
 
 

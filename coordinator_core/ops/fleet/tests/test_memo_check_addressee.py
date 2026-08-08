@@ -34,9 +34,13 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
 )
 
 
-def _run(coro):
-    """Run async coroutine synchronously — no pytest-asyncio dependency."""
-    return asyncio.run(coro)
+def _run(result):
+    """Run an async coroutine synchronously, or pass a plain (already
+    computed) result through unchanged (2026-08-07: `_memo_check_addressee`
+    is now plain `def`)."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:

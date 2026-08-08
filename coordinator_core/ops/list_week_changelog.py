@@ -49,6 +49,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags, same_path
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -99,7 +100,7 @@ def _machine_local_get(key: str) -> Optional[str]:
             [sys.executable, impl, "get", key],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -118,7 +119,13 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
+    samefile-then-fallback semantics: broader (junction-aware) equality is
+    correct here since this call site only checks "is git_root the meta-repo
+    home", where a junction-aliased home must compare equal."""
+    return same_path(a, b)
 
 
 def _git_root(cwd: Optional[str] = None) -> Optional[str]:
@@ -129,7 +136,7 @@ def _git_root(cwd: Optional[str] = None) -> Optional[str]:
             capture_output=True,
             text=True,
             cwd=cwd,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _git_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -156,10 +163,10 @@ def _resolve_state_root() -> Optional[str]:
         return None
 
     if _same_path(git_root, _claude_home()):
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             return None
-        return os.path.join(claude-klabauter, "state")
+        return os.path.join(claude_klabauter_root, "state")
 
     return os.path.join(git_root, "state")
 

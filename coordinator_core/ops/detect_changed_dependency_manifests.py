@@ -53,6 +53,7 @@ from __future__ import annotations
 import fnmatch
 import posixpath
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -113,7 +114,7 @@ def _run_git(repo_root: Path, args: List[str]) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _run_git: proc = subprocess.run(...) failed: {sys.exc_info()[1]}", file=sys.stderr)

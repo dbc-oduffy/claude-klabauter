@@ -45,7 +45,12 @@ _PROG = "install-claude-doe-wrapper"
 
 
 def _claude_home_base() -> str:
-    return os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    return (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
 
 
 def _wrapper_dst() -> str:

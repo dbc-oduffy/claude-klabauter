@@ -77,6 +77,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._sentinel_removal_guard import (
     REASON_INDIRECTION,
@@ -85,6 +86,8 @@ from coordinator_core.bash_guards._sentinel_removal_guard import (
     VERDICT_DENY,
     SentinelRemovalDetector,
 )
+from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # `_evaluate()` never returns VERDICT_ALLOW alongside content, so anything
 # other than VERDICT_ALLOW is advisory-worthy on the now-single (advisory)
@@ -92,7 +95,16 @@ from coordinator_core.bash_guards._sentinel_removal_guard import (
 _ADVISORY_VERDICTS = (VERDICT_ADVISORY, VERDICT_DENY)
 
 CLASS = "advisory"
-MATCHERS = ["Bash"]
+#: Widened 2026-08-07 (C4f, `docs/plans/2026-08-07-guards-reach-a-verdict-
+#: on-powershell-or-stay-silent.md`) -- this guard's own dialect-carry
+#: (`dialect_from_tool_name(payload["tool_name"])` in `check`/
+#: `check_advisory` below) now handles a PowerShell command correctly for
+#: its converted legs and declines to rule (records SILENT) rather than
+#: guessing where it cannot -- see `_sentinel_removal_guard.evaluate`'s own
+#: docstring. Same precedent as `block_reviewer_bash_outside_allowlist.py`'s
+#: own MATCHERS widening (C6). A direct reference to the shared universe
+#: (C2 declaration-form conversion) -- never a copy or re-wrap.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
 #: The exact basename this guard protects. Never relaxed to a substring/
@@ -107,9 +119,17 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 #: docstring.
 _detector = SentinelRemovalDetector(_TARGET_BASENAME)
 
+#: Guard identity threaded into `_verdict.record_silent` for the
+#: absent/unrecognized-dialect leg below -- matches this guard's own
+#: registered name (`check_advisory`'s dispatch entry) and
+#: `_sentinel_removal_guard._GUARD_NAME`, so a SILENT declaration recorded
+#: from either this module or the shared engine reads as the same guard to
+#: a caller collecting declarations (`_verdict.collecting`).
+_GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
-def _evaluate(cmd: str):
-    return _detector.evaluate(cmd)
+
+def _evaluate(cmd: str, dialect: Optional[Dialect]):
+    return _detector.evaluate(cmd, dialect)
 
 
 def _deny_reason(reason_kind: str, reason_class: str) -> str:
@@ -156,8 +176,15 @@ def _advisory_reason() -> str:
 
 
 def _cmd_from_payload(payload: Dict[str, Any]) -> str:
-    if (payload.get("tool_name") or "") != "Bash":
-        return ""
+    """Extract the raw command text, no longer gated on `tool_name ==
+    "Bash"` (AC2/C4): dialect resolution now happens separately, in
+    `check`/`check_advisory` below, via `_dialect.dialect_from_tool_name` --
+    an unrecognized `tool_name` still ends up as an allow, just via the
+    SILENT/declined-to-rule path rather than a bare empty-command short
+    circuit here. A payload with no `tool_input.command` at all (any
+    `tool_name`, e.g. a non-Bash/non-PowerShell tool like `Edit`) still
+    returns `""` and neither `check` nor `check_advisory` reaches the
+    dialect check for it."""
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
     if not cmd:
@@ -182,7 +209,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR) == "1":
         return None
 
-    verdict, reason_kind, reason_class = _evaluate(cmd)
+    dialect = dialect_from_tool_name(payload.get("tool_name"))
+    if dialect is None:
+        record_silent(
+            _GUARD_NAME,
+            "no recognized dialect (tool_name=%r) -- declined to rule"
+            % (payload.get("tool_name"),),
+        )
+        return None
+
+    verdict, reason_kind, reason_class = _evaluate(cmd, dialect)
     if verdict != VERDICT_DENY:
         return None
 
@@ -219,7 +255,16 @@ def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR) == "1":
         return None
 
-    verdict, _reason_kind, _reason_class = _evaluate(cmd)
+    dialect = dialect_from_tool_name(payload.get("tool_name"))
+    if dialect is None:
+        record_silent(
+            _GUARD_NAME,
+            "no recognized dialect (tool_name=%r) -- declined to rule"
+            % (payload.get("tool_name"),),
+        )
+        return None
+
+    verdict, _reason_kind, _reason_class = _evaluate(cmd, dialect)
     if verdict not in _ADVISORY_VERDICTS:
         return None
 

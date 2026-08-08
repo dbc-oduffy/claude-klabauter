@@ -470,6 +470,38 @@ class TestOfferAnchorFollowersHelperDirect:
         assert unanchored is None
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 6): this guard gates on
+    `_bt_token_matches_binary(seg_tokens[0], "git")` -- the external `git`
+    exe, byte-identical in both shell dialects. `check_offer_git_c` takes a
+    raw command string directly (no `tool_name` parameter at all, no
+    `_dialect.py` import), so a PowerShell-idiom surrounding shape --
+    `;`-chained rather than `&&`-chained, PowerShell's idiomatic separator
+    -- reaches the SAME shared tokenizer and must reach the SAME verdict as
+    the already-pinned bash-spelled equivalent.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 6 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_denies(self):
+        # Mirrors TestQuotedSemicolonHoleClosed's all-git-followers case,
+        # but chained throughout with `;` (PowerShell idiom) rather than
+        # `&&` after the `cd`.
+        out = guard.check_offer_git_c("cd /tmp/repo; git status; git log -1")
+        assert (
+            _rewritten_command(out)
+            == "git -C /tmp/repo status; git -C /tmp/repo log -1"
+        )
+
+    def test_semicolon_chained_non_git_follower_still_denies(self):
+        # A non-git follower after a `;`-chained cd must still deny, not
+        # auto-rewrite -- same restraint as the `&&`-chained case in
+        # TestNonGitFollowerStaysRungBWithSafeOffer.
+        out = guard.check_offer_git_c("cd /tmp/repo; git status; ls subdir/")
+        hso = _reason(out)
+        assert hso["permissionDecision"] == "deny"
+
+
 class TestSharedHelperPinsBothCallers:
     """Regression pin for the refactor itself: `_find_is_find_segment` (the
     runaway-find guard's segment classifier) and `check_offer_git_c` now

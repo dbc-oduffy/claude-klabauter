@@ -68,6 +68,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from coordinator_core.session import core
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Port of ``_CS_SHAPE_LOCK_STALE_SEC`` default. A shape merge completes in
 #: well under 1s; 30s is a very generous liveness bound for the lock's own
@@ -375,14 +376,14 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
 def _git(args, cwd: Optional[str]) -> Optional[subprocess.CompletedProcess]:
     """Run ``git <args>`` capturing output; return the CompletedProcess, or
     None on OSError (git missing / spawn failure). Threads the optional cwd
-    and suppresses the Windows console window (``core._NO_CONSOLE``)."""
+    and suppresses the Windows console window (``no_console_creationflags()``)."""
     try:
         return subprocess.run(
             ["git", *args],
             capture_output=True,
             text=True,
             cwd=cwd,
-            **core._NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

@@ -122,7 +122,7 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
 
 
 @register_op("plan.match_candidates")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "plan.match_candidates" handler.

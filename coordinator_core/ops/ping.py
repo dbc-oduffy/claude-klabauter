@@ -24,7 +24,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("ping")
-async def _ping(params: dict, repo_root: Path | None = None) -> dict:
+def _ping(params: dict, repo_root: Path | None = None) -> dict:
     """JSON-RPC "ping" handler.
 
     Returns:

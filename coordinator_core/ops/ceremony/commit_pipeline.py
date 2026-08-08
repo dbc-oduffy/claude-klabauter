@@ -4,10 +4,14 @@ critical section, integrating C1 (git_native), C2 (commit_message), and C3
 (commit_gates). This is the C4 chunk of the `wsc_tail` rebuild
 (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
 
-`run_commit_pipeline()` is the single entry point: it acquires
-`ceremony_lock` for the worktree, classifies the caller-supplied paths
-against staged git state (tolerant explicit-stage -- a path already swept by
-a concurrent archival op is skipped, not treated as a `git add` failure),
+`run_commit_pipeline()` is the single entry point: it classifies the
+caller-supplied paths against staged git state (tolerant explicit-stage -- a
+path already swept by a concurrent archival op is skipped, not treated as a
+`git add` failure; `ceremony_lock` used to be acquired for the worktree for
+the duration of this whole pass -- deleted 2026-08-07,
+docs/plans/2026-08-07-excise-the-ceremony-lock.md -- see that plan's safety
+argument for why the two residual windows it left, C10's divergence dedup
+and C11's sha capture, are safe without it),
 runs C3's deletion-block + dirty-tree gates, composes the commit message via
 C2, writes it to a PID-scoped temp file, commits via `git_native.
 commit_scoped()` (C3/C4 -- the computed commit-mechanism selector, an
@@ -47,10 +51,28 @@ Negative-spec (hard-won):
   - The temp message file path is built via `tempfile`, never a hardcoded
     path -- see the Windows port-hazard checklist at
     `state/improvement-queue/2026-07-15-naked-python-on-windows-port-checklist-t-7f55b7e682d3.yaml`.
-  - `committed_sha` is captured immediately post-commit, still inside
-    `ceremony_lock` -- never re-derived later via a racy `git rev-parse HEAD`
-    that could pick up a concurrent sibling's own commit on the same shared
-    branch.
+  - `committed_sha` is never a blind post-commit `git rev-parse HEAD` (C11,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md) -- that could pick up
+    a concurrent sibling's own commit landing in the same window on a shared
+    branch, now that there is no `ceremony_lock` bounding the window. When
+    `commit_scoped()` takes the private-index branch, `committed_sha` is its
+    own CAS-verified `stdout` (the exact sha `update-ref` landed). When it
+    takes the agree branch, `committed_sha` is resolved by matching a
+    per-commit `Commit-Nonce: <uuid4().hex>` trailer -- minted inside
+    `commit()` and appended to the message before it is written to the temp
+    file -- against a pathspec-scoped `git log --grep=<nonce> --fixed-strings
+    --format=%H <pre-commit-HEAD>..HEAD -- <commit_paths>` (docs/plans/
+    2026-08-08-a-landed-commit-reported-as-failed.md, W1: the prior subject-
+    substring match could spuriously match a peer commit whose message merely
+    *contained* this call's subject -- a revert, a rollup, a memo quoting it
+    -- since no peer can ever author this exact nonce string, the match is
+    collision-free by construction), failing loud (non-zero `exit_code`,
+    `committed_sha=None`) rather than guessing when no unambiguous match is
+    found -- see `commit()`'s own docstring. A verification failure on this
+    path (HEAD unresolvable, empty subject, or zero/ambiguous nonce match)
+    still sets `CommitOutcome.landed=True`: `git commit` already created the
+    commit at that point, so the caller must not treat it as a no-op --
+    see `CommitOutcome.landed`'s own docstring and `commit()`'s.
   - Push-with-retry never passes `--force` at any point.
   - Does NOT shell out to bash/node/`.sh`/`.js` -- git only, and only via
     `git_native._git`.
@@ -76,10 +98,12 @@ from __future__ import annotations
 import sys
 
 import os
+import re
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
 
@@ -92,7 +116,6 @@ from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_pat
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony import git_native
-from coordinator_core.ops.ceremony.ceremony_lock import ceremony_lock
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -104,17 +127,9 @@ from coordinator_core.ops.ceremony.commit_message import (
     compute_commit_paths,
     compute_gate_paths,
 )
-from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.session.core import session_dir as _session_core_session_dir
 from coordinator_core.session.core import sessions_dir as session_hub_dir
 from coordinator_core.session.liveness import live_session_ids
-
-#: Default named lock this pipeline's critical section acquires. A distinct
-#: name from any other `ceremony_lock` caller in this rebuild -- see
-#: `ceremony_lock.py` module docstring for the per-name-per-worktree contract.
-LOCK_NAME = "wsc-commit"
-
-DEFAULT_LOCK_TIMEOUT_SECS = 75.0
 
 #: `push_mode` values for `run_commit_pipeline()` (wsc-tail-sub-2s-invoke-
 #: budget DEC-1/F1). "sync" (default) is `scoped_git_commit.py`'s wire
@@ -128,12 +143,55 @@ PUSH_MODE_SYNC = "sync"
 PUSH_MODE_DEFERRED = "deferred"
 PUSH_MODE_NONE = "none"
 
-_PUSH_REJECT_MARKERS = (
-    "non-fast-forward",
-    "fetch first",
-    "rejected",
-    "failed to push some refs",
-)
+from coordinator_core.hooks.auto_push import classify_error
+
+#: Retry-worthy `auto_push.classify_error()` classifications for THIS
+#: pipeline's specific recovery shape (fetch + `git rebase --onto` +
+#: re-push) -- deliberately NOT the same set `auto_push.run_push_with_retry`
+#: treats as retryable (`_RETRYABLE_CLASSES = {"ref-lock", "network",
+#: "gh-transient"}`), because that retry is a bare re-send with backoff,
+#: never a rebase. Only "non-fast-forward" is REBASE-recoverable: it means a
+#: concurrent commit already landed upstream, and rebasing this session's
+#: own commit range onto the fetched ref is the correct fix. "ref-lock" is a
+#: LOCAL lock contention on the push-ref -- resolves in milliseconds on its
+#: own; a fetch+rebase cycle does nothing for it and only adds a rebase this
+#: pipeline would then have to run for no reason. "gh-transient" is a
+#: server-side 5xx/disconnect -- also not a divergence, so rebasing is not
+#: the fix (a bare retry with backoff would be, which this pipeline does not
+#: implement here; see module docstring's push-with-retry scope). Every
+#: other classification (gh-push-protection, gh-size-limit, gh-lfs-quota,
+#: auth, gh-server-reject, network, unknown, empty-stderr) names a failure
+#: no rebase addresses, so none of them belong in THIS set -- which is a
+#: narrower question than whether `auto_push` re-sends them; it does re-send
+#: several. See `classify_error`'s docstring in
+#: `coordinator_core.hooks.auto_push` for the
+#: ordered ladder this reuses verbatim, rather than a duplicated/patched
+#: marker tuple (2026-08-07 fix: the old substring-based
+#: `_PUSH_REJECT_MARKERS`, including a bare "rejected", over-matched a
+#: GH013 push-protection refusal -- `remote: error: GH013 ... push
+#: declined` is always accompanied by `! [remote rejected]` and `failed to
+#: push some refs` -- driving three full fetch+rebase+re-push cycles for
+#: something no rebase can ever fix).
+#:
+#: Import-direction note: `auto_push` lives under `coordinator_core.hooks`,
+#: this module under `coordinator_core.ops.ceremony` -- checked for a cycle
+#: back into `ops.ceremony` (none: no `hooks/*.py` module imports
+#: `ops.ceremony` anything) before taking this dependency. The one real cost
+#: is that importing `coordinator_core.hooks.auto_push` also runs
+#: `coordinator_core.hooks/__init__.py` (Python always executes a parent
+#: package's `__init__` before a submodule), which eagerly registers all 15
+#: `hooks.*` ops as a side effect UNLESS the caller has already armed the
+#: shared lazy-hooks channel (`COORDINATOR_CORE_LAZY_OPS` /
+#: `sys._coordinator_core_lazy_ops` -- see that `__init__.py`'s own
+#: docstring). That side effect is idempotent, additive (registers ops into
+#: a dict, no I/O, no mutation of shared state), and already paid by any
+#: process that imports `coordinator_core.hooks` for any other reason -- not
+#: a new hazard this import introduces, just a real (small) cost worth
+#: naming rather than a hard blocker; a shared module hosting only the
+#: classification ladder (never importing `ops.ceremony`) would avoid even
+#: that, but splitting `auto_push` for this one function is out of this
+#: fix's two-file scope.
+_PUSH_RETRY_CLASSES = frozenset({"non-fast-forward"})
 _PUSH_MAX_RETRIES = 3
 
 
@@ -760,20 +818,57 @@ def explicit_stage(
 # ---------------------------------------------------------------------------
 
 
+#: Matches a bare full git object sha -- how `commit()` (C11) distinguishes
+#: `commit_scoped()`'s private-index branch (whose `GitResult.stdout` IS the
+#: new commit sha, verbatim from `commit-tree`/`update-ref`) from its agree
+#: branch (whose `stdout` is `git commit`'s human-readable summary text, e.g.
+#: `"[main abc1234] subject\\n 1 file changed..."`) -- never a bare hex-digest
+#: string on its own. Widened to 40-64 hex (S1 Finding 6, review
+#: state/review-trail/2026-08-08-excise-lock-close-review/s1-c10-c11.md):
+#: `commit_scoped()` has no separate signal for which branch ran, so a
+#: SHA-256 repository's 64-hex private-index stdout must still match here --
+#: a 40-only pattern would silently fall through to the slower, now-possibly-
+#: failing agree-branch message-match path on a commit that CAS-verified
+#: perfectly. See `commit()`'s own docstring for the full mechanism.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40,64}")
+
+
 @dataclass(frozen=True)
 class CommitOutcome:
     """Typed result of the `git commit -F <msgfile> -- <paths>` step.
 
     Fields:
         exit_code -- 0 on success.
-        committed_sha -- the post-commit HEAD SHA, captured immediately
-            (still inside `ceremony_lock`) -- None on any commit or capture
-            failure.
+        committed_sha -- the VERIFIED landed commit sha (C11,
+            docs/plans/2026-08-07-excise-the-ceremony-lock.md): the
+            private-index branch's own CAS-verified `stdout`, or -- for the
+            agree branch -- a `git log --grep=<nonce> --fixed-strings
+            <pre-sha>..HEAD` match against this call's own minted
+            `Commit-Nonce:` trailer (docs/plans/2026-08-08-a-landed-commit-
+            reported-as-failed.md, W1). None on any commit failure OR on a
+            failed/ambiguous verification -- never a blind
+            `git rev-parse HEAD`, which could return a concurrent sibling's
+            own commit landing in the same window.
+        landed -- "did history change": True iff the `git commit`
+            invocation actually created a commit, set INDEPENDENTLY of
+            whether `committed_sha` could be resolved (docs/plans/
+            2026-08-08-a-landed-commit-reported-as-failed.md, W1). True on
+            every path where `commit_scoped()` succeeded -- the two
+            sha-resolved success returns AND all three post-success
+            verification-failure returns (HEAD unresolvable on an
+            unborn-branch first commit, empty message subject, zero-or-
+            ambiguous nonce match) -- because in every one of those cases
+            `git commit` already created the commit; only `committed_sha`
+            is unknown. False on a genuine `git commit` failure, including
+            the ordinary "nothing to commit" empty-commit-set no-op --
+            history did not change on that path, and this flag must not
+            invert that into a phantom commit.
         stderr -- git's stderr on a non-zero exit, "" on success.
     """
 
     exit_code: int
     committed_sha: Optional[str] = None
+    landed: bool = False
     stderr: str = ""
 
 
@@ -819,8 +914,6 @@ def commit(
     *,
     message: str,
     commit_paths: Sequence[str],
-    known_checked: Optional[Set[str]] = None,
-    known_diverged: Optional[Set[str]] = None,
     common_dir: Optional[Path] = None,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
@@ -834,35 +927,90 @@ def commit(
     copy, preserving each diverged path's staged content verbatim, and lands
     via a compare-and-swap `update-ref`). See `commit_scoped`'s own
     docstring for the two incidents (claude-klabauter 506748a0, example-doctrine-repo
-    726925b2) neither commit form is safe against alone. Either branch
-    leaves the real HEAD pointed at the new commit, so the post-commit
-    `rev_parse_head()` capture below is unchanged regardless of which
-    branch ran. Captures the post-commit HEAD SHA immediately (race-safe --
-    see module docstring), and unlinks the temp file in a `finally`
-    regardless of outcome.
+    726925b2) neither commit form is safe against alone. Unlinks the temp
+    file in a `finally` regardless of outcome.
 
-    `known_checked`/`known_diverged` -- optional pass-through of a divergence
-    answer `explicit_stage()` already computed earlier in THIS SAME locked
-    critical section (see `run_commit_pipeline`'s call site). Threading these
-    lets `commit_scoped()` skip re-deriving divergence for every path already
-    vetted, instead of re-spawning its own `diverging_paths()` pair -- see
-    that function's own docstring for the correctness argument (only sound
-    within one lock hold; never cached, never reused across a pass).
+    No `known_checked`/`known_diverged` dedup pass-through (C10,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md -- removed here, was a
+    same-lock-hold-only optimisation): after C1 there is no `ceremony_lock`
+    bounding the window between `explicit_stage()`'s own divergence probe
+    and this call, so a precomputed answer could be stale by the time
+    `commit_scoped()` uses it to pick the commit mechanism -- the same
+    claude-klabauter 506748a0 incident shape, through the function built to
+    prevent it. `commit_scoped()` now always derives divergence fresh for
+    every path in `commit_paths`, immediately before it picks the mechanism.
+    Cost: up to two additional pathspec-scoped `git diff` spawns per commit
+    -- exactly the cost the dedup removed, whose removal was justified by a
+    lock C1 deletes.
+
+    Sha capture (C11, same plan): neither commit branch's real HEAD-move is
+    trusted via a blind post-commit `git rev-parse HEAD` -- that call, run
+    after this pipeline's own lock hold ended, could return a concurrent
+    sibling's own commit landing in the window instead of this call's. The
+    private-index branch's `GitResult.stdout` IS the new commit sha already
+    (CAS-verified by `update-ref`'s 4-argument compare-and-swap), detected
+    here via `_FULL_SHA_RE` since `commit_scoped()` itself has no separate
+    signal for which branch ran (git_native.py takes no executable-code
+    change here, by design -- see this chunk's own scope note). The agree
+    branch's `stdout` is `git commit`'s human-readable summary text, not a
+    sha, so its `committed_sha` is instead resolved by matching a
+    per-commit `Commit-Nonce: <uuid4().hex>` trailer -- minted HERE, inside
+    this function, and appended to `message` before it is written to the
+    temp file (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md,
+    W1) -- against a pathspec-scoped `git log --grep=<nonce> --fixed-strings
+    --format=%H <pre-commit-HEAD>..HEAD`, bounded to commits since this
+    call's own pre-commit HEAD, scoped to `commit_paths` -- and failing loud
+    (non-zero `exit_code`, `committed_sha=None`) on zero or more-than-one
+    matches rather than guessing. The nonce (not the prior subject
+    substring) is the match target because no peer can ever author this
+    exact string, so the match is collision-free even against a peer commit
+    whose message merely *contains* this call's subject (a revert, a
+    rollup, a memo quoting it) -- the prior subject-substring match was
+    vulnerable to exactly that spurious second candidate. Minted inside
+    `commit()` rather than threaded from a caller deliberately: the value
+    must be one only this function matches on, and no caller needs to know
+    it exists.
+
+    `CommitOutcome.landed` (W1, same plan): every one of these three
+    verification-failure returns below -- HEAD unresolvable on an
+    unborn-branch first commit, empty message subject, zero-or-ambiguous
+    nonce match -- sets `landed=True` alongside `committed_sha=None` and
+    `exit_code=1`, because in every one of them `commit_scoped()` already
+    returned `ok`: `git commit` created a commit, only its sha is unknown.
+    The earlier `not result.ok` return above is the ONLY commit()-internal
+    path that stays `landed=False` -- see that branch's own comment for why
+    the ordinary "nothing to commit" no-op must never be reported as landed.
 
     `common_dir` -- optional pre-resolved git common dir, passed straight
     through to `_write_commit_message_tempfile` (see there); purely a spawn
     dedup, never an outcome input.
     """
     root = Path(worktree_root)
-    msg_file = _write_commit_message_tempfile(root, message, common_dir)
+    # Mint a per-commit nonce (W1) and append it as a `Commit-Nonce:` trailer
+    # BEFORE the message is written to the temp file, following the same
+    # blank-line-before-trailers convention `commit_message.compose_message`
+    # already implements (`"\n" + trailers + "\n"`) so the message stays
+    # well-formed regardless of what `message` already ends with.
+    nonce = uuid.uuid4().hex
+    nonce_trailer = f"Commit-Nonce: {nonce}"
+    if message.endswith("\n\n"):
+        message_with_nonce = message + nonce_trailer + "\n"
+    elif message.endswith("\n"):
+        message_with_nonce = message + "\n" + nonce_trailer + "\n"
+    else:
+        message_with_nonce = message + "\n\n" + nonce_trailer + "\n"
+    msg_file = _write_commit_message_tempfile(root, message_with_nonce, common_dir)
     try:
-        result = git_native.commit_scoped(
-            commit_paths,
-            msg_file,
-            root,
-            known_checked=known_checked,
-            known_diverged=known_diverged,
-        )
+        # Pre-commit HEAD, captured BEFORE `commit_scoped()` runs -- the
+        # lower bound `committed_sha`'s post-commit verification (below)
+        # scopes its `git log --grep` search to, so a peer's commit landing
+        # before this call started is never a candidate match. `None` on an
+        # unborn branch (this repo's very first commit) -- handled as its
+        # own case below, not a failure.
+        pre_sha_result = git_native.rev_parse_head(root)
+        pre_sha = pre_sha_result.stdout.strip() if pre_sha_result.ok else None
+
+        result = git_native.commit_scoped(commit_paths, msg_file, root)
         if not result.ok:
             # Deliberately NOT `_reason_from_git_result()` here (2026-08-03
             # research note, kept for the next reader): `git commit -F ... --
@@ -886,9 +1034,87 @@ def commit(
                 exit_code=result.returncode or 1,
                 stderr=(result.stderr.strip() or f"exit_code={result.returncode}")[:200],
             )
-        sha_result = git_native.rev_parse_head(root)
-        committed_sha = sha_result.stdout.strip() if sha_result.ok else None
-        return CommitOutcome(exit_code=0, committed_sha=committed_sha)
+
+        stdout = result.stdout.strip()
+        if _FULL_SHA_RE.fullmatch(stdout):
+            # Private-index branch (C11) -- `stdout` IS the CAS-verified new
+            # commit sha; no further verification needed, and no risk of
+            # picking up a peer's commit (see `commit()`'s own docstring).
+            return CommitOutcome(exit_code=0, committed_sha=stdout, landed=True)
+
+        # Agree branch (C11) -- `result.stdout` is `git commit`'s summary
+        # text, not a sha. Resolve `committed_sha` by matching this call's
+        # own minted `Commit-Nonce:` trailer against the bounded,
+        # pathspec-scoped range instead of a blind `git rev-parse HEAD` (W1
+        # -- nonce, not subject substring; see `commit()`'s own docstring).
+        subject = message.splitlines()[0] if message else ""
+        if pre_sha is None:
+            # Unborn-branch edge case (this repo's very first commit): a
+            # concurrent first-commit race on an unborn branch (a peer also
+            # racing to create this branch's root commit) is not reachable in
+            # the ceremony's own bootstrap -- residual accepted (S1 Finding
+            # 8), not asserted impossible. Absent that race, the fresh HEAD
+            # is unambiguously this call's own commit -- no message match
+            # needed to disambiguate.
+            post_sha_result = git_native.rev_parse_head(root)
+            if post_sha_result.ok and post_sha_result.stdout.strip():
+                return CommitOutcome(
+                    exit_code=0, committed_sha=post_sha_result.stdout.strip(), landed=True
+                )
+            # `git commit` already created this commit (`result.ok` above) --
+            # only its sha is unresolvable. W1: `landed=True` alongside
+            # `committed_sha=None` so the caller never treats this as a no-op.
+            return CommitOutcome(
+                exit_code=1,
+                landed=True,
+                stderr="commit: landed but sha verification failed -- HEAD unresolvable "
+                "on an unborn-branch first commit",
+            )
+        if not subject:
+            # Same reasoning as the unborn-branch case immediately above:
+            # the commit landed, only verification could not proceed.
+            return CommitOutcome(
+                exit_code=1,
+                landed=True,
+                stderr="commit: landed but sha verification requires a non-empty message subject",
+            )
+
+        match_result = git_native.log_grep(
+            root,
+            nonce_trailer,
+            extra_args=[
+                "--fixed-strings",
+                "--format=%H",
+                # S1 Finding 4: `--full-history` -- plain history
+                # simplification can prune THIS call's own commit from a
+                # pathspec-limited `git log` when a merge lands in the
+                # window, yielding a spurious zero-match that would
+                # otherwise surface as a false commit failure (Finding 0).
+                "--full-history",
+                f"{pre_sha}..HEAD",
+                "--",
+                *commit_paths,
+            ],
+        )
+        candidates = (
+            [line for line in match_result.stdout.splitlines() if line]
+            if match_result.ok
+            else []
+        )
+        if len(candidates) != 1:
+            # `git commit` already created this commit (`result.ok` above) --
+            # only the nonce match came back zero-or-ambiguous. W1:
+            # `landed=True` alongside `committed_sha=None`.
+            return CommitOutcome(
+                exit_code=1,
+                landed=True,
+                stderr=(
+                    f"commit: landed but sha verification found {len(candidates)} "
+                    f"candidate(s) matching this call's nonce trailer in {pre_sha}..HEAD -- "
+                    "refusing to guess (never falling back to a bare rev-parse HEAD)"
+                )[:200],
+            )
+        return CommitOutcome(exit_code=0, committed_sha=candidates[0], landed=True)
     finally:
         try:
             msg_file.unlink()
@@ -923,9 +1149,18 @@ class PushOutcome:
 
 
 def _is_push_reject(reason: str) -> bool:
-    """True if a git-push stderr `reason` looks like a non-fast-forward reject."""
-    lowered = reason.lower()
-    return any(marker in lowered for marker in _PUSH_REJECT_MARKERS)
+    """True iff `reason` classifies as a rebase-recoverable push reject.
+
+    Routes through `auto_push.classify_error()` -- the same ordered,
+    most-specific-first ladder that already correctly distinguishes a GitHub
+    push-protection/branch-protection refusal (GH013) from a genuine
+    non-fast-forward reject -- rather than a bespoke substring test. Only
+    `_PUSH_RETRY_CLASSES` (see that constant's own docstring) trigger the
+    fetch+rebase+re-push cycle below; a GH013 stderr still contains
+    "failed to push some refs", so a bare-marker test previously misfired
+    here (2026-08-07 fix).
+    """
+    return classify_error(reason) in _PUSH_RETRY_CLASSES
 
 
 def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[int, str]:
@@ -940,7 +1175,30 @@ def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[in
     Returns `(exit_code, reason)`. `exit_code == 0` -> rebase landed cleanly.
     On a rebase failure, aborts the half-applied rebase so the working tree
     is left clean for the caller.
+
+    Dirty-worktree pre-check (2026-08-07 fix): `git rebase --onto` refuses
+    outright on a dirty worktree, and on a shared-fleet box the worktree is
+    essentially never clean (peer sessions churn state ledgers
+    continuously) -- so the rebase recovery always failed, surfacing only
+    an opaque `git rebase: <raw git stderr>` that named the SYMPTOM (a
+    rebase refusal), not the actual, distinctly-diagnosable CAUSE (dirty
+    worktree). Detected here, BEFORE attempting the rebase, via
+    `git_native.status_porcelain()` (the same native seam
+    `commit_gates.dirty_tree_gate` already uses for this exact question --
+    never a raw `git status` shell-out). A porcelain check that itself
+    fails to run (indeterminate) falls through to the ordinary rebase
+    attempt below rather than guessing dirty/clean -- the pre-existing
+    rebase-failure path still covers that case, just without this
+    pre-check's more specific reason.
     """
+    status_result = git_native.status_porcelain(worktree_root)
+    if status_result.ok and status_result.stdout.strip():
+        return (
+            1,
+            "rebase recovery cannot run: worktree has uncommitted changes "
+            "(git rebase --onto refuses on a dirty worktree)",
+        )
+
     mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
     if not mb_result.ok:
         reason = (mb_result.stderr.strip() or "merge-base failed")[:200]
@@ -1039,7 +1297,9 @@ def derive_pushed_tristate(push_outcome: Optional[PushOutcome]) -> Optional[bool
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: stage -> gates -> commit -> push, inside ceremony_lock
+# Orchestration: stage -> gates -> commit -> push
+# (no longer "inside ceremony_lock" -- that mutex was deleted 2026-08-07,
+# docs/plans/2026-08-07-excise-the-ceremony-lock.md)
 # ---------------------------------------------------------------------------
 
 
@@ -1058,7 +1318,30 @@ class PipelineResult:
             invariant "every commit this op makes is pushed" no longer
             holds and a human/EM must resolve the divergence. A skipped
             push (`pushed is None`, no remote configured) is NOT a breach --
-            there is no remote invariant to violate.
+            there is no remote invariant to violate. Deliberately NOT
+            widened to include `sha_unverified` (W2, docs/plans/2026-08-08-
+            a-landed-commit-reported-as-failed.md): this predicate answers
+            "did a commit we can NAME fail to reach the remote" -- the
+            thing a human/EM would need to resolve is a divergence between
+            a known local sha and a known remote state. On the
+            `sha_unverified` path there is no known local sha to diverge
+            FROM; the actionable fact is entirely captured by
+            `sha_unverified=True` itself (surfaced separately, alongside a
+            loud diagnostic), and the push is attempted exactly as normal
+            (see `sha_unverified`'s own docstring) -- so by the time this
+            predicate would be evaluated, either the push succeeded (no
+            divergence) or it failed for an ordinary push reason unrelated
+            to the sha being unknown, which the existing `pushed is False`
+            arm already covers once `committed_sha` is resolved by a peer
+            read later. Widening this predicate to fire on `sha_unverified`
+            would only duplicate an already-loud signal under a name that
+            implies a resolvable-sha divergence that was never true here.
+        sha_unverified -- True iff `git commit` landed a real commit but
+            this pipeline could not resolve its sha (W2, same plan) --
+            `commit_outcome.landed=True` with `commit_outcome.exit_code !=
+            0`. `commit_failed` is False on this path (history changed;
+            nothing here failed the caller's request) and the push still
+            runs normally.
     """
 
     stage: StageOutcome
@@ -1070,6 +1353,7 @@ class PipelineResult:
     pushed: Optional[bool]
     commit_failed: bool
     integrity_breach: bool
+    sha_unverified: bool = False
     diagnostics: List[str] = field(default_factory=list)
 
 
@@ -1077,25 +1361,25 @@ def _resolve_pass_common_dir(cwd: str) -> Optional[Path]:
     """Resolve this worktree's git common dir ONCE per pipeline pass, through
     the resolver whose memo the rest of the pass reads.
 
-    Purpose: three consumers in a single `run_commit_pipeline` pass need the
+    Purpose: two consumers in a single `run_commit_pipeline` pass need the
     same `git rev-parse --path-format=absolute --git-common-dir` answer --
-    `ceremony_lock` (lock dir), `_write_commit_message_tempfile` (msgfile
-    dir), and `_live_peer_exists` (session hub, reached via
-    `session.liveness.live_session_ids` -> `session.core.sessions_dir`). Two
-    independent resolvers exist for that one fact, each with its own memo and
-    its own deliberately-different failure contract:
+    `_write_commit_message_tempfile` (msgfile dir) and the step-3 liveness
+    gate (via the shared `sessions_dir` memo). (A third consumer,
+    `ceremony_lock`'s own resolution, existed here until 2026-08-07,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md deleted the lock
+    entirely.) Two independent resolvers exist for that one fact, each with
+    its own memo and its own deliberately-different failure contract:
     `lifecycle.git_common_dir` (raises `RuntimeError`, keyed on a `Path`) and
     `session.core.sessions_dir` (returns `""`, keyed on a `cwd` STRING) --
     see the latter's docstring for why the two stay separate. Neither memo
     can serve the other, so a pass touching both paid the spawn TWICE.
 
-    Resolving here through `session.core.sessions_dir(cwd)` -- the one whose
-    memo `_live_peer_exists` will later read, and which cannot be primed from
-    the outside -- collapses that to one spawn: the derived common dir is
-    threaded explicitly into the two `lifecycle.git_common_dir` consumers
-    (both already accept a pre-resolved value), and the liveness read is
-    served from this call's own memo entry. The derivation is exact, not
-    approximate: `sessions_dir` is defined as
+    Resolving here through `session.core.sessions_dir(cwd)` -- which cannot
+    be primed from the outside -- collapses that to one spawn: the derived common dir is
+    threaded explicitly into the one `lifecycle.git_common_dir` consumer
+    (`_write_commit_message_tempfile`, which already accepts a pre-resolved
+    value), and the liveness read is served from this call's own memo entry.
+    The derivation is exact, not approximate: `sessions_dir` is defined as
     `<git-common-dir>/coordinator-sessions` over the identical git
     invocation, so `.parent` recovers `lifecycle.git_common_dir`'s value
     byte-for-byte.
@@ -1104,197 +1388,14 @@ def _resolve_pass_common_dir(cwd: str) -> Optional[Path]:
     missing, transient spawn failure -- `sessions_dir` reports all three as
     `""`, and a failure is deliberately NOT memoized there). None means "no
     pre-resolved value": every consumer then falls back to exactly the
-    resolution it performed before this dedup existed, including
-    `ceremony_lock`'s own `worktree_root / ".git"` last resort. NOTHING about
-    lock identity, message content, or commit outcome may ever branch on
-    whether this returned a value -- it is a cost optimisation only.
+    resolution it performed before this dedup existed. NOTHING about message
+    content or commit outcome may ever branch on whether this returned a
+    value -- it is a cost optimisation only.
     """
     hub = session_hub_dir(cwd)
     if not hub:
         return None
     return Path(hub).parent
-
-
-def _live_peer_exists(session_id: str, cwd: str) -> bool:
-    """Is there a live session in this repo OTHER than `session_id`?
-
-    Precondition gate for `_derive_absorbed_peer_claims_trailer`, and exact
-    rather than approximate: an `Absorbed-peer-claims:` line can only ever be
-    emitted for a path a LIVE PEER holds a claim on -- that is the whole
-    content of the trailer -- so "no live peer exists" implies "the derivation
-    can only produce the empty string". Whenever this returns False, the
-    `compute_offer` walk (~6 git spawns) is provably pure cost, and the
-    representative single-session commit keeps its pre-SC-DR-019 spawn count
-    (`coordinator_core/ops/ceremony/tests/test_wsc_tail_parity.py`'s KPI
-    bound). Liveness is read off `session.liveness.live_session_ids` --
-    filesystem + pid, no per-claim git walk -- and this session's own resolved
-    id is subtracted, since a claim held by oneself is never "absorbed".
-
-    Costs NO subprocess of its own on the pipeline path: `live_session_ids`
-    reaches `session.core.sessions_dir(cwd)`, which memoizes on an explicit
-    `cwd`, and `run_commit_pipeline` has already resolved that same `cwd`
-    through `_resolve_pass_common_dir` before acquiring the lock -- so this read
-    is served from that memo entry. Pass the SAME `cwd` string the pipeline
-    passed there (`str(root)`); a differently-spelled but equivalent path
-    (trailing slash, unresolved symlink) is a cache MISS and silently
-    reintroduces the spawn this gate exists to avoid.
-
-    Fail-open in the SAME direction as the derivation it guards: an
-    unreadable/raising liveness enumeration returns False (no trailer), NOT
-    True. Falling through to `compute_offer` "just in case" would let a
-    degraded liveness read silently reintroduce the cost this gate exists to
-    remove, and the trailer is advisory by construction -- a missed record is
-    the correct failure.
-
-    NEGATIVE SPEC: this is a COST GATE on an advisory record, and must never
-    be repurposed into an allow/deny path. It decides only whether a record is
-    worth computing -- never whether a commit, a path, or a claim is permitted.
-    Nothing about staging, gating, or scope enforcement may ever read it.
-    """
-    try:
-        live = live_session_ids(cwd)
-        return bool(frozenset(live) - {session_id})
-    except Exception:  # noqa: BLE001 - fail-open toward "no trailer"
-        return False
-
-
-#: Gate (b) marker (PM ruling, plan "touched.txt sibling-path escape and the
-#: suppressed absorbed-peer-claims trailer"): returned by
-#: `_derive_absorbed_peer_claims_trailer` when a live peer exists but
-#: `session_id` could not be resolved to a real session at all -- distinct by
-#: construction from the ordinary `""` negative (see that function's own
-#: docstring). Wording is this module's own; the trailer-line format
-#: (`Absorbed-peer-claims:` prefix) matches the populated form.
-#:
-#: Shape divergence (Review: code-reviewer -- Finding 2, 2026-08-05): the
-#: POPULATED trailer is `key:` followed by a newline and indented lines
-#: (`Absorbed-peer-claims:\n  <path>: session <sid> (claimed, live)`); this
-#: marker is `key: <value>` on a single line -- both share the
-#: `Absorbed-peer-claims` key but disagree on shape. No current consumer
-#: parses this trailer programmatically, so nothing breaks today, but a
-#: future trailer-parser keyed on `Absorbed-peer-claims:` must special-case
-#: this marker's single-line shape rather than treating it as a degenerate
-#: empty block. Left as-is deliberately -- the string is already committed
-#: and covered by test assertions; do not "fix" the shape mismatch by
-#: changing it without also updating those.
-_ABSORBED_PEER_CLAIMS_UNDETERMINED_MARKER = "Absorbed-peer-claims: <undetermined>"
-
-
-def _derive_absorbed_peer_claims_trailer(
-    session_id: str, commit_paths: Sequence[str], cwd: str,
-) -> str:
-    """Derive the `Absorbed-peer-claims:` commit trailer (SC-DR-019).
-
-    Purpose: cross-repo ruling SC-DR-019 (example-doctrine-repo, `coordinator/docs/wiki/
-    scoped-safety-commits.md` @ bdc0aa697) asks for a DERIVED record, at
-    commit time, of which paths in THIS commit's own pathspec were claimed by
-    a LIVE PEER session -- never author-supplied prose (the predecessor
-    mechanism, `Substrate-changes-attribution:`, failed precisely because it
-    asked the author to reconstruct attribution by hand, and so could be
-    wrong or omitted without anyone noticing). Composing
-    `coordinator_core.ops.session.safe_commit_offer.compute_offer` here --
-    the same allow-list source `scope_report.assert_paths_in_session_scope`
-    reads -- means this trailer can never be laundered by narrative: it is
-    read straight off `compute_offer`'s own `excluded` narration for exactly
-    the paths this commit is about to land.
-
-    WARN-ONLY BY CONSTRUCTION (DR-256, narrowed by PM ruling on the plan
-    "touched.txt sibling-path escape and the suppressed absorbed-peer-claims
-    trailer"): this function only RECORDS and never raises -- but the
-    never-raising, warn-only channel now carries TWO DISTINGUISHABLE
-    outcomes rather than one:
-
-      - `""` (empty) -- "nothing to report", covering both an ordinary
-        negative (no live peer, or a live peer exists but claims nothing in
-        `commit_paths`) AND an ordinary degraded read (a raising/exception
-        `compute_offer`, a malformed `excluded` shape). These two stay
-        indistinguishable from each other, exactly as DR-256 originally
-        specified -- a caller cannot tell "nothing was absorbed" from "the
-        read degraded", and must not need to.
-      - `_ABSORBED_PEER_CLAIMS_UNDETERMINED_MARKER` -- a live peer exists
-        (gate a passed) but `session_id` is empty or names a session with no
-        existing session directory (gate b): the derivation could not even
-        ATTEMPT to resolve attribution, as distinct from attempting it and
-        finding nothing. This is the shape a fabricated/unresolvable
-        `session_id` takes -- P2 (see this function's own defect writeup at
-        the module docstring, "the marker") -- and it must not be laundered
-        into the same silent "" as an ordinary negative, or a caller
-        upstream of the C4c ownership gate that fails CLOSED on a fabricated
-        identity would see this trailer fail OPEN on the exact same
-        identity.
-
-    Any exception in the derivation body itself (gate c: a raising/degraded
-    `compute_offer`) still yields `""`, and the caller commits exactly as it
-    would have with no derivation at all -- this function must never gate,
-    delay, or fail a commit.
-
-    Scoped to `commit_paths` -- the pipeline's own actual staged/commit
-    pathspec -- not a survey of the whole dirty tree, so a peer claim on an
-    unrelated file never appears here. Returns "" (no header) when no path
-    in `commit_paths` is peer-claimed. Otherwise returns a single
-    `Absorbed-peer-claims:` block, one deterministically-sorted line per
-    absorbed path:
-
-        Absorbed-peer-claims:
-          <path>: session <sid> (claimed, live)
-
-    Never touches the index or staged/working tree -- `compute_offer` is
-    read-only (see its own module docstring).
-
-    Gated on `_live_peer_exists` BEFORE `compute_offer` is called at all: with
-    no live peer the derivation's only possible output is `""`, so the walk is
-    skipped rather than run and discarded (see that helper for the exactness
-    argument and the cost-gate negative spec).
-    """
-    if not commit_paths:
-        return ""
-
-    if not _live_peer_exists(session_id, cwd):
-        return ""
-
-    # Gate (b), PM ruling (see this function's docstring): a live peer
-    # exists, but `session_id` itself cannot be resolved to a real session --
-    # either empty, or naming an id `session.core.session_dir` reports has no
-    # existing directory (exactly P2's shape: a lock-only id minted for
-    # `ceremony_lock` re-entrancy, never registered as a session). Guarded on
-    # the CONDITION, not by letting `compute_offer` raise and catching it --
-    # a fabricated id can resolve `compute_offer` successfully (see
-    # `scoped_git_commit.py`'s own "REVERTED 2026-08-03" docstring section
-    # for the sibling lesson: two individually-correct fail-closed fixes
-    # composing into a live wedge when one of them is exception-shaped
-    # instead of condition-shaped). Distinct from an ordinary "" negative --
-    # see the docstring above.
-    if not session_id or not os.path.isdir(_session_core_session_dir(session_id, cwd)):
-        return _ABSORBED_PEER_CLAIMS_UNDETERMINED_MARKER
-
-    try:
-        offer = compute_offer(session_id, cwd)
-    except Exception:  # noqa: BLE001 - fail-open, never blocks a commit
-        return ""
-
-    excluded = offer.get("excluded") if isinstance(offer, dict) else None
-    if not isinstance(excluded, list):
-        return ""
-
-    claims: Dict[str, str] = {}
-    for entry in excluded:
-        if not isinstance(entry, dict):
-            continue
-        path = entry.get("path")
-        reason = str(entry.get("reason", ""))
-        if not isinstance(path, str) or not reason.startswith("owned by session"):
-            continue
-        sid = reason.removeprefix("owned by session ").strip()
-        if sid:
-            claims[path] = sid
-
-    commit_path_set = set(commit_paths)
-    absorbed = sorted(p for p in commit_path_set if p in claims)
-    if not absorbed:
-        return ""
-
-    lines = [f"  {p}: session {claims[p]} (claimed, live)" for p in absorbed]
-    return "Absorbed-peer-claims:\n" + "\n".join(lines)
 
 
 def run_commit_pipeline(
@@ -1308,54 +1409,36 @@ def run_commit_pipeline(
     trailers: str = "",
     stage_paths: Sequence[str] = (),
     caller_paths: Optional[Set[str]] = None,
-    lock_timeout: float = DEFAULT_LOCK_TIMEOUT_SECS,
     on_committed: Optional[Callable[[str], None]] = None,
     push_mode: str = PUSH_MODE_SYNC,
-    attribution_session_id: Optional[str] = None,
 ) -> PipelineResult:
     """Run the full stage -> gate -> commit -> [push] critical section.
 
-    Purpose: the C4 orchestration entry point. Acquires `ceremony_lock` for
-    the duration of the entire critical section. In `push_mode="sync"`
-    (default -- `scoped_git_commit.py`'s untouched wire contract, DEC-1/F1),
-    the critical section spans stage through push-with-retry, exactly as
-    before. In `push_mode="deferred"|"none"`, the lock's critical section
-    spans ONLY stage -> gates -> commit -- `push_with_retry()` is skipped
-    entirely, `pushed` is always `None`, and `integrity_breach` is always
-    `False` (there is no synchronous push outcome to breach against; see
-    `wsc_tail.py`'s deferred-push design, DEC-1).
-
-    `attribution_session_id` (PM ruling, plan "touched.txt sibling-path
-    escape and the suppressed absorbed-peer-claims trailer"): the id
-    `_derive_absorbed_peer_claims_trailer` (step 3 below) uses for its OWN
-    `compute_offer` attribution lookup, kept deliberately SEPARATE from
-    `session_id` -- the identifier `ceremony_lock` re-entrancy is keyed on
-    (AC7). `session_id` alone is not always a resolvable session: `scoped_
-    git_commit.py`'s `_handler` mints a private `scoped-git-commit-<uuid4>`
-    purely as a lock key, with no session directory ever created for it
-    (P2's defect shape -- the lock key and the committing session's own
-    identity were the same variable). Defaults to `None`, which falls back
-    to `session_id` itself (this parameter's ABSENCE reproduces every
-    pre-existing caller's behavior byte-for-byte -- see this module's own
-    test suite, `test_absorbed_peer_claims_trailer.py`, which calls this
-    function with a single real `session_id` and no `attribution_session_id`
-    at all). A caller that mints a lock-only id MUST pass its own
-    separately-resolved committing-session id here: both `scoped_git_
-    commit.py`'s `_handler` AND `execute_plan_assemble`/`close_out_and_
-    stamp.py` mint a private per-invocation `session_id` purely as the lock
-    key (P2's exact shape), so both now resolve and pass a real
-    `attribution_session_id` (Review: code-reviewer -- Finding 1, 2026-08-05).
-    `wsc_tail.py` is the one caller that already passes a real session id as
-    `session_id` and needs no override.
+    Purpose: the C4 orchestration entry point. Used to acquire `ceremony_lock`
+    for the duration of the entire critical section -- that mutex was deleted
+    2026-08-07 (docs/plans/2026-08-07-excise-the-ceremony-lock.md; see that
+    plan for the safety argument covering the two residual unserialized
+    windows it left, C10's divergence dedup and C11's sha capture, and S2
+    Findings 3/4 for two further unserialized windows the plan's own
+    enumeration does not name). In `push_mode="sync"` (default --
+    `scoped_git_commit.py`'s untouched wire contract, DEC-1/F1), this
+    function's own critical section spans stage through push-with-retry,
+    exactly as before the lock's removal. In `push_mode="deferred"|"none"`,
+    this section spans ONLY stage -> gates -> commit -- `push_with_retry()`
+    is skipped entirely, `pushed` is always `None`, and `integrity_breach` is
+    always `False` (there is no synchronous push outcome to breach against;
+    see `wsc_tail.py`'s deferred-push design, DEC-1).
 
     Sequence:
       0. `_resolve_pass_common_dir(str(root))` -- the pass's ONE git-common-dir
-         resolution, taken before the lock and threaded into every consumer
-         that would otherwise re-derive it (`ceremony_lock`, `commit()`'s
-         msgfile writer, and -- via the shared `sessions_dir` memo -- the
-         step-3 liveness gate). See that helper for why one resolver cannot
-         simply serve the other's memo. Cost-only: `None` (unresolvable) puts
-         every consumer back on its own pre-existing resolution path.
+         resolution, taken up front and threaded into every consumer that
+         would otherwise re-derive it (`commit()`'s msgfile writer, and --
+         via the shared `sessions_dir` memo -- the step-3 liveness gate; a
+         third consumer, `ceremony_lock`'s own resolution, existed here
+         before the 2026-08-07 excision). See that helper for why one
+         resolver cannot simply serve the other's memo. Cost-only: `None`
+         (unresolvable) puts every consumer back on its own pre-existing
+         resolution path.
       1. `explicit_stage(stage_paths, caller_paths)` -- tolerant staging.
       2. `gate_paths = compute_gate_paths(stage.staged_paths, deleted_paths)`;
          `commit_paths = compute_commit_paths(gate_paths, swept_srcs,
@@ -1365,17 +1448,12 @@ def run_commit_pipeline(
          there is no message to validate and nothing to scope the dirty-tree
          gate to when there is nothing to commit; `commit_failed=False`, a
          benign no-op).
-      3. `_derive_absorbed_peer_claims_trailer(attribution_session_id or
-         session_id, commit_paths, root)` (SC-DR-019) -- appended to
-         caller-supplied `trailers` (never
-         replacing it), then `compose_message(...)` via C2, using
+      3. `compose_message(...)` via C2, using caller-supplied `trailers`
+         verbatim, and using
          `gate_paths`'s Deleted/Kept claims already supplied by the caller
          (`deleted_paths`/`kept_entries` are the SOURCE of the message
          blocks; `gate_paths` is the scope the deletion-block gate inspects
-         them against). The derivation call is scoped to `commit_paths` --
-         the actual commit pathspec -- and is warn-only/fail-open by
-         construction (see that function's own docstring): it never raises
-         into this critical section and never changes any outcome below.
+         them against).
       4. `deletion_block_gate(message, gate_paths, cwd)` + `dirty_tree_gate
          (worktree_root, gate_paths)` -- both from C3, both scoped to the
          SAME `gate_paths` (2026-07-22: dirty_tree_gate gained the same
@@ -1395,22 +1473,36 @@ def run_commit_pipeline(
          short-circuits before any commit is attempted (`commit_failed=True`,
          `commit=None`, `push=None`).
       5. `commit(message, commit_paths)` -- writes temp msgfile, commits,
-         captures `committed_sha`. On a successful commit, `on_committed`
-         (when supplied) is invoked with the real `committed_sha` BEFORE
-         `push_with_retry()` runs (step 6) -- this is the AC18 crash-
-         resumption hook: the caller (`wsc_tail.py`) uses it to persist the
-         commit sentinel the instant the commit has landed, so a crash
-         during the push-with-retry network round-trip (fetch/rebase/re-push
-         -- the most crash-exposed sub-window in the pipeline) is still
-         covered by AC18's "resume from stamp step, never double-commit"
-         guarantee. Never called on a failed/short-circuited commit. Any
-         exception `on_committed` itself raises propagates -- the sentinel
-         write is intentionally NOT best-effort (a silently-failed sentinel
-         write would silently reopen the exact duplicate-commit gap this
-         hook exists to close).
-      6. `push_with_retry()` -- only when the commit landed AND
-         `push_mode="sync"`. Skipped entirely for `push_mode="deferred"|
-         "none"` -- see the DEC-1 paragraph above.
+         captures `committed_sha`. Commit is a THREE-way outcome, not
+         binary (W2, docs/plans/2026-08-08-a-landed-commit-reported-as-
+         failed.md): (a) genuine failure / the ordinary already-committed
+         no-op (`commit_outcome.landed=False`) -- `commit_failed=True`,
+         `push` never runs; (b) an ordinary successful commit with a
+         resolved sha -- `commit_failed=False`, `committed_sha` set; (c)
+         `commit_outcome.landed=True` but its sha could not be verified --
+         `commit_failed=False`, `committed_sha=None`,
+         `sha_unverified=True`, and the push still runs (case (c) is
+         collapsed with case (a)'s `exit_code != 0` at the `git`
+         subprocess level, but NOT at this pipeline's own outcome level --
+         see the `commit_outcome.landed` branch inline). On a successful
+         commit with a resolved sha, `on_committed` (when supplied) is
+         invoked with the real `committed_sha` BEFORE `push_with_retry()`
+         runs (step 6) -- this is the AC18 crash-resumption hook: the
+         caller (`wsc_tail.py`) uses it to persist the commit sentinel the
+         instant the commit has landed, so a crash during the push-with-
+         retry network round-trip (fetch/rebase/re-push -- the most
+         crash-exposed sub-window in the pipeline) is still covered by
+         AC18's "resume from stamp step, never double-commit" guarantee.
+         Never called on a failed/short-circuited commit, and (deliberately,
+         not accidentally -- see the guard's own inline comment) never
+         called on case (c) either, since there is no real sha to persist.
+         Any exception `on_committed` itself raises propagates -- the
+         sentinel write is intentionally NOT best-effort (a silently-failed
+         sentinel write would silently reopen the exact duplicate-commit
+         gap this hook exists to close).
+      6. `push_with_retry()` -- when the commit landed (cases (b) and (c)
+         above) AND `push_mode="sync"`. Skipped entirely for
+         `push_mode="deferred"|"none"` -- see the DEC-1 paragraph above.
 
     A `StageOutcome.exit_code == 2` (missing-caller anomaly) does NOT by
     itself set `commit_failed` -- it is a degraded-but-not-failed signal the
@@ -1429,44 +1521,92 @@ def run_commit_pipeline(
     diagnostics: List[str] = []
     common_dir = _resolve_pass_common_dir(str(root))
 
-    with ceremony_lock(
-        root,
-        name=LOCK_NAME,
-        session_id=session_id,
-        timeout=lock_timeout,
-        git_common_dir=common_dir,
-    ):
-        # Pre-stage directory-pathspec guard (session fb5fa766, 2026-07-31
-        # incident): `commit_scoped()` (git_native.py) already refuses a
-        # directory pathspec, but only AFTER `explicit_stage()` below has
-        # already run `git add -- <dir>/` -- staging everything currently
-        # inside it. The refusal then reaches the caller correctly, but the
-        # staged residue survives it (this pipeline's own post-stage
-        # rollback deliberately drops directory entries from `reset_paths()`
-        # -- see that function's docstring -- so nothing cleans it up). The
-        # REPORTED incident shape was exactly this: an EM passing a
-        # directory pathspec (`state/subagent-share/<session-id>/`) into
-        # this pipeline. Refusing here, before `explicit_stage()` ever runs,
-        # means no `git add` for the offending batch ever happens, so there
-        # is no residue to roll back. Reuses `commit_scoped()`'s own
-        # predicate/wording (`git_native.directory_pathspecs()` /
-        # `directory_pathspec_diagnostic()`) rather than forking a second
-        # notion of "is a directory pathspec" -- `commit_scoped()`'s own
-        # check stays in place unchanged as the load-bearing guard for
-        # direct callers that never go through this pipeline; this is
-        # defence in depth, not a replacement. Checked against the FULL
-        # `stage_paths` batch (not just the caller-flagged subset) so a
-        # mixed batch -- one real file plus one directory -- refuses as a
-        # whole and stages neither.
-        dir_paths = git_native.directory_pathspecs(root, stage_paths)
-        if dir_paths:
-            pre_stage_diagnostics = [
-                f"run_commit_pipeline: pre-stage guard: {git_native.directory_pathspec_diagnostic(p)}"
-                for p in dir_paths
-            ]
-            diagnostics.extend(pre_stage_diagnostics)
+    # Pre-stage directory-pathspec guard (session fb5fa766, 2026-07-31
+    # incident): `commit_scoped()` (git_native.py) already refuses a
+    # directory pathspec, but only AFTER `explicit_stage()` below has
+    # already run `git add -- <dir>/` -- staging everything currently
+    # inside it. The refusal then reaches the caller correctly, but the
+    # staged residue survives it (this pipeline's own post-stage
+    # rollback deliberately drops directory entries from `reset_paths()`
+    # -- see that function's docstring -- so nothing cleans it up). The
+    # REPORTED incident shape was exactly this: an EM passing a
+    # directory pathspec (`state/subagent-share/<session-id>/`) into
+    # this pipeline. Refusing here, before `explicit_stage()` ever runs,
+    # means no `git add` for the offending batch ever happens, so there
+    # is no residue to roll back. Reuses `commit_scoped()`'s own
+    # predicate/wording (`git_native.directory_pathspecs()` /
+    # `directory_pathspec_diagnostic()`) rather than forking a second
+    # notion of "is a directory pathspec" -- `commit_scoped()`'s own
+    # check stays in place unchanged as the load-bearing guard for
+    # direct callers that never go through this pipeline; this is
+    # defence in depth, not a replacement. Checked against the FULL
+    # `stage_paths` batch (not just the caller-flagged subset) so a
+    # mixed batch -- one real file plus one directory -- refuses as a
+    # whole and stages neither.
+    dir_paths = git_native.directory_pathspecs(root, stage_paths)
+    if dir_paths:
+        pre_stage_diagnostics = [
+            f"run_commit_pipeline: pre-stage guard: {git_native.directory_pathspec_diagnostic(p)}"
+            for p in dir_paths
+        ]
+        diagnostics.extend(pre_stage_diagnostics)
+        return PipelineResult(
+            stage=StageOutcome(exit_code=-1, failed=list(pre_stage_diagnostics)),
+            deletion_gate=None,
+            dirty_gate=None,
+            commit=None,
+            push=None,
+            committed_sha=None,
+            pushed=False,
+            commit_failed=True,
+            integrity_breach=False,
+            diagnostics=diagnostics,
+        )
+
+    # Rollback bookkeeping (session fb5fa766, 2026-07-31 incident, widened
+    # 2026-07-31 per code-reviewer Finding 1): `staged_this_call` starts
+    # at the safe empty default and the `try` wraps `explicit_stage()`
+    # itself, not just the post-stage steps -- `explicit_stage()`'s own
+    # `git add -- <to_stage>` (via `git_native.add_paths`) is a single
+    # batched subprocess covering potentially many paths, and on a
+    # genuine failure `StageOutcome.acted` defaults to `[]` regardless of
+    # whether git partially staged some of the batch before erroring
+    # (see `explicit_stage()`'s failure-branch return). Wrapping only
+    # AFTER the `stage.failed` early-return -- as this looked prior to
+    # the widening -- left that partial-add-then-fail residue outside
+    # the rollback entirely, reproducing the exact "staged-and-abandoned"
+    # shape this commit exists to close, just behind a rarer trigger
+    # (see `test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted`
+    # for the empirical atomicity check this assumption now rests on,
+    # not just faith).
+    #
+    # Every post-stage exit below this point -- a gate failure, a
+    # non-zero commit subprocess (INCLUDING the ordinary
+    # already-committed `exit_code == 1` empty-commit-set no-op, which
+    # must roll back silently, never loudly), or an interrupted/killed
+    # process (the SessionEnd hook runs under a timeout) -- must not
+    # leave `staged_this_call` sitting at index state `A ` for the next
+    # bare `git commit` on this shared branch to absorb. `landed` flips
+    # True only at the two points nothing further needs undoing: the
+    # benign nothing-to-commit short-circuit (nothing of this call's own
+    # staging survives uncommitted -- see that branch) and immediately
+    # after a successful `commit()` (the staged content is now part of
+    # history, not index-only residue). Scoped to exactly `stage.acted`
+    # -- the paths THIS call's own `git add` touched, never
+    # `stage.staged_paths` (which also covers an already-staged diverged
+    # path this call deliberately left untouched) and never a
+    # bare/directory pathspec -- so a peer EM's own concurrently-staged
+    # work outside this set is never touched by the rollback.
+    staged_this_call: List[str] = []
+    landed = False
+    try:
+        stage = explicit_stage(root, stage_paths, caller_paths)
+        staged_this_call = list(stage.acted)
+
+        if stage.failed:
+            diagnostics.extend(stage.failed)
             return PipelineResult(
-                stage=StageOutcome(exit_code=-1, failed=list(pre_stage_diagnostics)),
+                stage=stage,
                 deletion_gate=None,
                 dirty_gate=None,
                 commit=None,
@@ -1478,177 +1618,114 @@ def run_commit_pipeline(
                 diagnostics=diagnostics,
             )
 
-        # Rollback bookkeeping (session fb5fa766, 2026-07-31 incident, widened
-        # 2026-07-31 per code-reviewer Finding 1): `staged_this_call` starts
-        # at the safe empty default and the `try` wraps `explicit_stage()`
-        # itself, not just the post-stage steps -- `explicit_stage()`'s own
-        # `git add -- <to_stage>` (via `git_native.add_paths`) is a single
-        # batched subprocess covering potentially many paths, and on a
-        # genuine failure `StageOutcome.acted` defaults to `[]` regardless of
-        # whether git partially staged some of the batch before erroring
-        # (see `explicit_stage()`'s failure-branch return). Wrapping only
-        # AFTER the `stage.failed` early-return -- as this looked prior to
-        # the widening -- left that partial-add-then-fail residue outside
-        # the rollback entirely, reproducing the exact "staged-and-abandoned"
-        # shape this commit exists to close, just behind a rarer trigger
-        # (see `test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted`
-        # for the empirical atomicity check this assumption now rests on,
-        # not just faith).
-        #
-        # Every post-stage exit below this point -- a gate failure, a
-        # non-zero commit subprocess (INCLUDING the ordinary
-        # already-committed `exit_code == 1` empty-commit-set no-op, which
-        # must roll back silently, never loudly), or an interrupted/killed
-        # process (the SessionEnd hook runs under a timeout) -- must not
-        # leave `staged_this_call` sitting at index state `A ` for the next
-        # bare `git commit` on this shared branch to absorb. `landed` flips
-        # True only at the two points nothing further needs undoing: the
-        # benign nothing-to-commit short-circuit (nothing of this call's own
-        # staging survives uncommitted -- see that branch) and immediately
-        # after a successful `commit()` (the staged content is now part of
-        # history, not index-only residue). Scoped to exactly `stage.acted`
-        # -- the paths THIS call's own `git add` touched, never
-        # `stage.staged_paths` (which also covers an already-staged diverged
-        # path this call deliberately left untouched) and never a
-        # bare/directory pathspec -- so a peer EM's own concurrently-staged
-        # work outside this set is never touched by the rollback.
-        staged_this_call: List[str] = []
-        landed = False
-        try:
-            stage = explicit_stage(root, stage_paths, caller_paths)
-            staged_this_call = list(stage.acted)
+        swept_srcs = [old for old, _new in stage.swept_renames]
+        swept_dsts = [new for _old, new in stage.swept_renames]
 
-            if stage.failed:
-                diagnostics.extend(stage.failed)
-                return PipelineResult(
-                    stage=stage,
-                    deletion_gate=None,
-                    dirty_gate=None,
-                    commit=None,
-                    push=None,
-                    committed_sha=None,
-                    pushed=False,
-                    commit_failed=True,
-                    integrity_breach=False,
-                    diagnostics=diagnostics,
-                )
+        # `gate_paths`/`commit_paths` derivation is UNCHANGED here --
+        # `stage.staged_paths` already includes every deletion this call
+        # is about to commit (see `explicit_stage`'s "Deletion staging"
+        # section), so `compute_gate_paths` needs no separate union for
+        # scope purposes; adding `stage.deletion_paths` again here would
+        # only duplicate entries already present.
+        gate_paths = compute_gate_paths(stage.staged_paths, list(deleted_paths))
+        commit_paths = compute_commit_paths(gate_paths, swept_srcs, swept_dsts)
 
-            swept_srcs = [old for old, _new in stage.swept_renames]
-            swept_dsts = [new for _old, new in stage.swept_renames]
+        # 2026-08-04 fix (defect A/B, see `explicit_stage`'s "Deletion
+        # staging" docstring section and `StageOutcome.deletion_paths`):
+        # the commit MESSAGE's "Deleted (Step 2.67):" block still needs
+        # `stage.deletion_paths` even though `gate_paths` does not --
+        # without a claim in the message, `commit_gates.
+        # deletion_block_gate`'s Assertion-3 hard-fails a staged
+        # deletion in scope with no Step 2.67 block declaring it. Union,
+        # never substitution -- a caller (e.g. `wsc_tail.py`) that
+        # already names its own deletions keeps that authorship; this
+        # only adds a deletion `explicit_stage` newly made committable
+        # that the caller never separately declared. Ordered (caller's
+        # own `deleted_paths` first, dedup-preserving) so a
+        # caller-authored ordering in the message is never disturbed.
+        message_deleted_paths = list(deleted_paths) + [
+            p for p in stage.deletion_paths if p not in deleted_paths
+        ]
 
-            # `gate_paths`/`commit_paths` derivation is UNCHANGED here --
-            # `stage.staged_paths` already includes every deletion this call
-            # is about to commit (see `explicit_stage`'s "Deletion staging"
-            # section), so `compute_gate_paths` needs no separate union for
-            # scope purposes; adding `stage.deletion_paths` again here would
-            # only duplicate entries already present.
-            gate_paths = compute_gate_paths(stage.staged_paths, list(deleted_paths))
-            commit_paths = compute_commit_paths(gate_paths, swept_srcs, swept_dsts)
-
-            # 2026-08-04 fix (defect A/B, see `explicit_stage`'s "Deletion
-            # staging" docstring section and `StageOutcome.deletion_paths`):
-            # the commit MESSAGE's "Deleted (Step 2.67):" block still needs
-            # `stage.deletion_paths` even though `gate_paths` does not --
-            # without a claim in the message, `commit_gates.
-            # deletion_block_gate`'s Assertion-3 hard-fails a staged
-            # deletion in scope with no Step 2.67 block declaring it. Union,
-            # never substitution -- a caller (e.g. `wsc_tail.py`) that
-            # already names its own deletions keeps that authorship; this
-            # only adds a deletion `explicit_stage` newly made committable
-            # that the caller never separately declared. Ordered (caller's
-            # own `deleted_paths` first, dedup-preserving) so a
-            # caller-authored ordering in the message is never disturbed.
-            message_deleted_paths = list(deleted_paths) + [
-                p for p in stage.deletion_paths if p not in deleted_paths
-            ]
-
-            if not commit_paths:
-                # Nothing to commit -- benign no-op (e.g. every stage_paths
-                # entry was swept/missing and no deleted_paths were
-                # supplied). Checked BEFORE the C3 gates run (2026-07-22
-                # correction) -- an empty pathspec has no message to
-                # validate and nothing for the dirty-tree gate to be scoped
-                # to; running the gates here would mean `gate_paths == []`,
-                # which -- since 2026-07-22 -- means "scoped to nothing" for
-                # dirty_tree_gate, i.e. a guaranteed pass, but there is no
-                # reason to pay the git-status-porcelain walk for a commit
-                # that was never going to happen.
-                #
-                # Review: code-reviewer — Finding 2: `pushed=False` here read as
-                # a genuine push rejection to callers (wsc_tail.py derives
-                # push_status="failed" whenever `pushed is False`), indistinguishable
-                # from an actual failed push -- but no push was ever attempted for
-                # a benign nothing-to-commit no-op. `pushed=None` already means
-                # "no push attempted, not a breach" per this dataclass's own
-                # docstring (`pushed is None` -- no remote configured -- is NOT a
-                # breach); a nothing-to-commit no-op is the same shape: nothing to
-                # push, no invariant violated.
-                landed = True
-                return PipelineResult(
-                    stage=stage,
-                    deletion_gate=None,
-                    dirty_gate=None,
-                    commit=None,
-                    push=None,
-                    committed_sha=None,
-                    pushed=None,
-                    commit_failed=False,
-                    integrity_breach=False,
-                    diagnostics=diagnostics,
-                )
-
-            absorbed_trailer = _derive_absorbed_peer_claims_trailer(
-                attribution_session_id if attribution_session_id is not None else session_id,
-                commit_paths, str(root),
-            )
-            combined_trailers = (
-                trailers + "\n" + absorbed_trailer
-                if trailers and absorbed_trailer
-                else trailers or absorbed_trailer
+        if not commit_paths:
+            # Nothing to commit -- benign no-op (e.g. every stage_paths
+            # entry was swept/missing and no deleted_paths were
+            # supplied). Checked BEFORE the C3 gates run (2026-07-22
+            # correction) -- an empty pathspec has no message to
+            # validate and nothing for the dirty-tree gate to be scoped
+            # to; running the gates here would mean `gate_paths == []`,
+            # which -- since 2026-07-22 -- means "scoped to nothing" for
+            # dirty_tree_gate, i.e. a guaranteed pass, but there is no
+            # reason to pay the git-status-porcelain walk for a commit
+            # that was never going to happen.
+            #
+            # Review: code-reviewer — Finding 2: `pushed=False` here read as
+            # a genuine push rejection to callers (wsc_tail.py derives
+            # push_status="failed" whenever `pushed is False`), indistinguishable
+            # from an actual failed push -- but no push was ever attempted for
+            # a benign nothing-to-commit no-op. `pushed=None` already means
+            # "no push attempted, not a breach" per this dataclass's own
+            # docstring (`pushed is None` -- no remote configured -- is NOT a
+            # breach); a nothing-to-commit no-op is the same shape: nothing to
+            # push, no invariant violated.
+            landed = True
+            return PipelineResult(
+                stage=stage,
+                deletion_gate=None,
+                dirty_gate=None,
+                commit=None,
+                push=None,
+                committed_sha=None,
+                pushed=None,
+                commit_failed=False,
+                integrity_breach=False,
+                diagnostics=diagnostics,
             )
 
-            message = compose_message(
-                subject=subject,
-                prose=prose,
-                deleted_paths=message_deleted_paths,
-                kept_entries=kept_entries,
-                trailers=combined_trailers,
+        message = compose_message(
+            subject=subject,
+            prose=prose,
+            deleted_paths=message_deleted_paths,
+            kept_entries=kept_entries,
+            trailers=trailers,
+        )
+
+        deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
+        dirty_gate = dirty_tree_gate(root, gate_paths)
+
+        if not deletion_gate.passed:
+            diagnostics.extend(deletion_gate.diagnostics)
+        if not dirty_gate.passed:
+            diagnostics.append(
+                "dirty-tree gate: unattributable paths: " + ", ".join(dirty_gate.unattributable)
             )
 
-            deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
-            dirty_gate = dirty_tree_gate(root, gate_paths)
-
-            if not deletion_gate.passed:
-                diagnostics.extend(deletion_gate.diagnostics)
-            if not dirty_gate.passed:
-                diagnostics.append(
-                    "dirty-tree gate: unattributable paths: " + ", ".join(dirty_gate.unattributable)
-                )
-
-            if not deletion_gate.passed or not dirty_gate.passed:
-                return PipelineResult(
-                    stage=stage,
-                    deletion_gate=deletion_gate,
-                    dirty_gate=dirty_gate,
-                    commit=None,
-                    push=None,
-                    committed_sha=None,
-                    pushed=False,
-                    commit_failed=True,
-                    integrity_breach=False,
-                    diagnostics=diagnostics,
-                )
-
-            commit_outcome = commit(
-                root,
-                message=message,
-                commit_paths=commit_paths,
-                known_checked=stage.checked_paths,
-                known_diverged=stage.diverged_paths,
-                common_dir=common_dir,
+        if not deletion_gate.passed or not dirty_gate.passed:
+            return PipelineResult(
+                stage=stage,
+                deletion_gate=deletion_gate,
+                dirty_gate=dirty_gate,
+                commit=None,
+                push=None,
+                committed_sha=None,
+                pushed=False,
+                commit_failed=True,
+                integrity_breach=False,
+                diagnostics=diagnostics,
             )
-            if commit_outcome.exit_code != 0:
-                # Includes the ordinary already-committed no-op (`git
+
+        commit_outcome = commit(
+            root,
+            message=message,
+            commit_paths=commit_paths,
+            common_dir=common_dir,
+        )
+        sha_unverified = False
+        if commit_outcome.exit_code != 0:
+            if not commit_outcome.landed:
+                # Unchanged in every respect (W2, docs/plans/2026-08-08-a-
+                # landed-commit-reported-as-failed.md): this is the
+                # ordinary failure and the already-committed no-op (`git
                 # commit` exits 1 on an empty commit set) -- the `finally`
                 # below rolls `staged_this_call` back to HEAD either way;
                 # for that shape the staged content already matches HEAD,
@@ -1672,84 +1749,170 @@ def run_commit_pipeline(
                     diagnostics=diagnostics,
                 )
 
-            # The commit landed -- `staged_this_call` is now committed
-            # history, not index-only residue; nothing left to roll back
-            # regardless of what push_with_retry() below does.
+            # `commit_outcome.landed=True` with a non-zero `exit_code`
+            # (W2, same plan): `git commit` DID create a commit here --
+            # `commit()`'s own verification of WHICH sha it landed
+            # failed (HEAD unresolvable on an unborn-branch first commit,
+            # an empty message subject, or a zero-or-ambiguous
+            # `Commit-Nonce:` match), not the commit itself. Set the
+            # local `landed` flag True BEFORE any return so the `finally`
+            # below skips the rollback for the STATED reason (history
+            # already changed -- there is nothing index-only left to
+            # reset) rather than happening to be a content no-op by
+            # coincidence, which is what a `landed=False` misclassification
+            # here would have produced. `commit_failed` stays False --
+            # nothing about the caller's request failed -- and
+            # `sha_unverified=True` carries the actionable fact forward.
             landed = True
-
-            if on_committed is not None and commit_outcome.committed_sha is not None:
-                # AC18 crash-resumption hook (Finding 2 fix) -- persist the
-                # sentinel with the REAL sha now, still inside ceremony_lock and
-                # BEFORE push_with_retry()'s network round-trip, so a crash
-                # during push/fetch/rebase is covered by "resume from stamp
-                # step" rather than triggering a full re-run and a duplicate
-                # commit. Intentionally not wrapped in try/except -- see
-                # docstring.
-                on_committed(commit_outcome.committed_sha)
+            sha_unverified = True
+            diagnostics.append(
+                "run_commit_pipeline: commit landed but its sha could not be "
+                f"verified -- {commit_outcome.stderr}"
+            )
 
             if push_mode != PUSH_MODE_SYNC:
-                # Deferred/none (DEC-1): the push half never runs inside this
-                # locked section -- the caller either spawns ONE detached push
-                # after the lock releases ("deferred") or issues none at all
-                # ("none"). No synchronous push outcome exists, so `pushed` is
-                # always None and there is no breach to detect.
                 return PipelineResult(
                     stage=stage,
                     deletion_gate=deletion_gate,
                     dirty_gate=dirty_gate,
                     commit=commit_outcome,
                     push=None,
-                    committed_sha=commit_outcome.committed_sha,
+                    committed_sha=None,
                     pushed=None,
                     commit_failed=False,
                     integrity_breach=False,
+                    sha_unverified=sha_unverified,
                     diagnostics=diagnostics,
                 )
 
+            # Let the push proceed (W2): `push_with_retry()` pushes
+            # whatever is at HEAD -- it never needs `committed_sha` -- and
+            # a commit that genuinely landed but was stranded local-only
+            # on this shared branch, because its own sha happened to be
+            # unresolvable, is the worse failure. `on_committed` is
+            # deliberately NOT invoked below (see the guard immediately
+            # after this block for why that is correct, not incidental).
             push_outcome = push_with_retry(root)
             if push_outcome.failed:
                 diagnostics.extend(push_outcome.failed)
             pushed = derive_pushed_tristate(push_outcome)
-            integrity_breach = commit_outcome.committed_sha is not None and pushed is False
-
             return PipelineResult(
                 stage=stage,
                 deletion_gate=deletion_gate,
                 dirty_gate=dirty_gate,
                 commit=commit_outcome,
                 push=push_outcome,
-                committed_sha=commit_outcome.committed_sha,
+                committed_sha=None,
                 pushed=pushed,
                 commit_failed=False,
-                integrity_breach=integrity_breach,
+                # `committed_sha is None` here unconditionally, so this
+                # formula is always False on this path regardless of
+                # `pushed` -- see `PipelineResult.integrity_breach`'s own
+                # docstring for why that is the right answer, not a gap:
+                # there is no known local sha to diverge FROM, so there is
+                # no divergence this predicate exists to name; the
+                # actionable fact is `sha_unverified=True` itself.
+                integrity_breach=False,
+                sha_unverified=sha_unverified,
                 diagnostics=diagnostics,
             )
-        finally:
-            # `BaseException`-safe via `finally` (not a bare `except`) --
-            # covers a normal failure return above AND any in-process
-            # Python-level exception (an unhandled error raised inside the
-            # `try`, or a `KeyboardInterrupt`/exception-from-signal-handler
-            # unwind) reaching this frame. Scoped strictly to
-            # `staged_this_call`; see the bookkeeping comment above for why
-            # this must never widen to a bare/derived pathspec.
-            #
-            # Review: code-reviewer -- Finding 1 (verified, not just softened):
-            # this is now a two-halves fix, both landed. The SessionEnd hook
-            # (`example-doctrine-repo coordinator/hooks/scripts/sessionend-auto-commit.py`,
-            # `a762df6f9888`) no longer hard-kills on timeout: it soft-
-            # terminates this pipeline's own CLI (`coordinator/bin/safe-
-            # commit-offer.py`), waits a 5s grace window, and only hard-kills
-            # if still alive. On our side, that CLI's `main()` installs a
-            # SIGTERM handler converting the signal into `sys.exit(1)`, so
-            # `SystemExit` propagates through this `finally` on POSIX the way
-            # `SIG_DFL` never would. The residual gap is now narrower and
-            # named: (a) Windows, where `Popen.terminate()` is
-            # `TerminateProcess` and no handler runs regardless, and (b) a
-            # hard kill after the grace window expires (`Popen.kill()` --
-            # SIGKILL on POSIX -- same shape this repo's own `cs_timeout()`
-            # in `coordinator_core/watchdog.py` documents). In either
-            # residual case this `finally` does not run, and any
-            # `staged_this_call` residue is left in the index for a future
-            # commit on this shared branch to absorb.
-            if not landed and staged_this_call:
-                git_native.reset_paths(root, staged_this_call)
+
+        # The commit landed -- `staged_this_call` is now committed
+        # history, not index-only residue; nothing left to roll back
+        # regardless of what push_with_retry() below does.
+        landed = True
+
+        if on_committed is not None and commit_outcome.committed_sha is not None:
+            # AC18 crash-resumption hook (Finding 2 fix) -- persist the
+            # sentinel with the REAL sha now (before 2026-08-07, this ran
+            # "still inside ceremony_lock" -- that mutex is gone; the
+            # ordering guarantee this hook needs is "before push", not "under
+            # a lock", and still holds) and BEFORE push_with_retry()'s
+            # network round-trip, so a crash
+            # during push/fetch/rebase is covered by "resume from stamp
+            # step" rather than triggering a full re-run and a duplicate
+            # commit. Intentionally not wrapped in try/except -- see
+            # docstring. The `commit_outcome.committed_sha is not None`
+            # half of this guard is exactly right, not accidental (W2,
+            # same plan): on the `sha_unverified` path above,
+            # `committed_sha` is None precisely because this function
+            # cannot NAME the sha that landed -- and this hook's entire
+            # contract is "persist the REAL sha" (its own docstring, one
+            # line up). There is no sha to persist on that path; calling
+            # it with `None`, or inventing a placeholder, would corrupt
+            # the AC18 crash-resumption sentinel rather than skip it, so
+            # staying unfired here is the correct behaviour for an
+            # unverifiable commit, not a bug this plan leaves open.
+            on_committed(commit_outcome.committed_sha)
+
+        if push_mode != PUSH_MODE_SYNC:
+            # Deferred/none (DEC-1): the push half never runs inside this
+            # function's own critical section -- before 2026-08-07 this was
+            # phrased "inside the locked section" / "after the lock
+            # releases"; `ceremony_lock` is gone, so the caller instead
+            # spawns ONE detached push after THIS function returns
+            # ("deferred") or issues none at all ("none"). No synchronous
+            # push outcome exists, so `pushed` is
+            # always None and there is no breach to detect.
+            return PipelineResult(
+                stage=stage,
+                deletion_gate=deletion_gate,
+                dirty_gate=dirty_gate,
+                commit=commit_outcome,
+                push=None,
+                committed_sha=commit_outcome.committed_sha,
+                pushed=None,
+                commit_failed=False,
+                integrity_breach=False,
+                sha_unverified=False,
+                diagnostics=diagnostics,
+            )
+
+        push_outcome = push_with_retry(root)
+        if push_outcome.failed:
+            diagnostics.extend(push_outcome.failed)
+        pushed = derive_pushed_tristate(push_outcome)
+        integrity_breach = commit_outcome.committed_sha is not None and pushed is False
+
+        return PipelineResult(
+            stage=stage,
+            deletion_gate=deletion_gate,
+            dirty_gate=dirty_gate,
+            commit=commit_outcome,
+            push=push_outcome,
+            committed_sha=commit_outcome.committed_sha,
+            pushed=pushed,
+            commit_failed=False,
+            integrity_breach=integrity_breach,
+            sha_unverified=False,
+            diagnostics=diagnostics,
+        )
+    finally:
+        # `BaseException`-safe via `finally` (not a bare `except`) --
+        # covers a normal failure return above AND any in-process
+        # Python-level exception (an unhandled error raised inside the
+        # `try`, or a `KeyboardInterrupt`/exception-from-signal-handler
+        # unwind) reaching this frame. Scoped strictly to
+        # `staged_this_call`; see the bookkeeping comment above for why
+        # this must never widen to a bare/derived pathspec.
+        #
+        # Review: code-reviewer -- Finding 1 (verified, not just softened):
+        # this is now a two-halves fix, both landed. The SessionEnd hook
+        # (`example-doctrine-repo coordinator/hooks/scripts/sessionend-auto-commit.py`,
+        # `a762df6f9888`) no longer hard-kills on timeout: it soft-
+        # terminates this pipeline's own CLI (`coordinator/bin/safe-
+        # commit-offer.py`), waits a 5s grace window, and only hard-kills
+        # if still alive. On our side, that CLI's `main()` installs a
+        # SIGTERM handler converting the signal into `sys.exit(1)`, so
+        # `SystemExit` propagates through this `finally` on POSIX the way
+        # `SIG_DFL` never would. The residual gap is now narrower and
+        # named: (a) Windows, where `Popen.terminate()` is
+        # `TerminateProcess` and no handler runs regardless, and (b) a
+        # hard kill after the grace window expires (`Popen.kill()` --
+        # SIGKILL on POSIX -- same shape this repo's own `cs_timeout()`
+        # in `coordinator_core/watchdog.py` documents). In either
+        # residual case this `finally` does not run, and any
+        # `staged_this_call` residue is left in the index for a future
+        # commit on this shared branch to absorb.
+        if not landed and staged_this_call:
+            git_native.reset_paths(root, staged_this_call)

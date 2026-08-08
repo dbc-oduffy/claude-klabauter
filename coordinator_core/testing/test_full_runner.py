@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.testing.full_runner import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # _run_cli spawns a real subprocess that imports coordinator_core. That child
 # inherits cwd but NOT pytest's rootdir sys.path insertion, so it can only
@@ -54,7 +55,7 @@ def _run_cli(args: list[str]) -> subprocess.CompletedProcess:
         stderr=subprocess.PIPE,
         text=True,
         timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
         cwd=_REPO_ROOT,
     )
 
@@ -284,6 +285,6 @@ def test_contended_run_proceeds_unserialized_rather_than_failing(fixture_tree, m
     from coordinator_core.testing import full_runner
 
     tree = fixture_tree()
-    monkeypatch.setattr(full_runner, "_MUTEX_WAIT_SECS", 0.0)
+    monkeypatch.setattr(full_runner.suite_mutex, "MUTEX_WAIT_SECS", 0.0)
     monkeypatch.setattr(full_runner.suite_mutex, "acquire", lambda *a, **k: False)
     assert full_runner.main(["--repo", str(tree.repo_root), "--jobs", "1"]) == 0

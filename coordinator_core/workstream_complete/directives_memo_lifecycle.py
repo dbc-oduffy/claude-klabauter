@@ -129,8 +129,9 @@ from typing import Any, Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.repo_root import git_common_dir
+from coordinator_core.win_portability import no_console_creationflags
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 #: The `decisions` keys this module's `build_directives` reads — declared
 #: once so a caller (`__init__.py`'s `preflight.decisions_template`

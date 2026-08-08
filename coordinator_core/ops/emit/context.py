@@ -7,7 +7,7 @@ OBSERVED_AT / HOSTNAME_VAL / REPO_NAME once and threaded them through provenance
 
 Attribution invariant (REVERSED 2026-07-07 per-repo-emission-cutover): repo_name is the
 EMITTING REPO's own slug, resolved from *repo_root*'s git remote.  Each working repo
-emits under its own identity — ``~/.claude`` reaches slug ``dbc-example-operator/.example-doctrine-mirror-repo``
+emits under its own identity — ``~/.claude`` reaches slug ``dbc-oduffy/.example-doctrine-mirror-repo``
 via the NORMAL remote-resolution path (its own ``origin`` remote), not via any fallback.
 There is NO universal meta-repo default.  When the remote IS unresolvable but ``repo_root``
 IS a valid directory, the slug is ``local/<basename>`` (air-gapped / local-only repos must
@@ -32,11 +32,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # TEST/DOC-ORACLE CONSTANT ONLY (post-2026-07-07 per-repo-emission-cutover).
 # This is the correct slug that ~/.claude reaches via its own normal remote-resolution path.
 # It is NEVER a runtime fallback for unresolvable remotes — an absent/unparseable remote on
 # a valid repo_root yields ``local/<basename>``; only an underivable repo_root raises.
-META_REPO_NAME_FALLBACK = "dbc-example-operator/.example-doctrine-mirror-repo"
+META_REPO_NAME_FALLBACK = "dbc-oduffy/.example-doctrine-mirror-repo"
 
 # Provenance source_kinds that are git-backed and therefore carry a non-null ref
 # (matches cockpit-contract/src/provenance.ts SourceKind + the D9 bidirectional invariant).
@@ -78,6 +80,7 @@ def _run_git(repo_root: Path, *args: str) -> Optional[str]:
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         # OSError: executable not found or OS rejects the call.
@@ -95,8 +98,8 @@ def _remote_url_to_slug(url: str) -> Optional[str]:
     """Convert a git remote URL to an ``owner/repo`` slug, or None if unparseable.
 
     Handles the common SSH and HTTPS forms:
-        git@github.com:dbc-example-operator/.example-doctrine-mirror-repo.git  -> dbc-example-operator/.example-doctrine-mirror-repo
-        https://github.com/dbc-example-operator/.example-doctrine-mirror-repo  -> dbc-example-operator/.example-doctrine-mirror-repo
+        git@github.com:dbc-oduffy/.example-doctrine-mirror-repo.git  -> dbc-oduffy/.example-doctrine-mirror-repo
+        https://github.com/dbc-oduffy/.example-doctrine-mirror-repo  -> dbc-oduffy/.example-doctrine-mirror-repo
     """
     url = url.strip()
     if not url:
@@ -200,7 +203,7 @@ class EmitContext:
         git_sha_short      — first 8 chars of git_sha (bash: ${GIT_SHA:0:8}).
         observed_at        — ISO-8601 UTC wall-clock, ``date -u +%FT%TZ`` equivalent.
         hostname           — ``hostname`` ("unknown" on failure).
-        repo_name          — EMITTING REPO's own slug (e.g. ``dbc-example-operator/claude-klabauter``);
+        repo_name          — EMITTING REPO's own slug (e.g. ``dbc-oduffy/claude-klabauter``);
                              resolved from ``repo_root``'s git remote.  This is the ``repo``
                              field on every provenance row — the rag/cockpit ingest key.
         subprocess_root    — optional override for subprocess record-root resolution. When

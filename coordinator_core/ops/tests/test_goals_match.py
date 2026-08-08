@@ -35,7 +35,6 @@ Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import List, Optional
@@ -74,11 +73,6 @@ assert _OP_NAME in _REGISTRY, (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
 
 
 def _make_git_repo(root: Path) -> Path:
@@ -177,7 +171,7 @@ class TestGoalMatchCandidates:
         # Review: code-reviewer — passing {} caused early-return on missing text before
         # reaching _collect_candidates; use a real text value to exercise is_dir() guard.
         common_dir = _make_git_repo(tmp_path / "repo")
-        result = _run(_handler({"text": "legibility"}, repo_root=common_dir))
+        result = _handler({"text": "legibility"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
@@ -185,12 +179,12 @@ class TestGoalMatchCandidates:
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "goals").mkdir(parents=True)
-        result = _run(_handler({"text": "legibility"}, repo_root=common_dir))
+        result = _handler({"text": "legibility"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
         """repo_root=None → empty candidates without raising."""
-        result = _run(_handler({"text": "legibility"}, repo_root=None))
+        result = _handler({"text": "legibility"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
@@ -204,7 +198,7 @@ class TestGoalMatchCandidates:
             title="Goal One",
             objective="improve legibility",
         )
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
@@ -218,7 +212,7 @@ class TestGoalMatchCandidates:
             title="Goal One",
             objective="improve legibility",
         )
-        result = _run(_handler({"text": ""}, repo_root=common_dir))
+        result = _handler({"text": ""}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_well_formed_goal_fields(self, tmp_path):
@@ -232,7 +226,7 @@ class TestGoalMatchCandidates:
             title="OKR Legibility",
             objective="make OKR tracking legible across the team",
         )
-        result = _run(_handler({"text": "legibility"}, repo_root=common_dir))
+        result = _handler({"text": "legibility"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         entry = result["candidates"][0]
         assert entry["goal_id"] == "okr-legibility"
@@ -260,7 +254,7 @@ class TestGoalMatchCandidates:
             objective="make OKR tracking legible across the engineering team",
         )
 
-        result = _run(_handler({"text": "okr tracking legibility"}, repo_root=common_dir))
+        result = _handler({"text": "okr tracking legibility"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
         # The legibility goal must rank first.
@@ -302,7 +296,7 @@ class TestGoalMatchCandidates:
             objective="this goal is actively in progress",
         )
 
-        result = _run(_handler({"text": "goal"}, repo_root=common_dir))
+        result = _handler({"text": "goal"}, repo_root=common_dir)
 
         ids = [c["goal_id"] for c in result["candidates"]]
         assert "g-active" in ids
@@ -326,7 +320,7 @@ class TestGoalMatchCandidates:
             objective="a well-formed goal artifact",
         )
 
-        result = _run(_handler({"text": "goal"}, repo_root=common_dir))
+        result = _handler({"text": "goal"}, repo_root=common_dir)
 
         ids = [c["goal_id"] for c in result["candidates"]]
         assert "g-good" in ids
@@ -355,7 +349,7 @@ class TestGoalMatchCandidates:
             objective="actively in progress",
         )
 
-        result = _run(_handler({"text": "goal"}, repo_root=common_dir))
+        result = _handler({"text": "goal"}, repo_root=common_dir)
 
         ids = [c["goal_id"] for c in result["candidates"]]
         assert "g-nostatus" not in ids
@@ -384,7 +378,7 @@ class TestGoalMatchCandidates:
             objective="a well-formed active goal",
         )
 
-        result = _run(_handler({"text": "goal"}, repo_root=common_dir))
+        result = _handler({"text": "goal"}, repo_root=common_dir)
 
         ids = [c["goal_id"] for c in result["candidates"]]
         assert "g-good" in ids
@@ -412,7 +406,7 @@ class TestGoalMatchCandidates:
             objective="a well-formed active goal",
         )
 
-        result = _run(_handler({"text": "goal"}, repo_root=common_dir))
+        result = _handler({"text": "goal"}, repo_root=common_dir)
 
         ids = [c["goal_id"] for c in result["candidates"]]
         assert "g-good" in ids
@@ -450,8 +444,8 @@ class TestGoalMatchCandidates:
 
         # Use the near-verbatim KR text to ensure the SequenceMatcher ratio
         # substantially exceeds the unrelated control goal's score.
-        result = _run(
-            _handler({"text": "reduce perceptual rendering latency below 100ms"}, repo_root=common_dir)
+        result = _handler(
+            {"text": "reduce perceptual rendering latency below 100ms"}, repo_root=common_dir
         )
 
         assert len(result["candidates"]) == 2

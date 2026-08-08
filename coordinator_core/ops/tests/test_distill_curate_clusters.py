@@ -28,10 +28,6 @@ from coordinator_core.ops.distill_curate_clusters import (
 )
 
 
-def _run(coro):
-    return asyncio.run(coro)
-
-
 def test_kebab_slug_already_canonical_keeps() -> None:
     result = curate_clusters({"git-safety": 5})
     v = result["verdicts"][0]
@@ -288,12 +284,11 @@ def test_keep_verdict_weights_nugget_volume_via_keep_threshold() -> None:
 
 
 def test_handler_wire_contract() -> None:
-    result = _run(
-        _handler(
+    result = _handler(
             {"tag_counts": {"git-safety": 5, "N/A": 1}},
             repo_root=None,
         )
-    )
+    
     assert result["degraded"] is False
     by_tag = {v["tag"]: v for v in result["verdicts"]}
     assert by_tag["git-safety"]["verdict"] == "keep"
@@ -301,7 +296,7 @@ def test_handler_wire_contract() -> None:
 
 
 def test_handler_missing_tag_counts_is_degraded() -> None:
-    result = _run(_handler({}, repo_root=None))
+    result = _handler({}, repo_root=None)
     assert result["degraded"] is True
 
 
@@ -312,7 +307,7 @@ def test_op_reachable_via_registry_and_jsonrpc_dispatch() -> None:
     distill.curate_clusters '<params>'`) actually goes through — a handler-level
     test alone would miss a registration or JSON-RPC-envelope regression."""
     assert "distill.curate_clusters" in ipc._REGISTRY
-    reply = _run(
+    reply = asyncio.run(
         ipc.dispatch_message(
             {
                 "jsonrpc": "2.0",
@@ -345,12 +340,11 @@ def test_handler_invalid_keep_threshold_falls_back_to_auto() -> None:
     """An invalid explicit value (< 1) must reach the auto-derivation path,
     not silently become 2 — a single-tag count-1 corpus auto-derives to 1
     (100% drop share at threshold 2 exceeds the 25% cap), so it KEEPS."""
-    result = _run(
-        _handler(
+    result = _handler(
             {"tag_counts": {"distillation-log-schema": 1}, "keep_threshold": -3},
             repo_root=None,
         )
-    )
+    
     v = result["verdicts"][0]
     assert v["verdict"] == "keep"
     assert result["threshold_applied"] == 1

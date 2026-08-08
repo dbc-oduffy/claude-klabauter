@@ -171,7 +171,7 @@ def _summarize(suites: list[Suite], results: list[SuiteResult]) -> tuple[list[di
 
 
 @register_op("testing.full_runner")
-async def _testing_full_runner(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _testing_full_runner(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "testing.full_runner" handler.
 
     Params: see module docstring "Wire params".

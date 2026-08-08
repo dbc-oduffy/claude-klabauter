@@ -48,6 +48,7 @@ Parent plan:   docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-invento
 from __future__ import annotations
 
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
@@ -95,7 +96,7 @@ def _run_binary(argv: List[str]) -> None:
         encoding="utf-8",
         errors="replace",
         stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         raise HibernateDispatchError(argv, proc.returncode, proc.stderr or "")
@@ -156,7 +157,7 @@ def hibernate(platform: Optional[str] = None) -> dict:
 
 
 @register_op("machine.hibernate")
-async def _machine_hibernate(params: dict, repo_root=None) -> dict:
+def _machine_hibernate(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'machine.hibernate' handler — dispatch a native hibernate.
 
     Params: none consumed (contract `params: {}`).

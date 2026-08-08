@@ -1,13 +1,11 @@
 """Tests for coordinator_core.ops.detect_plugin_layout (op detect.plugin_layout).
 
-Covers the flat/nested classification, the async register_op handler
-contract, and the CC-4/AC7 double-invocation idempotency proof (pure
-read-only existence check — a second call with identical inputs is a
-no-op that yields byte-identical output).
+Covers the flat/nested classification, the register_op handler
+contract (plain sync handler), and the CC-4/AC7 double-invocation idempotency
+proof (pure read-only existence check — a second call with identical inputs
+is a no-op that yields byte-identical output).
 """
 from __future__ import annotations
-
-import asyncio
 
 from coordinator_core.ops.detect_plugin_layout import _handler, classify_plugin_layout
 
@@ -36,13 +34,13 @@ def test_handler_returns_flat_layout(tmp_path):
     marker.parent.mkdir(parents=True)
     marker.write_text("agent\n", encoding="utf-8")
 
-    result = asyncio.run(_handler({"plugin_root": str(tmp_path)}))
+    result = _handler({"plugin_root": str(tmp_path)})
 
     assert result == {"layout": "flat"}
 
 
 def test_handler_returns_nested_layout(tmp_path):
-    result = asyncio.run(_handler({"plugin_root": str(tmp_path)}))
+    result = _handler({"plugin_root": str(tmp_path)})
 
     assert result == {"layout": "nested"}
 
@@ -53,7 +51,7 @@ def test_double_invocation_is_idempotent_no_op(tmp_path):
     marker.write_text("agent\n", encoding="utf-8")
 
     params = {"plugin_root": str(tmp_path)}
-    first = asyncio.run(_handler(params))
-    second = asyncio.run(_handler(params))
+    first = _handler(params)
+    second = _handler(params)
 
     assert first == second == {"layout": "flat"}

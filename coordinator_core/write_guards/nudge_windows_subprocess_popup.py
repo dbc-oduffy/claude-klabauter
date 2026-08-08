@@ -38,8 +38,17 @@ in-process and returned directly.
 CLASS is "advisory" per DR-077 (2026-07-21) — a example-doctrine-repo-authored ruling that
 DELIBERATELY DEPARTS from the retired reference hook (see
 ``docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md``
-in the example-doctrine-repo repo; routed here by cross-repo memo
-``cross-repo/archive/2026-07-21-claude-central-em-popup-guard-fragment-scoped-false-denials-dr077.md``).
+in the example-doctrine-repo repo). NOTE: DR-077's scope is the whole-file-context /
+advisory-class change ONLY (part 1 and part 2 below) — it contains no
+substantive discussion of git or DETACHED_PROCESS semantics and does not
+back the (now-removed) git exemption; that exemption's provenance is
+tracked separately, see the negative-spec below. The
+``cross-repo/archive/2026-07-21-claude-central-em-popup-guard-fragment-scoped-false-denials-dr077.md``
+citation this docstring used to carry alongside DR-077 is DANGLING — that
+file does not exist in either this repo or example-doctrine-repo (verified
+2026-08-07 during the windows-popup-guard-blind-to-git-and-asyncio
+spinoff). Left noted here rather than silently dropped so a future reader
+does not re-cite it or burn time hunting for it.
 On positive detection it returns the advisory ``additionalContext`` envelope
 (never ``permissionDecision: "deny"``); on any internal error it fails OPEN
 (returns None). This is a NAMED, ruling-backed divergence from
@@ -62,10 +71,37 @@ original edit-fragment extraction on any read failure, decode error, missing
 ``old_string``, or oversized file, never on a raise.
 
 Negative-spec:
+  - The pattern lists ``_EXTENSIONS``, ``_PY_CONSOLE_TARGET_RE``, and
+    ``_PY_SUBPROCESS_CALL_RE`` (and, for suppression detection,
+    ``_PY_SUPPRESSION_RE``) ARE THE GUARD'S ENTIRE FIELD OF VIEW. Widen
+    freely; NEVER narrow. A narrowing does not make the guard stricter — it
+    silently converts it into a no-op that keeps returning None (ALLOW) on
+    files it can no longer see, while looking exactly like a clean file to
+    every caller. This is the same failure shape as F1 (a hook probe
+    matching only ``.sh`` after the repo went all-Python) and F13 (a
+    registration assert masking three real failures) from the
+    2026-08-07 install-dogfood audit — see
+    state/handoffs/2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md.
+    Each pattern constant above carries its own load-bearing note; this line
+    is the summary, not a substitute for reading those.
   - Does NOT replicate the reference hook's claude-klabauter fast-path re-dispatch —
     see the async-seam note above.
-  - Does NOT police git.exe (reference hook code-reviewer F3: git always
-    spawns with DETACHED_PROCESS semantics on Windows).
+  - The git exemption (reference hook code-reviewer F3: "git always spawns
+    with DETACHED_PROCESS semantics on Windows and does not call
+    AllocConsole()") was REMOVED on 2026-08-07, on measured evidence, per
+    spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md.
+    MEASURED (not asserted): a console-subsystem ``git.exe`` spawned with no
+    creationflags from a console-less parent allocates a **visible**
+    ``ConsoleWindowClass`` window in ~50ms; pipe redirection
+    (``capture_output=True``) does NOT suppress it. Both positive and
+    negative controls passed. See
+    ``state/audits/2026-08-07-git-console-allocation-measurement.md`` for
+    the full harness and raw findings — the F3 premise this exemption rested
+    on was itself never measured, and the audit's own live-site check found
+    every miss to be a ``git`` spawn. ``git`` and ``git.exe`` are now both
+    policed by ``_PY_CONSOLE_TARGET_RE`` like any other console-subsystem
+    target; a genuinely suppressed git spawn still clears
+    ``_PY_SUPPRESSION_RE`` as normal.
   - Does NOT apply the bare shell-token check to ``.py`` files — real
     subprocess risk in ``.py`` already goes through the intent-aware
     ``subprocess.run(``/``Popen(``/``os.system(`` check; the bare-token
@@ -107,29 +143,101 @@ _ALLOWLIST_MARKERS = (
     "# popup-safe-env-suppressed",
 )
 
-#: Extension gate.
+#: Extension gate. LOAD-BEARING (spinoff
+#: 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md Part 3): a file
+#: whose extension is absent from this tuple is invisible to this guard
+#: regardless of what it spawns — widen only, never narrow. See the note
+#: above ``_PY_SUBPROCESS_CALL_RE`` for the recurrence this guards against.
 _EXTENSIONS = (".sh", ".py", ".ps1", ".psm1")
 
 #: Throwaway-path exemption.
 _THROWAWAY_MARKERS = ("/tasks/", "/state/scratch/")
 
 # --- .sh / .py detection --------------------
-_PY_SUBPROCESS_CALL_RE = re.compile(r"subprocess\.(run|Popen)\(|os\.system\(")
+#: LOAD-BEARING (spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
+#: Part 3): this pattern list is the guard's entire field of view for Python
+#: spawn call-sites. It may be WIDENED, never narrowed — a narrowing silently
+#: converts the guard into a no-op that still returns None (ALLOW) on every
+#: file it scans, the exact F1/F13 recurrence this spinoff calls out (a check
+#: reporting clean because of what it declines to look at). ``asyncio.``-
+#: prefixed AND bare ``create_subprocess_exec``/``create_subprocess_shell(``
+#: forms are both matched: every call-site found in this repo at authoring
+#: time used the qualified ``asyncio.`` form (e.g.
+#: ``ops/fleet/_common.py``, ``ops/distill_apply_disposal.py``), but the
+#: bare form (``from asyncio import create_subprocess_exec``) is legal
+#: Python and would otherwise be a silent second blind spot identical in
+#: kind to the one this widening fixes — there is no live site to regress
+#: against it, so this is a preventive widening, not an observed-miss fix.
+#: Bare-form false-positive risk is bounded by ``_PY_CONSOLE_TARGET_RE``
+#: below still needing to match a literal console-target string in the
+#: same content before ``_should_deny_sh_or_py`` fires. The bare
+#: alternative carries a ``(?<![\w.])`` left lookbehind so it cannot
+#: substring-match inside a longer identifier (e.g.
+#: ``my_create_subprocess_exec(``) — the qualified ``asyncio.`` form is
+#: also covered by the same lookbehind, applied before the optional
+#: ``asyncio.`` prefix.
+_PY_SUBPROCESS_CALL_RE = re.compile(
+    r"subprocess\.(run|Popen)\(|os\.system\("
+    r"|(?<![\w.])(?:asyncio\.)?create_subprocess_(?:exec|shell)\("
+)
+#: LOAD-BEARING (see note above _PY_SUBPROCESS_CALL_RE) — the console-target
+#: allowlist. Widen only; do not narrow. Deliberately NOT a catch-all (see
+#: this module's Negative-spec) — a target absent from this list is a
+#: silent miss by design until added, not a bug to route around elsewhere.
+#: ``git``/``git.exe`` added 2026-08-07 (windows-popup-guard-blind-to-git-
+#: and-asyncio spinoff) — the prior exemption's "DETACHED_PROCESS" premise
+#: was measured and refuted, see the negative-spec below and
+#: state/audits/2026-08-07-git-console-allocation-measurement.md. The bare
+#: ``"git"`` list-element form (not just ``"git.exe"``) is matched because
+#: both audited miss sites spawn ``["git", "rev-parse", ...]``, not
+#: ``["git.exe", ...]``.
 _PY_CONSOLE_TARGET_RE = re.compile(
-    r'"(powershell\.exe|netstat\.exe|python\.exe|cmd\.exe)"|sys\.executable'
+    r'"(powershell\.exe|netstat\.exe|python\.exe|cmd\.exe|git\.exe|git)"'
+    r"|sys\.executable"
 )
+#: LOAD-BEARING (see note above _PY_SUBPROCESS_CALL_RE). Matches BOTH the
+#: canonical kwarg form (``creationflags=getattr(subprocess,
+#: "CREATE_NO_WINDOW", 0)``) and the dict-literal form used by
+#: ``ops/distill_apply_disposal.py::_subprocess_kwargs``
+#: (``{"creationflags": 0x08000000}  # CREATE_NO_WINDOW``) — the trailing
+#: ``# CREATE_NO_WINDOW`` comment that form relies on is stripped by
+#: ``_strip_line_comments`` BEFORE this regex runs (comments are stripped
+#: file-wide, not just for the call-site regexes), so without the
+#: ``creationflags["']?\s*[:=]`` alternative below, that site's suppression
+#: was invisible to this guard even though the site itself is correctly
+#: suppressed at runtime. Confirmed by direct regex probe against the
+#: post-strip content during this widening (2026-08-07) — this was a real,
+#: second blind spot, not a hypothetical one.
 _PY_SUPPRESSION_RE = re.compile(
-    r"creationflags=|CREATE_NO_WINDOW|no_console_creationflags\(\)"
+    r"creationflags[\"']?\s*[:=]|CREATE_NO_WINDOW|no_console_creationflags\(\)"
 )
+#: Triple-quoted string spans (``"""..."""`` / ``'''...'''``), matched
+#: non-greedy across newlines. Applied ONLY ahead of ``_PY_SUPPRESSION_RE``
+#: (see ``_should_deny_sh_or_py``) — never ahead of ``_PY_SUBPROCESS_CALL_RE``
+#: / ``_PY_CONSOLE_TARGET_RE``, whose deliberate prose-firing behavior on a
+#: pure-docstring file is pinned by
+#: ``TestCaseCDocstringOnlyProse::test_write_pure_prose_file_still_surfaces_but_only_as_advisory``
+#: and must not change. Scope: a docstring/string literal that merely
+#: *mentions* ``creationflags``/``CREATE_NO_WINDOW`` in prose (not inside a
+#: real kwarg/dict-literal suppression) must not clear the suppression check
+#: for a genuinely unsuppressed spawn elsewhere in the same file — see the
+#: negative-spec on ``_strip_line_comments`` for the false-negative this
+#: closes.
+_TRIPLE_QUOTED_STRING_RE = re.compile(r'"""(?:.*?)"""|\'\'\'(?:.*?)\'\'\'', re.DOTALL)
 
 #: .sh-only bare shell-token check.
 _SH_BARE_TOKEN_RE = re.compile(
     r"(^|[\s;&|`])(python3?(\.exe)?[\t ]+(-c|-m)|powershell\.exe)",
     re.MULTILINE,
 )
+#: `-WindowStyle Hidden` REMOVED 2026-08-07 (no-window-subprocess-primitive
+#: plan, chunk C5, AC7) — create-then-hide, not reliable suppression (see
+#: `_REASON`'s note above and state/audits/2026-08-07-git-console-
+#: allocation-measurement.md). The other four spellings are untouched and
+#: remain sufficient to satisfy this `.sh` bare-token check.
 _SH_BARE_TOKEN_SUPPRESSION_RE = re.compile(
-    r"creationflags=|CREATE_NO_WINDOW|no_console_creationflags\(\)"
-    r"|python-quiet\.sh|pythonw|-WindowStyle[\t ]+Hidden",
+    r"creationflags[\"']?\s*[:=]|CREATE_NO_WINDOW|no_console_creationflags\(\)"
+    r"|python-quiet\.sh|pythonw",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -143,6 +251,16 @@ _PS1_BARE_POWERSHELL_RE = re.compile(
     r"(^|[\t ])(powershell\.exe|pwsh)([\t ]|$)",
     re.MULTILINE | re.IGNORECASE,
 )
+#: 2026-08-07 (no-window-subprocess-primitive plan, chunk C5, AC7): the
+#: ENTIRE body of this regex is `-WindowStyle\s+Hidden` — nothing else. Left
+#: UNCHANGED deliberately. `-WindowStyle Hidden` is create-then-hide, not
+#: reliable suppression (see `_REASON`'s note above), but narrowing/emptying
+#: this regex would leave `_should_deny_ps1` permanently unsatisfiable: every
+#: `.ps1` naming `powershell.exe`/`pwsh` would deny with no compliant
+#: spelling left to offer (there is no Python-side primitive a `.ps1` file
+#: can spell). The correct disposition is advisory-with-honest-text: this
+#: regex stays the accepted (still-imperfect) marker, and the honesty lives
+#: in `_REASON`'s `.ps1` line instead.
 _PS1_SUPPRESSION_RE = re.compile(r"-WindowStyle[\t ]+Hidden", re.IGNORECASE)
 
 
@@ -156,11 +274,16 @@ def _strip_line_comments(content: str) -> str:
     is not a comment start, so a real call followed by a trailing comment
     (``python3 -c 'x'  # note``) is still detected.
 
-    NOTE: this is a small private duplicate of the identical helper in
-    coordinator_core/hooks/nudge_windows_subprocess_popup.py. The two packages
-    are deliberately independent (see this module's docstring), so a shared
-    cross-package import was rejected in favor of keeping both copies in
-    lockstep by hand — see the shared parametrized test suite.
+    NOTE: an earlier revision of this docstring claimed a second copy of
+    this module at coordinator_core/hooks/nudge_windows_subprocess_popup.py,
+    kept in hand-lockstep via a shared parametrized test suite. That file
+    does not exist in this repo (verified 2026-08-07 during the
+    windows-popup-guard-blind-to-git-and-asyncio spinoff) — there is only
+    this one copy, under coordinator_core/write_guards/. The 12-case suite
+    at coordinator_core/tests/test_nudge_windows_subprocess_popup_comments.py
+    tests this copy only (see its own module docstring, which already notes
+    the single-copy placement). If a second copy is reintroduced, restore a
+    real lockstep note here instead of the stale one this replaces.
 
     LIMITS (deliberate, not fixed here):
       - No full shell/Python/PowerShell parser — only ``'`` and ``"`` are
@@ -174,6 +297,14 @@ def _strip_line_comments(content: str) -> str:
         that currently over-fires.
       - ``.ps1``/``.psm1`` ``<# ... #>`` block comments are NOT recognized;
         only line comments starting with an unquoted ``#``.
+      - Does NOT strip triple-quoted (``\"\"\"``/``'''``) string spans —
+        that gap is closed separately (and only for the suppression check)
+        by ``_strip_triple_quoted_strings``, called from
+        ``_should_deny_sh_or_py`` ahead of ``_PY_SUPPRESSION_RE`` only. This
+        function's own comment-stripping pass is unaffected: a triple-quoted
+        span containing a ``#`` is still (correctly) not treated as a
+        comment start by the quote tracking below, since ``"``/``'`` are
+        tracked per-character, not per-triple.
     """
     out_lines = []
     for line in content.split("\n"):
@@ -194,16 +325,60 @@ def _strip_line_comments(content: str) -> str:
         out_lines.append("".join(chars))
     return "\n".join(out_lines)
 
+
+def _strip_triple_quoted_strings(content: str) -> str:
+    """Blank out ``\"\"\"...\"\"\"``/``'''...'''`` spans, newline-preserving.
+
+    Closes the false-negative in ``_PY_SUPPRESSION_RE`` (spinoff
+    2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md): a docstring
+    or explanatory string literal that merely *mentions*
+    ``creationflags``/``CREATE_NO_WINDOW`` in prose must not clear the
+    suppression check for a genuinely unsuppressed spawn elsewhere in the
+    same file. Called ONLY ahead of ``_PY_SUPPRESSION_RE`` in
+    ``_should_deny_sh_or_py`` — deliberately NOT applied ahead of
+    ``_PY_SUBPROCESS_CALL_RE``/``_PY_CONSOLE_TARGET_RE``, whose prose-firing
+    behavior on a pure-docstring file is intentional (DR-077 Case C) and
+    pinned by an existing test.
+
+    Non-greedy, ``re.DOTALL`` match — an unbalanced/unterminated triple
+    quote is a rare authoring error this does not attempt to recover from
+    (the guard fails open on any unexpected shape regardless). Replacement
+    preserves the span's newline count so any downstream ``re.MULTILINE``
+    line-anchored regex still sees consistent line numbers.
+    """
+    return _TRIPLE_QUOTED_STRING_RE.sub(
+        lambda m: "\n" * m.group(0).count("\n"), content
+    )
+
 #: Advisory offer text. Originally ported BYTE-FOR-BYTE from the reference
 #: hook's REASON heredoc, then reworded to offer-framing per DR-077; as of
 #: the 2026-08-02 message-size-discipline plan (chunk C8) it is further
 #: compressed to fit the 220-prose-byte cap (coordinator_core/bash_guards/
 #: _message_size.py) — the RECOMMENDED FIX/WHY/spec-backlink prose was cut,
-#: but the fix (creationflags one-liner, PowerShell -WindowStyle Hidden) and
-#: both allowlist escape markers are preserved as exempt command spans.
+#: but the fix (creationflags one-liner) and both allowlist escape markers
+#: are preserved as exempt command spans.
+#:
+#: 2026-08-07 (no-window-subprocess-primitive plan, chunk C5, AC6): the
+#: `powershell.exe -WindowStyle Hidden` recommended-fix line is REMOVED, not
+#: reworded in place — `verify_no_console_flash.py`'s own docstring and
+#: `_PS1_SUPPRESSION_RE`'s note both establish it is create-then-hide, not
+#: reliable suppression (state/audits/2026-08-07-git-console-allocation-
+#: measurement.md). Recommending it as a fix while `_should_deny_ps1` also
+#: still accepts it as the only compliant `.ps1` spelling (AC7 — narrowing
+#: that acceptance would make the guard unsatisfiable, see
+#: `_PS1_SUPPRESSION_RE`'s own docstring) would have the guard deny an
+#: author, offer this exact spelling as the fix, then deny that fix. In its
+#: place: `no_console_creationflags()` (the primitive `coordinator_core.
+#: win_portability` now ships, landed by peer chunk C2) as the Python-side
+#: fix, plus one honest `.ps1` line — still inside the same indented
+#: cue-window block so it stays an exempt command span, not authored prose
+#: — naming the create-then-hide caveat and pointing back at the primitive
+#: as the preferred route.
 _REASON = """OFFER: this console-subprocess call pops a window under headless Windows Bash. Use instead:
   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-  powershell.exe -WindowStyle Hidden
+  no_console_creationflags()
+  .ps1: -WindowStyle Hidden is create-then-hide, may still flash; no reliable
+  PowerShell suppression exists -- prefer spawning via the primitive above.
 
 Escape: `# popup-intentional-last-resort` or `# popup-safe-env-suppressed`."""
 
@@ -332,7 +507,13 @@ def _extract_content(tool_name: str, tool_input: Dict[str, Any], file_path: str)
 
 def _should_deny_sh_or_py(file_path: str, content: str) -> bool:
     if _PY_SUBPROCESS_CALL_RE.search(content) and _PY_CONSOLE_TARGET_RE.search(content):
-        if not _PY_SUPPRESSION_RE.search(content):
+        # Suppression check only: triple-quoted spans (docstrings, string
+        # literals) are blanked out first so a prose *mention* of
+        # creationflags/CREATE_NO_WINDOW cannot clear a genuinely
+        # unsuppressed spawn. Deliberately not applied above, to the
+        # call-site/console-target search -- see _strip_triple_quoted_strings.
+        suppression_scope = _strip_triple_quoted_strings(content)
+        if not _PY_SUPPRESSION_RE.search(suppression_scope):
             return True
 
     if file_path.endswith(".sh"):

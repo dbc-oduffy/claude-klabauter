@@ -29,9 +29,15 @@ from coordinator_core import _hook_envelope
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
+def _run(result):
+    """Run an async coroutine synchronously (no pytest-asyncio needed), or pass a
+    plain (already-computed) result straight through — some handlers are `async def`
+    and some are plain `def` (2026-08-07 zero-await conversions; a plain-`def`
+    handler's return value is already a dict by the time it reaches this helper,
+    never a coroutine)."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _unlink_if_exists(path: str) -> None:

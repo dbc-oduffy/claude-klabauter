@@ -187,20 +187,20 @@ class TestGoalAppendFailLoudOnNone:
         from coordinator_core.ops.goal_append import _goal_append
 
         with pytest.raises(ValueError, match="_origin_worktree"):
-            _run(_goal_append(
+            _goal_append(
                 {"period": "day", "period_value": "2026-07-07", "text": "Test goal"},
                 repo_root=None,
-            ))
+            )
 
     def test_none_repo_root_error_mentions_no_fallback(self) -> None:
         """Error message must mention no silent fallback (AC5)."""
         from coordinator_core.ops.goal_append import _goal_append
 
         with pytest.raises(ValueError, match="No silent fallback"):
-            _run(_goal_append(
+            _goal_append(
                 {"period": "day", "period_value": "2026-07-07", "text": "Test goal"},
                 repo_root=None,
-            ))
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -229,10 +229,10 @@ class TestGoalAppendExplicitOverrides:
             "coordinator_core.ops.goal_append.resolve_context",
             return_value=fake_ctx,
         ) as mock_resolve:
-            result = _run(_goal_append(
+            result = _goal_append(
                 {"period": "day", "period_value": "2026-07-07", "text": "Handler wiring test"},
                 repo_root=common_dir,
-            ))
+            )
 
         # resolve_context called once (by the handler), with derived root
         mock_resolve.assert_called_once_with(tmp_path)  # main_worktree_root(common_dir) = tmp_path
@@ -255,7 +255,7 @@ class TestGoalAppendExplicitOverrides:
             "coordinator_core.ops.goal_append.resolve_context",
             return_value=fake_ctx,
         ):
-            result = _run(_goal_append(
+            result = _goal_append(
                 {
                     "period": "day",
                     "period_value": "2026-07-07",
@@ -263,7 +263,7 @@ class TestGoalAppendExplicitOverrides:
                     "repo": "override-org/override-repo",
                 },
                 repo_root=common_dir,
-            ))
+            )
 
         assert result["row"]["repo"] == "override-org/override-repo"
 
@@ -282,10 +282,10 @@ class TestGoalAppendExplicitOverrides:
             "coordinator_core.ops.goal_append.resolve_context",
             return_value=fake_ctx,
         ):
-            result = _run(_goal_append(
+            result = _goal_append(
                 {"period": "week", "period_value": "2026-W27", "text": "State root test"},
                 repo_root=common_dir,
-            ))
+            )
 
         log_file = Path(result["log_file"])
         # Must be written inside state_dir, not ~/.claude/state or any other root
@@ -324,14 +324,14 @@ class TestGoalAppendLinkedWorktreeFixture:
             "coordinator_core.ops.goal_append.resolve_context",
             return_value=fake_ctx,
         ):
-            result = _run(_goal_append(
+            result = _goal_append(
                 {
                     "period": "day",
                     "period_value": "2026-07-07",
                     "text": "Linked worktree goal record",
                 },
                 repo_root=common_dir,
-            ))
+            )
 
         # Verify non-zero records: the log file exists and has content
         log_file = Path(result["log_file"])

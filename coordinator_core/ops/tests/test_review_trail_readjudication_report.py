@@ -303,6 +303,67 @@ def test_git_binary_missing_fails_loud(two_worktrees, monkeypatch):
         compute_readjudication_report(str(linked))
 
 
+def test_full_range_shas_and_bulk_trailer_map_are_cached_per_range(two_worktrees, monkeypatch):
+    """C4: two records sharing one ``sha_range`` must spawn `git rev-list` and
+    the bulk trailer `git log` exactly ONCE each, not once per record.
+
+    Guards `_full_range_shas`'s first-ever cache and the migration off
+    `trailer_foreign_shas` onto `bulk_trailer_session_map` (§10.7 item 1's
+    sanctioned P1-bulk direction) — both must be genuinely memoised, not just
+    behaviorally correct.
+    """
+    main = two_worktrees["main"]
+    sha_range = f"{two_worktrees['c_base']}..{two_worktrees['c_main']}"
+    _write_record(main, "rec-a.json", sha_range)
+    _write_record(main, "rec-b.json", sha_range)
+
+    real_run = mod._run
+    calls: list[list[str]] = []
+
+    def _counting_run(cmd, cwd=None):
+        calls.append(cmd)
+        return real_run(cmd, cwd)
+
+    monkeypatch.setattr(mod, "_run", _counting_run)
+
+    report = compute_readjudication_report(str(main))
+
+    assert report.records_scanned == 2
+    assert report.skipped == []
+    assert len(report.flips) == 2
+
+    rev_list_calls = [c for c in calls if c[:2] == ["git", "rev-list"]]
+    trailer_log_calls = [c for c in calls if c[:2] == ["git", "log"]]
+    assert len(rev_list_calls) == 1
+    assert len(trailer_log_calls) == 1
+
+
+def test_bulk_trailer_map_reproduces_trailer_foreign_shas_exclusion_semantics(
+    two_worktrees,
+):
+    """C4: the bulk-map-derived foreign set matches the pre-migration
+    `trailer_foreign_shas` semantics exactly — a commit with NO Session-Id
+    trailer is never foreign (untrailered != absent-from-map only matters for
+    P2; P1's exclusion posture must survive the migration unchanged)."""
+    main = two_worktrees["main"]
+    # An untrailered commit on top of the already-foreign-trailered c_main.
+    (main / "untrailered.txt").write_text("x\n", encoding="utf-8")
+    _git("add", "untrailered.txt", cwd=main)
+    _git("commit", "-q", "-m", "no trailer here", cwd=main)
+    c_untrailered = _git("rev-parse", "HEAD", cwd=main)
+
+    sha_range = f"{two_worktrees['c_base']}..{c_untrailered}"
+    _write_record(main, "rec-untrailered.json", sha_range)
+
+    report = compute_readjudication_report(str(main))
+
+    assert report.skipped == []
+    assert len(report.flips) == 1
+    dropped = set(report.flips[0].dropped_shas)
+    assert two_worktrees["c_main"] in dropped
+    assert c_untrailered not in dropped
+
+
 def test_handler_reports_an_unresolved_corpus_root_as_an_error(two_worktrees, monkeypatch):
     """The op handler surfaces the same failure as a wire ``error``, matching its
     AC-5 contract ("an unresolved repo_root fails loud rather than silently

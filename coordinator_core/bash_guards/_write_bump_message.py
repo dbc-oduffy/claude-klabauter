@@ -155,14 +155,52 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
     return AGENT_CLASS_EM
 
 
-def render_em_message(target_repo: str, session_repo: str, gitdir: Path, session_id: str) -> str:
+def _target_phrase(target_repo: str, raw_target: str = "") -> str:
+    """Compose the display form of `target_repo`, optionally showing the
+    PRE-translation raw token the operator actually typed alongside it.
+
+    Spec backlink: docs/plans/2026-08-08-the-bump-message-never-showed-the-
+    operat.md, chunk R1, AC1/AC2 -- the bump message must show BOTH the raw
+    token and the resolved native path, distinguishably, but never print the
+    same string twice under two labels (AC2's named failure mode).
+
+    `raw_target` is CALLER-RESOLVED (see module docstring, "CALLERS RESOLVE
+    THE INPUTS"): a caller passes `""` (the default) whenever it has already
+    determined raw and resolved are the same value for its own candidate --
+    this function does NOT itself compare `raw_target` to `target_repo`,
+    because at several call sites `target_repo` is a DECORATED label (e.g.
+    `bump_outside_repo_write.py`'s `"no git repo (%s)" % target_dir`), not
+    the bare resolved path a straight string-equality check against
+    `raw_target` could ever match -- that decision belongs to the caller,
+    which knows its own plain resolved value.
+
+    Both forms are backticked and placed inside the `_alternative_liveness`
+    cue window every template already opens with the bare word "instead" --
+    per module docstring, "BUDGET", a backticked span inside a cue window is
+    exempt from the prose byte count, so a variable-length raw token costs
+    nothing against `_message_size.MESSAGE_PROSE_CAP_BYTES` regardless of its
+    own length. Only the literal connective prose ("(typed ...)") counts
+    against the cap, and only when `raw_target` is non-empty.
+    """
+    if not raw_target:
+        return f"`{target_repo}`"
+    return f"`{target_repo}` (typed `{raw_target}`)"
+
+
+def render_em_message(
+    target_repo: str,
+    session_repo: str,
+    gitdir: Path,
+    session_id: str,
+    raw_target: str = "",
+) -> str:
     """The FOREIGN-class, EM-class deny copy. Self-attributed, opens on the
     bare word "instead" to hold the whole remainder in one
     `_alternative_liveness` cue window (see module docstring, "BUDGET")."""
     line = clear_line(gitdir, session_id)
     return (
         "Coordinator guard — instead: check with your PM before writing into "
-        f"`{target_repo}` (not `{session_repo}`); once assented, clear this target:\n"
+        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`); once assented, clear this target:\n"
         f"  {line}\n"
         "Still unsure? cross-repo-memo is the sanctioned channel."
     )
@@ -174,6 +212,7 @@ def render_subagent_message(
     gitdir: Path,
     session_id: str,
     sandbox_root: str,
+    raw_target: str = "",
 ) -> str:
     """The FOREIGN-class, subagent-class deny copy. `sandbox_root` is
     caller-resolved (see module docstring, "CALLERS RESOLVE THE INPUTS");
@@ -181,7 +220,7 @@ def render_subagent_message(
     line = clear_line(gitdir, session_id)
     return (
         "Coordinator guard — instead: you have no PM here, report to the EM that "
-        f"dispatched you before writing into `{target_repo}` (not `{session_repo}`); "
+        f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
         f"your sandbox `{sandbox_root}` is the place to write, or once assented, "
         "clear this target:\n"
         f"  {line}"
@@ -193,6 +232,7 @@ def render_publish_em_message(
     destination_owner: str,
     gitdir: Path,
     session_id: str,
+    raw_target: str = "",
 ) -> str:
     """The PUBLISH-class, EM-class deny copy -- drafted around durability,
     not ownership (see module docstring, "DESTINATION_PUBLISH"). Names the
@@ -202,7 +242,7 @@ def render_publish_em_message(
     PM-checking / cross-repo-memo pointer (AC3, AC15)."""
     line = clear_line(gitdir, session_id)
     return (
-        f"Coordinator guard — instead: `{target_repo}` is publish mirror "
+        f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
         f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. Clear this "
         "target if you still mean to write here:\n"
@@ -216,6 +256,7 @@ def render_publish_subagent_message(
     gitdir: Path,
     session_id: str,
     sandbox_root: str,
+    raw_target: str = "",
 ) -> str:
     """The PUBLISH-class, subagent-class deny copy -- same durability
     framing as `render_publish_em_message`, routed to the dispatching EM
@@ -226,7 +267,7 @@ def render_publish_subagent_message(
     del sandbox_root
     line = clear_line(gitdir, session_id)
     return (
-        f"Coordinator guard — instead: `{target_repo}` is publish mirror "
+        f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
         f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. Report to "
         "your EM; if assented, clear this target:\n"
@@ -244,6 +285,7 @@ def render_bump_message(
     sandbox_root: str = "",
     destination_class: str = DESTINATION_FOREIGN,
     destination_owner: str = "",
+    raw_target: str = "",
 ) -> str:
     """Dispatch to the correct one of the four templates by
     `(destination_class, agent_class)`. The single entry point C4/C5/C7
@@ -266,13 +308,24 @@ def render_bump_message(
     empty, rather than raising -- ordinary defensive composition, not a
     repeat of `_write_bump_applicability`'s detection-layer fail-open
     contract.
+
+    `raw_target` (R1, docs/plans/2026-08-08-the-bump-message-never-showed-
+    the-operat.md) defaults to `""`, the same "optional, safe default"
+    contract `sandbox_root`/`destination_class`/`destination_owner` already
+    carry (AC4) -- every caller that predates R1 keeps rendering byte-
+    identical output. A caller passes a non-empty `raw_target` only when it
+    has already determined (in its own terms -- see `_target_phrase`'s own
+    docstring) that the PRE-translation token differs from `target_repo`;
+    threaded straight through to whichever template below is selected.
     """
     if destination_class == DESTINATION_PUBLISH:
         if agent_class == AGENT_CLASS_SUBAGENT:
             return render_publish_subagent_message(
-                target_repo, destination_owner, gitdir, session_id, sandbox_root
+                target_repo, destination_owner, gitdir, session_id, sandbox_root, raw_target
             )
-        return render_publish_em_message(target_repo, destination_owner, gitdir, session_id)
+        return render_publish_em_message(target_repo, destination_owner, gitdir, session_id, raw_target)
     if agent_class == AGENT_CLASS_SUBAGENT:
-        return render_subagent_message(target_repo, session_repo, gitdir, session_id, sandbox_root)
-    return render_em_message(target_repo, session_repo, gitdir, session_id)
+        return render_subagent_message(
+            target_repo, session_repo, gitdir, session_id, sandbox_root, raw_target
+        )
+    return render_em_message(target_repo, session_repo, gitdir, session_id, raw_target)

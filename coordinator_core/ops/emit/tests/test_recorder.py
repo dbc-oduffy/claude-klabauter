@@ -34,9 +34,12 @@ from coordinator_core.ops.emit.recorder import (
 from coordinator_core.ops.emit.context import EmitContext
 
 
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency."""
-    return asyncio.run(coro)
+def _run(result):
+    """Run an async coroutine synchronously, or pass a plain result through
+    unchanged (2026-08-07: `_backlog_record` is now plain `def`)."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -286,7 +286,7 @@ def write_chunk_table(target_root: Path, run_id: str, artifact: dict[str, Any]) 
 
 
 @register_op("cartography.chunk_table")
-async def _cartography_chunk_table(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_chunk_table(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.chunk_table" handler.
 
     See module docstring "Wire params" / "Reply fields". `repo_root` is

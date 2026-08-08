@@ -620,6 +620,71 @@ against a literal known-good value -- an edit to the header/stanza WORDING
 that left every enumerated list untouched would currently pass that suite
 silently.
 
+Divergence 13 (2026-08-07, C6 of
+`docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md`
+-- total-lockout fix): measured, with a valid confined identity: every
+PowerShell cmdlet denied -- Get-ChildItem, Select-String, Get-Content, gci,
+the Where-Object pipeline -- while `git status --porcelain` allowed (see the
+verdict record cited below, table 2). A `coordinator:code-reviewer` granted
+PowerShell could run NOTHING. Root cause: this guard's Tier A allowlist was
+expressed exclusively as POSIX binary names; a PowerShell cmdlet name is
+never a match for a POSIX binary name, so every PowerShell command fell
+through to the generic Tier B/deny path regardless of whether it was
+genuinely read-only.
+
+Fix: the allowlist is now expressed PER DIALECT, carried from
+`payload["tool_name"]` via `_dialect.dialect_from_tool_name` (this guard's
+own `MATCHERS` above now references `COMMAND_TOOL_NAMES` directly) -- never
+inferred from the command string (Anti-scope: "do not build a dialect
+detector"). `Dialect.BASH` keeps the pre-existing git/machine-local/
+readonly-fs-binary/scaffolder Tier A+B logic byte-for-byte unchanged (AC4).
+`Dialect.POWERSHELL` gains its OWN narrow Tier A allowlist
+(`_READONLY_POWERSHELL_CMDLETS` / `_POWERSHELL_PIPELINE_FILTER_CMDLETS`,
+see those constants' own docstrings for the exact three cmdlets admitted and
+why) -- Tier B (the coordinator-doc-new scaffolder) and the python3-
+interpreter tier are NOT extended to PowerShell by this divergence; neither
+was reported as a concrete defect and widening either would be an
+unrequested surface enlargement this fix does not ask for. A dialect this
+module's `Dialect` enum does not (yet) recognize records SILENT
+(`_verdict.record_silent`) and declines to rule rather than falling open --
+see the dialect-gap leg in `check()`, currently unreachable given the
+top-gate accepts only "Bash"/"PowerShell", kept explicit for a future third
+dialect.
+
+**Cite ratified `docs/decisions/DR-277-guards-are-advisory-by-default-two-
+named.md` (carve-out 2):** the census flipped this guard to advisory on a
+"not a security boundary" reading; DR-277 promotes it back to keep-hard as
+the backstop for `block_subagent_commit`'s own miss (`183176e7`/`edd72e36`
+-- an executor wrapping the commit API in `python3 -c` to evade three prose
+instructions), reasoning that an advisory backstop is no backstop against a
+model that already ignored prose.
+
+**Negative spec, binding and non-optional:** SILENT for a dialect this guard
+has no allowlist for is NOT a class flip and must NEVER be read as fail-open
+drift away from DR-277. This guard stays fail-closed (hard-deny) for EVERY
+dialect it DOES recognize -- `Dialect.BASH` and, as of this divergence,
+`Dialect.POWERSHELL` both still deny-by-omission anything outside their own
+Tier A/B allowlist, exactly as the pre-C6 Bash-only guard always did. SILENT
+covers ONLY the dialect gap (a `Dialect` member with no allowlist expressed
+here at all) -- it never covers, and must never be extended to cover, a
+recognized-dialect MISS (a PowerShell or Bash command this guard understands
+and denies today). A reader must not conclude from this divergence that
+"PowerShell support" means PowerShell got any less strict than Bash already
+was -- it did not; it got its OWN equally strict, equally narrow allowlist.
+
+Test surface: `coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist.py`
+-- the eight probe commands from the verdict record
+(`docs/research/spike-verdicts/2026-08-07-powershell-guard-detection-and-
+tokenizer-mechanism.md`, table 2), both dialects (AC8), plus a control
+proving each PowerShell-allow assertion is not vacuous (fails when this
+divergence's PowerShell Tier A branch is reverted/stubbed out) -- see that
+note's own docstring, `_resolve_subagent_identity` fail-closes on an
+`agent_id` matching neither the bare-hex nor named-teammate shape, so every
+test payload here uses a valid bare-hex `agent_id` (>= 12 chars) and
+`agent_type: "coordinator:code-reviewer"` (the sole member of
+`_CONFINED_FINDINGS_AGENTS`), or the test passes vacuously without ever
+reaching detection.
+
 Amendment 2 (2026-08-03, PM ruling -- re-anchor the discriminator, close the
 pytest-for-code-reviewer gap): PM ruling, given verbatim: "bash confinement
 should only be for destructive actions that would degrade a machine." This
@@ -695,6 +760,9 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
 from coordinator_core.subagent_sandbox.engine import load_policy
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
+from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 
 # W3 FIX 1 (2026-07-15, security parity break): the shared _helpers.resolve_effective_types() re-exports
@@ -705,7 +773,15 @@ from coordinator_core.subagent_sandbox.engine import load_policy
 # the ALREADY-CORRECT canonical resolver (write_guards.block_subagent_plan_body_write._resolve_subagent_identity)
 # instead, per the same workaround that guard already uses -- see its own docstring.
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: (2026-08-07, C6 of
+#: docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md)
+#: "PowerShell" joins this guard's own declared coverage now that it carries
+#: a PowerShell Tier A allowlist (see Divergence 13 below) -- this is the
+#: guard's own MATCHERS declaration, not an edit to dispatch.py's chain loop
+#: or to the shared tool-name constant (both out of this chunk's Anti-scope).
+#: (2026-08-07, C2) A direct reference to the shared universe -- never a
+#: copy or re-wrap -- since this guard covers the full tool-name universe.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
 #: (a) Shell-chaining metacharacter set — 9 distinct substring checks,
@@ -856,6 +932,99 @@ _FIND_WRITE_FLAGS = frozenset(
 #: allowlist and not a write denylist.
 _MACHINE_LOCAL_BINARY = "machine-local"
 _MACHINE_LOCAL_READONLY_SUBCOMMANDS = frozenset({"get", "has", "keys", "path", "dir"})
+
+#: Tier A (2026-08-07, C6 -- PowerShell dialect): read-only cmdlets a
+#: confined findings-agent legitimately needs to see its own diff/dispatched
+#: files under a PowerShell-routed shell, modeled directly on
+#: ``_READONLY_FS_BINARIES``'s bash-side rationale (enumeration/inspection/
+#: content-search, nothing that creates, deletes, or executes). Deliberately
+#: NARROW -- exactly the three cmdlets measured in the verdict record's
+#: eight-probe table (``docs/research/spike-verdicts/2026-08-07-powershell-
+#: guard-detection-and-tokenizer-mechanism.md``), plus their standard
+#: built-in aliases, and nothing wider:
+#:   - ``Get-ChildItem``/``gci`` -- directory enumeration, the ``ls``/``find``
+#:     sibling. Read-only: it lists, it does not write.
+#:   - ``Select-String``/``sls`` -- content search, the ``grep`` sibling.
+#:   - ``Get-Content``/``gc`` -- file-content read, the ``cat`` sibling.
+#: Matched case-INSENSITIVELY (unlike the bash-side binary names) because
+#: PowerShell cmdlet/alias resolution is itself case-insensitive -- a
+#: case-sensitive match here would silently under-admit a spelling PowerShell
+#: itself treats as identical, which is a usability gap in the exact same
+#: "incoherent to a reader" sense Divergence 10/11's PM ruling already named,
+#: not a security concern (nothing in this set is write-capable regardless of
+#: case). Deliberately EXCLUDES the common ``ls``/``dir``/``cat``/``type``
+#: aliases some readers might expect: those are PowerShell aliases for the
+#: SAME cmdlets already covered by ``Get-ChildItem``/``Get-Content`` above
+#: (``ls``/``dir`` -> ``Get-ChildItem``; ``cat``/``type`` -> ``Get-Content``),
+#: but neither was in the measured eight-probe table, and admitting an
+#: unmeasured alias name is exactly the "over-broad allowlist" failure mode
+#: this chunk's own dispatch brief warns against -- widen only against a
+#: future measured need, not speculatively.
+_READONLY_POWERSHELL_CMDLETS = frozenset(
+    {"get-childitem", "gci", "select-string", "sls", "get-content", "gc"}
+)
+
+#: Tier A (2026-08-07, C6 -- PowerShell dialect) pipeline-filter cmdlets:
+#: valid ONLY as a non-first segment of a pipeline whose first segment is
+#: already Tier-A-allowlisted (mirrors the bash-side pipeline carve-out,
+#: Divergence 8) -- never as a standalone command, since a bare
+#: ``Where-Object`` has no data source of its own and admitting it as a
+#: first-segment entry would buy nothing. ``Where-Object`` is the one
+#: measured in the verdict record's eighth probe
+#: (``Get-ChildItem | Where-Object { $_.Length -gt 100 } -> deny``, now
+#: intended to allow) -- filtering an already-read-only object stream is
+#: itself read-only (it drops or keeps objects already produced upstream; it
+#: creates, deletes, and executes nothing). Its built-in alias ``?`` is
+#: included for the same reason ``gci``/``sls``/``gc`` are; ``where`` (the
+#: other built-in alias) is included alongside it, both unmeasured but
+#: structurally identical low-risk aliases of the one measured cmdlet, not a
+#: new capability class.
+_POWERSHELL_PIPELINE_FILTER_CMDLETS = frozenset({"where-object", "?", "where"})
+
+
+def _is_readonly_powershell_command(cmd: str) -> bool:
+    """(C6, PowerShell dialect) ``True`` iff ``cmd``'s first token is a
+    read-only PowerShell cmdlet/alias on ``_READONLY_POWERSHELL_CMDLETS``.
+    Case-insensitive match (see that constant's own docstring for why).
+    Sibling of ``_is_readonly_fs_command`` for the PowerShell dialect.
+    """
+    first_token = _extract_first_token(cmd)
+    return first_token.lower() in _READONLY_POWERSHELL_CMDLETS
+
+
+def _segment_is_powershell_tier_a_allowlisted(segment: str, *, is_first_segment: bool) -> bool:
+    """(C6, PowerShell dialect) Sibling of ``_segment_is_tier_a_allowlisted``
+    for a PowerShell pipeline segment: the FIRST segment must be a read-only
+    data-source cmdlet (``_READONLY_POWERSHELL_CMDLETS``); any LATER segment
+    may additionally be a filter cmdlet (``_POWERSHELL_PIPELINE_FILTER_CMDLETS``,
+    e.g. ``Where-Object``), since a filter has no data source of its own and
+    is only meaningful downstream of one.
+    """
+    first_token = _extract_first_token(segment).lower()
+    if first_token in _READONLY_POWERSHELL_CMDLETS:
+        return True
+    if not is_first_segment and first_token in _POWERSHELL_PIPELINE_FILTER_CMDLETS:
+        return True
+    return False
+
+
+def _evaluate_powershell_pipeline_segments(cmd: str, split_indices: list) -> Optional[str]:
+    """(C6, PowerShell dialect) Sibling of ``_evaluate_pipeline_segments``:
+    split ``cmd`` at each unquoted ``|`` in ``split_indices`` and verify
+    every resulting segment independently satisfies
+    ``_segment_is_powershell_tier_a_allowlisted`` (first segment: read-only
+    data source; later segments: read-only data source OR filter cmdlet).
+    Returns the first non-allowlisted segment's stripped text (deny), or
+    ``None`` if every segment is allowlisted. Splitting mechanics mirror
+    ``_evaluate_pipeline_segments`` exactly -- the scanner already proved
+    every index in ``split_indices`` is a top-level, unquoted, single ``|``.
+    """
+    bounds = [-1] + split_indices + [len(cmd)]
+    for idx, (start, end) in enumerate(zip(bounds, bounds[1:])):
+        segment = cmd[start + 1 : end].strip()
+        if not _segment_is_powershell_tier_a_allowlisted(segment, is_first_segment=(idx == 0)):
+            return segment
+    return None
 
 #: git global options ALLOWED before the subcommand (2026-07-25, option-surface
 #: hardening) that take a SEPARATE value argument (space-form, e.g.
@@ -2345,7 +2514,16 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     Returns ``None`` (allow) or the nested hard-deny envelope.
     """
     # 1. Tool-name guard — defense-in-depth (reference hook 62-67).
-    if (payload.get("tool_name") or "") != "Bash":
+    # (2026-08-07, C6) Widened from a bare "!= Bash" literal to accept
+    # PowerShell too, now that this guard carries a PowerShell Tier A
+    # allowlist (Divergence 13 below). Any OTHER tool_name -- including an
+    # absent one -- is still not this guard's business at all (MATCHERS
+    # already filters in production; this remains a defense-in-depth
+    # pre-filter, not the dialect-gap SILENT case) and returns plain None,
+    # exactly as the pre-C6 gate did for every non-Bash tool_name.
+    tool_name = payload.get("tool_name") or ""
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is None:
         return None
 
     # 2. No agent_id -> top-level EM Bash call -> allow BEFORE any
@@ -2391,6 +2569,21 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     # Resolve this effective_type's allowed Bash surface -- a validated
     # bash_policy entry if one exists, else _default_ruleset() (AC11).
     ruleset = _resolve_ruleset(effective_type, policy)
+
+    # (2026-08-07, C6) Dialect-gap SILENT leg -- see Divergence 13's negative
+    # spec below. Unreachable today given the top-gate above accepts ONLY
+    # "Bash"/"PowerShell" (both of which this guard now has an allowlist
+    # for), but kept explicit rather than assumed: a THIRD dialect entering
+    # `Dialect` in the future, with no allowlist added here yet, must record
+    # SILENT and decline to rule -- never fall open to allow, and never
+    # silently reuse the Bash or PowerShell allowlist for a dialect neither
+    # was written for.
+    if dialect not in (Dialect.BASH, Dialect.POWERSHELL):
+        record_silent(
+            "block_reviewer_bash_outside_allowlist",
+            f"no allowlist for dialect {dialect!r} -- declined to rule, not a class flip",
+        )
+        return None
 
     # 7. Confined findings-agent confirmed — extract and validate the command
     #    (reference hook 198-282).
@@ -2441,7 +2634,10 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         # segment must be independently Tier-A-allowlisted. This is checked
         # BEFORE the single-command Tier A/B logic below, which does not
         # know how to evaluate a multi-segment command.
-        bad_segment = _evaluate_pipeline_segments(cmd_for_check, pipeline_splits, ruleset)
+        if dialect is Dialect.POWERSHELL:
+            bad_segment = _evaluate_powershell_pipeline_segments(cmd_for_check, pipeline_splits)
+        else:
+            bad_segment = _evaluate_pipeline_segments(cmd_for_check, pipeline_splits, ruleset)
         if bad_segment is not None:
             deny = True
             deny_reason = _pipeline_segment_deny_reason(bad_segment)
@@ -2488,6 +2684,13 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
                 deny = True
                 deny_reason = ml_deny_reason
         elif _is_readonly_fs_command(cmd_for_check, ruleset):
+            return None
+        elif dialect is Dialect.POWERSHELL and _is_readonly_powershell_command(cmd_for_check):
+            # Tier A (2026-08-07, C6): read-only PowerShell cmdlet escape
+            # hatch -- sibling of the bash readonly-fs-binary branch
+            # immediately above, gated on dialect since these cmdlet names
+            # (Get-ChildItem, Select-String, Get-Content) are meaningless as
+            # Bash-dialect binary names and must not be admitted there.
             return None
 
     if not deny and not _first_token_is_allowlisted_binary(cmd_for_check, ruleset):

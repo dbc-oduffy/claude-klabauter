@@ -17,7 +17,6 @@ depend on the sibling example-doctrine-repo repo being checked out on the test m
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import stat
 import subprocess
@@ -598,11 +597,11 @@ def test_validate_target_root_op_handler_returns_contract_shape(tmp_path):
     target.mkdir()
     _init_git(str(target))
 
-    result = asyncio.run(_validate_target_root_op({"target_root": str(target)}))
+    result = _validate_target_root_op({"target_root": str(target)})
 
     assert result == {"valid": True, "reason": None}
 
 
 def test_validate_target_root_op_handler_requires_target_root_param():
     with pytest.raises(ValueError):
-        asyncio.run(_validate_target_root_op({}))
+        _validate_target_root_op({})

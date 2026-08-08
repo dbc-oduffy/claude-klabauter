@@ -6,6 +6,7 @@ bin-entrypoint variant).
 from __future__ import annotations
 
 import subprocess
+import sys
 
 from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
@@ -147,8 +148,220 @@ def test_write_surface_derived_from_settings_not_restated():
     assert isinstance(clause, StaticClause)
 
     declared_keys = {entry.key for entry in clause.entries}
-    settings_keys = {key for key, _ in cg._SETTINGS}
+    settings_keys = {s.key for s in cg._SETTINGS}
     assert declared_keys == settings_keys
 
     for entry in clause.entries:
         assert entry.kind == "git-config-key"
+
+
+def test_global_scope_setting_written_machine_wide_from_repo_invocation(
+    tmp_path, monkeypatch
+):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+
+    rc = cg.main([])
+    assert rc == 0
+
+    res = subprocess.run(
+        ["git", "config", "--global", "--get", "core.checkStat"],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert res.stdout.strip() == "minimal"
+
+    local = subprocess.run(
+        ["git", "config", "--local", "--get", "core.checkStat"],
+        cwd=str(repo),
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert local.returncode != 0
+
+
+def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    assert cg.main([]) == 0
+    assert (
+        _git(repo, "config", "--local", "--get", "gc.autoDetach").stdout.strip()
+        == "false"
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    assert cg.main(["--global"]) == 0
+    res = subprocess.run(
+        ["git", "config", "--global", "--get", "gc.autoDetach"],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert res.stdout.strip() == "false"
+
+
+def test_setting_skipped_for_platform(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    fake_setting = cg.GitSetting(
+        key="coordinator.fakeplatform",
+        value="on",
+        platforms=frozenset({"never-a-real-platform"}),
+    )
+    monkeypatch.setattr(cg, "_SETTINGS", (fake_setting, *cg._SETTINGS))
+
+    rc = cg.main([])
+    assert rc == 0
+    res = subprocess.run(
+        ["git", "config", "--local", "--get", "coordinator.fakeplatform"],
+        cwd=str(repo),
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert res.returncode != 0
+    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
+
+
+def test_setting_written_for_matching_platform(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    fake_setting = cg.GitSetting(
+        key="coordinator.fakeplatform",
+        value="on",
+        platforms=frozenset({sys.platform}),
+    )
+    monkeypatch.setattr(cg, "_SETTINGS", (fake_setting, *cg._SETTINGS))
+
+    rc = cg.main([])
+    assert rc == 0
+    assert (
+        _git(repo, "config", "--get", "coordinator.fakeplatform").stdout.strip()
+        == "on"
+    )
+
+
+_HELP_BROWSER_KEYS = ("help.format", "web.browser", "browser.noop.cmd")
+
+
+def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str]):
+    """Stub the git-config subprocess seam with an in-memory store keyed on
+    (scope-tuple, key), so triple-write tests don't depend on the host
+    platform or touch real git config."""
+    store = dict(initial)
+    get_calls: list[tuple[tuple[str, ...], str]] = []
+
+    def fake_get(scope, key):
+        scope = tuple(scope)
+        get_calls.append((scope, key))
+        return store.get((scope, key))
+
+    def fake_set(scope, key, value):
+        store[(tuple(scope), key)] = value
+        return True
+
+    monkeypatch.setattr(cg, "_git_config_get", fake_get)
+    monkeypatch.setattr(cg, "_git_config_set", fake_set)
+    return store, get_calls
+
+
+def test_help_browser_triple_written_machine_wide_windows_both_invocations(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "win32")
+    for i, argv in enumerate(([], ["--global"])):
+        store, _ = _stub_git_config(monkeypatch, {})
+        base = tmp_path / f"win-{i}"
+        base.mkdir()
+        repo = _init_repo(base)
+        monkeypatch.chdir(repo)
+
+        rc = cg.main(argv)
+        assert rc == 0
+        for key in _HELP_BROWSER_KEYS:
+            assert store[(("--global",), key)] == dict(
+                (s.key, s.value) for s in cg._SETTINGS
+            )[key]
+
+
+def test_help_browser_triple_not_written_on_non_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    for i, argv in enumerate(([], ["--global"])):
+        store, _ = _stub_git_config(monkeypatch, {})
+        base = tmp_path / f"nonwin-{i}"
+        base.mkdir()
+        repo = _init_repo(base)
+        monkeypatch.chdir(repo)
+
+        rc = cg.main(argv)
+        assert rc == 0
+        for key in _HELP_BROWSER_KEYS:
+            assert (("--global",), key) not in store
+
+
+def test_help_browser_triple_skipped_when_web_browser_already_set(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(sys, "platform", "win32")
+    store, _ = _stub_git_config(
+        monkeypatch, {(("--global",), "web.browser"): "chrome"}
+    )
+    base = tmp_path / "preset"
+    base.mkdir()
+    repo = _init_repo(base)
+    monkeypatch.chdir(repo)
+
+    rc = cg.main([])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "skipping group 'help-browser'" in err
+    assert "web.browser already set to 'chrome'" in err
+    assert (("--global",), "help.format") not in store
+    assert (("--global",), "browser.noop.cmd") not in store
+    assert store[(("--global",), "web.browser")] == "chrome"
+
+
+def test_help_browser_group_precondition_evaluated_once_per_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _stub_git_config(monkeypatch, {})
+    base = tmp_path / "once"
+    base.mkdir()
+    repo = _init_repo(base)
+    monkeypatch.chdir(repo)
+
+    call_count = 0
+    real_predicate = cg._help_browser_group_precondition
+
+    def counting_predicate(resolve_scope):
+        nonlocal call_count
+        call_count += 1
+        return real_predicate(resolve_scope)
+
+    monkeypatch.setitem(cg._GROUP_PRECONDITIONS, "help-browser", counting_predicate)
+
+    rc = cg.main([])
+    assert rc == 0
+    assert call_count == 1
+
+
+def test_settings_are_gitsetting_records():
+    for setting in cg._SETTINGS:
+        assert isinstance(setting, cg.GitSetting)
+
+    by_key = {s.key: s for s in cg._SETTINGS}
+    assert by_key["gc.autoDetach"].scope == "repo"
+    assert by_key["gc.autoDetach"].platforms is None
+    assert by_key["gc.autoDetach"].group is None
+    assert by_key["gc.autoDetach"].unset_group is None
+
+    assert by_key["core.checkStat"].scope == "global"
+    assert by_key["core.checkStat"].platforms is None
+    assert by_key["core.checkStat"].group is None
+    assert by_key["core.checkStat"].unset_group is None

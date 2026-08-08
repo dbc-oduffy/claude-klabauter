@@ -98,6 +98,7 @@ from coordinator_core.ops.ceremony import commit_pipeline as commit_pipeline_mod
 from coordinator_core.ops.ceremony.commit_gates import deletion_block_gate
 from coordinator_core.ops.ceremony.commit_message import compose_message, format_kept_entry
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 
 _EM_DASH = " — "
 
@@ -388,51 +389,81 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
     Measured-vs-plan-estimate note: the plan's AC14 prose estimates a
     "~2-3" post-rebuild spawn band; empirically instrumenting this
     representative single-file-stage/gate/commit pass (no remote configured,
-    the no-op push path) measures 14 `subprocess.run` calls, every one of
-    them `git` (see the call list asserted below). "~2-3" was a
-    pre-implementation approximation in the plan's prose; the number that
-    actually matters for AC2/AC14 -- and the one asserted here -- is (1)
-    EVERY spawn is `git`, never `bash`/`node`/a `.sh` script/
-    `coordinator-session.sh` sourcing, and (2) the total is small and BOUNDED.
+    the no-op push path) measures 18 `subprocess.run` calls (post C10/C11,
+    see "Bound history" below), every one of them `git` (see the call list
+    asserted below). "~2-3" was a pre-implementation approximation in the
+    plan's prose; the number that actually matters for AC2/AC14 -- and the
+    one asserted here -- is (1) EVERY spawn is `git`, never
+    `bash`/`node`/a `.sh` script/`coordinator-session.sh` sourcing, and (2)
+    the total is small and BOUNDED.
 
     Bound history (`< 11` -> `< 15`, 2026-07-27, docs/plans/2026-07-27-
     computed-commit-mechanism-selection.md § dedup; `0ec3ca894`,
     2026-08-03, spent that headroom to 15 with a redundant two-call
     ignored-path pre-filter, since collapsed back to one call -- see
     `git_native.check_ignore()`'s own negative-spec; `< 15` -> `< 16`,
-    2026-08-04, defect A/B deletion-staging fix): the ORIGINAL `< 11`
-    was "down from ~11" per the OLD external-process chain this pipeline
-    replaced, which mixed bash+node+git across three different interpreters
-    for the same ceremony -- that comparison is still true and this pipeline
-    still never leaves `git`. The bound moved because this pass now BUYS
-    something the old chain never had: `git_native.commit_scoped()` computes
-    index/worktree divergence from OBSERVED state and picks the commit
-    mechanism accordingly, rather than trusting an operator to pick
-    `git commit -- <paths>` vs. a bare `git commit` by hand (the shape of
-    two real incidents -- claude-klabauter 506748a0, example-doctrine-repo 726925b2).
-    That correctness costs one `diverging_paths()` call (2 `git diff`
-    subprocesses) in the AGREE case this test exercises --
-    `commit_pipeline.explicit_stage()` needs it to decide what is safe to
-    `git add` without destroying a deliberately-staged partial hunk.
-    `commit_scoped()` itself does NOT pay for a second call:
-    `explicit_stage()`'s already-computed answer is threaded through
-    `commit()` via `known_checked`/`known_diverged` and reused, safe ONLY
-    because both calls run synchronously, back-to-back, inside the SAME
-    `ceremony_lock` hold (see `commit_scoped`'s own docstring for the full
-    argument). A THIRD call site, `wsc_tail._derive_trailers()`, computes
-    its own independent answer earlier in the full ceremony, BEFORE the
-    lock is even acquired -- deliberately NOT deduped with the two above,
-    since a peer session can mutate the tree in the unlocked gap between
-    that check and this pipeline's locked one; that site is not exercised
-    by this test, which calls `run_commit_pipeline()` directly rather than
-    the full `wsc_tail` handler. The 2026-08-04 fix adds ONE more
-    unconditional call, `git ls-files --deleted -- <paths>`
-    (`git_native.ls_files_deleted`) -- `explicit_stage()` needs it, every
-    call, to distinguish "this path was deleted from the worktree" from
-    "this path never existed" (see that function's own "Deletion staging"
-    docstring section); without it, a named deletion could never reach the
-    commit set at all (the live incident this fix closes). `< 16` is 15
-    measured plus small headroom, not a relaxation of the invariant below.
+    2026-08-04, defect A/B deletion-staging fix; `< 16` -> `< 19`,
+    2026-08-07, docs/plans/2026-08-07-excise-the-ceremony-lock.md § C10/C11):
+    the ORIGINAL `< 11` was "down from ~11" per the OLD external-process
+    chain this pipeline replaced, which mixed bash+node+git across three
+    different interpreters for the same ceremony -- that comparison is
+    still true and this pipeline still never leaves `git`. The bound moved
+    at 2026-07-27 because this pass now BUYS something the old chain never
+    had: `git_native.commit_scoped()` computes index/worktree divergence
+    from OBSERVED state and picks the commit mechanism accordingly, rather
+    than trusting an operator to pick `git commit -- <paths>` vs. a bare
+    `git commit` by hand (the shape of two real incidents -- claude-klabauter
+    506748a0, example-doctrine-repo 726925b2). That correctness costs one
+    `diverging_paths()` call (2 `git diff` subprocesses) in the AGREE case
+    this test exercises -- `commit_pipeline.explicit_stage()` needs it to
+    decide what is safe to `git add` without destroying a
+    deliberately-staged partial hunk. A THIRD call site,
+    `wsc_tail._derive_trailers()`, computes its own independent answer
+    earlier in the full ceremony -- deliberately NOT deduped with the two
+    above, since a peer session can mutate the tree in the gap between that
+    check and this pipeline's own; that site is not exercised by this test,
+    which calls `run_commit_pipeline()` directly rather than the full
+    `wsc_tail` handler. The 2026-08-04 fix adds ONE more unconditional
+    call, `git ls-files --deleted -- <paths>` (`git_native.ls_files_deleted`)
+    -- `explicit_stage()` needs it, every call, to distinguish "this path
+    was deleted from the worktree" from "this path never existed" (see that
+    function's own "Deletion staging" docstring section); without it, a
+    named deletion could never reach the commit set at all (the live
+    incident this fix closes).
+
+    2026-08-07 (docs/plans/2026-08-07-excise-the-ceremony-lock.md § C10/C11,
+    the `ceremony_lock` excision): the dedup this docstring used to describe
+    -- `explicit_stage()`'s divergence answer threaded into `commit_scoped()`
+    via `known_checked`/`known_diverged`, "safe only because both calls run
+    synchronously, back-to-back, inside the SAME `ceremony_lock` hold" -- no
+    longer exists, because that lock no longer exists (C1 strips its sole
+    acquisition site; `ceremony_lock.py` is an inert no-op shim). C10 removed
+    the dedup rather than trying to re-bound its soundness without a lock:
+    `commit_scoped()` now always derives divergence fresh for every path in
+    `commit_paths`, costing 2 more pathspec-scoped `git diff` subprocesses
+    per commit -- exactly the AGREE-case cost the 2027-07-27 dedup had
+    removed, now paid again since the lock that justified removing it is
+    gone (see `commit_scoped`'s own docstring, "OPTIONAL dedup seam"
+    paragraph, for the corrected precondition). C11 closed a second,
+    independent TOCTOU the same excision exposed: `commit()` used to capture
+    `committed_sha` via a blind post-commit `git rev-parse HEAD`, safe only
+    because it ran before the lock released; with no lock, that read could
+    return a concurrent sibling's own commit. `commit()` now resolves the
+    AGREE-branch `committed_sha` via ONE bounded, pathspec-scoped
+    `git log --grep=<message> --fixed-strings --format=%H <pre-sha>..HEAD --
+    <paths>` call matching this call's own commit message (failing loud on
+    zero or multiple matches, rather than falling back to the racy read);
+    the DIVERGED-branch sha needs no extra call at all, since
+    `commit_scoped()`'s own `stdout` is already the CAS-verified new sha.
+    Net for this test's AGREE-case pass: +2 (C10's fresh divergence check)
+    +1 (C11's message-match lookup) = +3 over the prior 15-call baseline,
+    landing at 18 measured. `wsc_tail._derive_trailers()` (the THIRD call
+    site above) is untouched by this change -- it was never lock-dependent,
+    just deliberately not deduped -- so its "BEFORE the lock is even
+    acquired" framing is dropped above as no longer meaningful, not because
+    its own behaviour changed. `< 19` is 18 measured plus the same one-call
+    headroom convention every prior bound move in this history used, not a
+    relaxation of the invariant below.
     """
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
@@ -472,11 +503,11 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
         assert "coordinator-session.sh" not in joined
         assert not joined.endswith(".sh") or "COMMIT_EDITMSG" in joined
 
-    # Bounded + collapsed: small headroom over the 15 measured post-dedup
-    # (see the docstring's "Bound history" for what the divergence-check and
-    # deletion-detection residuals buy and why the OLD `< 11`/`< 15` grew),
-    # and every one is `git` (see above).
-    assert 1 <= len(calls) < 16, f"spawn count {len(calls)} out of expected collapsed band: {calls}"
+    # Bounded + collapsed: small headroom over the 18 measured post-C10/C11
+    # (see the docstring's "Bound history" for what the divergence-check,
+    # deletion-detection, and sha-verification residuals buy and why the OLD
+    # `< 11`/`< 15`/`< 16` grew), and every one is `git` (see above).
+    assert 1 <= len(calls) < 19, f"spawn count {len(calls)} out of expected collapsed band: {calls}"
 
 
 def test_kpi_wsc_tail_blocking_path_under_2s(wsc_tail_repo, monkeypatch):
@@ -2143,18 +2174,23 @@ def test_wsc_tail_sync_seam_restores_synchronous_push_byte_for_byte(wsc_tail_rep
 
 
 def test_ac4_no_ceremony_lock_nesting_remains_on_any_live_path():
-    """AC4 (grep-assert): DEC-3 jettisoned `wsc_tail`'s outer `ceremony_lock`
-    hold entirely -- this module's live source must contain no `ceremony_
-    lock(...)` acquire call of any shape (only prose references to the name
-    in comments/docstrings are permitted). `run_commit_pipeline`'s own
-    internal lock (`commit_pipeline.py`) is the only `ceremony_lock`
-    acquired anywhere on this op's live path, and it is never nested."""
-    source = inspect.getsource(wsc_tail_mod)
-    assert "ceremony_lock(" not in source, (
-        "wsc_tail.py must acquire no ceremony_lock of its own (DEC-3 jettison) "
-        "-- found a `ceremony_lock(` call-shaped occurrence"
-    )
-    assert "with ceremony_lock" not in source
+    """AC9 (repo-wide reintroduction guard, re-pointed by C7,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md). Name pinned by AC9's
+    literal text (S3 close review, finding 6) -- the body below is
+    repo-wide, not scoped to nesting or to `wsc_tail`'s live path; if AC9's
+    wording is amended, this name should follow.
+
+    `ceremony_lock.py` was deleted outright by C7 -- the mutex it implemented
+    was killed by PM ruling (repeated shared-worktree wedges) and its
+    restoration is separately sized, explicitly out of scope for this plan.
+    This is the only executable enforcement of the plan's Anti-scope "do NOT
+    reimplement a mutex" -- but it enforces exactly one identifier
+    (`ceremony_lock`), not the Anti-scope's full "any file, any name" text; a
+    mutex reintroduced under a different name is NOT caught here and needs
+    plan review to catch. See `_ceremony_lock_guard.py`'s module docstring
+    for exactly what is and is not covered, and why."""
+    repo_root = Path(__file__).resolve().parents[4]
+    assert_no_ceremony_lock_reintroduction(repo_root)
 
 
 def test_wait_for_can_fire_during_wsc_tail_critical_section(wsc_tail_repo, monkeypatch):

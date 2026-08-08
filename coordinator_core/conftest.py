@@ -183,9 +183,17 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     """Redirect every home-resolution env var into a per-test throwaway dir.
 
     Autouse at the suite root, so it is instantiated before any package-local
-    autouse fixture and before the test body — a test that subsequently sets
-    ``HOME`` (or calls ``sandbox_home``) still wins, which is the intended
-    layering.
+    autouse fixture and before the test body. Fixture ORDERING alone does not
+    guarantee a later override wins, though: on Windows, ``expanduser``/
+    ``Path.home()`` consult ``USERPROFILE`` (then ``HOMEDRIVE``+``HOMEPATH``)
+    before ``HOME``, so a test that subsequently sets only ``HOME`` does NOT
+    win there — it silently keeps resolving into this fixture's quarantine
+    dir, because ``USERPROFILE`` is still set. Use
+    ``coordinator_core.testing.home_sandbox.sandbox_home``, which sets every
+    variable the running platform consults (including ``USERPROFILE`` and
+    clearing ``HOMEDRIVE``/``HOMEPATH``), whenever a test needs to *name* and
+    assert against its own sandboxed home rather than merely inherit this
+    fixture's throwaway one.
 
     Opt out with ``@pytest.mark.real_home`` when a test is a parity oracle
     against the LIVE tree — e.g. the emit-parity suite resolves the real
@@ -235,6 +243,28 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "coordinator-test@invalid")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "coordinator-test")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "coordinator-test@invalid")
+
+    # Second consequence of hiding ~/.gitconfig, same shape as the identity one
+    # above but with a GUI blast radius. Git for Windows ships no `man.exe`, so
+    # `git <verb> --help` resolves `help.format` to `web` and hands off to
+    # `git-web--browse`, which LAUNCHES THE OPERATOR'S DEFAULT BROWSER at a local
+    # `git-<verb>.html`. The operator's global mitigation for that (the
+    # help.format/web.browser/browser.noop.cmd triple) lives in ~/.gitconfig --
+    # which this fixture has just made invisible. Measured on 2026-08-07: with
+    # the quarantine applied, `git config --get web.browser` answers empty/rc=1
+    # on a box where the global triple is set, so the suite runs UNPROTECTED and
+    # any test shelling out to `git <verb> --help` sprays browser tabs (observed:
+    # dozens a minute from the bash-guard alternative-liveness gate).
+    # `GIT_CONFIG_*` is the injection form that survives a quarantined HOME.
+    # `browser.noop.cmd` is `eval`-ed by `git-web--browse`, so its value must
+    # stay free of shell metacharacters -- a parenthesis is a hard syntax error.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "help.format")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "web")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "web.browser")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "noop")
+    monkeypatch.setenv("GIT_CONFIG_KEY_2", "browser.noop.cmd")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "echo not-opening-browser-for:")
 
     # Belt-and-braces companion to the HOME/USERPROFILE quarantine above: this
     # fixture redirects the FILESYSTEM a test writes into, but a 2026-07-28

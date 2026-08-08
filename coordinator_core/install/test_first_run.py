@@ -8,6 +8,7 @@ each test is anchored to.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -562,6 +563,14 @@ def test_run_post_toolchain_preflight_failure_is_non_fatal(tmp_path, monkeypatch
 def _make_executable(path: Path, body: str = "#!/bin/sh\n") -> None:
     path.write_text(body)
     path.chmod(0o755)
+    if os.name == "nt":
+        # An extensionless shebang file with POSIX exec bits set is inert
+        # on Windows -- `win_portability.is_executable` (which this
+        # module's own machine-local-CLI probe uses) only recognizes a
+        # PATHEXT-suffixed sibling for an extensionless path. Without this,
+        # every test below silently falls onto the "not found/executable"
+        # WARNING branch regardless of what it's actually exercising.
+        path.with_name(path.name + ".exe").write_bytes(b"")
 
 
 def test_seed_registry_missing_claude_klabauter_root_warns_and_returns(monkeypatch, capsys):

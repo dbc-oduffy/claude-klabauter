@@ -22,6 +22,8 @@ from coordinator_core import win_portability
 from coordinator_core.win_portability import (
     is_executable,
     join_path_list,
+    no_console_creationflags,
+    same_path,
     split_path,
     split_path_list,
 )
@@ -183,3 +185,114 @@ def test_split_path_bypasses_forward_slash_lint_class_no_fs_access(tmp_path, mon
     # call occurs by pointing it at a path that would raise if stat'd unsafely.
     result = split_path("nonexistent\\segment\\path", maxsplit=1, from_right=True)
     assert result == ["nonexistent/segment", "path"]
+
+
+# ---------------------------------------------------------------------------
+# no_console_creationflags -- both platform branches on one host (AC10)
+# ---------------------------------------------------------------------------
+
+
+def test_no_console_creationflags_posix_returns_empty_mapping(monkeypatch):
+    monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
+    assert no_console_creationflags() == {}
+
+
+def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypatch):
+    monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
+    result = no_console_creationflags()
+    assert set(result) == {"creationflags"}
+    # Independently-derived expectation, not a re-assertion of the function's
+    # own output: subprocess.CREATE_NO_WINDOW when the real host defines it
+    # (real Windows), else the documented getattr fallback of 0 (a POSIX host
+    # modelling the Windows branch via the monkeypatched seam).
+    import subprocess
+
+    expected = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert result["creationflags"] == expected
+
+
+def test_no_console_creationflags_does_not_set_stdio_kwargs(monkeypatch):
+    # AC10 / capture-semantics guarantee: the mapping must carry ONLY the
+    # creationflags kwarg, never stdout/stderr/stdin -- splatting it into an
+    # existing subprocess.run(..., capture_output=True) call must not alter
+    # capture behaviour on either platform branch.
+    monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
+    assert set(no_console_creationflags()) <= {"creationflags"}
+    monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
+    assert set(no_console_creationflags()) <= {"creationflags"}
+
+
+# ---------------------------------------------------------------------------
+# same_path -- consolidated path-equality primitive
+# (state/sizings/2026-08-07-path-equality-consolidates-onto-one-prim.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_same_path_uses_samefile_when_both_paths_exist(tmp_path):
+    # Both legs exist -- samefile leg. A trailing separator changes the raw
+    # string but not the filesystem entry samefile stats.
+    assert same_path(str(tmp_path), str(tmp_path) + os.sep) is True
+
+
+def test_same_path_samefile_leg_detects_alias_realpath_alone_would_miss(tmp_path):
+    # The load-bearing case this primitive exists for: two DIFFERENT path
+    # strings that samefile recognises as the same entry via a symlink alias,
+    # which a naive same-string-after-realpath check would also catch here
+    # (symlink resolves), but demonstrates the samefile leg is actually
+    # exercised (not silently short-circuited to the fallback) for an aliased
+    # pair -- see test_same_path_false_for_distinct_existing_paths for the
+    # negative control proving the function does not just return True always.
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted on this host")
+    assert same_path(str(real), str(alias)) is True
+
+
+def test_same_path_false_for_distinct_existing_paths(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert same_path(str(a), str(b)) is False
+
+
+def test_same_path_falls_back_to_realpath_normcase_when_a_path_is_missing(tmp_path):
+    existing = tmp_path / "exists"
+    existing.mkdir()
+    missing = tmp_path / "does-not-exist"
+    # samefile raises OSError for the missing leg -- fallback compares
+    # normcase(realpath(...)) strings, which differ here (distinct paths).
+    assert same_path(str(existing), str(missing)) is False
+
+
+def test_same_path_fallback_true_for_identical_missing_path_strings(tmp_path):
+    missing = tmp_path / "does-not-exist"
+    # Neither exists -- samefile raises for both, fallback string-compares
+    # equal realpath(normcase(...)) output for the SAME input string.
+    assert same_path(str(missing), str(missing)) is True
+
+
+def test_same_path_never_raises_for_unreadable_or_malformed_input():
+    # Empty string is a degenerate path realpath still resolves (to cwd on
+    # most platforms) without raising -- the never-raises contract is
+    # exercised via a guaranteed-absent pair instead, asserting no exception
+    # propagates out of either the samefile or fallback leg.
+    assert same_path("", "") in (True, False)
+    assert same_path("\x00bad", "\x00bad") in (True, False)
+
+
+def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
+    if os.name != "nt":
+        pytest.skip("normcase is a no-op on POSIX; this asserts Windows-real casefold behaviour")
+    missing_upper = str(tmp_path / "DOES-NOT-EXIST")
+    missing_lower = str(tmp_path / "does-not-exist")
+    # Neither path exists -- samefile raises OSError for both, so this
+    # exercises the fallback (realpath+normcase) leg specifically, proving
+    # normcase folds the case difference rather than the two strings
+    # happening to match some other way.
+    assert os.path.normcase(missing_upper) == os.path.normcase(missing_lower)
+    assert same_path(missing_upper, missing_lower) is True

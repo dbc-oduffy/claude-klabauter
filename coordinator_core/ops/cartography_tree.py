@@ -85,7 +85,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("cartography.tree")
-async def _cartography_tree(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_tree(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.tree" handler.
 
     Required params: target_root. Optional: scope (see module docstring

@@ -59,7 +59,7 @@ Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 generations of defect found in the same session:
 
   1. The ORIGINAL bash-ported version baked a literal
-     `$HOME/.claude/plugins/coordinator/bin/...` path into
+     `$HOME/.claude/plugins/coordinator-claude/coordinator/bin/...` path into
      every emitted hook. Commit b644d5a9 migrated the whole executable
      surface into this repo (`claude-klabauter/coordinator/bin/`); that literal
      directory has not existed since. Every gate was guarded by a plain
@@ -276,10 +276,13 @@ def _git_toplevel(target: str) -> Optional[str]:
     parity with the bash oracle's `|| { ...skip...; exit 0; }` branch.
     """
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "-C", target, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _git_toplevel: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

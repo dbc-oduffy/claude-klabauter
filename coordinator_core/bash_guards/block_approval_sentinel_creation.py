@@ -181,9 +181,17 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
     _tokenize_full_command,
 )
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: Widened 2026-08-07 (C4e) from `["Bash"]` -- this guard now also declares
+#: a verdict (or SILENT) for PowerShell, per the plan's per-guard-dialect-
+#: declaration ruling (Doubt-check (2)). See `check()`'s own dialect gate.
+#: A direct reference to the shared universe (C2 declaration-form
+#: conversion) -- never a copy or re-wrap -- since this guard covers the
+#: full command tool-name universe.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 #: The exact basename this guard protects. Never relaxed to a substring/
@@ -501,8 +509,16 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 _detector = _ApprovalSentinelDetector(_TARGET_BASENAME)
 
 
-def _evaluate(cmd: str):
-    return _detector.evaluate(cmd)
+def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
+    """`dialect=None`/`Dialect.BASH` preserves the exact pre-C4e call shape
+    (`_detector.evaluate(cmd)`, AC4) -- only a genuinely recognized
+    non-bash dialect routes through the new dialect-aware entry point (see
+    `_sentinel_creation_guard.SentinelCreationDetector.evaluate_for_dialect`)."""
+    if dialect is None or dialect is Dialect.BASH:
+        return _detector.evaluate(cmd)
+    return _detector.evaluate_for_dialect(
+        cmd, dialect, guard_name="block_approval_sentinel_creation"
+    )
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
@@ -581,8 +597,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # fail_closed=True entries route an uncaught exception through its
     # crash-deny wrapper); catching and swallowing an unexpected error into
     # a silent allow here would defeat that contract.
-    if (payload.get("tool_name") or "") != "Bash":
+    tool_name = payload.get("tool_name") or ""
+    if tool_name not in MATCHERS:
         return None
+    dialect = dialect_from_tool_name(tool_name)
 
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
@@ -600,7 +618,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # quoted spellings" coverage this guard is chartered to close. The
     # tokenized pass below is cheap enough that skipping this pre-filter is
     # not a meaningful cost.
-    deny, reason_kind, reason_class = _evaluate(cmd)
+    deny, reason_kind, reason_class = _evaluate(cmd, dialect)
     if not deny:
         return None
 

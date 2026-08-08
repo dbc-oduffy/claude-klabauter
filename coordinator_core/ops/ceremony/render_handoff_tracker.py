@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,7 +197,7 @@ def render_handoff_lineage(
 
 
 @register_op("ceremony.render_handoff_tracker")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'ceremony.render_handoff_tracker' handler — C9 disk seam.
 
     Parameters (params dict):
@@ -290,7 +291,7 @@ def _detect_root(specified: str) -> str:
             text=True,
             timeout=10,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if result.returncode == 0:
             toplevel = result.stdout.strip()

@@ -265,7 +265,7 @@ def write_stamped_manifest(manifest_path: Path, manifest: dict[str, Any]) -> Non
 
 
 @register_op("distill.stamp_disposal")
-async def _handler(params: dict, repo_root: Path | None = None) -> dict:
+def _handler(params: dict, repo_root: Path | None = None) -> dict:
     """distill.stamp_disposal handler.
 
     Params:

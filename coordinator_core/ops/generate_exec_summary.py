@@ -64,6 +64,7 @@ from __future__ import annotations
 import glob
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
@@ -315,7 +316,7 @@ def _run_git_log(repo_root: str) -> str:
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _run_git_log: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -519,7 +520,7 @@ def _resolve_repo_root() -> Optional[str]:
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _resolve_repo_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

@@ -69,7 +69,7 @@ from coordinator_core.cartography.symbols import build_symbols
 
 
 @register_op("cartography.symbols")
-async def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.symbols" handler.
 
     Args (via params):

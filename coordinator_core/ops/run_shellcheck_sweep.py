@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 import tempfile
 from pathlib import Path
@@ -93,7 +94,7 @@ def _run_git(repo_root: Path, args: List[str]) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(
@@ -149,7 +150,7 @@ def _lint_one_file(repo_root: Path, rel_path: str) -> List[dict]:
                 capture_output=True,
                 text=True,
                 timeout=_SHELLCHECK_TIMEOUT_SECONDS,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(_SHELLCHECK_NOT_FOUND_MESSAGE) from exc

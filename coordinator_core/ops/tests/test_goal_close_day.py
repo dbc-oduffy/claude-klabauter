@@ -27,8 +27,8 @@ TODAY = "2026-07-25"
 YESTERDAY = "2026-07-24"
 TOMORROW = "2026-07-26"
 
-REPO = "dbc-example-operator/claude-klabauter"
-OTHER_REPO = "dbc-example-operator/.example-doctrine-mirror-repo"
+REPO = "dbc-oduffy/claude-klabauter"
+OTHER_REPO = "dbc-oduffy/.example-doctrine-mirror-repo"
 
 
 def _row(**overrides) -> dict:

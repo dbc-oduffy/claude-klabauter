@@ -222,6 +222,12 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     _BUNDLED_C_FLAG_RE,
     _C_FLAG_INTERPRETERS,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+)
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._write_bump_applicability import (
     bump_applies,
     is_agent_memory_store_path,
@@ -245,8 +251,12 @@ from coordinator_core.bash_guards._write_bump_message import (
     resolve_agent_class,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    PS_SET_LOCATION_ALIASES,
+    extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
+    extract_write_sink_targets_powershell,
     nearest_existing_ancestor as _nearest_existing_ancestor,
+    resolve_relative as _resolve_relative,
 )
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
@@ -263,19 +273,6 @@ def _deny(reason: str) -> Dict[str, Any]:
             "permissionDecisionReason": reason,
         }
     }
-
-
-def _resolve_relative(base: str, target: str) -> str:
-    """`target` resolved against `base` if relative, else `target` itself
-    verbatim. Mirrors `bump_foreign_repo_write._resolve_relative` exactly
-    (private to that sibling module, so re-stated here rather than
-    imported -- same shape both guards need for their own cwd-tracking)."""
-    if not target:
-        return base
-    expanded = os.path.expanduser(target) if target.startswith("~") else target
-    if os.path.isabs(expanded):
-        return expanded
-    return os.path.join(base, expanded)
 
 
 def _resolve_and_casefold(raw: str) -> Optional[str]:
@@ -410,13 +407,20 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
 # ---------------------------------------------------------------------------
 
 
-def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[str, str]]:
-    """Yield `(target_dir, label)` for every write-sink candidate this
-    command carries -- every depth of `resolve_command_positions`'s own
+def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[str, str, str]]:
+    """Yield `(target_dir, label, raw_target)` for every write-sink candidate
+    this command carries -- every depth of `resolve_command_positions`'s own
     result (so `bash`/`sh`/`zsh -c` payloads, already unwrapped by that
     shared tokenizer, are covered for free), PLUS a manual unwrap of any
     depth-0 `python`/`python3 -c` payload (the one leg the shared tokenizer
     does not auto-recurse -- see module docstring).
+
+    `raw_target` (R1, docs/plans/2026-08-08-the-bump-message-never-showed-
+    the-operat.md) is the literal token this segment carried BEFORE
+    `_resolve_relative`/`translate_msys_path` touched it -- captured here,
+    at the point of extraction, rather than reconstructed later from
+    `target_dir` (AC2: a reconstructed value is the translated path wearing
+    a different label, not a raw token).
 
     `cd` cwd-tracking applies only at depth 0 -- a `cd` inside a nested `-c`
     payload does not move the OUTER command's own effective cwd, and
@@ -444,11 +448,20 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
         if rc.depth == 0 and head_base == "cd":
             positional = [t for t in rc.tokens[1:] if not t.startswith("-")]
             if len(positional) == 1:
-                effective_cwd = _resolve_relative(effective_cwd, positional[0])
+                # `None` means untranslatable -- a `cd` we cannot resolve
+                # must not poison every subsequent candidate in this
+                # segment, so leave `effective_cwd` at its previous value
+                # rather than clobbering it with `None`.
+                resolved = _resolve_relative(effective_cwd, positional[0])
+                if resolved is not None:
+                    effective_cwd = resolved
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
-            yield (_resolve_relative(effective_cwd, raw_target), head_base)
+            resolved_target = _resolve_relative(effective_cwd, raw_target)
+            if resolved_target is None:
+                continue
+            yield (resolved_target, head_base, raw_target)
 
         if rc.depth == 0 and head_base in _C_FLAG_INTERPRETERS:
             inline_payload = _extract_inline_c_payload(rc.tokens[1:])
@@ -463,7 +476,10 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
                     continue
                 nested_head = normalize_executable_basename(nrc.tokens[0])
                 for raw_target in extract_write_sink_targets_for_segment(nrc.tokens, nested_head):
-                    yield (_resolve_relative(effective_cwd, raw_target), nested_head)
+                    resolved_target = _resolve_relative(effective_cwd, raw_target)
+                    if resolved_target is None:
+                        continue
+                    yield (resolved_target, nested_head, raw_target)
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +509,28 @@ def check_bump_outside_repo_write(
          marker (checked against the session's own anchor gitdir) already
          clears it.
     """
+    # DIALECT GATE (C4e, 2026-08-07 -- guard-dialect-coverage.md row 15;
+    # follow-up dispatch, same date, converted the blanket PowerShell SILENT
+    # below into real detection once the PM authorized extending this
+    # cohort's scope into `_write_bump_sink_shapes.py`). `Dialect.POWERSHELL`
+    # now routes to `_check_bump_outside_repo_write_powershell`, which
+    # detects ONLY the cmdlet-shaped write table C3's triage named as the
+    # genuinely unmatched gap (`New-Item`/`Set-Content`/`Add-Content`/
+    # `Copy-Item`/`Move-Item`/`Out-File`/`Tee-Object`, added to
+    # `_write_bump_sink_shapes.py` as `PS_WRITE_SINK_CMDLETS`/
+    # `extract_write_sink_targets_powershell`) -- `cp`/`mv` PowerShell
+    # aliases are NOT duplicated here (already fire via alias collision
+    # elsewhere) and `>`/`>>` are left alone (same operator characters in
+    # both dialects, not this leg's to re-derive). Every other PowerShell
+    # shape -- a bare redirect, an alias, an unrecognized cmdlet, or a
+    # command this dialect's tokenizer cannot parse at all -- still records
+    # SILENT and declines, per "prefer SILENT to a guess wherever PowerShell
+    # semantics are unclear" (see that function's own docstring). `Dialect.
+    # BASH`/`None` falls through unchanged below (AC4).
+    dialect = dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None)
+    if dialect is Dialect.POWERSHELL:
+        return _check_bump_outside_repo_write_powershell(cmd, session_id, cwd, payload)
+
     if not cmd or not cmd.strip() or not session_id:
         return None
 
@@ -517,7 +555,7 @@ def check_bump_outside_repo_write(
     anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
     effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
 
-    for target_dir, _label in _iter_write_sink_candidates(cmd, cwd):
+    for target_dir, _label, raw_target in _iter_write_sink_candidates(cmd, cwd):
         probe_dir = _nearest_existing_ancestor(target_dir)
         if probe_dir is None:
             # No existing ancestor at all -- cannot resolve a git root
@@ -578,7 +616,231 @@ def check_bump_outside_repo_write(
             sandbox_root=sandbox_root,
             destination_class=destination_class,
             destination_owner=destination_owner,
+            raw_target=raw_target if raw_target != target_dir else "",
         )
         return _deny(message)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# PowerShell-dialect leg (C4e follow-up, 2026-08-07, guard-dialect-coverage.md
+# row 15). Mirrors `check_bump_outside_repo_write`'s own applicability/
+# marker/message wiring exactly -- kept as a fully separate function (not
+# interleaved into the bash body) so the bash leg's AC4 byte-identical-
+# behaviour requirement carries zero risk from this addition, matching the
+# same "kept separate" reasoning `block_subagent_destructive_action.
+# _check_powershell` states for its own PowerShell leg.
+# ---------------------------------------------------------------------------
+
+
+def _check_bump_outside_repo_write_powershell(
+    cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg. Detects ONLY the cmdlet-shaped write-sink
+    table `_write_bump_sink_shapes.PS_WRITE_SINK_CMDLETS` names (`New-Item`/
+    `Set-Content`/`Add-Content`/`Copy-Item`/`Move-Item`/`Out-File`/
+    `Tee-Object`) -- the single gap C3's triage (guard-dialect-coverage.md
+    row 15) found genuinely unmatched. Every other PowerShell shape in a
+    given command -- a bare `>`/`>>` redirect, a `cp`/`mv` alias, an
+    unrecognized cmdlet, or a segment this dialect's tokenizer cannot parse
+    at all -- records SILENT and is never treated as "inspected and clean",
+    per this plan's "prefer SILENT to a guess" posture (mirrors
+    `block_subagent_destructive_action._evaluate_powershell_destructive`'s
+    own SILENT-on-unmatched-shape discipline).
+
+    TRACKS `Set-Location`/`cd`/`sl`/`chdir` ACROSS SEGMENTS (fixed
+    2026-08-08, parity fix mirroring `bump_foreign_repo_write.py`'s own
+    `_check_bump_foreign_repo_write_powershell`, which closed the identical
+    gap for backlog row
+    `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`), and
+    the bash body's own `effective_cwd` tracking
+    (`_iter_write_sink_candidates`'s `cd` branch) -- one mechanism mirrored,
+    not a second invented: a running `effective_cwd` is threaded across
+    segments, updated by each resolvable `Set-Location`/alias target
+    (`extract_set_location_target_powershell`), so a cmdlet write-target
+    candidate extracted AFTER a directory change resolves against the
+    changed base, not the original `cwd`.
+
+    SILENT-NOT-DENY IS ABSOLUTE HERE: once a `Set-Location` target fails to
+    resolve (`_resolve_relative` returns `None` -- an unresolvable literal,
+    a `$var`-shaped or otherwise unexpanded target), `effective_cwd` is left
+    UNTRUSTED for the remainder of this command: every subsequent
+    write-sink candidate is declined outright (never judged, never a
+    guessed base) rather than resolved against a now-possibly-stale cwd.
+    This guard's predicate is the INVERSE of `bump-foreign-repo-write`'s
+    (fires when a target resolves under NO git root at all, not under a
+    DIFFERENT one) but the cwd-tracking machinery is identical; only the
+    verdict computed from the resolved `target_dir` differs, and that
+    verdict logic below is untouched by this fix.
+
+    Only LITERAL `Set-Location` targets are followed -- a target containing
+    `$` (a PowerShell variable, `$env:` reference, or `$(...)`
+    subexpression) is NEVER handed to `_resolve_relative` at all, since
+    composing it onto `effective_cwd` would silently manufacture a
+    wrong-but-plausible-looking base. It is treated identically to an
+    `_resolve_relative`-unresolvable target: `effective_cwd` goes untrusted
+    and every later candidate in this command is declined. A bare
+    `Set-Location`/`cd` with no argument (real PowerShell's `$HOME` default,
+    which this module has no reliable way to resolve) is treated as "cwd
+    unchanged", never as "cwd now unknown" -- see
+    `extract_set_location_target_powershell`'s own docstring.
+    """
+    if not cmd or not cmd.strip() or not session_id:
+        return None
+
+    env = os.environ
+
+    if not bump_applies(session_id, cwd=cwd, env=env):
+        return None
+
+    if not session_anchor_has_git_repo(session_id, cwd=cwd, env=env):
+        return None
+
+    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
+    if not anchor:
+        return None
+    anchor_gitdir = resolve_gitdir(anchor)
+    if anchor_gitdir is None:
+        return None
+
+    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
+    anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
+    effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
+
+    segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="bump-outside-repo-write")
+    if segments is None:
+        # SILENT already recorded by `resolve_segments_for_dialect` itself
+        # (ImportError, `has_error` parse residue, absent dialect) -- no
+        # second SILENT path needed for that case.
+        return None
+
+    effective_cwd = cwd or os.getcwd()
+    matched_any_cmdlet = False
+    cwd_unresolved = False
+
+    for tokens, _pipe_before in segments:
+        if not tokens:
+            continue
+        head_low = tokens[0].lower()
+
+        if head_low in PS_SET_LOCATION_ALIASES:
+            target = extract_set_location_target_powershell(tokens, head_low)
+            if target is None:
+                # Bare `Set-Location`/`cd` with no argument -- treated as
+                # "cwd unchanged", never as "cwd now unknown" (see this
+                # function's own docstring).
+                continue
+            if cwd_unresolved:
+                # Already lost track of the base -- nothing this segment
+                # resolves against can be trusted either, so skip without
+                # re-recording (one SILENT per command is enough signal).
+                continue
+            if "$" in target:
+                # Variable-valued target -- never composed onto
+                # `effective_cwd` (would guess a base); go SILENT for the
+                # rest of this command instead.
+                cwd_unresolved = True
+                record_silent(
+                    "bump-outside-repo-write",
+                    "PowerShell leg's Set-Location target %r is variable-"
+                    "valued -- every subsequent write-sink candidate in "
+                    "this command is declined rather than resolved "
+                    "against a guessed base (see this function's own "
+                    "docstring)" % target,
+                )
+                continue
+            resolved = _resolve_relative(effective_cwd, target)
+            if resolved is None:
+                cwd_unresolved = True
+                record_silent(
+                    "bump-outside-repo-write",
+                    "PowerShell leg's Set-Location target %r could not be "
+                    "resolved -- every subsequent write-sink candidate in "
+                    "this command is declined rather than judged against "
+                    "an untrusted base cwd (see this function's own "
+                    "docstring)" % target,
+                )
+            else:
+                effective_cwd = resolved
+            continue
+
+        raw_targets = extract_write_sink_targets_powershell(tokens, head_low)
+        if not raw_targets:
+            continue
+        matched_any_cmdlet = True
+
+        if cwd_unresolved:
+            # The base this segment's candidates would resolve against is
+            # untrusted (an earlier Set-Location in this command failed to
+            # resolve) -- decline every candidate rather than judge them
+            # against a wrong parent (see this function's own docstring).
+            continue
+
+        for raw_target in raw_targets:
+            target_dir = _resolve_relative(effective_cwd, raw_target)
+            if target_dir is None:
+                # Untranslatable -- fail open, no verdict for this
+                # candidate (this guard family's FAIL OPEN posture).
+                continue
+            probe_dir = _nearest_existing_ancestor(target_dir)
+            if probe_dir is None:
+                continue
+            target_gitdir = resolve_gitdir(probe_dir)
+            if target_gitdir is not None:
+                continue
+
+            if _target_is_always_allowed(probe_dir, anchor_git_root_str, effective_sid, env=env):
+                continue
+
+            if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
+                continue
+
+            agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, anchor_git_root_str)
+            sandbox_root = (
+                _sandbox_root(anchor_git_root_str, effective_sid) if agent_class == AGENT_CLASS_SUBAGENT else ""
+            )
+
+            destination_class = (
+                DESTINATION_PUBLISH
+                if target_is_publish_destination(target_dir, env=env)
+                else DESTINATION_FOREIGN
+            )
+            destination_owner = (
+                publish_destination_owner(target_dir, env=env)
+                if destination_class == DESTINATION_PUBLISH
+                else ""
+            )
+
+            record_applicability_event(
+                session_id,
+                repo=anchor_git_root_str,
+                target=target_dir,
+                agent_class=agent_class,
+                cwd=cwd,
+            )
+
+            message = render_bump_message(
+                agent_class=agent_class,
+                target_repo="no git repo (%s)" % target_dir,
+                session_repo=anchor_git_root_str,
+                gitdir=anchor_gitdir,
+                session_id=effective_sid,
+                sandbox_root=sandbox_root,
+                destination_class=destination_class,
+                destination_owner=destination_owner,
+                raw_target=raw_target if raw_target != target_dir else "",
+            )
+            return _deny(message)
+
+    if not matched_any_cmdlet and not cwd_unresolved:
+        record_silent(
+            "bump-outside-repo-write",
+            "PowerShell leg matched no recognized cmdlet write-sink verb "
+            "(New-Item/Set-Content/Add-Content/Copy-Item/Move-Item/Out-File/"
+            "Tee-Object) -- redirection operators, cp/mv aliases, and any "
+            "other PowerShell shape are declined rather than guessed at "
+            "(see this function's own docstring)",
+        )
 
     return None

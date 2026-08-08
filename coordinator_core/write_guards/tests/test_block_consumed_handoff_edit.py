@@ -637,6 +637,24 @@ class TestGuardStillDenies:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+class TestDriveRootContainmentGate:
+    """Discriminates the drive-root trailing-backslash defect directly:
+    a `git_root` of a bare Windows drive root (`X:\\`) previously composed a
+    double-slash `expected_prefix` (`rstrip("/")` does not strip a trailing
+    backslash), which never matched the single-slash form `Path.resolve()`
+    produces on the candidate side -- the gate went silently inert and
+    `_normalize_and_gate` returned `None` for every candidate. Proven to
+    fail against the pre-fix `rstrip("/")` spelling before this fix landed.
+    """
+
+    def test_drive_root_git_root_still_matches(self):
+        result = guard._normalize_and_gate(
+            "state/handoffs/2026-07-20_120000_abc.md", "X:\\"  # abs-path-ok: synthetic drive-root literal, not a repo path citation
+        )
+
+        assert result is not None
+
+
 # ---------------------------------------------------------------------------
 # 5. Pass-through behavior preserved
 # ---------------------------------------------------------------------------

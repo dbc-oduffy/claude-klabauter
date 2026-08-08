@@ -108,9 +108,10 @@ from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
 )
 from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
 from coordinator_core.daily_day import local_day
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
-MATCHERS = ["Bash"]
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 43
 
 #: Cheap pre-filter -- a candidate creation-shaped invocation must at least
@@ -215,7 +216,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     docstring "WHAT THIS DOES").
     """
     try:
-        if (payload.get("tool_name") or "") != "Bash":
+        if (payload.get("tool_name") or "") not in MATCHERS:
             return None
 
         tool_input = payload.get("tool_input") or {}

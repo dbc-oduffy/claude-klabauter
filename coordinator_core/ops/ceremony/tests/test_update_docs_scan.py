@@ -28,7 +28,6 @@ Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.m
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 import os
 from pathlib import Path
@@ -49,8 +48,8 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    return result
 
 
 def _set_mtime(path: Path, when: _dt.datetime) -> None:

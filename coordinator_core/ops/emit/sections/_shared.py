@@ -50,11 +50,14 @@ def run_git(repo_root: Path, *args: str) -> Optional[str]:
     is identical to context._run_git.
     """
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         out = subprocess.run(
             ["git", "-C", str(repo_root), *args],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return None

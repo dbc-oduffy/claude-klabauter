@@ -87,6 +87,7 @@ if str(_THIS_REPO_ROOT) not in sys.path:
 
 from coordinator_core.dag import _parse_frontmatter  # noqa: E402
 from coordinator_core.machine_resolver import registry_get  # noqa: E402
+from coordinator_core.ops.ceremony.git_native import cat_file_batch  # noqa: E402
 from coordinator_core.ops.handoff_reconcile import (  # noqa: E402
     _AWAITING_GATE_STATE,
     _collect_all_handoffs_for_gate_index,
@@ -161,9 +162,12 @@ def _load_gate_eval_at(claude_klabauter_root: Path, sha: str, module_name: str) 
     distinct `sys.modules` keys, or the second `exec` would silently rebind the
     first snapshot's globals.
     """
+    from coordinator_core.win_portability import no_console_creationflags
+
     source = subprocess.run(
         ["git", "-C", str(claude_klabauter_root), "show", f"{sha}:coordinator_core/reconcile/gate_eval.py"],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout
     spec = importlib.util.spec_from_loader(module_name, loader=None)
     module = importlib.util.module_from_spec(spec)
@@ -257,9 +261,12 @@ def _git_ls_corpus_files(repo_root: Path, ref: str) -> List[str]:
     tree has since deleted/moved (the migration's "disappeared" side) and never
     a path the working tree has added since (the migration's "appeared" side).
     """
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", ref, "--", *_CORPUS_TREE_ROOTS],
         capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         return []
@@ -270,9 +277,12 @@ def _git_show_blob(repo_root: Path, ref: str, rel_path: str) -> Optional[str]:
     """Read `rel_path` as it existed at `ref` via `git show <ref>:<path>` into an
     in-memory string -- never `git checkout`, so the working tree the live/new
     corpus read relies on is never disturbed by reading the old corpus state."""
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         ["git", "-C", str(repo_root), "show", f"{ref}:{rel_path}"],
         capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         return None
@@ -290,18 +300,27 @@ def _gated_batons_for_repo_at_ref(
     `_collect_open_handoffs` applies) so a ref-based read classifies a baton
     identically to how a working-tree read at that same content would.
 
+    Reads every blob via ONE `coordinator_core.ops.ceremony.git_native
+    .cat_file_batch` feed instead of one `git show` spawn per file (the N+1
+    site this function used to be). That helper was authored locally here
+    (C5) and promoted to the shared git-wrapper module (C36) once a second
+    call site needed the same primitive -- see its docstring there.
+
     `scan_errors` is always `[]` here -- an unreadable blob at a pinned ref is a
-    hard `git show` failure surfaced by raising, not a soft scan gap; unlike a
-    live filesystem walk, there is no partial/racing state a historical git
-    read can land in.
+    hard failure surfaced by raising, not a soft scan gap; unlike a live
+    filesystem walk, there is no partial/racing state a historical git read
+    can land in.
     """
+    rel_paths = _git_ls_corpus_files(repo_root, ref)
+    contents = cat_file_batch(repo_root, ref, rel_paths)
     all_handoffs: List[Dict[str, Any]] = []
-    for rel_path in _git_ls_corpus_files(repo_root, ref):
-        content = _git_show_blob(repo_root, ref, rel_path)
+    for rel_path in rel_paths:
+        content = contents.get(rel_path)
         if content is None:
             raise RuntimeError(
-                f"corpus axis: git show {ref}:{rel_path} failed in {repo_root} -- "
-                "ls-tree listed this path but show could not read it"
+                f"corpus axis: git cat-file --batch could not resolve "
+                f"{ref}:{rel_path} in {repo_root} -- "
+                "ls-tree listed this path but the batch feed could not read it"
             )
         meta = _parse_frontmatter(content)
         if not meta:

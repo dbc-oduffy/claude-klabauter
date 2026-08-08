@@ -167,7 +167,7 @@ def age_ping(
 
 
 @register_op("queue.age_ping")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         return {"exit_code": 1, "error": "queue.age_ping: repo_root is required"}
 

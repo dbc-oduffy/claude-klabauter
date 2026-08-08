@@ -228,7 +228,19 @@ class TestAssertPathsInSessionScope:
         assert "'shared.py'" in reason
         assert "'orphan.py'" in reason
         assert "orphan" in reason
+        # CORRECTED 2026-08-07 (pass 2): this assertion used to read "claimed
+        # by DEAD session other (claim is reapable)", and it PASSED — but it
+        # was pinning the defect, not the property. "other" is init'd IN THIS
+        # FIXTURE REPO with a fresh `last_activity`, so it is genuinely live;
+        # it only read DEAD because the zero-arg oracle resolved its session
+        # registry from the PROCESS cwd (the real claude-klabauter checkout) instead of
+        # `cwd` (this tmp repo), where "other" does not exist at all. That is
+        # the same cross-repo miss the example-doctrine-repo incident hit against a real
+        # peer. With the oracle cwd-scoped, the end-to-end path now earns the
+        # right verdict against the real oracle — which is what this
+        # assertion was always meant to prove.
         assert "claimed by live session other" in reason
+        assert "reapable" not in reason
 
     def test_allowed_remainder_named_as_committable_and_exact(self, tmp_path):
         """The uncontested remainder (allowed paths) appears in the message
@@ -503,6 +515,149 @@ class TestAlreadyCleanClassification:
         assert classification != scope_report._CLASSIFICATION_UNCLASSIFIED
 
 
+class TestClassifyDeniedPathLiveness:
+    """`_classify_denied_path`'s ownership branch must EARN "live", never
+    assert it from a bare format-string interpolation of `compute_offer`'s
+    reason field (break-class fix, 2026-08-07 — example-doctrine-repo report). Three
+    branches, exercised directly against a minimal offer dict so each is
+    deterministic — liveness monkeypatched at the `scope_report` module
+    seam rather than relying on a real session's actual live/dead state.
+    `test_multi_path_denial_enumerates_every_denied_path` above proves the
+    same contract end-to-end against the real oracle."""
+
+    def _offer_with_reason(self, reason):
+        return {"excluded": [{"path": "shared.py", "reason": reason}]}
+
+    def test_bare_sid_live_earns_live_wording(self, monkeypatch):
+        offer = self._offer_with_reason("owned by session other")
+        monkeypatch.setattr(
+            scope_report, "live_session_ids", lambda cwd=None: frozenset({"other"})
+        )
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == "claimed by live session other"
+
+    def test_bare_sid_not_live_names_the_read_but_withholds_the_remedy(self, monkeypatch):
+        """A refusal must never prescribe reaping (2026-08-07 memo, break-class):
+        the remedy is the actionable half of the message, and acting on it means
+        committing over a peer's in-flight surface. Name the observation, not a
+        licence."""
+        offer = self._offer_with_reason("owned by session other")
+        monkeypatch.setattr(
+            scope_report, "live_session_ids", lambda cwd=None: frozenset({"someone-else"})
+        )
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == (
+            "claimed by session other (holder reads NOT live in this repo; "
+            "NOT a licence to reap — re-verify the holder before any takeover)"
+        )
+        assert "reapable" not in classification
+
+    def test_liveness_oracle_is_asked_about_the_target_repo_not_the_process_cwd(
+        self, monkeypatch
+    ):
+        """Session registries are per-repo (`<repo>/.git/coordinator-sessions/`),
+        so "is <sid> live?" is only answerable relative to a repo. The zero-arg
+        oracle resolved from the PROCESS cwd, so a cross-repo invocation read
+        every peer of the TARGET repo as not-live — the reported incident.
+        `cwd` must reach the oracle."""
+        offer = self._offer_with_reason("owned by session other")
+        seen = []
+
+        def _oracle(cwd=None):
+            seen.append(cwd)
+            return frozenset({"other"}) if cwd == "/target/repo" else frozenset({"noise"})
+
+        monkeypatch.setattr(scope_report, "live_session_ids", _oracle)
+        classification = scope_report._classify_denied_path(
+            "shared.py", offer, [], cwd="/target/repo"
+        )
+        assert seen == ["/target/repo"]
+        assert classification == "claimed by live session other"
+
+    def test_assert_paths_threads_cwd_through_to_the_oracle(self, monkeypatch):
+        """End-to-end on the threading itself: the `cwd` the caller passes to
+        `assert_paths_in_session_scope` (already used for `compute_offer` and
+        the positive-evidence check) must be the same one the liveness oracle
+        answers for — they must not disagree about WHICH repo."""
+        monkeypatch.setattr(
+            scope_report,
+            "compute_offer",
+            lambda session_id, cwd: {
+                "safe_paths": [],
+                "excluded": [{"path": "shared.py", "reason": "owned by session other"}],
+                "orphans": [],
+            },
+        )
+        seen = []
+        monkeypatch.setattr(
+            scope_report,
+            "live_session_ids",
+            lambda cwd=None: (seen.append(cwd) or frozenset({"other"})),
+        )
+        ok, reason = scope_report.assert_paths_in_session_scope(
+            "me", ["shared.py"], "/target/repo"
+        )
+        assert ok is False
+        assert seen == ["/target/repo"]
+        assert "claimed by live session other" in reason
+
+    def test_non_bare_token_remainder_never_asserts_dead(self, monkeypatch):
+        """`safe_commit_offer`'s degraded-owner reason ("unknown (claims
+        unreadable: other)") is not a session id — feeding it to the oracle
+        would deterministically read as not-live and mint a NEW false DEAD
+        assertion, exactly the defect this fix removes. The oracle must not
+        even be consulted for this shape."""
+        offer = self._offer_with_reason("owned by session unknown (claims unreadable: other)")
+        calls = []
+        monkeypatch.setattr(
+            scope_report,
+            "live_session_ids",
+            lambda cwd=None: (calls.append(1) or frozenset()),
+        )
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == (
+            "claimed by session unknown (claims unreadable: other) (liveness not checked)"
+        )
+        assert not calls  # oracle never consulted for a non-bare-token remainder
+
+    def test_agent_race_window_remainder_also_routes_to_branch_three(self, monkeypatch):
+        offer = self._offer_with_reason(
+            "owned by session unknown (agent race window, no em-session-id.txt yet)"
+        )
+
+        def _must_not_be_called(cwd=None):
+            raise AssertionError("oracle must not be called for a non-bare-token remainder")
+
+        monkeypatch.setattr(scope_report, "live_session_ids", _must_not_be_called)
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == (
+            "claimed by session unknown (agent race window, no em-session-id.txt yet) "
+            "(liveness not checked)"
+        )
+
+    def test_oracle_raising_is_treated_as_unknown_not_dead(self, monkeypatch):
+        """The oracle's documented empty-on-error contract makes an empty
+        result indistinguishable from "nothing is live" — an oracle exception
+        must not be allowed to masquerade as a confirmed-dead verdict either."""
+        offer = self._offer_with_reason("owned by session other")
+
+        def _boom(cwd=None):
+            raise RuntimeError("simulated liveness oracle failure")
+
+        monkeypatch.setattr(scope_report, "live_session_ids", _boom)
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == "claimed by session other (liveness not checked)"
+        assert "DEAD" not in classification
+
+    def test_oracle_empty_result_treated_as_unknown_not_dead(self, monkeypatch):
+        offer = self._offer_with_reason("owned by session other")
+        monkeypatch.setattr(
+            scope_report, "live_session_ids", lambda cwd=None: frozenset()
+        )
+        classification = scope_report._classify_denied_path("shared.py", offer, [])
+        assert classification == "claimed by session other (liveness not checked)"
+
+
 # ---------------------------------------------------------------------------
 # (b) session.scope_report op
 # ---------------------------------------------------------------------------
@@ -515,7 +670,7 @@ class TestScopeReportOp:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        result = asyncio.run(_handler({"session_id": "mine", "cwd": str(repo)}))
+        result = _handler({"session_id": "mine", "cwd": str(repo)})
         expected = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert result == expected
 
@@ -524,7 +679,7 @@ class TestScopeReportOp:
         core.init("mine", cwd=str(repo))
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "mine")
 
-        result = asyncio.run(_handler({"cwd": str(repo)}))
+        result = _handler({"cwd": str(repo)})
         assert result["session_id"] == "mine"
 
     def test_op_unresolvable_session_id_returns_error_envelope_not_raise(self, tmp_path, monkeypatch):
@@ -533,7 +688,7 @@ class TestScopeReportOp:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
-        result = asyncio.run(_handler({"cwd": str(repo)}))
+        result = _handler({"cwd": str(repo)})
         assert result["session_id"] == ""
         assert result["safe_paths"] == []
         assert "error" in result
@@ -545,7 +700,7 @@ class TestScopeReportOp:
         scope.touch("mine", "a.py", cwd=str(repo))
 
         before = _dirty_status(repo)
-        asyncio.run(_handler({"session_id": "mine", "cwd": str(repo)}))
+        _handler({"session_id": "mine", "cwd": str(repo)})
         after = _dirty_status(repo)
         assert before == after
 
@@ -750,7 +905,9 @@ class TestOwnershipReadout:
         assert "orphan.py" not in {p["path"] for p in ownership["peer"]}
         assert "orphan.py" in ownership["unattributed"]
 
-    def test_degraded_forces_every_non_mine_path_into_unattributed(self, tmp_path):
+    def test_degraded_forces_every_non_mine_path_into_unattributed(
+        self, tmp_path, monkeypatch
+    ):
         """Perturbation-proof of the peer-vs-unattributed distinction (AC7):
         make one peer's claim set unreadable this call, and prove an
         OTHERWISE-resolvable peer claim (`other_claimed.py`, contrast with
@@ -758,7 +915,22 @@ class TestOwnershipReadout:
         same claim shape lands in `peer`) is denied that attribution and
         folded into `unattributed` instead -- this call cannot stand behind
         ANY owner name it would otherwise print, not just the one it could
-        not read."""
+        not read.
+
+        NOT `os.chmod(path, 0o000)`: Windows does not honour POSIX mode
+        bits for the owning user, so the chmod'd file stays readable there
+        and the test's own precondition (an unreadable touched.txt) never
+        establishes itself -- `compute_offer` then correctly reports
+        ``degraded is False``, and the test goes red for a reason that has
+        nothing to do with the code under test (see
+        state/bug-backlog/2026-08-07-ownership-degraded-test-uses-posix-only-chmod-and-is-red-on-windows.yaml).
+        Instead, monkeypatch the exact read seam `compute_scope` uses for a
+        peer's ``touched.txt`` (``pathlib.Path.read_text``) to raise
+        `PermissionError` for THIS peer's file only, leaving every other
+        session's ``touched.txt`` read in this fixture (``mine``,
+        `other`) untouched -- the same platform-neutral simulated failure
+        on Windows and POSIX alike, pinning the identical property either
+        way."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("other", cwd=str(repo))
@@ -773,11 +945,19 @@ class TestOwnershipReadout:
         peer_touched = Path(core.session_dir("peer", cwd=str(repo))) / "touched.txt"
         peer_touched.write_text("unreadable.md\n", encoding="utf-8")
         (repo / "unreadable.md").write_text("peer's own in-flight work")
-        os.chmod(str(peer_touched), 0o000)
-        try:
-            offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        finally:
-            os.chmod(str(peer_touched), 0o644)
+
+        real_read_text = Path.read_text
+
+        def _read_text_deny_peer_only(self, *args, **kwargs):
+            if self == peer_touched:
+                raise PermissionError(
+                    f"simulated unreadable touched.txt: {self}"
+                )
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _read_text_deny_peer_only)
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
 
         ownership = offer["ownership"]
         assert ownership["degraded"] is True
@@ -812,3 +992,176 @@ class TestOwnershipReadout:
             "ownership",
         }
         assert set(offer["ownership"].keys()) == {"mine", "peer", "unattributed", "degraded"}
+
+
+class TestClassificationOffer:
+    """The 2026-08-07 classification-offer fix (bug-backlog `2026-08-06-
+    scoped-commit-denial-names-unclassified-for-a-peer-held-path`).
+
+    `compute_offer`'s candidate set is the calling session's own claim plus
+    its own sub-agent fan-out -- never the pathspec the caller named. A path
+    the caller never touched, whose mtime predates its `started_at`, is
+    therefore not a `compute_scope` candidate at all: Step 3/3b's peer-claim
+    read is never consulted for it, Step 4 mints no `skipped` entry naming
+    its holder, and Step 5 keeps it out of `orphans` (`other_owner` has it).
+    It is absent from every key of the offer, so `_classify_denied_path` fell
+    through to `_CLASSIFICATION_UNCLASSIFIED` for a path a live peer
+    demonstrably held -- pointing an operator at `include_orphans: true`, a
+    remedy that provably cannot help a peer-claimed path.
+
+    Negative-spec: these tests pin the WORDING of a denial and, in
+    `test_classification_offer_never_widens_the_verdict`, the fact that the
+    verdict itself is untouched. Nothing here may be read as licence to feed
+    the classification offer back into the allow-list -- see
+    `scope_report`'s "TWO OFFERS" module-docstring paragraph.
+    """
+
+    @staticmethod
+    def _started_at_in_the_future(repo, session_id):
+        """Push `session_id`'s `started_at` past now, so a file dirtied after
+        this call never satisfies `compute_scope` Step 2's `mtime >=
+        started_at_epoch` test and never becomes a candidate for it. Same
+        recipe as `TestOrphanAdoptionPositiveEvidence`'s non-candidate probe
+        above -- the shape the live reproduction hit."""
+        from datetime import datetime, timezone
+
+        sdir = Path(core.session_dir(session_id, cwd=str(repo)))
+        future = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
+        )
+        (sdir / "started_at").write_text(
+            future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
+        )
+
+    def test_peer_held_path_never_touched_by_caller_names_the_holder(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        self._started_at_in_the_future(repo, "mine")
+
+        (repo / "peer-held.md").write_text("peer's in-flight work")
+        scope.touch("peer", "peer-held.md", cwd=str(repo))
+
+        # The defect's own premise, asserted rather than assumed: the path is
+        # absent from EVERY key of the caller's primary offer.
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+        assert "peer-held.md" not in offer["safe_paths"]
+        assert "peer-held.md" not in (offer["orphans"] or [])
+        assert "peer-held.md" not in {e["path"] for e in offer["excluded"]}
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["peer-held.md"], cwd=str(repo)
+        )
+
+        assert ok is False
+        assert scope_report.deny_reason_names_a_holder(reason) is True
+        assert "peer" in reason
+        assert scope_report._CLASSIFICATION_UNCLASSIFIED not in reason
+
+    def test_orphan_still_classifies_as_orphan_and_still_denies(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        self._started_at_in_the_future(repo, "mine")
+
+        (repo / "orphan.md").write_text("nobody's")
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["orphan.md"], cwd=str(repo), allow_orphans=False
+        )
+
+        # The regression that matters is the BOOLEAN, not the string: the
+        # classification offer adopts a caller-named unclaimed path into its
+        # OWN safe_paths by construction, so a verdict read off it would
+        # allow here.
+        assert ok is False
+        assert scope_report._CLASSIFICATION_ORPHAN in reason
+        # Deliberately the PREDICATE, not `CLAIMED_BY_PREFIX not in reason`:
+        # the orphan wording reads "...dirty but claimed by no session" and
+        # contains that prefix mid-sentence while meaning its inverse. See
+        # `CLAIMED_BY_PREFIX`/`CLAIMED_BY_SENTINELS` for the collision.
+        assert scope_report.CLAIMED_BY_PREFIX in reason
+        assert scope_report.deny_reason_names_a_holder(reason) is False
+
+    def test_orphan_classification_is_unreachable_with_include_orphans(self, tmp_path):
+        """`_CLASSIFICATION_ORPHAN` contains the literal `CLAIMED_BY_PREFIX`
+        substring, and `scoped_git_commit._include_orphans_ineffective_note`
+        discriminates on that substring -- but only ever on a denial where
+        `include_orphans` was True. The two are disjoint BY CONSTRUCTION, and
+        this pins it: with adoption requested, a verified caller has every
+        orphan ALLOWED (so it is never classified at all), and an unverified
+        one gets `_CLASSIFICATION_INCLUDE_ORPHANS_IGNORED`, which carries no
+        claimed-by wording. Reachable `_CLASSIFICATION_ORPHAN` therefore
+        implies `include_orphans` was False, where the note is silent anyway.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        self._started_at_in_the_future(repo, "mine")
+        (repo / "orphan.md").write_text("nobody's")
+
+        # Verified caller (core.init wrote meta.json) -- adoption succeeds,
+        # so there is no denial to word at all.
+        ok, _reason = assert_paths_in_session_scope(
+            "mine", ["orphan.md"], cwd=str(repo), allow_orphans=True
+        )
+        assert ok is True
+
+        # Unverified caller (no session dir, hence no meta.json) -- denial
+        # names the unmet ASK, never a holder.
+        ok, reason = assert_paths_in_session_scope(
+            "never-initialized", ["orphan.md"], cwd=str(repo), allow_orphans=True
+        )
+        assert ok is False
+        assert scope_report._CLASSIFICATION_ORPHAN not in reason
+        assert scope_report.deny_reason_names_a_holder(reason) is False
+
+    def test_genuinely_unknown_path_stays_unclassified(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+
+        # Clean at HEAD and named by no session anywhere -- there is nothing
+        # for either offer to say about it, and saying nothing is correct.
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["README.md"], cwd=str(repo)
+        )
+
+        assert ok is False
+        assert scope_report._CLASSIFICATION_UNCLASSIFIED in reason
+        assert scope_report.deny_reason_names_a_holder(reason) is False
+
+    def test_classification_offer_never_widens_the_verdict(self, tmp_path):
+        """THE invariant test. `extra_candidates` feeds `compute_scope` Step
+        1, so every path below IS a member of the classification offer's own
+        `safe_paths` -- adopted because the caller named it, not because the
+        caller owns it. If someone later "simplifies" the two `compute_offer`
+        calls into one, this allows, and any caller can own any dirty path in
+        the tree by putting it in its own pathspec.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        self._started_at_in_the_future(repo, "mine")
+
+        named = ["unclaimed-a.md", "unclaimed-b.md"]
+        for path in named:
+            (repo / path).write_text("dirty, claimed by nobody")
+
+        classification_offer = safe_commit_offer.compute_offer(
+            "mine", cwd=str(repo), extra_candidates=named
+        )
+        assert set(named) <= set(classification_offer["safe_paths"])
+
+        ok, _reason = assert_paths_in_session_scope(
+            "mine", named, cwd=str(repo), allow_orphans=False
+        )
+        assert ok is False
+
+    def test_default_compute_offer_is_byte_for_byte_unchanged(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        assert safe_commit_offer.compute_offer(
+            "mine", cwd=str(repo)
+        ) == safe_commit_offer.compute_offer(
+            "mine", cwd=str(repo), extra_candidates=None
+        )

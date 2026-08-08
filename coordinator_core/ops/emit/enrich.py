@@ -73,6 +73,7 @@ Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) â
 from __future__ import annotations
 
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -144,7 +145,7 @@ def _walk_last_modified_at(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return {}

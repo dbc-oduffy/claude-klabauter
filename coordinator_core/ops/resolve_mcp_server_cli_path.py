@@ -148,7 +148,7 @@ def resolve_cli_path_and_root(claude_json_path: Path, server_name: str) -> dict:
 
 
 @register_op("mcp.resolve_server_cli_path")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'mcp.resolve_server_cli_path' handler.
 
     Params:

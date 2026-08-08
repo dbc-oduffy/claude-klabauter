@@ -115,7 +115,7 @@ def _advance_run(params: dict, repo_root: Path) -> dict:
 
 
 def _retract_run(params: dict, repo_root: Path) -> dict:
-    return asyncio.run(_retract(params, repo_root=repo_root))
+    return _retract(params, repo_root=repo_root)
 
 
 def _fm_field(path: Path, key: str) -> Optional[str]:

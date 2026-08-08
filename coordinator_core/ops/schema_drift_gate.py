@@ -93,7 +93,7 @@ def evaluate() -> dict:
 
 
 @register_op("schema.drift_gate")
-async def _handler(params: dict, repo_root: Optional[object] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[object] = None) -> dict:
     """JSON-RPC 'schema.drift_gate' handler. Takes no params; repo_root unused
     (scope "none" — see coordinator_core/op_scopes.py)."""
     return evaluate()

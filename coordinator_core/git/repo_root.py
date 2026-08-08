@@ -2,7 +2,7 @@
 repo-root resolution seam.
 
 Purpose: the census behind
-docs/plans/2026-08-06-eliminate-claude-klabauter-s-non-test-subprocess-spawn-population.md
+docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md
 found 254 call sites shelling out to `git rev-parse` for one of six forms
 (`--show-toplevel`, `--git-dir`, `--is-inside-work-tree`,
 `--git-common-dir`, `--show-prefix`, `--absolute-git-dir`), split across two
@@ -137,14 +137,16 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.win_portability import no_console_creationflags
 
 _TIMEOUT_SECS = 2.0
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 # cwd-keyed memo: absolute-cwd -> (toplevel_or_None, gitdir_or_None,
 # common_dir_or_None), populated by the WALK-based path. Deliberately
@@ -335,7 +337,30 @@ def git_common_dir(cwd: Optional[str] = None) -> Optional[str]:
         return None
     spawned_path = Path(spawned)
     if not spawned_path.is_absolute():
-        spawned_path = Path(resolved) / spawned_path
+        # A linked worktree's un-formatted `--git-common-dir` answer is
+        # relative to `resolved` and carries literal `..` traversal
+        # segments (git's raw output, not lexically collapsed) — e.g.
+        # `.git/worktrees/<name>/../..`. `Path.__truediv__` joins
+        # lexically too: it does NOT collapse those segments, so a bare
+        # join leaves a dangling `..` in the result. `os.path.normpath`
+        # collapses them with no filesystem I/O and no symlink
+        # resolution — unlike `Path.resolve()`, it can't change identity
+        # by following a symlink, which matters because callers (e.g.
+        # `lifecycle.main_worktree_root`'s bare `.parent`) assume a
+        # lexically clean absolute path with no unresolved segments to
+        # walk past.
+        #
+        # Accepted limitation, stated rather than implied (same tradeoff as
+        # `git_dir.py::resolve_git_common_dir`'s identical join): lexical
+        # collapse and the kernel disagree whenever ANY symlinked path
+        # segment is collapsed past -- `<x>/link/..` normalizes to `<x>`,
+        # while the OS would land in the link target's parent. That segment
+        # need not be `.git` itself: a symlinked intermediate directory, or
+        # a symlinked linked-worktree directory, collapses just as wrongly.
+        # Taken deliberately: `.resolve()` would change identity by
+        # following a symlink, which is worse than the un-collapsed form
+        # was for EVERY `.parent` consumer, symlink or not.
+        spawned_path = Path(os.path.normpath(Path(resolved) / spawned_path))
     return str(spawned_path)
 
 

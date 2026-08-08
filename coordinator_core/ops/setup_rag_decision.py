@@ -91,8 +91,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 
 _TRIPWIRE_SENTINEL = "coordinator-rag-tripwire: un-indexed"
 
@@ -235,7 +238,7 @@ def _daemon_present() -> bool:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=timeout,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             return result.returncode == 0
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
@@ -252,7 +255,7 @@ def _daemon_present() -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):

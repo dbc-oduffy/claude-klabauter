@@ -1593,7 +1593,17 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
                         except ValueError:
                             n = 0
                         if n > 0:
-                            _, branch_out = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=git_cwd)
+                            # Routed through the same per-call memo as the
+                            # rev-parse/rev-list probes above (2026-08-07,
+                            # spawn-storm sweep D6) -- this call is a
+                            # single-shot in practice (the function returns
+                            # on this branch immediately below), so the
+                            # memo buys no spawn-count reduction here, but
+                            # nothing about repo state can change mid-
+                            # dispatch either, so there is no freshness
+                            # reason to keep it as a bare `_run_git` call
+                            # sitting beside two memoized siblings.
+                            _, branch_out = _memo_run_git(["rev-parse", "--abbrev-ref", "HEAD"], git_cwd)
                             cur_branch = branch_out.strip() or "HEAD"
                             _, subj_out = _run_git(
                                 ["log", "--format=  - %h %s", "%s..HEAD" % target], cwd=git_cwd
@@ -1883,7 +1893,15 @@ def _expand_home_var(tok: str) -> Optional[str]:
     home = os.environ.get("HOME")
     if not home:
         return None
-    expanded = _HOME_VAR_RE.sub(home, tok)
+    # negative-spec: the replacement MUST stay a callable. Passing `home` as a
+    # plain string makes re.sub parse it as a replacement TEMPLATE, in which
+    # backslash sequences are escapes -- so a Windows HOME of `C:\Users\<name>`
+    # raises `PatternError: bad escape \U`, breaking this function's own
+    # "never raises" contract three lines up in the docstring. Observed live on
+    # win32: every `rm` naming `$HOME` crashed the destructive-rm guard, which
+    # fails CLOSED, so the guard denied the command having never inspected it.
+    # A callable replacement is returned verbatim with no escape processing.
+    expanded = _HOME_VAR_RE.sub(lambda _m: home, tok)
     if "$" in expanded:
         return None
     return expanded
@@ -2264,7 +2282,9 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
                 # the same path is a degenerate case, not the shape this
                 # audit is scoped to) -- genuinely loop-VARIANT, unlike the
                 # calls above.
-                rc_st, out_st = _run_git(["-C", root, "status", "--porcelain", "--", tgt_abs])
+                rc_st, out_st = _run_git(
+                    ["-C", root, "--no-optional-locks", "status", "--porcelain", "--", tgt_abs]
+                )
                 status = "\n".join(out_st.splitlines()[:9])
                 if status:
                     peer_sid = _rm_peer_claim_of(tgt_abs, root)
@@ -3044,6 +3064,32 @@ def _check_destructive_git_revert_full(
     # resolution for why every verb needs it, not stash alone.
     _verb_invocation_confirmed: Dict[str, bool] = {}
 
+    # F0-b-adjacent spawn-count defect (2026-08-07, spawn-storm sweep D6):
+    # the `git status --porcelain` oracle below ran once PER SEGMENT even
+    # though `git_cwd` is almost always identical across a chained command
+    # (`git checkout . && git reset --hard` hits the checkout branch then
+    # the reset branch, both against the same working tree) -- the tree
+    # cannot mutate mid-dispatch (a single synchronous hook invocation, no
+    # concurrent mutator), so re-running the same-cwd status probe on
+    # segment 2..N is pure repeated work, the same shape `_new_git_memo`
+    # closes for the reset/orphan checks. NOT routed through that shared
+    # `_memo_run_git` closure here: its memo drops `extra_env`, and this
+    # oracle depends on `LC_ALL=C` for locale-independent porcelain output
+    # -- reusing it verbatim would silently vary this check's behavior
+    # under a non-C locale. A small local cache keyed on `git_cwd` alone
+    # (the args are invariant across every call site below) preserves that
+    # env pin while still collapsing the repeat.
+    _status_porcelain_cache: Dict[Optional[str], Tuple[int, str]] = {}
+
+    def _memo_status_porcelain(cwd: Optional[str]) -> Tuple[int, str]:
+        if cwd not in _status_porcelain_cache:
+            _status_porcelain_cache[cwd] = _run_git(
+                ["--no-optional-locks", "status", "--porcelain"],
+                cwd=cwd,
+                extra_env={"LC_ALL": "C"},
+            )
+        return _status_porcelain_cache[cwd]
+
     for seg in _split_segments(cmd):
         if not seg.strip():
             continue
@@ -3095,7 +3141,7 @@ def _check_destructive_git_revert_full(
                 has_worktree = bool(re.search(r"(^|\s)(-[a-zA-Z]*W[a-zA-Z]*|--worktree)(\s|$)", after))
                 if verb == "restore" and has_staged and not has_worktree:
                     continue
-                rc, out = _run_git(["status", "--porcelain"], cwd=git_cwd, extra_env={"LC_ALL": "C"})
+                rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
                     return _deny(
                         "BLOCKED: 'git %s .' oracle (git status) timed "
@@ -3124,7 +3170,7 @@ def _check_destructive_git_revert_full(
 
         elif verb == "reset":
             if re.search(r"(^|\s)--hard(\s|$)", after):
-                rc, out = _run_git(["status", "--porcelain"], cwd=git_cwd, extra_env={"LC_ALL": "C"})
+                rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
                     return _deny(
                         "BLOCKED: 'git reset --hard' oracle (git status) "
@@ -3196,7 +3242,7 @@ def _check_destructive_git_revert_full(
             # stash.py` for reset/checkout/restore over the same fixture,
             # so this branch never needs its own local corroboration.
             if is_sweep_shape and not has_dashdash:
-                rc, out = _run_git(["status", "--porcelain"], cwd=git_cwd, extra_env={"LC_ALL": "C"})
+                rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
                     return _deny(
                         "BLOCKED: 'git stash' oracle (git status) timed "

@@ -23,7 +23,9 @@ All git operations run against a throwaway repo created fresh under
 from __future__ import annotations
 
 import asyncio
+import importlib
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,39 +33,13 @@ import pytest
 
 from coordinator_core.ops.ceremony import scoped_git_commit
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
+from coordinator_core.ops.session import scope_report
 from coordinator_core.ops.session.scope_report import (
     assert_paths_in_session_scope as _real_assert_paths_in_session_scope,
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness
 from coordinator_core.session import scope as session_scope
-
-
-@pytest.fixture(autouse=True)
-def _bypass_ownership_gate(monkeypatch):
-    """C4c (docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-
-    classes.md) added a pathspec ownership-scope gate to `_handler`. This
-    module's throwaway repos never seed a real `.git/coordinator-sessions/
-    <sid>/touched.txt` claim for the ambient test session, so the REAL
-    `assert_paths_in_session_scope` predicate (strict allow-list — see
-    `scope_report`'s own module docstring, "REVERTED 2026-08-03", for why the
-    gate composes this and not a permissive alternative) would deny nearly
-    every dirty path this file's fixtures write, for every test in it. This
-    autouse fixture always-allows so those tests can exercise commit-
-    pipeline/push-reporting mechanics without also having to construct a
-    fully-seeded session scope for content that is not what each test is
-    actually about.
-
-    NEW TEST HERE? This fixture is autouse — every test in this file
-    inherits the always-allow bypass automatically. If your test cares about
-    ownership REJECTION (an allow/deny decision, not commit-pipeline
-    mechanics), write it in `test_scoped_git_commit_ownership.py` instead,
-    which does NOT take this bypass and exercises the real predicate against
-    seeded session scope.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit, "_assert_paths_in_session_scope", lambda *a, **k: (True, "")
-    )
 
 
 def _git(args, cwd) -> None:
@@ -109,7 +85,9 @@ def _current_branch(repo: Path) -> str:
 
 
 def _call(params: dict) -> dict:
-    return asyncio.run(scoped_git_commit._handler(params, repo_root=None))
+    # _handler is a plain sync function (2026-08-07 transport-hang fix — see
+    # its own docstring); no asyncio.run wrapper needed or possible.
+    return scoped_git_commit._handler(params, repo_root=None)
 
 
 def test_commit_lands_and_reports_sha_and_no_remote(tmp_path):
@@ -307,12 +285,9 @@ def test_successful_commit_response_stays_thin(tmp_path):
     caller already asks via `pushed` and could not previously get a truthful
     three-valued answer to.
 
-    `ownership_gate` joins the fixed shape on the same footing (2026-08-04,
-    example-cockpit-repo-em's consumer-side probe): the ownership gate emitted text
-    only when it DENIED, so a consumer reading a successful response could
-    only infer the ALLOW backwards from a commit having happened. See
-    `scoped_git_commit`'s module docstring, § Ownership-gate observability,
-    for the negative spec — it is a visibility field, read by nothing.
+    `ownership_gate` was part of that fixed shape until the 2026-08-08
+    ownership-gate excision removed the gate it reported on; the success
+    response is back to the thin four-key shape.
     """
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
@@ -330,9 +305,7 @@ def test_successful_commit_response_stays_thin(tmp_path):
     )
 
     assert result["committed"] is True
-    assert set(result) == {
-        "committed", "sha", "pushed", "push_state", "ownership_gate"
-    }
+    assert set(result) == {"committed", "sha", "pushed", "push_state"}
 
 
 def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypatch):
@@ -703,165 +676,8 @@ def test_declined_path_is_named_with_reason_in_the_response(tmp_path):
     assert declined[0]["reason"]
 
 
-def test_motivating_scenario_peer_committed_and_stays_live_co_toucher_can_commit(
-    tmp_path, monkeypatch
-):
-    """AC1/AC6, end-to-end through the ceremony (C4,
-    docs/plans/2026-08-03-scope-guard-peer-claim-release.md).
-
-    Session A touches a shared path, commits it via `ceremony.scoped_git_commit`,
-    and STAYS LIVE. Session B then touches the SAME path and must be able to
-    commit it -- B's `my_scope` contains the path and `skipped` does not name A.
-
-    This is the one test in the file that restores the REAL
-    `assert_paths_in_session_scope` predicate (the module's `_bypass_ownership_
-    gate` autouse fixture always-allows for every other test here) -- a bypassed
-    gate would make `committed=True` trivially true regardless of whether the
-    release actually freed the path, pinning nothing.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_assert_paths_in_session_scope",
-        _real_assert_paths_in_session_scope,
-    )
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    shared_path = "shared/handoff.md"
-    sid_a = "scenario-session-a"
-    sid_b = "scenario-session-b"
-
-    session_core.init(sid_a, cwd=str(repo))
-    _seed_file(repo, shared_path, "from A")
-    session_scope.touch(sid_a, shared_path, cwd=str(repo))
-
-    result_a = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": [shared_path],
-            "message": "A commits the shared path",
-            "session_id": sid_a,
-        }
-    )
-    assert result_a["committed"] is True
-    assert "error" not in result_a
-
-    # A must be live for the ENTIRE test -- if A read dead here, the
-    # pre-existing liveness gate would release the claim on its own and the
-    # rest of this test would pin nothing about this plan's own release path.
-    assert liveness.session_live(sid_a, cwd=str(repo)) is True
-
-    session_core.init(sid_b, cwd=str(repo))
-    _seed_file(repo, shared_path, "from B")
-    session_scope.touch(sid_b, shared_path, cwd=str(repo))
-
-    # A is STILL live at the moment B's scope/commit is evaluated.
-    assert liveness.session_live(sid_a, cwd=str(repo)) is True
-
-    scope_b = session_scope.compute_scope(sid_b, cwd=str(repo))
-    assert shared_path in scope_b.my_scope
-    assert all(owner != sid_a for _path, owner in scope_b.skipped)
-
-    result_b = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": [shared_path],
-            "message": "B commits the shared path",
-            "session_id": sid_b,
-        }
-    )
-    assert result_b["committed"] is True
-    assert "error" not in result_b
-    assert _committed_files_at_head(repo) == [shared_path]
 
 
-def test_motivating_scenario_peer_with_genuine_uncommitted_content_still_blocks(
-    tmp_path, monkeypatch
-):
-    """AC2 at the ceremony layer -- the negative pair to the scenario above.
-    Session A commits a path, then leaves GENUINE uncommitted content in that
-    same path, and STAYS LIVE. Session B touching the same path must still be
-    correctly blocked -- a test that only proved the guard releases a clean
-    path would pass equally if the guard released everything.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_assert_paths_in_session_scope",
-        _real_assert_paths_in_session_scope,
-    )
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    shared_path = "shared/still-dirty.md"
-    sid_a = "scenario-session-a2"
-    sid_b = "scenario-session-b2"
-
-    session_core.init(sid_a, cwd=str(repo))
-    _seed_file(repo, shared_path, "v1")
-    session_scope.touch(sid_a, shared_path, cwd=str(repo))
-
-    result_a = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": [shared_path],
-            "message": "A commits v1",
-            "session_id": sid_a,
-        }
-    )
-    assert result_a["committed"] is True
-    head_after_a = _committed_files_at_head(repo)
-
-    # A leaves GENUINE uncommitted content in the same path -- re-claims it
-    # (last event was released to R by the commit above, so a fresh T is
-    # required for it to be seen as claimed again).
-    _seed_file(repo, shared_path, "v2 -- uncommitted")
-    session_scope.touch(sid_a, shared_path, cwd=str(repo))
-
-    # A must be live for the ENTIRE test.
-    assert liveness.session_live(sid_a, cwd=str(repo)) is True
-
-    session_core.init(sid_b, cwd=str(repo))
-    session_scope.touch(sid_b, shared_path, cwd=str(repo))
-
-    # A is STILL live at the moment B's scope/commit is evaluated.
-    assert liveness.session_live(sid_a, cwd=str(repo)) is True
-
-    scope_b = session_scope.compute_scope(sid_b, cwd=str(repo))
-    assert shared_path not in scope_b.my_scope
-    assert any(
-        path == shared_path and owner == sid_a for path, owner in scope_b.skipped
-    )
-
-    head_before_b = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    result_b = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": [shared_path],
-            "message": "B tries to sweep A's uncommitted content",
-            "session_id": sid_b,
-        }
-    )
-    assert result_b["committed"] is False
-    assert result_b["sha"] is None
-    assert "error" in result_b
-    assert sid_a in result_b["error"]
-
-    # Nothing landed -- HEAD did not move, and A's uncommitted content is
-    # still sitting dirty on disk, untouched.
-    head_after_b = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-    assert head_after_b == head_before_b
-    assert _committed_files_at_head(repo) == head_after_a
 
 
 def test_post_commit_release_phantom_claims_clears_a_phantom_touch(tmp_path):
@@ -963,185 +779,53 @@ def test_directory_expansion_never_sweeps_in_an_untracked_file(tmp_path):
     assert any(line == "?? waivers/untracked.json" for line in status)
 
 
-def test_directory_expansion_still_denies_a_live_peers_member_file_by_name(
-    tmp_path, monkeypatch
-):
-    """Guard rail: a directory expanding to 10 (here 2) files, one of which
-    belongs to a live peer session, still denies on THAT file, named
-    individually -- expansion must never launder a peer's file into this
-    session's commit.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_assert_paths_in_session_scope",
-        _real_assert_paths_in_session_scope,
-    )
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "waivers/mine.json", "v1")
-    _seed_file(repo, "waivers/theirs.json", "v1")
-    _git(["add", "--", "waivers/mine.json", "waivers/theirs.json"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    sid_me = "expansion-session-me"
-    sid_peer = "expansion-session-peer"
-    session_core.init(sid_me, cwd=str(repo))
-    session_core.init(sid_peer, cwd=str(repo))
-
-    _seed_file(repo, "waivers/mine.json", "v2")
-    session_scope.touch(sid_me, "waivers/mine.json", cwd=str(repo))
-
-    _seed_file(repo, "waivers/theirs.json", "v2")
-    session_scope.touch(sid_peer, "waivers/theirs.json", cwd=str(repo))
-    assert liveness.session_live(sid_peer, cwd=str(repo)) is True
-
-    result = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": ["waivers/"],
-            "message": "try to sweep the peer's file via the directory",
-            "session_id": sid_me,
-        }
-    )
-
-    assert result["committed"] is False
-    assert "error" in result
-    assert "waivers/theirs.json" in result["error"]
-    assert sid_peer in result["error"]
-    # Nothing landed for either file.
-    assert _porcelain(repo)
 
 
-def test_directory_expansion_include_orphans_adopts_orphan_members(tmp_path, monkeypatch):
-    """A (guard rail) + existing `include_orphans` contract: a directory
-    whose expanded members are all orphans (claimed by no session) commits
-    once `include_orphans: true` is set -- expansion composes with the
-    existing orphan-adoption opt-in rather than bypassing it.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_assert_paths_in_session_scope",
-        _real_assert_paths_in_session_scope,
-    )
 
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "waivers/orphan1.json", "v1")
-    _seed_file(repo, "waivers/orphan2.json", "v1")
-    _git(["add", "--", "waivers/orphan1.json", "waivers/orphan2.json"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
 
-    # Dirtied by nobody's claimed touch -- an orphan, per `compute_offer`.
-    _seed_file(repo, "waivers/orphan1.json", "v2")
-    _seed_file(repo, "waivers/orphan2.json", "v2")
 
-    sid = "expansion-orphan-session"
-    session_core.init(sid, cwd=str(repo))
 
-    denied = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": ["waivers/"],
-            "message": "adopt the orphaned waivers",
-            "session_id": sid,
-        }
-    )
-    assert denied["committed"] is False
-    assert "waivers/orphan1.json" in denied["error"] or "orphan" in denied["error"]
 
-    adopted = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": ["waivers/"],
-            "message": "adopt the orphaned waivers",
-            "session_id": sid,
-            "include_orphans": True,
-        }
-    )
-    assert adopted["committed"] is True
-    assert "error" not in adopted
-    assert sorted(_committed_files_at_head(repo)) == [
-        "waivers/orphan1.json",
-        "waivers/orphan2.json",
+
+
+
+
+
+def test_deny_reason_names_a_holder_is_true_for_exactly_the_claimed_by_shapes():
+    """The predicate itself, over every classification `_classify_denied_path`
+    can return: true for the three claimed-by branch shapes, false for all
+    five `_CLASSIFICATION_*` constants -- including the orphan one whose
+    wording collides with the construction prefix."""
+    holder_shapes = [
+        "claimed by live session peer-1",
+        (
+            "claimed by session peer-1 (holder reads NOT live in this repo; "
+            "NOT a licence to reap — re-verify the holder before any takeover)"
+        ),
+        "claimed by session unknown (claims unreadable: other) (liveness not checked)",
+    ]
+    non_holder_shapes = [
+        scope_report._CLASSIFICATION_ORPHAN,
+        scope_report._CLASSIFICATION_INCLUDE_ORPHANS_IGNORED,
+        scope_report._CLASSIFICATION_INDETERMINATE,
+        scope_report._CLASSIFICATION_UNCLASSIFIED,
+        scope_report._CLASSIFICATION_ALREADY_CLEAN,
     ]
 
+    for shape in holder_shapes:
+        assert scope_report.deny_reason_names_a_holder(shape) is True, shape
+    for shape in non_holder_shapes:
+        assert scope_report.deny_reason_names_a_holder(shape) is False, shape
 
-def test_directory_denial_message_explains_directory_vs_file(tmp_path):
-    """B: a denial that still carries an unexpanded directory (no dirty
-    TRACKED member beneath it -- here, only an untracked file) must say it
-    is a directory and what that means, rather than the bare
-    "unclaimed/never classified" wording that gave no signal at all.
-    """
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "notes/only-untracked.md", "content")
-
-    # Real ownership predicate (never seeded a session scope) so the
-    # directory string itself reaches the denial branch this asserts on.
-    scoped_git_commit._assert_paths_in_session_scope = _real_assert_paths_in_session_scope
-    try:
-        result = _call(
-            {
-                "worktree_root": str(repo),
-                "paths": ["notes/"],
-                "message": "try to commit the untracked-only directory",
-                "session_id": "directory-denial-session",
-            }
-        )
-    finally:
-        scoped_git_commit._assert_paths_in_session_scope = (
-            lambda *a, **k: (True, "")
-        )
-
-    assert result["committed"] is False
-    assert "error" in result
-    assert "directory" in result["error"]
-    assert "notes/" in result["error"]
+    # Fail-closed on a non-string: a caller deciding whether it may ASSERT a
+    # holder must never get True from a degraded input.
+    assert scope_report.deny_reason_names_a_holder(None) is False
 
 
-def test_include_orphans_ineffective_note_explains_peer_claimed_denial(
-    tmp_path, monkeypatch
-):
-    """B: re-invoking with `include_orphans: true` against a path claimed by
-    a live peer must say WHY the flag made no difference, rather than
-    repeating the exact same unexplained refusal a second time.
-    """
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_assert_paths_in_session_scope",
-        _real_assert_paths_in_session_scope,
-    )
 
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "shared/peer-owned.md", "v1")
-    _git(["add", "--", "shared/peer-owned.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
 
-    sid_peer = "ineffective-note-peer"
-    sid_caller = "ineffective-note-caller"
-    session_core.init(sid_peer, cwd=str(repo))
-    session_core.init(sid_caller, cwd=str(repo))
 
-    _seed_file(repo, "shared/peer-owned.md", "v2")
-    session_scope.touch(sid_peer, "shared/peer-owned.md", cwd=str(repo))
-    assert liveness.session_live(sid_peer, cwd=str(repo)) is True
 
-    result = _call(
-        {
-            "worktree_root": str(repo),
-            "paths": ["shared/peer-owned.md"],
-            "message": "try again with include_orphans",
-            "session_id": sid_caller,
-            "include_orphans": True,
-        }
-    )
-
-    assert result["committed"] is False
-    assert "error" in result
-    assert "include-orphans" in result["error"]
-    assert "made no difference" in result["error"]
 
 
 def test_post_commit_release_phantom_claims_never_drops_a_pending_tracked_deletion(

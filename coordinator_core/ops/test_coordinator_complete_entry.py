@@ -12,6 +12,7 @@ Port of: coordinator-complete-entry.sh (example-doctrine-repo a1a568d2, 2026-07-
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -653,7 +654,14 @@ class TestRollupSentence:
         )
         shim.chmod(0o755)
 
-        monkeypatch.setattr(m.shutil, "which", lambda name: str(shim) if name == "coordinator-render-rollup.sh" else None)
+        # Review: code-reviewer (Finding 1 consolidation) — `_which_render_rollup_shim`
+        # delegates to `coordinator_core.launchable.which_path_ordered`, which walks
+        # `os.environ["PATH"]` directly rather than calling `shutil.which` (that's the
+        # whole point of the fix: `shutil.which` never finds a `.sh`-suffixed name on
+        # Windows). Monkeypatching `shutil.which` no longer intercepts the lookup;
+        # prepend the shim's directory onto the real `PATH` instead, matching how a
+        # test actually stages this shim in production.
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
 
         def _should_not_be_called(argv):
             raise AssertionError("in-process render module must not be called when a PATH shim exists")

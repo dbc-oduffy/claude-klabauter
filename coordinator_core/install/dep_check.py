@@ -75,6 +75,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.ops.setup_chain_walker import command_succeeds_native
+from coordinator_core.win_portability import no_console_creationflags
 
 _VISITED_SET_WRITE_CLAUSE_INDEX = 0
 _VISITED_SET_DELETE_CLAUSE_INDEX = 1
@@ -84,8 +85,6 @@ restated as bare `0`/`1` at each `record_resolution` call site
 stale-file sweep, also contributes to clause 1's deletions; clause 1 is
 otherwise `visited_set_crash_cleanup`'s)."""
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
 _PROBE_TIMEOUT_SECS = 10.0
 
 CRASH_RC = 3  # reserved — see module docstring.
@@ -261,7 +260,7 @@ def _probe_python_import(python: str, expr: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=_PROBE_TIMEOUT_SECS,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return False

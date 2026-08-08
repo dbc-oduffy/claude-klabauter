@@ -114,6 +114,7 @@ import ntpath
 import posixpath
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 import warnings
 from pathlib import Path
@@ -438,7 +439,7 @@ def _run_producer(producer, *args: str) -> "tuple[list[dict], Optional[str]]":
             text=True,
             check=False,
             timeout=_PRODUCER_TIMEOUT_SECONDS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError) as exc:
         return [], f"subprocess spawn raised {type(exc).__name__}: {exc}"

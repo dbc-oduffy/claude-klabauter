@@ -6,7 +6,7 @@ Tests assert:
   - classify_error() ordered-ladder parity, including the load-bearing ordering
     trap (non-fast-forward matched before gh-transient when both patterns hit).
   - branch_gate() work/*-proceed, migration|release|feature-skip-with-message,
-    everything-else-silent-skip.
+    everything-else-skip-with-message.
   - extract_first_err()'s Trace-preamble-skipping fallback chain.
   - main() always exits 0, even on push failure or an injected internal
     exception (auto-push must never block a commit).
@@ -146,8 +146,8 @@ def test_classify_error_ordering_trap_push_protection_before_auth():
         ("feature/foo", False, True),
         ("release/1.0", False, True),
         ("migration/legacy", False, True),
-        ("main", False, False),
-        ("random-branch", False, False),
+        ("main", False, True),
+        ("random-branch", False, True),
     ],
 )
 def test_branch_gate(branch, expect_push, expect_message):
@@ -176,7 +176,7 @@ def test_main_branch_gate_skip_prints_to_stderr(monkeypatch, tmp_path, capsys):
     assert "skipping feature/foo" in captured.err
 
 
-def test_main_silent_skip_on_unrecognized_branch(monkeypatch, tmp_path, capsys):
+def test_main_unrecognized_branch_skip_prints_to_stderr(monkeypatch, tmp_path, capsys):
     repo_root = str(tmp_path)
     monkeypatch.setenv(auto_push._ENV_SYNC, "1")
     monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
@@ -187,7 +187,7 @@ def test_main_silent_skip_on_unrecognized_branch(monkeypatch, tmp_path, capsys):
     rc = auto_push.main(["--repo-root", repo_root])
     assert rc == 0
     captured = capsys.readouterr()
-    assert captured.err == ""
+    assert "skipping main" in captured.err
 
 
 # ---------------------------------------------------------------------------

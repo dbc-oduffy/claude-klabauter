@@ -75,8 +75,15 @@ assert _OP_NAME in _REGISTRY, (
 
 
 def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
+    """Execute a coroutine synchronously (test helper).
+
+    ``_handler`` is a plain ``def`` (no ``await`` in its body), so calls
+    already resolve to a plain value by the time they reach here; pass
+    those through unchanged.
+    """
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 def _make_git_repo(root: Path) -> Path:

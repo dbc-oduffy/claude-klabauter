@@ -47,7 +47,7 @@ import json
 
 import pytest
 
-from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards import _verdict, dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
 
@@ -118,6 +118,36 @@ _ADVISORY_THEN_DENY_CHAIN = list(_TWO_ADVISORY_CHAIN) + [
 
 def _patch_chain(monkeypatch, chain):
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(chain))
+
+
+def _silent_then_allow(guard_name: str, reason: str):
+    """Stand-in for a C1-shaped guard: records `_verdict.SILENT` on
+    whatever out-of-band collection is currently open (a no-op on the real
+    dispatch path, which never opens one -- see C1's own module docstring)
+    and returns its ordinary allow, `None`, exactly like any guard that
+    never heard of `_verdict` at all."""
+    _verdict.record_silent(guard_name, reason)
+    return None
+
+
+# A single SILENT-recording guard, alone -- the minimal case for the
+# allow-shape equivalence: dispatch.py makes ZERO edits for C1, so this
+# chain must behave identically, on every path below, to an empty chain.
+_SILENT_RECORDING_CHAIN = [
+    GuardEntry(
+        "fake-silent-guard",
+        lambda: _silent_then_allow("fake-silent-guard", "cannot parse PowerShell backtick continuation"),
+        False,
+        GuardBand.ADVISORY_REWRITE,
+    ),
+]
+
+# The same SILENT-recording guard, registered ahead of a real advisory --
+# proves the declaration does not leak into, reorder, or otherwise disturb
+# the aggregate `collect_advisories=True` return.
+_SILENT_THEN_ADVISORY_CHAIN = list(_SILENT_RECORDING_CHAIN) + [
+    GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
+]
 
 
 class TestAdvisoryAggregationPropertyA:
@@ -267,3 +297,41 @@ class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
         assert "fake hard deny: tail" in result["hookSpecificOutput"]["permissionDecisionReason"]
         assert calls == ["fake-soft-first", "fake-content-second"]
         assert "fake-platform-deny" not in calls
+
+
+class TestSilentNeverReachesDispatchReturnValue:
+    """C1's own test-surface note: this file already exercises the dispatch
+    entry path where the allow-shape equivalence must hold -- this class
+    asserts SILENT never reaches `evaluate_payload_json`'s return value,
+    NOT that `dispatch.py`'s loop changed (it did not; C1 makes zero edits
+    to it). A guard that records `_verdict.SILENT` and returns its ordinary
+    `None` allow must be byte-identical, on both the legacy and the
+    ``collect_advisories=True`` path, to a chain with no such guard at
+    all."""
+
+    def test_legacy_path_silent_recording_guard_allows_silently(self, monkeypatch):
+        _patch_chain(monkeypatch, _SILENT_RECORDING_CHAIN)
+        result = dispatch.evaluate_payload_json(_payload())
+        assert result is None
+
+    def test_collect_advisories_silent_recording_guard_contributes_nothing(self, monkeypatch):
+        _patch_chain(monkeypatch, _SILENT_RECORDING_CHAIN)
+        result = dispatch.evaluate_payload_json(_payload(), collect_advisories=True)
+        assert result is None
+
+    def test_silent_recording_alongside_a_real_advisory_does_not_leak_into_the_aggregate(self, monkeypatch):
+        _patch_chain(monkeypatch, _SILENT_THEN_ADVISORY_CHAIN)
+        result = dispatch.evaluate_payload_json(_payload(), collect_advisories=True)
+        assert result == [_soft_envelope("first")]
+        assert "SILENT" not in json.dumps(result)
+
+    def test_declaration_is_observable_only_to_a_caller_that_opens_its_own_collection(self):
+        # The property AC1 actually needs, demonstrated at the collector's
+        # own seam rather than dispatch's: dispatch.py opens NO collection
+        # (it makes zero edits for this chunk), so a declaration made
+        # during a real dispatch is invisible to it -- but a caller (this
+        # test, standing in for C7's structural test) that opens its own
+        # collection around the SAME guard call sees it plainly.
+        with _verdict.collecting() as silences:
+            _silent_then_allow("fake-silent-guard", "cannot parse PowerShell backtick continuation")
+        assert _verdict.was_silent("fake-silent-guard", silences)

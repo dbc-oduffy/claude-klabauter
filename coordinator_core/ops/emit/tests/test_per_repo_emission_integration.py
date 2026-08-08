@@ -31,7 +31,6 @@ Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C7 / AC6 / 
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -379,7 +378,7 @@ class TestLinkedWorktreeEmitsNonZeroRecords:
             "coordinator_core.ops.artifact_emit._envelope.resolve_context",
             side_effect=spy_resolve_context,
         ):
-            result = asyncio.run(_artifact_emit({"out": str(out_path)}, repo_root=common_dir))
+            result = _artifact_emit({"out": str(out_path)}, repo_root=common_dir)
 
         # Handler returned ok
         assert result["ok"] is True, f"emit result must be ok; got {result!r}"
@@ -419,7 +418,7 @@ class TestLinkedWorktreeEmitsNonZeroRecords:
             "coordinator_core.ops.artifact_emit._envelope.resolve_context",
             return_value=real_ctx,
         ):
-            asyncio.run(_artifact_emit({"out": str(out_path)}, repo_root=common_dir))
+            _artifact_emit({"out": str(out_path)}, repo_root=common_dir)
 
         data = json.loads(out_path.read_text())
         for record in data["coordinator_roots"]:

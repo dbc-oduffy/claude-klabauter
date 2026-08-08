@@ -52,17 +52,17 @@ Negative-spec:
       (the same fixed-indentation `  - <path>` scanner `pickup_assemble`
       consumes for `preflight.completeness_items[]`), rather than carrying a
       second private copy of the awk-idiom scan.
-    - `_build_known_scope`'s owner-claim probe (DR-084) reads BOTH
-      `claimed_by:` (new) and `consumed_by:` (legacy) — this module is a
-      read-only classifier over handoffs authored by other writers and never
-      itself stamps a handoff status/field, so there is no write side here to
-      migrate to NEW-only.
+    - `_build_known_scope`'s owner-claim probe resolves ledger-first via
+      `coordinator_core.claim_state.resolve_claim_state`, DR-084 dual-tolerant
+      (`claimed_by:` new, `consumed_by:` legacy) on the mirror fallback —
+      this module is a read-only classifier over handoffs authored by other
+      writers and never itself stamps a handoff status/field, so there is no
+      write side here to migrate to NEW-only.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -71,12 +71,15 @@ from typing import List, Optional, Tuple
 from coordinator_core.ops.extract_scope_paths import (
     _extract_scope_paths as _shared_extract_scope_paths,
 )
+from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.state_root import (
     CrossCuttingStateRoot,
     StateRootError,
     coordinator_state_root,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "dirty-tree-gate"  # literal program-name prefix — mirrors oracle stderr text (no .sh suffix)
 
@@ -149,7 +152,24 @@ def parse_porcelain_paths(status_out: str) -> List[Tuple[str, str]]:
     return pairs
 
 
-def _build_known_scope(handoffs_dir: str) -> set:
+def _build_known_scope(handoffs_dir: str, repo_root: Optional[str] = None) -> set:
+    """Union of `scope:` paths from every claimed `state/handoffs/*.md`.
+
+    Purpose: case-(b) known-concurrent-owner membership set (see module
+    docstring). A handoff is "claimed" when
+    `coordinator_core.claim_state.resolve_claim_state` reports a live
+    holder -- ledger-first, frontmatter mirror as fallback. Was previously a
+    private `^(claimed_by|consumed_by):` regex over the mirror only.
+
+    Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+    § C3 / AC4. Before this fix, a live ledger claim with a branch-reverted
+    mirror dropped its `scope:` paths from `known_scope` entirely,
+    reclassifying the claim holder's own in-progress files as case-(c)
+    unattributable.
+
+    `common_dir` is resolved once per call, not once per handoff, per C1's
+    hot-path cost note.
+    """
     known_scope: set = set()
     if not os.path.isdir(handoffs_dir):
         return known_scope
@@ -159,18 +179,28 @@ def _build_known_scope(handoffs_dir: str) -> set:
     except OSError:
         return known_scope
 
+    root = Path(repo_root) if repo_root else Path(handoffs_dir).parent.parent
+    try:
+        common_dir = git_common_dir(root)
+    except Exception:
+        common_dir = None
+
     for name in entries:
         if not name.endswith(".md"):
             continue
         path = os.path.join(handoffs_dir, name)
         if not os.path.isfile(path):
             continue
+        # Review: coordinator:code-reviewer C3 P3 — renamed from `claim_state`,
+        # which shadowed the sibling module `coordinator_core.claim_state`
+        # this function imports `resolve_claim_state` from.
+        resolved_claim = resolve_claim_state(Path(path), common_dir=common_dir, repo_root=root)
+        if resolved_claim.holder is None:
+            continue
         try:
             text = Path(path).read_text(encoding="utf-8")
         except OSError:
             print(f"skip: _build_known_scope: text = Path(path).read_text(encoding=\"utf-8\") failed: {sys.exc_info()[1]}", file=sys.stderr)
-            continue
-        if not re.search(r"^(claimed_by|consumed_by):", text, flags=re.MULTILINE):
             continue
         for sp in _shared_extract_scope_paths(text):
             if sp:
@@ -228,6 +258,7 @@ def main(argv: List[str]) -> int:
                 ["git", "rev-parse", "--show-toplevel"],
                 capture_output=True,
                 text=True,
+                **no_console_creationflags(),
             )
         except OSError:
             print(f"{_PROG} ({terminator}): must be run inside a git repository", file=sys.stderr)
@@ -239,7 +270,7 @@ def main(argv: List[str]) -> int:
 
     # --- Build case-(b) known-scope path set ---
     handoffs_dir = _resolve_handoffs_dir(plugin_root, repo_root)
-    known_scope = _build_known_scope(handoffs_dir)
+    known_scope = _build_known_scope(handoffs_dir, repo_root=repo_root)
 
     # --- Classify dirty paths ---
     unattributable: List[str] = []
@@ -255,6 +286,7 @@ def main(argv: List[str]) -> int:
         ["git", "-C", repo_root, "status", "--porcelain", "--untracked-files=all"],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     status_out = status_result.stdout if status_result.returncode == 0 else ""
 
@@ -270,6 +302,7 @@ def main(argv: List[str]) -> int:
             diff_result = subprocess.run(
                 ["git", "-C", repo_root, "diff", "--quiet", "--", path],
                 capture_output=True,
+                **no_console_creationflags(),
             )
             if diff_result.returncode == 0:
                 continue

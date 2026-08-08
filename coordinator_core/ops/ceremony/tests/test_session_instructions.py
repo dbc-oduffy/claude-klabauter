@@ -24,7 +24,6 @@ Spec backlink:
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 from pathlib import Path
@@ -42,9 +41,10 @@ from coordinator_core.ops.ceremony.node_handlers import (
 )
 
 
-def _run(coro) -> Any:
-    """Run an async handler coroutine synchronously."""
-    return asyncio.run(coro)
+def _run(result) -> Any:
+    """Pass a plain (already computed) result through unchanged
+    (2026-08-07: _handler is now plain `def`)."""
+    return result
 
 
 class SessionInstructionsRepo:

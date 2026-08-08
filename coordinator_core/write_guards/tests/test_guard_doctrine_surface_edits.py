@@ -206,3 +206,46 @@ def test_sentinel_is_not_tracked_in_this_repo():
         f"{_SENTINEL_NAME} is TRACKED -- gitignore does not untrack an "
         "already-committed path. Run `git rm --cached` on it."
     )
+
+
+# ---------------------------------------------------------------------------
+# Deny-message class split (cross-repo/inbox/2026-08-08-example-store-repo-em-...).
+#
+# A sibling repo's PM read "always-loaded doctrine" against their own
+# coordinator.local.md, correctly judged it false, and proposed ungating the
+# file. The premise was right and the conclusion inverted -- the frontmatter
+# is the executed/authority half. These pin the message that says so, because
+# a deny reason a reader can falsify is one they route around.
+# ---------------------------------------------------------------------------
+
+
+def test_local_config_denial_does_not_claim_always_loaded_doctrine():
+    reason = guard._deny_reason("coordinator.local.md", is_local_config=True)
+    assert "always-loaded doctrine" not in reason
+    assert "reaches every session" not in reason
+
+
+def test_local_config_denial_names_the_execution_and_authority_surface():
+    reason = guard._deny_reason("coordinator.local.md", is_local_config=True)
+    for key in ("fast_test_cmd", "_post_command", "fast_tier_unscoped_reason"):
+        assert key in reason, f"deny message must name {key} as the real reason"
+
+
+def test_claude_md_denial_keeps_the_always_loaded_rationale():
+    reason = guard._deny_reason("CLAUDE.md")
+    assert "always-loaded doctrine" in reason
+    assert "fast_test_cmd" not in reason
+
+
+def test_local_config_path_matches_the_protected_entry(scratch_repo):
+    """`_local_config_path` must resolve identically to the protected-list
+    entry it is compared against in `check()` -- a drift between the two
+    silently reverts every coordinator.local.md denial to the class-1
+    message without failing anything else.
+    """
+    root = str(scratch_repo)
+    assert guard._local_config_path(root) in guard._protected_paths(root)
+
+
+def test_local_config_path_is_none_without_a_repo_root():
+    assert guard._local_config_path(None) is None

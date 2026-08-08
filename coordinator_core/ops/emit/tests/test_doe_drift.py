@@ -610,14 +610,14 @@ class TestProvenanceNormalizerReuse:
     def _make_record_with_live_provenance(self) -> dict:
         """Record with 'live' runtime-varying provenance fields."""
         return {
-            "repo": "dbc-example-operator/live-repo",
+            "repo": "dbc-oduffy/live-repo",
             "title": "some-record",
             "observed_at": "2026-07-05T15:30:00Z",
             "computed_as_of": "2026-07-05T15:30:00Z",
-            "REPO_NAME": "dbc-example-operator/live-repo",
+            "REPO_NAME": "dbc-oduffy/live-repo",
             "provenance": {
                 "source_kind": "local_fs",
-                "repo": "dbc-example-operator/live-repo",
+                "repo": "dbc-oduffy/live-repo",
                 "ref": {
                     "branch": "work/some-branch/2026-07-05",
                     "sha": "aabbccddeeff00112233445566778899aabbccdd",
@@ -671,14 +671,14 @@ class TestProvenanceNormalizerReuse:
         record_a["provenance"]["observed_at"] = "2026-07-05T10:00:00Z"
         record_a["provenance"]["ref"]["sha"] = "1111111111111111111111111111111111111111"
         record_a["provenance"]["ref"]["branch"] = "work/branch-a/2026-07-05"
-        record_a["provenance"]["repo"] = "dbc-example-operator/repo-a"
+        record_a["provenance"]["repo"] = "dbc-oduffy/repo-a"
 
         record_b = self._make_record_with_live_provenance()
         record_b["observed_at"] = "2026-07-05T22:59:00Z"
         record_b["provenance"]["observed_at"] = "2026-07-05T22:59:00Z"
         record_b["provenance"]["ref"]["sha"] = "9999999999999999999999999999999999999999"
         record_b["provenance"]["ref"]["branch"] = "feature/branch-b"
-        record_b["provenance"]["repo"] = "dbc-example-operator/repo-b"
+        record_b["provenance"]["repo"] = "dbc-oduffy/repo-b"
 
         normalized_a = _normalize(record_a)
         normalized_b = _normalize(record_b)

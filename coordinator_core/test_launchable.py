@@ -15,7 +15,7 @@ import sys
 import pytest
 
 from coordinator_core import launchable
-from coordinator_core.launchable import resolve_by_shebang, resolve_launchable
+from coordinator_core.launchable import resolve_by_shebang, resolve_launchable, which_path_ordered
 
 
 @pytest.fixture
@@ -244,3 +244,166 @@ def test_shebang_with_leading_utf8_bom_still_resolves(as_posix, tmp_path):
     script = tmp_path / "thing.sh"
     script.write_bytes(b"\xef\xbb\xbf#!/usr/bin/env python3\n" + b"print('hi')\n")
     assert resolve_by_shebang(str(script)) == [sys.executable, str(script)]
+
+
+# ---------------------------------------------------------------------------
+# which_path_ordered -- directory-major, extension-minor PATH walk
+# ---------------------------------------------------------------------------
+
+
+def _set_path(monkeypatch, *dirs):
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs))
+
+
+def test_directory_major_extension_minor_ordering(monkeypatch, tmp_path):
+    """Earlier PATH dir wins even when its only match is a LOWER-priority
+    extension than a match sitting in a LATER dir.
+
+    dir1 (first on PATH) has only a `.BAT` twin of `tool`; dir2 (second on
+    PATH) has a `.EXE` twin, which PATHEXT ranks ahead of `.BAT`. An
+    extension-major implementation (walk `.EXE` across ALL dirs first, then
+    `.BAT` across all dirs) would find dir2's `.EXE` first and return it --
+    wrong, since dir1 precedes dir2 on PATH. The correct directory-major
+    walk must return dir1's `.BAT` instead.
+    """
+    dir1 = tmp_path / "dir1"
+    dir2 = tmp_path / "dir2"
+    dir1.mkdir()
+    dir2.mkdir()
+    bat = dir1 / "tool.BAT"
+    bat.write_text("@echo off\n")
+    exe = dir2 / "tool.EXE"
+    exe.write_text("binary\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(dir1), str(dir2))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    result = which_path_ordered("tool")
+
+    assert result == str(bat)
+
+
+def test_pathext_order_honoured_within_a_directory(monkeypatch, tmp_path):
+    """Within one dir, PATHEXT precedence (.EXE before .BAT here) governs
+    which twin wins, not filesystem/alphabetic order."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    (d / "tool.BAT").write_text("@echo off\n")
+    exe = d / "tool.EXE"
+    exe.write_text("binary\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool") == str(exe)
+
+
+def test_bare_extensionless_name_is_a_candidate(monkeypatch, tmp_path):
+    """A directory holding only the bare `name` (no PATHEXT twin at all)
+    still matches -- the bare form is tried after the suffixed forms in
+    that same directory."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    bare = d / "tool"
+    bare.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool") == str(bare)
+
+
+def test_extensions_empty_list_matches_only_literal_filename(monkeypatch, tmp_path):
+    """`extensions=[]` must NOT append any PATHEXT suffix -- only the exact
+    `name` should match. This is the shim-supporting mode: a wider match
+    (e.g. picking up a `name.EXE` sibling) would be a real regression."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    shim = d / "tool.sh"
+    shim.write_text("#!/bin/sh\n")
+    # A decoy that a naive PATHEXT-appending search could wrongly prefer.
+    (d / "tool.sh.EXE").write_text("binary\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool.sh", extensions=[]) == str(shim)
+
+
+def test_posix_default_is_bare_name_only_no_pathext(monkeypatch, tmp_path):
+    """On POSIX (per the module's own `_is_windows` seam) `extensions`
+    defaults to `[]`, matching shutil.which's own platform default -- a
+    PATHEXT-suffixed sibling must NOT be picked up even if PATHEXT happens
+    to be set in the environment (e.g. inherited from a cross-platform CI
+    box)."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    bare = d / "tool"
+    bare.write_text("#!/bin/sh\n")
+    (d / "tool.EXE").write_text("binary\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: False)
+
+    assert which_path_ordered("tool") == str(bare)
+
+
+def test_not_found_returns_none(monkeypatch, tmp_path):
+    d = tmp_path / "dir1"
+    d.mkdir()
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("nope") is None
+
+
+def test_empty_path_entry_is_skipped(monkeypatch, tmp_path):
+    """A `PATH` containing an empty segment (e.g. a trailing/doubled
+    separator) must not raise or match anything spurious -- it is skipped
+    and the walk continues to the next real directory."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    target = d / "tool"
+    target.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, "", str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool") == str(target)
+
+
+def test_path_entry_that_is_not_a_directory_is_skipped(monkeypatch, tmp_path):
+    """A `PATH` entry pointing at a plain file (not a directory) must not
+    raise -- os.path.isfile candidates built under it simply never exist,
+    and the walk falls through to the next entry."""
+    not_a_dir = tmp_path / "not-a-dir.txt"
+    not_a_dir.write_text("x\n")
+    d = tmp_path / "dir1"
+    d.mkdir()
+    target = d / "tool"
+    target.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(not_a_dir), str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool") == str(target)
+
+
+def test_name_that_already_carries_an_extension_tries_pathext_twins_first(monkeypatch, tmp_path):
+    """With the default `extensions` (PATHEXT), a name that already ends in
+    its own extension still gets PATHEXT-suffixed candidates tried first
+    (`tool.sh.EXE`, ...) before the bare `tool.sh` -- this is the case
+    `which_path_ordered`'s docstring calls out as `shutil.which` getting
+    wrong (it never tries the literal filename at all); here we confirm
+    THIS function does still fall through to the bare literal name when no
+    PATHEXT-suffixed twin exists."""
+    d = tmp_path / "dir1"
+    d.mkdir()
+    shim = d / "tool.sh"
+    shim.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    _set_path(monkeypatch, str(d))
+    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
+
+    assert which_path_ordered("tool.sh") == str(shim)

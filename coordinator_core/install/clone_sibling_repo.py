@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import normalize_native_path
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.write_surface import (
     ShapedClause,
     WriteSurfaceDeclaration,
@@ -169,7 +170,7 @@ def clone_idempotent(repo_url: str, target_dir: str) -> dict:
             text=True,
             timeout=_CLONE_TIMEOUT_SECS,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError as exc:
         # No `_record_resolution` call on any of these three failure paths —

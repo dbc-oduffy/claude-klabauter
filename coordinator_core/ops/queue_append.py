@@ -104,6 +104,7 @@ import logging
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 import tempfile
 from pathlib import Path
@@ -645,7 +646,7 @@ def _machine_local_get(key: str) -> Optional[str]:
             [sys.executable, impl, "get", key],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -742,34 +743,34 @@ def _output_path(
                 f"queue.append: central queue_scope only valid for improvement-queue or lessons, "
                 f"got {schema_name!r}"
             )
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
                 "repos.claude_klabauter not set in machine-local registry and CLAUDE_KLABAUTER_ROOT env var not set"
             )
-        base = os.path.join(claude-klabauter, output_dir)
+        base = os.path.join(claude_klabauter_root, output_dir)
     elif caller_worktree is not None:
         home = _claude_home()
         if _same_path(str(caller_worktree), home):
             # Meta-repo caller → route to claude-klabauter (stop-the-rot taxonomy).
-            claude-klabauter = _claude_klabauter_root()
-            if claude-klabauter is None:
+            claude_klabauter_root = _claude_klabauter_root()
+            if claude_klabauter_root is None:
                 raise _ClaudeKlabauterUnresolvable(
                     "repos.claude_klabauter not set; cannot route meta-repo per-repo state to claude-klabauter"
                 )
-            base = os.path.join(claude-klabauter, output_dir)
+            base = os.path.join(claude_klabauter_root, output_dir)
         else:
             # Sibling repo → per-repo state stays in the repo itself.
             base = os.path.join(str(caller_worktree), output_dir)
     else:
         # caller_worktree is None — _OP_KEY_SCOPE entry may be missing; fallback
         # to claude-klabauter root (daemon context has no meaningful cwd anchor).
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
                 "caller_worktree not provided and CLAUDE_KLABAUTER_ROOT not set; cannot resolve output path"
             )
-        base = os.path.join(claude-klabauter, output_dir)
+        base = os.path.join(claude_klabauter_root, output_dir)
 
     if schema_name == "workstream":
         filename = f"{workstream_id}.yaml"

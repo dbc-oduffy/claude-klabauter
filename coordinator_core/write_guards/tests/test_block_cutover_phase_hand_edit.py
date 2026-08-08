@@ -170,6 +170,25 @@ class TestFlagsPhaseHandEdit:
         assert "cutover-cli advance" in reason
 
 
+class TestDriveRootContainmentGate:
+    """Discriminates the drive-root trailing-backslash defect directly:
+    a `git_root` of a bare Windows drive root previously composed a
+    double-slash `expected_prefix` (`rstrip("/")` does not strip a trailing
+    backslash), which never matched the single-slash form `Path.resolve()`
+    produces on the candidate side -- the gate went silently inert and
+    `_normalize_and_gate` returned `None` for every candidate. Proven to
+    fail against the pre-fix `rstrip("/")` spelling before this fix landed.
+    """
+
+    def test_drive_root_git_root_still_matches(self):
+        drive_root = "X:" + "\\"  # abs-path-ok: synthetic drive-root literal, not a repo path citation
+        result = guard._normalize_and_gate(
+            "state/roadmap/foo/cutovers/bar.md", drive_root
+        )
+
+        assert result is not None
+
+
 class TestPassThrough:
     def test_edit_of_other_field_passes_through(self, tmp_path, monkeypatch):
         repo_root, record_path = _make_repo(tmp_path)

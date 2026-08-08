@@ -124,7 +124,7 @@ def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
 
 
 @register_op("initiative.serve_set")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "initiative.serve_set" handler.

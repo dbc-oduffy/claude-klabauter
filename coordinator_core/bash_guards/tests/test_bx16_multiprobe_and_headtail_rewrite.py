@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import io
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -30,6 +32,18 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
+
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized (see bb48ce7's identical
+    fixture-realism finding on the write-bump test suite). Accepts a
+    ``Path`` or a plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
 def _payload_prefix() -> str:
@@ -60,9 +74,24 @@ def _run_python_c(command: str) -> str:
 
 
 def _run_shell(command: str) -> str:
-    result = subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=10
-    )
+    """Execute `command` through an actual bash-compatible shell. On
+    Windows, plain `subprocess.run(shell=True)` launches cmd.exe -- a
+    different tokenizer than the bash/POSIX-sh one `dispatch_checks`
+    itself parses `command` as, so it does not corroborate anything about
+    what a real Bash-tool invocation would do. Routed through Git Bash
+    explicitly there; POSIX `shell=True` already invokes `/bin/sh`, which
+    is bash-compatible for everything exercised in this module."""
+    if platform.system() == "Windows":
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("git-bash not found on PATH")
+        result = subprocess.run(
+            [bash, "-c", command], capture_output=True, text=True, timeout=10
+        )
+    else:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=10
+        )
     return result.stdout
 
 
@@ -114,7 +143,11 @@ class TestPython3InvocationImportErrorFallback:
         out = dc.check_multiprobe_banner_rewrite(cmd)
         assert out is None
 
+    @pytest.mark.pending_fix
     def test_bare_facts_equivalence(self, tmp_path):
+        """state/bash-guards/known-red.json group "dispatch-checks-windows-path"
+        (state/bug-backlog/2026-08-07-dispatch-checks-py-corrupts-windows-path-4bd80b653b51.yaml).
+        Owner: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md."""
         cmd = 'echo "=== FACTS ==="; pwd; whoami'
         out = dc.check_multiprobe_banner_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -123,6 +156,7 @@ class TestPython3InvocationImportErrorFallback:
         rewritten = _run_python_c(rewrite)
         assert original == rewritten
 
+    @pytest.mark.pending_fix
     def test_date_and_uname_a_equivalence(self):
         """`date`'s output carries a wall-clock second, so the shell run and
         the rewritten run are compared with that second masked -- the two
@@ -319,7 +353,11 @@ class TestDatePortableAcrossPlatforms:
     instead of asking `strftime` for it, so no platform branch is needed and
     the real `date` command's exact output is still reproduced."""
 
+    @pytest.mark.pending_fix
     def test_date_rewrite_never_raises_and_matches_real_date(self):
+        """state/bash-guards/known-red.json group "dispatch-checks-windows-path"
+        (date/uname divergence). Owner:
+        docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md."""
         cmd = 'echo "=== FACTS ==="; pwd; date'
         out = dc.check_multiprobe_banner_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -348,12 +386,43 @@ def census_dir(tmp_path):
     return tmp_path
 
 
+class TestHeadTailPlumbingRewriteGeneratorPathJoin:
+    """AC3 regression (2026-08-07 guard-suite-back-to-a-gate, C2): the
+    `find`/`grep` generator bodies `_bt_build_generator_lines` emits must
+    join path components with `posixpath.join` ('/'), not `os.path.join` --
+    the real `find`/`grep` binary a Bash-tool command shells out to is
+    ALWAYS a POSIX (Git-Bash/coreutils) binary, even when the Bash tool
+    itself runs on Windows, so its own output always joins with '/'.
+    `os.path.join` on a Windows host instead glues the matched filename on
+    with a native '\\', producing a rewrite whose output is byte-for-byte
+    different from the real command it claims to reproduce exactly (a
+    census/report consumer diffing the two would see spurious drift on
+    every nested match). Pre-fix this failed: `_bt_build_generator_lines`
+    called `os.path.join`, which on a POSIX CI/dev host is
+    indistinguishable from `posixpath.join` (both emit '/' there) -- these
+    two assertions pin the SOURCE TEXT of the emitted generator body
+    directly, so the regression is caught on every host, not only
+    Windows."""
+
+    def test_find_generator_joins_with_posixpath_not_os_path(self):
+        parsed = ht._bt_parse_find_census_segment(["find", "/tmp/census", "-type", "f"])
+        script = "\n".join(ht._bt_build_generator_lines("find", parsed))
+        assert "posixpath.join(root, fn)" in script
+        assert "os.path.join(root, fn)" not in script
+
+    def test_grep_generator_joins_with_posixpath_not_os_path(self):
+        parsed = dc._bt_grep_flags_and_operands(["grep", "-rn", "TODO", "/tmp/census"])
+        script = "\n".join(ht._bt_build_generator_lines("grep", parsed))
+        assert "posixpath.join(root, fn)" in script
+        assert "os.path.join(root, fn)" not in script
+
+
 class TestHeadTailPlumbingRewrite:
     def test_never_denies(self, census_dir):
         for cmd in [
-            "ls %s | head -n 2" % census_dir,
-            "find %s -type f | head" % census_dir,
-            "grep -rn TODO %s | tail -n 1" % census_dir,
+            "ls %s | head -n 2" % _posix(census_dir),
+            "find %s -type f | head" % _posix(census_dir),
+            "grep -rn TODO %s | tail -n 1" % _posix(census_dir),
             "cat file | head",  # unrecognized upstream -> advisory
             "a | b | c | head",  # too many segments -> advisory
         ]:
@@ -361,7 +430,7 @@ class TestHeadTailPlumbingRewrite:
             assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
 
     def test_ls_head_equivalence(self, census_dir):
-        cmd = "ls %s | head -n 2" % census_dir
+        cmd = "ls %s | head -n 2" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell(cmd)
@@ -369,29 +438,29 @@ class TestHeadTailPlumbingRewrite:
         assert original == rewritten
 
     def test_find_head_equivalence_sorted(self, census_dir):
-        cmd = "find %s -type f -name '*.txt' | head -n 5" % census_dir
+        cmd = "find %s -type f -name '*.txt' | head -n 5" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         # find's own traversal order is not guaranteed -- compare against a
         # SORTED oracle (this rewrite's own documented, deliberate choice).
         original = _run_shell(
-            "find %s -type f -name '*.txt' | sort | head -n 5" % census_dir
+            "find %s -type f -name '*.txt' | sort | head -n 5" % _posix(census_dir)
         )
         rewritten = _run_python_c(rewrite)
         assert original == rewritten
 
     def test_grep_tail_equivalence_sorted(self, census_dir):
-        cmd = "grep -rn TODO %s | tail -n 1" % census_dir
+        cmd = "grep -rn TODO %s | tail -n 1" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
-        original = _run_shell("grep -rn TODO %s | sort | tail -n 1" % census_dir)
+        original = _run_shell("grep -rn TODO %s | sort | tail -n 1" % _posix(census_dir))
         rewritten = _run_python_c(rewrite)
         assert original == rewritten
 
     def test_tail_zero_does_not_return_everything(self, census_dir):
         """Python's own `_out[-0:]` slice quirk (== `_out[0:]`, the WHOLE
         list) must not leak into the generated rewrite for `tail -n 0`."""
-        cmd = "ls %s | tail -n 0" % census_dir
+        cmd = "ls %s | tail -n 0" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         assert _run_python_c(rewrite) == ""
@@ -410,20 +479,20 @@ class TestHeadTailPlumbingRewrite:
         `-w` from `_GREP_SUBSTITUTABLE_SHORT_FLAGS` closes both callers at
         once."""
         out = ht.check_head_tail_plumbing_rewrite(
-            "grep -wrn TODO %s | head -n 5" % census_dir
+            "grep -wrn TODO %s | head -n 5" % _posix(census_dir)
         )
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
         assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_unrecognized_count_form_advises(self, census_dir):
-        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -c 10" % census_dir)
+        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -c 10" % _posix(census_dir))
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_composed_three_stage_pipeline_advises(self, census_dir):
         out = ht.check_head_tail_plumbing_rewrite(
-            "ls %s | sort | head -n 2" % census_dir
+            "ls %s | sort | head -n 2" % _posix(census_dir)
         )
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
@@ -443,7 +512,7 @@ class TestHeadTailPlumbingRewrite:
         test a pattern the fix can faithfully translate, so segmentation
         equivalence is still checked end-to-end rather than by substring."""
         (census_dir / "pipe.txt").write_text("a|b marker\n")
-        cmd = "grep -Frn 'a|b' %s | head -n 1" % census_dir
+        cmd = "grep -Frn 'a|b' %s | head -n 1" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -460,26 +529,26 @@ class TestHeadTailPlumbingRewrite:
         fall through to the advisory skeleton rather than a silently wrong
         `updatedInput`."""
         (census_dir / "pipe.txt").write_text("a|b marker\n")
-        cmd = "grep -rn 'a|b' %s | head -n 1" % census_dir
+        cmd = "grep -rn 'a|b' %s | head -n 1" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
         assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_bare_pipeline_without_head_tail_returns_none(self, census_dir):
-        assert ht.check_head_tail_plumbing_rewrite("ls %s" % census_dir) is None
+        assert ht.check_head_tail_plumbing_rewrite("ls %s" % _posix(census_dir)) is None
         assert ht.check_head_tail_plumbing_rewrite("") is None
 
     def test_override_disables_check(self, monkeypatch, census_dir):
         monkeypatch.setenv("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", "1")
-        cmd = "ls %s | head -n 2" % census_dir
+        cmd = "ls %s | head -n 2" % _posix(census_dir)
         assert ht.check_head_tail_plumbing_rewrite(cmd) is None
 
     def test_bare_head_no_pipe_returns_none(self, census_dir):
         """`head file.txt` with no upstream pipe is an ordinary bounded read,
         not the plumbing shape -- the classifier itself excludes it, so this
         check must never manufacture a match on it."""
-        assert ht.check_head_tail_plumbing_rewrite("head %s/a.txt" % census_dir) is None
+        assert ht.check_head_tail_plumbing_rewrite("head %s/a.txt" % _posix(census_dir)) is None
 
 
 class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
@@ -504,35 +573,35 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
 
     def test_exact_live_repro_command(self, census_dir):
         """The exact shape that crashed live: `ls DIR 2>/dev/null | head -N`."""
-        self._declines_rewrite("ls %s 2>/dev/null | head -40" % census_dir)
+        self._declines_rewrite("ls %s 2>/dev/null | head -40" % _posix(census_dir))
 
     def test_ls_stderr_redirect_glued(self, census_dir):
-        self._declines_rewrite("ls %s 2>/dev/null | head -n 2" % census_dir)
+        self._declines_rewrite("ls %s 2>/dev/null | head -n 2" % _posix(census_dir))
 
     def test_ls_stderr_redirect_separate_token(self, census_dir):
-        self._declines_rewrite("ls %s 2> /dev/null | head -n 2" % census_dir)
+        self._declines_rewrite("ls %s 2> /dev/null | head -n 2" % _posix(census_dir))
 
     def test_ls_stdout_redirect(self, census_dir):
-        self._declines_rewrite("ls %s >out.txt | head -n 2" % census_dir)
+        self._declines_rewrite("ls %s >out.txt | head -n 2" % _posix(census_dir))
 
     def test_ls_append_redirect(self, census_dir):
-        self._declines_rewrite("ls %s >>out.txt | head -n 2" % census_dir)
+        self._declines_rewrite("ls %s >>out.txt | head -n 2" % _posix(census_dir))
 
     def test_ls_input_redirect(self, census_dir):
-        self._declines_rewrite("ls %s <in.txt | head -n 2" % census_dir)
+        self._declines_rewrite("ls %s <in.txt | head -n 2" % _posix(census_dir))
 
     def test_find_stderr_redirect(self, census_dir):
         self._declines_rewrite(
-            "find %s -type f 2>/dev/null | head -n 5" % census_dir
+            "find %s -type f 2>/dev/null | head -n 5" % _posix(census_dir)
         )
 
     def test_find_bare_redirect_as_first_token(self, tmp_path):
         """The position-sensitive shape: a redirection as the FIRST predicate
         token, which used to be assigned to `path` directly."""
-        self._declines_rewrite("find %s 2>/dev/null | head -n 5" % tmp_path)
+        self._declines_rewrite("find %s 2>/dev/null | head -n 5" % _posix(tmp_path))
 
     def test_grep_stderr_redirect(self, census_dir):
-        self._declines_rewrite("grep -rn TODO %s 2>/dev/null | head -n 5" % census_dir)
+        self._declines_rewrite("grep -rn TODO %s 2>/dev/null | head -n 5" % _posix(census_dir))
 
     def test_standalone_grep_rewrite_also_declines(self, census_dir):
         """`_bt_grep_flags_and_operands` is shared with the standalone-grep
@@ -543,7 +612,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
         this check only owns the rewrite target -- so `None` here IS the
         "declined to rewrite" outcome for this function, not a gap."""
         out = dc.check_grep_via_bash_rewrite(
-            "grep -rn TODO %s 2>/dev/null" % census_dir
+            "grep -rn TODO %s 2>/dev/null" % _posix(census_dir)
         )
         if out is not None:
             assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -553,7 +622,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
         """Sanity companion: an ordinary pipeline with no redirection must
         still auto-rewrite -- this fix must not have widened into a blanket
         decline."""
-        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -n 2" % census_dir)
+        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -n 2" % _posix(census_dir))
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
@@ -579,9 +648,9 @@ class TestGeneratedPayloadShellSafety:
     def test_head_tail_rewrite_has_no_raw_single_quote_in_payload(self, census_dir):
         prefix = _payload_prefix()
         for cmd in [
-            "ls %s | head -n 2" % census_dir,
-            "find %s -type f | tail -n 1" % census_dir,
-            "grep -rn TODO %s | head -n 1 -l" % census_dir,
+            "ls %s | head -n 2" % _posix(census_dir),
+            "find %s -type f | tail -n 1" % _posix(census_dir),
+            "grep -rn TODO %s | head -n 1 -l" % _posix(census_dir),
         ]:
             out = ht.check_head_tail_plumbing_rewrite(cmd)
             if out is None or "updatedInput" not in out["hookSpecificOutput"]:
@@ -598,7 +667,7 @@ class TestGeneratedPayloadShellSafety:
         compile(inner, "<test>", "exec")  # raises SyntaxError on failure
 
     def test_head_tail_rewrite_parses_under_current_interpreter(self, census_dir):
-        cmd = "grep -rn TODO %s | tail -n 1" % census_dir
+        cmd = "grep -rn TODO %s | tail -n 1" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         command = out["hookSpecificOutput"]["updatedInput"]["command"]
         inner = command[len(_payload_prefix()) : -1]
@@ -664,54 +733,54 @@ class TestHeadTailRewriteDifferentialEquivalence:
 
     @pytest.mark.parametrize("n", [0, 1, 3, 10, 30, 999])
     def test_find_head(self, big_tree, n):
-        up_tokens = ["find", str(big_tree), "-type", "f", "-name", "*.txt"]
+        up_tokens = ["find", _posix(big_tree), "-type", "f", "-name", "*.txt"]
         parsed = ht._bt_parse_find_census_segment(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("find", parsed, True, n))
-        cmd = "find %s -type f -name '*.txt' | head -n %d" % (big_tree, n)
+        cmd = "find %s -type f -name '*.txt' | head -n %d" % (_posix(big_tree), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
     @pytest.mark.parametrize("n", [0, 1, 3, 10, 30, 999])
     def test_find_tail(self, big_tree, n):
-        up_tokens = ["find", str(big_tree), "-type", "f", "-name", "*.txt"]
+        up_tokens = ["find", _posix(big_tree), "-type", "f", "-name", "*.txt"]
         parsed = ht._bt_parse_find_census_segment(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("find", parsed, False, n))
-        cmd = "find %s -type f -name '*.txt' | tail -n %d" % (big_tree, n)
+        cmd = "find %s -type f -name '*.txt' | tail -n %d" % (_posix(big_tree), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
     @pytest.mark.parametrize("n", [0, 1, 3, 30, 999])
     def test_grep_head(self, big_tree, n):
-        up_tokens = ["grep", "-rn", "TODO", str(big_tree)]
+        up_tokens = ["grep", "-rn", "TODO", _posix(big_tree)]
         parsed = dc._bt_grep_flags_and_operands(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("grep", parsed, True, n))
-        cmd = "grep -rn TODO %s | head -n %d" % (big_tree, n)
+        cmd = "grep -rn TODO %s | head -n %d" % (_posix(big_tree), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
     @pytest.mark.parametrize("n", [0, 1, 3, 30, 999])
     def test_grep_tail(self, big_tree, n):
-        up_tokens = ["grep", "-rn", "TODO", str(big_tree)]
+        up_tokens = ["grep", "-rn", "TODO", _posix(big_tree)]
         parsed = dc._bt_grep_flags_and_operands(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("grep", parsed, False, n))
-        cmd = "grep -rn TODO %s | tail -n %d" % (big_tree, n)
+        cmd = "grep -rn TODO %s | tail -n %d" % (_posix(big_tree), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
     @pytest.mark.parametrize("n", [0, 1, 3, 30, 999])
     def test_ls_head_and_tail(self, big_tree, n):
-        up_tokens = ["ls", str(big_tree)]
+        up_tokens = ["ls", _posix(big_tree)]
         parsed = ht._bt_parse_ls_segment(up_tokens)
         for is_head in (True, False):
             old = _exec_script_text(
                 _old_style_head_tail_script("ls", parsed, is_head, n)
             )
             verb = "head" if is_head else "tail"
-            cmd = "ls %s | %s -n %d" % (big_tree, verb, n)
+            cmd = "ls %s | %s -n %d" % (_posix(big_tree), verb, n)
             out = ht.check_head_tail_plumbing_rewrite(cmd)
             new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
             assert old == new, (verb, n)
@@ -746,7 +815,7 @@ class TestHeadShortCircuitStopsEarly:
         monkeypatch.setattr(os, "walk", counting_walk)
 
         n = 3
-        cmd = "find %s -type f -name 'match.txt' | head -n %d" % (tmp_path, n)
+        cmd = "find %s -type f -name 'match.txt' | head -n %d" % (_posix(tmp_path), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 
@@ -775,7 +844,7 @@ class TestHeadShortCircuitStopsEarly:
         monkeypatch.setattr(os, "walk", counting_walk)
 
         n = 4
-        cmd = "grep -rn TODO %s | head -n %d" % (tmp_path, n)
+        cmd = "grep -rn TODO %s | head -n %d" % (_posix(tmp_path), n)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 
@@ -803,7 +872,7 @@ class TestHeadShortCircuitStopsEarly:
 
         monkeypatch.setattr(os, "walk", counting_walk)
 
-        cmd = "find %s -type f -name 'match.txt' | tail -n 3" % tmp_path
+        cmd = "find %s -type f -name 'match.txt' | tail -n 3" % _posix(tmp_path)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 

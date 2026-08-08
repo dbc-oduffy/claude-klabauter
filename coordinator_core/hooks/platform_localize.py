@@ -119,7 +119,7 @@ PLUGIN_INFRA_REQUIREMENTS: Dict[str, str] = {
 }
 
 COORDINATOR_MP = "coordinator-claude"
-COORDINATOR_GITHUB_REPO = "dbc-example-operator/coordinator-claude"
+COORDINATOR_GITHUB_REPO = "dbc-oduffy/coordinator-claude"
 
 _REGISTRY_LINE_RE = re.compile(r'^"?([^"=]+)"?\s*=\s*"([^"]*)"')
 
@@ -450,7 +450,13 @@ def main(argv: Optional[List[str]] = None) -> int:
              (first-run.sh, install-maximalist.sh's `run_required`) -- see
              the trampoline's own header for the full fail-loud posture.
     """
-    claude_home = os.path.join(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~"), ".claude")
+    claude_home = os.path.join(
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~"),
+        ".claude",
+    )
     settings_local_path = os.path.join(claude_home, "settings.local.json")
     known_marketplaces_path = os.path.join(claude_home, "plugins", "known_marketplaces.json")
     plugins_dir = os.path.join(claude_home, "plugins")

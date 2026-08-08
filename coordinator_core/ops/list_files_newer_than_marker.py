@@ -92,7 +92,7 @@ def list_files_newer_than_marker(source_dir: str, limit: int = _DEFAULT_LIMIT) -
 
 
 @register_op("percolate.list_files_newer_than_marker")
-async def _list_files_newer_than_marker(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _list_files_newer_than_marker(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "percolate.list_files_newer_than_marker" handler.
 
     Required params: source_dir.

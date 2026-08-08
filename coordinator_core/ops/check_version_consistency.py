@@ -54,6 +54,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _PROG = "check-version-consistency"
 
 _USAGE = """\
@@ -91,6 +93,7 @@ def _git_toplevel(start: Optional[str] = None) -> Optional[str]:
             cwd=start or os.getcwd(),
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         print(f"skip: _git_toplevel: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -239,6 +242,7 @@ def _latest_v_tag(bundle_root: str) -> Optional[str]:
             ["git", "-C", bundle_root, "tag", "--list", "v*", "--sort=-v:refname"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         print(f"skip: _latest_v_tag: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

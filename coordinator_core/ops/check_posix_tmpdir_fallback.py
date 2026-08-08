@@ -58,8 +58,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, NamedTuple, Tuple
+from coordinator_core.win_portability import no_console_creationflags
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_NO_WINDOW = no_console_creationflags()
+
 
 _ENV_VAR_NAMES = {"TMPDIR", "TEMP", "TMP"}
 _POSIX_TMP_LITERALS = {"/tmp"}
@@ -77,7 +80,7 @@ def _git(root, args: List[str]) -> str:
         capture_output=True,
         text=True,
         check=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     return proc.stdout
 
@@ -195,7 +198,7 @@ def _default_root() -> str:
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     root = proc.stdout.strip()
     return root or os.getcwd()

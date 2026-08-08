@@ -87,6 +87,7 @@ import json
 import re
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 import time
 from pathlib import Path
@@ -127,7 +128,7 @@ def _run(
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
         cwd=cwd,
     )
 

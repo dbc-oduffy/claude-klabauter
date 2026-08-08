@@ -76,6 +76,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+import logging
 import os
 import re
 import struct
@@ -84,13 +85,14 @@ import sys
 import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple, Optional, Union
 
 from coordinator_core.archive_stamp import (
     _NO_COMMIT_TOKEN_RE as _SHIPPED_NO_COMMIT_RE,
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
 from coordinator_core.artifact_basename import md_fallback_candidates
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha as _shared_canonical_body_sha,
@@ -123,6 +125,8 @@ from coordinator_core.ops.parse_completeness_item import (
 )
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _liveness
+from coordinator_core.session import worktree_safety as _worktree_safety
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
 # ---------------------------------------------------------------------------
@@ -193,7 +197,7 @@ _TERMINAL_MEMO_FIELDS = (
 # Small git/filesystem helpers — no shell, no bash, subprocess-argv only.
 # ---------------------------------------------------------------------------
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 # Verbs `_run_git` must run as a real `git` spawn rather than through the
 # in-process read-model: `status`/`diff` (read-only, but their working-tree /
@@ -1156,8 +1160,22 @@ def _in_process_log_oneline(dirs: _GitDirs, argv: list[str]) -> list[tuple[str, 
 
 
 def _parse_since_date(date_str: str) -> Optional[int]:
+    """A date-only `--since` value (`YYYY-MM-DD`) is inherently UTC-shaped —
+    there is no wall-clock/timezone component to localize. Never call naive
+    `.timestamp()` on it: Python treats a naive `datetime` as LOCAL time, so
+    every previous caller silently got its epoch offset by the host's UTC
+    offset, and CPython on Windows additionally raises `OSError: [Errno 22]`
+    converting a local-time date on or near 1970-01-01 (the exact fallback
+    `_artifact_since_date` returns for a dateless basename) because the
+    underlying CRT `mktime` rejects negative/near-zero results. Attaching
+    `tzinfo=timezone.utc` before `.timestamp()` fixes both: no local-offset
+    skew, and no epoch-adjacent CRT failure."""
     try:
-        return int(datetime.strptime(date_str.strip(), "%Y-%m-%d").timestamp())
+        return int(
+            datetime.strptime(date_str.strip(), "%Y-%m-%d")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
     except ValueError:
         return None
 
@@ -1815,10 +1833,27 @@ def classify(path: Path, fm_text: str, repo_root: Path) -> str:
     status = read_fm_field_unquoted(fm_text, "status")
     deployment_state = read_fm_field_unquoted(fm_text, "deployment_state")
 
-    if in_handoffs_dir and status in {"active", "consumed", "open", "claimed"} and deployment_state is not None:
-        if _is_spinoff_kind(kind):
-            return "spinoff"
-        return "handoff"
+    if in_handoffs_dir and status in {"active", "consumed", "open", "claimed"}:
+        if deployment_state is not None:
+            if _is_spinoff_kind(kind):
+                return "spinoff"
+            return "handoff"
+        # Ledger-first (C11, row 20): a mirror revert can drop
+        # `deployment_state` alongside the claim stamp, which would
+        # otherwise fall through to `ambiguous` and refuse to route a live,
+        # ledger-claimed handoff at all (fact-find row 20). A live ledger
+        # claim on this path can only exist for a handoff/spinoff —
+        # `claim_state` is class-generic onto handoffs only, per that
+        # module's own Anti-scope — so it settles the classification
+        # without needing `deployment_state` to have survived the revert.
+        try:
+            claim_state = resolve_claim_state(repo_root / path, repo_root=repo_root)
+        except Exception:
+            claim_state = None
+        if claim_state is not None and claim_state.source == "ledger":
+            if _is_spinoff_kind(kind):
+                return "spinoff"
+            return "handoff"
 
     if in_inbox_dir or (_has_memo_shape(fm_text) and status in {"open", "actioned"}):
         return "memo"
@@ -2975,13 +3010,70 @@ def compute_handoff_preflight(
 # gates.* (deterministic facts only — contract § gates)
 # ---------------------------------------------------------------------------
 
-def compute_branch_gate(repo_root: Path) -> dict[str, Any]:
-    """Step 1.2 — MECHANICAL: resume vs. create vs. already-current."""
+def compute_branch_gate(
+    repo_root: Path, *, classification: Optional[str] = None
+) -> dict[str, Any]:
+    """Step 1.2 — MECHANICAL: resume vs. create vs. already-current.
+
+    `classification` discriminates the memo disposition path from
+    handoff/spinoff: `apply` on a memo stamps frontmatter and commits on
+    whatever branch it's invoked from — the engine never creates or resumes
+    a work branch for it. Reporting `create` there (the handoff/spinoff
+    default) prescribes an action nobody takes, on every memo pickup, which
+    trains the reader to stop trusting the field. `in_place` is reported
+    rather than folded into `unknown`/`not_applicable` because
+    `current_branch` stays load-bearing here — the EM still needs to see
+    they're sitting on `main` or a shared branch before frontmatter mutates.
+
+    The concurrent-peer case is the harder version of the same problem:
+    this repo routinely runs 4-5 concurrent EM sessions in ONE shared
+    working tree (project CLAUDE.md § Coordinator Operating Doctrine).
+    Reporting `create` while a live peer shares this checkout doesn't just
+    prescribe an action nobody takes — it prescribes an action that BREAKS
+    peers, by switching the shared checkout out from under every live
+    session's in-progress work. So whenever the mechanical branch-name
+    check alone would answer `create` (never for `memo`'s `in_place` path,
+    never for `unknown`, never for a `work/` `resume`), this function asks
+    `coordinator_core.session.worktree_safety.branch_mutation_verdict`
+    whether any other live session shares this worktree right now, and
+    downgrades to `in_place` — naming the peers and what branch each is
+    on — rather than green-lighting the cut. This is advisory, not a
+    refusal: the function still always returns a plain dict, never raises,
+    and never blocks the caller from proceeding.
+
+    `unknown` liveness (identity or live-set unresolvable) is NOT degraded
+    to `create` — it maps to the same cautious `in_place` answer as an
+    affirmatively-observed peer, with a `reason` saying the live set was
+    indeterminate. "Fail closed" here means the CAUTIOUS branch answer:
+    reporting `create` on an indeterminate read risks prescribing exactly
+    the peer-breaking action this exists to prevent.
+    """
     branch = _current_branch(repo_root)
     if branch is None:
         return {"action": "unknown", "current_branch": None}
-    action = "resume" if branch.startswith("work/") else "create"
-    return {"action": action, "current_branch": branch}
+    if classification == "memo":
+        return {
+            "action": "in_place",
+            "current_branch": branch,
+            "reason": (
+                "memo disposition stamps frontmatter and commits on the "
+                "current branch; the engine creates no work branch"
+            ),
+        }
+    if branch.startswith("work/"):
+        return {"action": "resume", "current_branch": branch}
+
+    verdict = _worktree_safety.branch_mutation_verdict(str(repo_root))
+    if verdict.outcome == "ok":
+        return {"action": "create", "current_branch": branch}
+    return {
+        "action": "in_place",
+        "current_branch": branch,
+        "reason": (
+            f"cutting a new branch would switch the shared worktree under "
+            f"live peer session(s): {verdict.reason}"
+        ),
+    }
 
 
 def compute_aging_verdict(handoff_path: Path) -> str:
@@ -3394,6 +3486,60 @@ def _read_lineage_artifact_fm(repo_root: Path, relative_path: str) -> Optional[d
     return _parse_fm_dict(split.fm_text)
 
 
+_LOG = logging.getLogger(__name__)
+
+
+def _resolve_ledger_first_holder(
+    repo_root: Path,
+    artifact_path: Union[Path, str],
+    fm: dict[str, Any],
+    *,
+    common_dir: Optional[Path] = None,
+) -> Optional[str]:
+    """One artifact's claim holder, ledger-first (plan
+    2026-08-07-claim-state-ledger-first-authoritative-read.md, C11, Appendix A
+    rows 17-19/35) — routed through `claim_state.resolve_claim_state`, never a
+    second ledger reader (dependency direction is one-way onto `claim_state`).
+
+    `resolve_claim_state` itself is dual-tolerant over `claimed_by`
+    (canonical) / `consumed_by` (legacy) on the mirror side (DR-084), so this
+    helper only adds the ONE piece `claim_state` deliberately does not cover:
+    `picked_up_by`, a THIRD legacy mirror field this module's own frontmatter
+    reads have always also checked and which is out of `claim_state`'s
+    class-generic (handoff-only, ledger + claimed_by/consumed_by) scope. Tried
+    only as a last-resort fallback, after both the ledger and the
+    claimed_by/consumed_by mirror have already answered nothing.
+
+    `artifact_path` may be absolute or repo-root-relative — `repo_root /
+    artifact_path` resolves to `artifact_path` unchanged when it is already
+    absolute (`pathlib`'s join-with-absolute-operand behavior), so callers
+    holding either shape (a scanned sibling's absolute `Path`, or this
+    artifact's own repo-relative string) need no special-casing.
+    """
+    holder: Optional[str] = None
+    try:
+        state = resolve_claim_state(repo_root / artifact_path, common_dir=common_dir, repo_root=repo_root)
+        holder = state.holder
+    except Exception as exc:
+        # Review: code-reviewer (Finding 2) — align with the sibling
+        # ledger-first migration (review_trail_write._scan_workstream),
+        # which logs a warning on the equivalent resolve_claim_state
+        # failure. Fail-closed behavior (holder=None, falling through to
+        # the picked_up_by mirror fallback below) is unchanged — only the
+        # missing diagnostic is restored.
+        _LOG.warning(
+            "pickup_assemble: claim_state resolution failed for %s — %s; "
+            "falling back to picked_up_by mirror",
+            artifact_path,
+            exc,
+        )
+        holder = None
+    if holder:
+        return str(holder)
+    picked_up_by = fm.get("picked_up_by")
+    return str(picked_up_by) if picked_up_by else None
+
+
 def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> "frozenset[str]":
     """The AC3e lineage-relatedness set for one artifact: every session id a
     live-holder check must treat as a HANDOVER, never a competing peer.
@@ -3424,10 +3570,18 @@ def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> "frozenset
         lineage_fm = _read_lineage_artifact_fm(repo_root, lineage_path)
         if lineage_fm is None:
             continue
-        for key in ("claimed_by", "consumed_by", "picked_up_by", "authoring_session"):
-            sid = lineage_fm.get(key)
-            if sid:
-                related.add(str(sid))
+        authoring_session = lineage_fm.get("authoring_session")
+        if authoring_session:
+            related.add(str(authoring_session))
+        # Ledger-first (C11, row 18): the predecessor's claim holder resolves
+        # through `_resolve_ledger_first_holder` (claimed_by/consumed_by via
+        # `claim_state`, picked_up_by as the last-resort mirror-only
+        # fallback) instead of a raw frontmatter-only scan, so a predecessor
+        # whose mirror reverted but whose ledger still holds a live claim
+        # still counts as lineage-related.
+        lineage_holder = _resolve_ledger_first_holder(repo_root, lineage_path, lineage_fm)
+        if lineage_holder:
+            related.add(lineage_holder)
 
     return frozenset(related)
 
@@ -3513,14 +3667,28 @@ def compute_liveness_signal(
     if self_sid:
         related_sessions.add(str(self_sid))
 
-    for key in ("claimed_by", "consumed_by", "picked_up_by"):
-        sid = fm.get(key)
-        if sid and sid not in related_sessions:
-            try:
-                if _liveness.session_live(sid, str(repo_root)):
-                    return True
-            except (OSError, ValueError):
-                continue
+    # Ledger-first (C11, row 17): the class-appropriate stamp is now resolved
+    # via `_resolve_ledger_first_holder` when `artifact_path` is available
+    # (the one production call site always passes it) — a ledger-held claim
+    # whose mirror reverted still surfaces as the stamped holder. Falls back
+    # to the raw frontmatter scan only when no `artifact_path` was given
+    # (tests exercising this function against a bare `fm` dict).
+    stamped_sid: Optional[str] = None
+    if artifact_path is not None:
+        stamped_sid = _resolve_ledger_first_holder(repo_root, artifact_path, fm)
+    if stamped_sid is None:
+        for key in ("claimed_by", "consumed_by", "picked_up_by"):
+            sid = fm.get(key)
+            if sid:
+                stamped_sid = str(sid)
+                break
+
+    if stamped_sid and stamped_sid not in related_sessions:
+        try:
+            if _liveness.session_live(stamped_sid, str(repo_root)):
+                return True
+        except (OSError, ValueError):
+            pass
 
     return False
 
@@ -3651,6 +3819,15 @@ def compute_competing_claim(
     handoffs_dir = repo_root / "state" / "handoffs"
     self_scope = fm.get("scope", []) or []
 
+    # Ledger-first (C11, row 18): pre-resolve `common_dir` once for this
+    # call's whole sibling scan, mirroring `resolve_claim_state`'s own
+    # hot-path guidance (a caller that already has `common_dir` in hand never
+    # triggers a second resolution) — this loop can visit many candidates.
+    try:
+        _common_dir = lifecycle.git_common_dir(repo_root)
+    except Exception:
+        _common_dir = None
+
     candidates: list[dict[str, Any]] = []
     saw_live_peer = False
     saw_handover = False
@@ -3705,12 +3882,13 @@ def compute_competing_claim(
             continue
         candidate_fm = entry["fm"]
 
-        holder_sid = None
-        for key in ("claimed_by", "consumed_by", "picked_up_by"):
-            sid = candidate_fm.get(key)
-            if sid:
-                holder_sid = str(sid)
-                break
+        # Ledger-first (C11, row 18): a sibling's claim holder now resolves
+        # through `_resolve_ledger_first_holder` rather than a raw
+        # frontmatter scan, so a sibling whose mirror reverted but whose
+        # ledger still holds a live claim still surfaces as a candidate.
+        holder_sid = _resolve_ledger_first_holder(
+            repo_root, candidate_path, candidate_fm, common_dir=_common_dir
+        )
         if not holder_sid:
             continue
 
@@ -3955,12 +4133,12 @@ def compute_successor_handoffs(
         if deployment_state not in _SUCCESSOR_LIVE_DEPLOYMENT_STATES:
             continue
 
-        holder_sid = None
-        for key in ("claimed_by", "consumed_by", "picked_up_by"):
-            sid = candidate_fm.get(key)
-            if sid:
-                holder_sid = str(sid)
-                break
+        # Ledger-first (C11, row 19): the live-successor candidate's holder
+        # now resolves through `_resolve_ledger_first_holder` rather than a
+        # raw frontmatter scan, so an `in_flight` successor whose mirror
+        # reverted but whose ledger still holds a live claim is not dropped
+        # for want of a visible holder.
+        holder_sid = _resolve_ledger_first_holder(root, candidate_path, candidate_fm)
 
         if deployment_state == "in_flight":
             if not holder_sid:
@@ -6134,7 +6312,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
     scope_entries = fm.get("scope", []) or []
     tree_quiescence = compute_tree_quiescence(root, scope_entries)
     staleness = compute_staleness(root)
-    branch_gate = compute_branch_gate(root)
+    branch_gate = compute_branch_gate(root, classification=classification)
     liveness_fired = compute_liveness_signal(root, fm, artifact["path"])
     # One glob+read+frontmatter-parse pass over `state/handoffs/*.md`, shared
     # by `compute_competing_claim` and `compute_successor_handoffs` below
@@ -6163,7 +6341,21 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
         # session already landed it. `held_by_self` alone is not enough:
         # `compute_claim_grant` can also grant on a lineage handover
         # (a DIFFERENT session's claim), where re-stamping is still required.
-        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and fm.get("status") == "claimed"
+        #
+        # Ledger-first (C11, row 35): the AND's second conjunct used to be a
+        # raw `fm.get("status") == "claimed"` frontmatter-only read, which is
+        # exactly the branch-switch-revert desync case — a session that
+        # already landed the stamp on one branch reads as never-stamped on a
+        # branch that never carried that commit, so the AND collapses to
+        # False, `d2` re-emits, and `/pickup` re-stamps a baton this session
+        # already holds, clobbering `claimed_at` (fact-find row 35). Routed
+        # through `claim_state.resolve_claim_state` instead: `claim_state.
+        # holder is not None` answers "has a claim already landed for this
+        # artifact" ledger-first, with the frontmatter mirror as fallback,
+        # so a ledger-confirmed prior stamp still satisfies the idempotence
+        # check even when the mirror has reverted.
+        claim_state = resolve_claim_state(root / artifact["path"], repo_root=root)
+        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and claim_state.holder is not None
         directives = build_handoff_directives(
             artifact["path"], claim["holder"], basename, self_claimed_in_frontmatter=self_claimed_in_frontmatter
         )
@@ -6575,18 +6767,92 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
 _ARTIFACT_JOIN_RE = re.compile(r"\s+AND\s+")
 
 
-def split_artifact_args(artifact_arg: str) -> list[str]:
-    """Split a `brief` argument on the standalone ` AND ` token into N paths.
+def _expand_braces(artifact_arg: str) -> list[str]:
+    """Expand ONE `PREFIX{a,b,c}SUFFIX` brace group into N literal paths.
 
-    A single path with no standalone ` AND ` returns `[path]` unchanged (so the
-    single-artifact path is byte-identical to today). Empty/whitespace-only
-    segments are dropped; a fully-empty result degrades to `[artifact_arg]` so
-    the caller still gets a resolvable-or-failing single entry rather than an
-    empty batch.
+    Alternatives are comma-split at the group's own nesting depth (a nested
+    `{...}` inside an alternative doesn't fragment the split) and each
+    alternative is whitespace/newline-stripped, so a shell-style line-wrapped
+    brace list (`{a,\n  b}`) resolves the same as `{a,b}`. A string with no
+    `{`, or an unbalanced `{` with no matching `}` at the same depth, passes
+    through UNCHANGED as `[artifact_arg]` — this is the no-behavior-change
+    guarantee for every pre-existing single-path caller.
+
+    A second (or further) brace group in the same string is expanded by
+    recursing on each already-substituted alternative; each recursive call
+    operates on a strictly shorter string than its parent (the matched group
+    is replaced by one alternative), so recursion is depth-bounded by the
+    number of brace groups in the input and cannot loop.
+    """
+    start = artifact_arg.find("{")
+    if start == -1:
+        return [artifact_arg]
+    depth = 0
+    end = -1
+    for i in range(start, len(artifact_arg)):
+        ch = artifact_arg[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return [artifact_arg]
+
+    prefix = artifact_arg[:start]
+    suffix = artifact_arg[end + 1 :]
+    inner = artifact_arg[start + 1 : end]
+
+    alternatives: list[str] = []
+    nested_depth = 0
+    current: list[str] = []
+    for ch in inner:
+        if ch == "{":
+            nested_depth += 1
+            current.append(ch)
+        elif ch == "}":
+            nested_depth -= 1
+            current.append(ch)
+        elif ch == "," and nested_depth == 0:
+            alternatives.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    alternatives.append("".join(current))
+
+    if len(alternatives) < 2:
+        return [artifact_arg]
+
+    expanded: list[str] = []
+    for alt in alternatives:
+        combined = prefix + alt.strip() + suffix
+        expanded.extend(_expand_braces(combined))
+    return expanded
+
+
+def split_artifact_args(artifact_arg: str) -> list[str]:
+    """Split a `brief` argument on the standalone ` AND ` token into N paths,
+    then brace-expand (`PREFIX{a,b,c}SUFFIX`) each resulting path.
+
+    A single path with no standalone ` AND ` and no `{...}` group returns
+    `[path]` unchanged (so the single-artifact path is byte-identical to
+    today). Empty/whitespace-only segments are dropped; a fully-empty result
+    degrades to `[artifact_arg]` so the caller still gets a resolvable-or-
+    failing single entry rather than an empty batch. Brace expansion (see
+    `_expand_braces`) feeds this SAME per-path list — a multi-artifact
+    argument built from `AND`, from `{...}`, or from both, disposes through
+    the identical N-independent-`brief()`-calls path in `brief_multi`.
     """
     parts = [p.strip() for p in _ARTIFACT_JOIN_RE.split(artifact_arg)]
     paths = [p for p in parts if p]
-    return paths or [artifact_arg]
+    if not paths:
+        paths = [artifact_arg]
+    expanded: list[str] = []
+    for path in paths:
+        expanded.extend(_expand_braces(path))
+    return expanded
 
 
 def brief_multi(

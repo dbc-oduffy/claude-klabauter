@@ -334,7 +334,7 @@ def write_disposal_manifest(worktree_root: Path, manifest: dict[str, Any]) -> Pa
 
 
 @register_op("distill.assemble_disposal_manifest")
-async def _handler(params: dict, repo_root: Path | None = None) -> dict:
+def _handler(params: dict, repo_root: Path | None = None) -> dict:
     """distill.assemble_disposal_manifest handler.
 
     Params:

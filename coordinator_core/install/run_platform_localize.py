@@ -106,11 +106,14 @@ def _run_schema_validation(python_bin: str, validate_schemas_path: Path) -> None
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
     for the recorded verdict."""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [python_bin, str(validate_schemas_path)],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"platform-localize: schema validation could not run: {exc}", file=sys.stderr)

@@ -49,7 +49,7 @@ def _make_ctx(tmp_path: Path) -> EmitContext:
         git_sha_short="abc12345",
         observed_at="2026-07-04T00:00:00Z",
         hostname="test-host",
-        repo_name="dbc-example-operator/.example-doctrine-mirror-repo",
+        repo_name="dbc-oduffy/.example-doctrine-mirror-repo",
     )
 
 

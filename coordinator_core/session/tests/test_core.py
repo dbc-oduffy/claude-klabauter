@@ -809,179 +809,57 @@ class TestResolveSessionId:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "tier3-sid")
         assert core.resolve_session_id() == "tier3-sid"
 
-    def test_tier4_empty_outside_a_git_repo(self, monkeypatch, tmp_path):
+    def test_all_tiers_empty_outside_a_git_repo(self, monkeypatch, tmp_path):
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         assert core.resolve_session_id(cwd=str(tmp_path)) == ""
 
-    def test_tier4_no_sentinel_file_returns_empty(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
-
-    def test_tier4_zero_live_no_session_dir_trusts_sentinel(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
-        sessions_dir.mkdir(parents=True)
-        (sessions_dir / ".current-session-id").write_text("legacy-sid")
-
-        from coordinator_core.session import liveness as _liveness
-
-        monkeypatch.setattr(_liveness, "live_session_ids", lambda cwd=None: frozenset())
-        assert core.resolve_session_id(cwd=str(tmp_path)) == "legacy-sid"
-
-    def test_tier4_zero_live_but_session_dir_exists_fails_empty(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
-        (sessions_dir / "some-sid").mkdir(parents=True)
-        (sessions_dir / ".current-session-id").write_text("some-sid")
-
-        from coordinator_core.session import liveness as _liveness
-
-        monkeypatch.setattr(_liveness, "live_session_ids", lambda cwd=None: frozenset())
-        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
-
-    def test_tier4_one_live_matching_sentinel_trusted(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
-        sessions_dir.mkdir(parents=True)
-        (sessions_dir / ".current-session-id").write_text("live-sid")
-
-        from coordinator_core.session import liveness as _liveness
-
-        monkeypatch.setattr(
-            _liveness, "live_session_ids", lambda cwd=None: frozenset({"live-sid"})
-        )
-        assert core.resolve_session_id(cwd=str(tmp_path)) == "live-sid"
-
-    def test_tier4_one_live_not_matching_sentinel_fails_empty(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
-        sessions_dir.mkdir(parents=True)
-        (sessions_dir / ".current-session-id").write_text("stale-sid")
-
-        from coordinator_core.session import liveness as _liveness
-
-        monkeypatch.setattr(
-            _liveness, "live_session_ids", lambda cwd=None: frozenset({"other-sid"})
-        )
-        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
-
-    def test_tier4_two_or_more_live_always_ambiguous(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
-        sessions_dir.mkdir(parents=True)
-        (sessions_dir / ".current-session-id").write_text("sid-a")
-
-        from coordinator_core.session import liveness as _liveness
-
-        monkeypatch.setattr(
-            _liveness,
-            "live_session_ids",
-            lambda cwd=None: frozenset({"sid-a", "sid-b"}),
-        )
-        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
-
-    def test_tier4_ambiguity_check_uses_threaded_cwd_not_process_cwd(
-        self, monkeypatch, tmp_path
-    ):
-        """Review: code-reviewer (Finding 1) — regression for the cwd-
-        threading gap in the Tier-4 ambiguity guard. Deliberately does NOT
-        monkeypatch resolve_live_session_ids/live_session_ids (the existing
-        Tier-4 tests above all do, which is exactly why they miss this class
-        of bug) — instead builds two REAL git repos with genuinely different
-        session-registry state and proves resolve_session_id(cwd=...) answers
-        off the repo it was TOLD about, not the process's actual cwd.
-
-        repo_wrong (the real process cwd during this call): 2 live sessions
-        -> if the ambiguity guard mistakenly enumerates THIS registry, the
-        Tier-4 check sees live_count >= 2 and returns "" (always ambiguous).
-
-        repo_target (passed explicitly as cwd=): 0 live sessions and no
-        session dir for the sentinel -> the correct, unambiguous Tier-4
-        outcome is to trust the sentinel and return it verbatim.
-
-        A bug-present implementation returns "" (wrong repo's ambiguity);
-        the fixed implementation returns "sid-target" (right repo).
+    def test_sentinel_ignored_when_env_vars_absent(self, monkeypatch, tmp_path):
+        """KS-4 (2026-08-07): the removed tier-4 sentinel read must no
+        longer influence resolution at all — a present, well-formed
+        sentinel file with no env vars set still resolves to "".
         """
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / ".current-session-id").write_text("legacy-sid")
+        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
 
-        repo_wrong = tmp_path / "repo_wrong"
-        repo_wrong.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo_wrong)
-        wrong_sessions = repo_wrong / ".git" / "coordinator-sessions"
-        for sid in ("wrong-a", "wrong-b"):
-            sdir = wrong_sessions / sid
-            sdir.mkdir(parents=True)
-            (sdir / "meta.json").write_text(
-                json.dumps({"pid": "1", "last_activity": core.now_iso()}),
-                encoding="utf-8",
-            )
-
-        repo_target = tmp_path / "repo_target"
-        repo_target.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo_target)
-        target_sessions = repo_target / ".git" / "coordinator-sessions"
-        target_sessions.mkdir(parents=True)
-        (target_sessions / ".current-session-id").write_text("sid-target")
-        # Deliberately NO session dirs under repo_target -> 0 live AND no
-        # session dir for the sentinel -> Tier-4's "trust the sentinel" case.
-
-        # Make repo_wrong the REAL process cwd for the duration of this call
-        # (monkeypatch.chdir auto-restores) — a cwd=None resolution inside
-        # live_session_ids/git_root would land here, not on repo_target.
-        monkeypatch.chdir(repo_wrong)
-
-        result = core.resolve_session_id(cwd=str(repo_target))
-        assert result == "sid-target"
-
-    def test_tier4_ambiguity_check_threads_cwd_into_live_session_ids(
+    def test_sentinel_ignored_even_when_it_matches_a_live_session(
         self, monkeypatch, tmp_path
     ):
-        """Spy variant of the above: monkeypatch
-        ``liveness.live_session_ids`` (the real cwd-taking function, NOT the
-        zero-arg ``resolve_live_session_ids`` alias) to record the cwd it was
-        invoked with, and assert it equals the tmp repo passed to
-        ``resolve_session_id`` — never ``None``/process-cwd."""
+        """A sentinel that WOULD have resolved unambiguously under the old
+        tier-4 ambiguity guard (solo live session, sentinel matches) must
+        still be ignored — tier-3 env-var absence resolves to "", not the
+        sentinel's value.
+        """
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         subprocess.run(["git", "init", "-q"], cwd=tmp_path)
         sessions_dir = tmp_path / ".git" / "coordinator-sessions"
+        sdir = sessions_dir / "live-sid"
+        sdir.mkdir(parents=True)
+        (sdir / "meta.json").write_text(
+            json.dumps({"pid": "1", "last_activity": core.now_iso()}),
+            encoding="utf-8",
+        )
+        (sessions_dir / ".current-session-id").write_text("live-sid")
+        assert core.resolve_session_id(cwd=str(tmp_path)) == ""
+
+    def test_tier3_env_var_wins_over_a_present_sentinel(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "tier3-sid")
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / ".current-session-id").write_text("legacy-sid")
-
-        from coordinator_core.session import liveness as _liveness
-
-        seen_cwd = []
-
-        def _spy_live_session_ids(cwd=None):
-            seen_cwd.append(cwd)
-            return frozenset()
-
-        monkeypatch.setattr(_liveness, "live_session_ids", _spy_live_session_ids)
-        assert core.resolve_session_id(cwd=str(tmp_path)) == "legacy-sid"
-        assert seen_cwd == [str(tmp_path)]
+        assert core.resolve_session_id(cwd=str(tmp_path)) == "tier3-sid"
 
 
 # ---------------------------------------------------------------------------
@@ -1066,6 +944,26 @@ class TestSessionEnvPrecedenceSingleSource:
         # Consumer 3: block_consumed_handoff_edit's is_holder lookup.
         sid3 = self._guard_is_holder_lookup()
         assert sid3 == expected
+
+        # Consumer 4 (KS-6, 2026-08-07): worktree_safety.resolve_self_session_id
+        # — widened from a CLAUDE_CODE_SESSION_ID-only read to delegate to
+        # core.resolve_session_id directly.
+        from coordinator_core.session import worktree_safety
+
+        assert worktree_safety.resolve_self_session_id(cwd=None) == expected
+
+        # Consumer 5 (KS-6, 2026-08-07): ops.session_context.resolve_current_session_id
+        # — widened from a 2-tier (CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID)
+        # read to the full 3-tier ladder.
+        from coordinator_core.ops import session_context
+
+        assert session_context.resolve_current_session_id() == expected
+
+        # Consumer 6 (KS-6, 2026-08-07): git.commit_trailers._resolve_session_id
+        # — widened from a 2-tier read to delegate to core.resolve_session_id.
+        from coordinator_core.git import commit_trailers
+
+        assert commit_trailers._resolve_session_id(git_dir="") == expected
 
     def test_all_three_consumers_import_the_same_tuple_object(self):
         from coordinator_core.ops import handoff_correct_body

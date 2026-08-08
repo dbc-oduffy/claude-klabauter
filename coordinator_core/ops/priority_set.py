@@ -333,7 +333,7 @@ def set_priority(
 
 
 @register_op("priority.set")
-async def _priority_set(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _priority_set(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'priority.set' handler — locked priority-ledger write.
 
     MUTATING (writes one ``<central-state>/priority-ledger/<target_id>.yaml``

@@ -29,8 +29,9 @@ Spec backlink: docs/plans/2026-07-29-bash-guard-merged-execution-shape.md M1
 from __future__ import annotations
 
 import json
+import os
 import shlex
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards.dispatch_checks import (
     _GREP_FAMILY_BINARIES_BT,
@@ -51,6 +52,7 @@ from coordinator_core.bash_guards._shape_classifier import (
     Shape as _BT_Shape,
     classify_command as _bt_classify_command,
 )
+from coordinator_core.bash_guards import _dialect
 
 
 def _bt_head_tail_count(tokens_rest: List[str]) -> Optional[int]:
@@ -72,6 +74,46 @@ def _bt_head_tail_count(tokens_rest: List[str]) -> Optional[int]:
     if len(tokens_rest) == 2 and tokens_rest[0] == "-n" and tokens_rest[1].isdigit():
         return int(tokens_rest[1])
     return None
+
+
+def _bt_select_object_first_last(tokens_rest: List[str]) -> Tuple[bool, bool, Optional[int]]:
+    """PowerShell's line-count equivalent of `_bt_head_tail_count` above --
+    parses a `Select-Object` segment's own argument tokens (everything after
+    the cmdlet name) into `(is_head, is_tail, n)`. `-First`/`-Last` are
+    genuine PowerShell VERBS, not an alias of `head`/`tail` (docs/reference/
+    guard-dialect-coverage.md row 13) -- there is no `-N`/bare-count
+    shorthand to recognize here, only the two-token `-First N` / `-Last N`
+    form (flag spelling matched case-insensitively, since PowerShell
+    parameter names are themselves case-insensitive). Anything else (a flag
+    this doesn't know, both `-First` and `-Last` present at once, a missing
+    or non-numeric count) returns `(False, False, None)` so the caller
+    advises instead of guessing -- same discipline as `_bt_head_tail_count`.
+    """
+    is_head = False
+    is_tail = False
+    n: Optional[int] = None
+    i = 0
+    while i < len(tokens_rest):
+        tok = tokens_rest[i]
+        low = tok.lower()
+        if low == "-first" and i + 1 < len(tokens_rest) and tokens_rest[i + 1].isdigit():
+            if is_tail:
+                return False, False, None
+            is_head = True
+            n = int(tokens_rest[i + 1])
+            i += 2
+            continue
+        if low == "-last" and i + 1 < len(tokens_rest) and tokens_rest[i + 1].isdigit():
+            if is_head:
+                return False, False, None
+            is_tail = True
+            n = int(tokens_rest[i + 1])
+            i += 2
+            continue
+        return False, False, None
+    if n is None:
+        return False, False, None
+    return is_head, is_tail, n
 
 
 def _bt_parse_find_census_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
@@ -151,12 +193,20 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
         )
         entries_expr = "files" if only_files else "files + dirs"
         return [
-            "import fnmatch, os",
+            "import fnmatch, os, posixpath",
             "_out = []",
             "for root, dirs, files in os.walk(%s):" % json.dumps(path),
             "    for fn in sorted(%s):" % entries_expr,
             "        if %s:" % match_expr,
-            "            _out.append(os.path.join(root, fn))",
+            # posixpath.join, not os.path.join -- `find`'s own output joins
+            # path components with a bare '/' on every platform (it never
+            # runs on Windows itself; a Windows caller sees Git-Bash's `find`
+            # binary, which is POSIX). `os.path.join` on a Windows host
+            # would instead glue the filename on with a native '\\',
+            # producing a byte-for-byte divergence from the real command
+            # this rewrite is supposed to reproduce exactly, even though
+            # both spellings resolve to the same file.
+            "            _out.append(posixpath.join(root, fn))",
         ]
     if kind == "ls":
         path = parsed["path"]
@@ -167,7 +217,7 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
     if kind == "grep":
         flags = parsed["flags"]
         lines = [
-            "import os, re",
+            "import os, posixpath, re",
             "pat = re.compile(%s%s)"
             % (
                 json.dumps(parsed["pattern"]),
@@ -177,10 +227,19 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
             "_out = []",
             "for base in targets:",
             "    walk = os.walk(base) if os.path.isdir(base) else "
-            '[(os.path.dirname(base) or ".", [], [os.path.basename(base)])]',
+            # posixpath.dirname/posixpath.basename, not the os.path forms --
+            # same rationale as the `posixpath.join` note below: a bare
+            # single-file `grep` target is split on '/' the way the real
+            # (POSIX) grep binary's own reporting would spell it, not on a
+            # native Windows '\\'.
+            '[(posixpath.dirname(base) or ".", [], [posixpath.basename(base)])]',
             "    for root, dirs, files in walk:",
             "        for fn in sorted(files):",
-            "            p = os.path.join(root, fn)",
+            # posixpath.join, not os.path.join -- see the identical note in
+            # `_bt_build_generator_lines`'s `find` branch: keeps the emitted
+            # path byte-identical to what the real grep/find binary (always
+            # POSIX, even when the caller is on Windows) would have printed.
+            "            p = posixpath.join(root, fn)",
             "            try:",
             '                with open(p, encoding="utf-8", errors="replace") as fh:',
             "                    lines_ = fh.readlines()",
@@ -308,7 +367,145 @@ def _bt_tail_ring_buffer_lines(gen_lines: List[str], kind: str, n: int) -> List[
     return out
 
 
-def check_head_tail_plumbing_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg of `check_head_tail_plumbing_rewrite` (row 13,
+    docs/reference/guard-dialect-coverage.md): the `find`/`ls` upstream-
+    generator recognition (`_bt_parse_find_census_segment`/
+    `_bt_parse_ls_segment`/the grep-family branch) is DIALECT-NEUTRAL
+    already -- `find`/`ls`/a grep-family binary is the SAME external exe
+    invoked the same way from a PowerShell prompt, and `token_matches_binary`
+    operates on a plain token string regardless of dialect (see `_dialect.py`
+    module docstring, "Output shape") -- so only the HEAD/TAIL half of this
+    shape needs a PowerShell-specific recognizer
+    (`_bt_select_object_first_last`, keyed on `Select-Object -First`/
+    `-Last` rather than a `head`/`tail` binary choice).
+
+    There is no PowerShell-dialect `_shape_classifier.classify_command` this
+    module can call (out of scope for this cohort -- see docs/reference/
+    guard-dialect-coverage.md row 9's note that the shape-classifier wiring
+    is a separate concern) -- this function re-derives just the ONE gate it
+    needs locally (does any segment pipe into a `Select-Object -First`/
+    `-Last` invocation at all) rather than widen `_shape_classifier.py`.
+    Returns bare `None` (a genuine clean, not a decline) for any PowerShell
+    command that never pipes into `Select-Object`/`select` at all.
+    """
+    tokens = _dialect.tokenize_command(
+        cmd, _dialect.Dialect.POWERSHELL, guard_name="guard_head_tail_rewrite"
+    )
+    if tokens is None:
+        return None  # SILENT already recorded by `_dialect` for the parse failure
+
+    segments = _bt_segments_from_tokens_with_pipe_flag(tokens)
+
+    def _is_select_object(tok: str) -> bool:
+        return _bt_token_matches_binary(tok, "Select-Object") or _bt_token_matches_binary(
+            tok, "select"
+        )
+
+    has_select_object_target = any(
+        pipe_before and seg_tokens and _is_select_object(seg_tokens[0])
+        for seg_tokens, pipe_before in segments
+    )
+    if not has_select_object_target:
+        return None  # not this shape at all -- a genuine clean, not a decline
+
+    if len(segments) != 2:
+        return _advisory(
+            "Advisory: this pipeline pipes into 'Select-Object -First'/"
+            "'-Last' as part of a longer chain than this rewrite's "
+            "conservative two-stage 'generator | Select-Object' shape "
+            "covers, so no rewrite is offered -- and for a chain this long "
+            "none would help: reproducing the upstream stages inside a "
+            "python3 -c would mean running them as subprocesses anyway "
+            "(python3 + shell + each upstream stage), which costs MORE "
+            "forks than the chain you wrote, not fewer. Shortening the "
+            "chain, or asking for less of its output, is the real saving "
+            "here. %s"
+            % operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")
+        )
+    (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
+    if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
+        return None  # not the `generator | Select-Object` shape this check owns
+    if not _is_select_object(ht_tokens[0]):
+        return None  # matched on the upstream segment, not the tail one; not ours
+
+    is_head, is_tail, n = _bt_select_object_first_last(ht_tokens[1:])
+    if n is None:
+        return _advisory(
+            "Advisory: '... | %s' truncates output via an extra subprocess "
+            "-- this rewrite recognizes '-First N' and '-Last N' forms "
+            "only; this invocation's own arguments ('%s') are not one of "
+            "those, so the rewrite is not offered automatically. %s"
+            % (
+                ht_tokens[0],
+                " ".join(ht_tokens[1:]),
+                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
+            )
+        )
+
+    kind: Optional[str] = None
+    parsed: Optional[Dict[str, Any]] = None
+    if _bt_token_matches_binary(up_tokens[0], "find"):
+        parsed = _bt_parse_find_census_segment(up_tokens)
+        kind = "find" if parsed else None
+    elif _bt_token_matches_binary(up_tokens[0], "ls"):
+        parsed = _bt_parse_ls_segment(up_tokens)
+        kind = "ls" if parsed else None
+    elif any(_bt_token_matches_binary(up_tokens[0], b) for b in _GREP_FAMILY_BINARIES_BT):
+        parsed = _bt_grep_flags_and_operands(up_tokens)
+        kind = "grep" if parsed else None
+
+    if kind is None or parsed is None:
+        return _advisory(
+            "Advisory: '... | %s' truncates a subprocess's output via "
+            "ANOTHER subprocess. No rewrite is offered here because none "
+            "would help, not because a translation is merely missing from "
+            "file: this pipeline's upstream stage ('%s') is not one this "
+            "guard can reproduce in Python, so a python3 -c would have to "
+            "RUN it as a subprocess -- python3 plus a shell plus the "
+            "upstream stage, more forks than the two you wrote, not fewer. "
+            "%s"
+            % (
+                ht_tokens[0],
+                " ".join(up_tokens),
+                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
+            )
+        )
+
+    if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
+        return None
+
+    gen_lines = _bt_build_generator_lines(kind, parsed)
+    if gen_lines is None:  # pragma: no cover -- defensive, kind is always recognized here
+        return None
+
+    if is_head:
+        slice_expr = "_out[:%d]" % n
+        if n > 0:
+            body_lines = _bt_head_short_circuit_lines(gen_lines, n)
+        else:
+            body_lines = ["_out = []"]
+    elif n > 0:
+        slice_expr = "_out"
+        body_lines = ["import collections"] + _bt_tail_ring_buffer_lines(gen_lines, kind, n)
+    else:
+        slice_expr = "[]"
+        body_lines = gen_lines
+
+    script_lines = body_lines + ["for _l in %s:" % slice_expr, "    print(_l)"]
+    script = "\n".join(script_lines)
+    return _allow_rewrite(
+        "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
+        "Auto-rewrite: pipe into '%s' forks twice for one answer -- "
+        "replaced with one python3 -c reproducing the same output and "
+        "slicing head/tail inside that single subprocess. %s"
+        % (ht_tokens[0], operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")),
+    )
+
+
+def check_head_tail_plumbing_rewrite(
+    cmd: str, session_id: str = "", dialect: "Optional[_dialect.Dialect]" = None
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 7 (BX-8's rewrite target, head/tail half) -- `... | head
     -n N` / `... | tail -n N` truncates a subprocess's output via ANOTHER
     subprocess. A third of all measured forks are this text-plumbing shape
@@ -339,6 +536,10 @@ def check_head_tail_plumbing_rewrite(cmd: str, session_id: str = "") -> Optional
     cmd = _crlf_strip(cmd)
     if _override("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"):
         return None
+
+    if dialect is _dialect.Dialect.POWERSHELL:
+        return _check_head_tail_plumbing_powershell(cmd)
+
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:
         return None
@@ -412,6 +613,23 @@ def check_head_tail_plumbing_rewrite(cmd: str, session_id: str = "") -> Optional
                 operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
             )
         )
+
+    # Fail open when the upstream `find`/`ls` root does not resolve on THIS
+    # host -- an unquoted Windows path (`find C:\Users\x\tmp`) is
+    # de-escaped by bash's own tokenizing before this guard ever sees it
+    # (`C:\Users\x\tmp` -> `C:Usersxtmp`; not this guard's doing, see
+    # `_command_tokenizer.py`'s own module docstring), and the generated
+    # `os.walk`/`os.listdir` root would then be that same de-separated,
+    # non-existent path. Left alone, the ORIGINAL `find`/`ls` command would
+    # fail LOUDLY (`find: 'C:Usersxtmp': No such file or directory`) --
+    # substituting a rewrite here instead would swap that loud failure for
+    # a silent, zero-line, exit-0 result an agent reads as "no matches"
+    # rather than "your path was wrong". Not offering the rewrite (`None`,
+    # not `_advisory`) lets the original command run and produce its own
+    # error -- no guess at intent, no attempt to repair the path. A root
+    # that DOES exist is completely unaffected by this check.
+    if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
+        return None
 
     gen_lines = _bt_build_generator_lines(kind, parsed)
     if gen_lines is None:  # pragma: no cover -- defensive, kind is always recognized here

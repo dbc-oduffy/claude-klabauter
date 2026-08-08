@@ -47,6 +47,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -61,6 +62,7 @@ from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session_hierarchy.derive import derive
+from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ def _engine_worktree_root() -> Optional[Path]:
             capture_output=True,
             text=True,
             timeout=5,
+            **no_console_creationflags(),
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         print(f"skip: _engine_worktree_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -145,7 +148,7 @@ def _run(worktree_root: Path) -> dict:
     handoffs_archived = query_records("handoff-archived", worktree_root, limit=0)
     created_by_session = os.environ.get("CS_SESSION_ID", "")
 
-    records = derive(handoffs_active, handoffs_archived, created_by_session)
+    records = derive(handoffs_active, handoffs_archived, created_by_session, repo_root=worktree_root)
 
     slug = machine_slug()
     output_file = worktree_root / "state" / f"session-hierarchy.{slug}.json"
@@ -172,7 +175,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ancestry``'s absent-``repo_root`` empty-payload posture rather than
     raising).
     """
-    worktree_root = _engine_worktree_root()
+    worktree_root = await asyncio.to_thread(_engine_worktree_root)
     if worktree_root is None:
         _LOG.warning("session_hierarchy.derive: engine worktree unresolvable")
         return {"error": "engine worktree unresolvable"}

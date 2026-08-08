@@ -332,6 +332,73 @@ class TestTouchNormalization:
         assert scope._is_absolute("") is False
 
 
+class TestRelpathFailureBenignPredicate:
+    """Unit coverage for :func:`scope._relpath_failure_is_benign` — the
+    Windows cross-drive discrimination that keeps a routine
+    path-outside-this-repo relpath failure from arming
+    :func:`scope._emit_normalize_diagnostic`'s latch.
+
+    Uses monkeypatched ``realpath``/``splitdrive`` throughout so every case
+    is pinned to a chosen platform shape rather than whatever drive the test
+    host actually places ``tmp_path`` on."""
+
+    def test_oserror_is_never_benign(self, monkeypatch):
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: ("X:", p))
+        exc = OSError("boom")
+        assert scope._relpath_failure_is_benign(exc, "X:/a/b.py", "X:/repo") is False
+
+    def test_valueerror_same_drive_is_not_benign(self, monkeypatch):
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: ("X:", p))
+        exc = ValueError("simulated")
+        assert (
+            scope._relpath_failure_is_benign(exc, "X:/outside/x.py", "X:/repo")
+            is False
+        )
+
+    def test_valueerror_cross_drive_is_benign(self, monkeypatch):
+        drives = {"C:/outside/x.py": "C:", "X:/repo": "X:"}
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
+        exc = ValueError("simulated")
+        assert (
+            scope._relpath_failure_is_benign(exc, "C:/outside/x.py", "X:/repo")
+            is True
+        )
+
+    def test_valueerror_cross_drive_case_insensitive(self, monkeypatch):
+        drives = {"c:/outside/x.py": "c:", "X:/repo": "X:"}
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
+        exc = ValueError("simulated")
+        assert (
+            scope._relpath_failure_is_benign(exc, "c:/outside/x.py", "X:/repo")
+            is True
+        )
+
+    def test_valueerror_same_drive_case_insensitive_is_not_benign(self, monkeypatch):
+        drives = {"x:/outside/x.py": "x:", "X:/repo": "X:"}
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: (drives[p], p))
+        exc = ValueError("simulated")
+        assert (
+            scope._relpath_failure_is_benign(exc, "x:/outside/x.py", "X:/repo")
+            is False
+        )
+
+    def test_posix_has_no_drive_letters_so_never_benign(self, monkeypatch):
+        # posixpath.splitdrive always returns ("", path) regardless of the
+        # input — simulate that shape deterministically so this pins POSIX
+        # behavior even when the test itself runs on Windows.
+        monkeypatch.setattr(scope.os.path, "realpath", lambda p: p)
+        monkeypatch.setattr(scope.os.path, "splitdrive", lambda p: ("", p))
+        exc = ValueError("simulated")
+        assert (
+            scope._relpath_failure_is_benign(exc, "/outside/x.py", "/repo") is False
+        )
+
+
 class TestNormalizeDiagnostic:
     """C3/AC5: normalize_touch_path's one-shot, deduped-per-process stderr
     diagnostic on its fail-open path (git ls-files / relpath failure) —
@@ -381,7 +448,10 @@ class TestNormalizeDiagnostic:
             raise ValueError("simulated relpath failure")
 
         monkeypatch.setattr(scope.os.path, "relpath", _boom)
-        outside = "/totally/outside/xyz.py"  # git ls-files misses this
+        # Same drive as the repo (or no drive at all on POSIX) — a GENUINE
+        # relpath failure, not the Windows cross-drive case, so this must
+        # still arm the latch. abs-path-ok: synthetic path, never touched.
+        outside = os.path.splitdrive(str(repo))[0] + "/totally/outside/xyz.py"
 
         result1 = scope.normalize_touch_path(outside, cwd=str(repo))
         err1 = capsys.readouterr().err
@@ -393,6 +463,41 @@ class TestNormalizeDiagnostic:
         err2 = capsys.readouterr().err
         assert err2 == ""
         assert result2 is None
+
+    def test_diagnostic_silent_on_windows_cross_drive_outside_repo(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The relpath arm's own cross-drive discrimination
+        (:func:`scope._relpath_failure_is_benign`), simulated deterministically
+        via ``splitdrive`` so it pins the same behavior regardless of which
+        real drive the test host happens to place ``tmp_path`` on."""
+        self._reset_latch(monkeypatch)
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(
+            scope, "_git_run", lambda args, cwd=None: scope.GitRun(0, "", "")
+        )
+
+        def _boom(*a, **k):
+            raise ValueError("simulated cross-drive relpath failure")
+
+        monkeypatch.setattr(scope.os.path, "relpath", _boom)
+
+        root_real = os.path.realpath(str(repo))
+
+        def _fake_splitdrive(p):
+            return ("R:", p) if p == root_real else ("F:", p)
+
+        monkeypatch.setattr(scope.os.path, "splitdrive", _fake_splitdrive)
+
+        outside = str(tmp_path / "elsewhere" / "note.md")  # abs-path-ok: synthetic, never touched
+        result = scope.normalize_touch_path(outside, cwd=str(repo))
+
+        assert scope.normalize_diagnostic_fired() is False, (
+            "a Windows cross-drive relpath failure for a path outside this "
+            "repo is the routine case, not a degradation"
+        )
+        assert capsys.readouterr().err == ""
+        assert result is None  # still absolute after the skip -> fail-open None
 
 
 class TestNormalizeDiagnosticBenignVsOperational:

@@ -74,6 +74,54 @@ from coordinator_core.tests._home_resolution_lint_baseline import (
     X_OK_BASELINE,
 )
 
+# Rule 5 (`rung_order`, C5) baseline lives HERE rather than in
+# `_home_resolution_lint_baseline.py` -- that module is owned by C8's
+# re-seed pass.
+#
+# 2026-08-08 (C8 re-seed, discovery widened per C1/C4): C8 identified 7
+# genuine false positives, 6 of one shape -- a default-arg ladder rung whose
+# FALLBACK is `Path.home()` itself (`os.environ.get(KEY, str(Path.home()))`),
+# which already resolves USERPROFILE correctly on Windows -- plus 1 of a
+# different shape (`check-machine-path-leak.py:327`).
+#
+# 2026-08-08 (C8b re-seed, post-C5b/`1e2f3e11`): C5b fixed the underlying
+# `_classify_rung` defect that made the 6 default-arg sites above
+# double-count a nested `Path.home()` call as a same-order self-
+# transposition. Verified live (`test_rung_order_baseline_has_no_stale_
+# entries` before this edit named exactly these 6 rows -- the 5 unique
+# `(path, text)` keys below plus the duplicate-text sandbox_check.py:919
+# row -- as no-longer-matching a live finding): all 6 now go clean and are
+# removed rather than re-baselined.
+#
+# `coordinator/bin/check-machine-path-leak.py:327` -- `os.environ.get("HOME")
+# or os.path.expanduser("~")` -- is a DIFFERENT shape (not a default-arg
+# ladder rung; C5b's fix does not touch it) and STILL reports live. Flagged
+# as an "unguarded expanduser rung" per the engine's structural rule, but the
+# line carries its own prior code-review note (`# Review: code-reviewer --
+# F4: $HOME is POSIX-only ... falls back to os.path.expanduser (which honors
+# USERPROFILE on Windows) instead of silently no-oping the soft-warn`) --
+# this exact shape was ALREADY the F4 Windows fix, independently reviewed
+# and landed for that reason, not an unreviewed leftover.
+#
+# The remaining `EXPANDUSER`-terminal findings this run surfaced (~28
+# sites, dominant shape `CLAUDE_HOME/HOME or os.path.expanduser("~")` with
+# no USERPROFILE rung at all, plus a handful of already-C9-fixed sites
+# --`coordinator/bin/{machine-local,cross-repo-memo,coordinator-prepare-
+# commit-msg}` -- whose ladders now carry the full CLAUDE_HOME -> HOME ->
+# USERPROFILE chain but still end in an unguarded `os.path.expanduser("~")`
+# rather than `Path.home()`) are REAL per this rule and are NOT baselined
+# here -- see this chunk's own run-report for the full per-site disposition
+# and named successor. Baselining them would be exactly the "reason says
+# why the gate should pass, not why the construct is correct" shape this
+# ledger's bar forbids.
+RUNG_ORDER_BASELINE: tuple[tuple[str, int, str], ...] = (
+    (
+        "coordinator/bin/check-machine-path-leak.py",
+        327,
+        'current_home = os.environ.get("HOME") or os.path.expanduser("~")',
+    ),
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SCAN_ROOTS = ("coordinator_core", "coordinator", "bin", "scripts")
@@ -264,6 +312,47 @@ def test_bare_or_baseline_has_no_stale_entries():
 
 
 # ---------------------------------------------------------------------------
+# Rule 5 (C5): a home-resolution ladder rung out of the master order
+# CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home(). Baseline is local to
+# this file -- see `RUNG_ORDER_BASELINE`'s own comment above.
+# ---------------------------------------------------------------------------
+
+
+def test_no_rung_order_violation():
+    """A home-resolution ladder's rungs must appear as a subsequence of the
+    master order CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home() -- a
+    skipped rung mid-ladder passes, but a transposed rung, a literal '~'
+    rung, or an unguarded expanduser rung does not.
+    """
+    findings = _engine().find_rung_order_violations()
+    baseline_keys = {(p, t) for p, _n, t in RUNG_ORDER_BASELINE}
+    new = [f for f in findings if f.key() not in baseline_keys]
+    warnings.warn(
+        f"[home-resolution-lint] engine_version={ENGINE_VERSION} rule=rung_order "
+        f"total={len(findings)} baseline={len(RUNG_ORDER_BASELINE)} new={len(new)}"
+    )
+    rendered = "\n".join(f"  {f.path}:{f.line}: {f.text}" for f in new)
+    assert new == [], (
+        f"Found {len(new)} NEW home-resolution ladder rung out of the master order "
+        f"CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home() -- a skipped rung is "
+        f"fine, but a transposed rung, a literal '~' rung, or an unguarded "
+        f"expanduser rung is not. Reorder the ladder to the master order:\n{rendered}"
+    )
+
+
+def test_rung_order_baseline_has_no_stale_entries():
+    live = {f.key() for f in _engine().find_rung_order_violations()}
+    stale = sorted(
+        entry for entry in {(p, t) for p, _n, t in RUNG_ORDER_BASELINE} if entry not in live
+    )
+    rendered = "\n".join(f"  {p}\n    {t}" for p, t in stale)
+    assert stale == [], (
+        f"{len(stale)} RUNG_ORDER_BASELINE entr(ies) no longer match a live "
+        f"finding. Delete from this file's RUNG_ORDER_BASELINE:\n{rendered}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC-6 positive control + AC-1 shape-5 coverage cross-reference.
 # ---------------------------------------------------------------------------
 
@@ -283,6 +372,7 @@ def test_settings_home_module_is_clean():
     assert all(f.path != relpath for f in engine.find_x_ok_checks())
     assert all(f.path != relpath for f in engine.find_colon_path_joins())
     assert all(f.path != relpath for f in engine.find_bare_home_or_chains())
+    assert all(f.path != relpath for f in engine.find_rung_order_violations())
 
 
 def test_docstring_lie_shape_is_covered_elsewhere():

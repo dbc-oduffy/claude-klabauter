@@ -30,8 +30,6 @@ Spec backlink: cross-repo memo, 2026-08-06 architecture survey.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -197,13 +195,10 @@ def test_path_escape_raises(tmp_path):
 
 
 def test_op_handler_missing_params_raise_value_error(tmp_path):
-    async def _run():
-        with pytest.raises(ValueError, match="target_root"):
-            await _cartography_op_edges({"files": ["a.py"]})
-        with pytest.raises(ValueError, match="files"):
-            await _cartography_op_edges({"target_root": str(tmp_path)})
-
-    asyncio.run(_run())
+    with pytest.raises(ValueError, match="target_root"):
+        _cartography_op_edges({"files": ["a.py"]})
+    with pytest.raises(ValueError, match="files"):
+        _cartography_op_edges({"target_root": str(tmp_path)})
 
 
 def test_op_handler_happy_path_delegates(tmp_path):
@@ -214,11 +209,8 @@ def test_op_handler_happy_path_delegates(tmp_path):
         "@register_op('demo.op')\n"
         "async def _h(params, repo_root=None):\n    return {}\n",
     )
-    async def _run():
-        return await _cartography_op_edges(
-            {"target_root": str(tmp_path), "files": ["producer.py"]}
-        )
-
-    result = asyncio.run(_run())
+    result = _cartography_op_edges(
+        {"target_root": str(tmp_path), "files": ["producer.py"]}
+    )
     assert result["op_names"] == ["demo.op"]
     assert result["static_only"] is True

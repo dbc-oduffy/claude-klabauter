@@ -307,6 +307,192 @@ class TestSizeCap:
         assert guard._read_file_safely(str(missing)) is None
 
 
+class TestAsyncioSubprocessFamily:
+    """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
+    Part 2 -- the guard's call-site regex previously matched only
+    subprocess.run/Popen/os.system and was structurally blind to the
+    entire asyncio spawn family (asyncio.create_subprocess_exec/_shell)."""
+
+    def test_unsuppressed_asyncio_create_subprocess_exec_is_flagged(self):
+        content = (
+            'import asyncio\n'
+            'proc = asyncio.create_subprocess_exec("powershell.exe", "-Command", "dir")\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_suppressed_asyncio_canonical_form_not_flagged(self):
+        content = (
+            'import asyncio, subprocess\n'
+            'proc = asyncio.create_subprocess_exec(\n'
+            '    "powershell.exe", "-Command", "dir",\n'
+            '    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        assert guard.check(payload) is None
+
+    def test_suppressed_asyncio_subprocess_kwargs_dict_form_not_flagged(self):
+        """The ops/distill_apply_disposal.py::_subprocess_kwargs shape --
+        a hardcoded 0x08000000 passed via a dict literal (**kwargs), with
+        the CREATE_NO_WINDOW marker only in a trailing comment. Comments
+        are stripped file-wide before detection runs, so the suppression
+        regex must recognize the dict-literal ``"creationflags":`` form on
+        its own, not rely on the (stripped) comment."""
+        content = (
+            'import sys, asyncio\n'
+            'def _subprocess_kwargs():\n'
+            '    if sys.platform == "win32":\n'
+            '        return {"creationflags": 0x08000000}  # CREATE_NO_WINDOW\n'
+            '    return {}\n'
+            '\n'
+            'async def _run():\n'
+            '    proc = await asyncio.create_subprocess_exec(\n'
+            '        "powershell.exe", "-Command", "dir",\n'
+            '        **_subprocess_kwargs(),\n'
+            '    )\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        assert guard.check(payload) is None
+
+    def test_unsuppressed_asyncio_create_subprocess_shell_is_flagged(self):
+        content = 'import asyncio\nasyncio.create_subprocess_shell("cmd.exe")\n'
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_bare_form_without_asyncio_prefix_is_also_matched(self):
+        """Preventive widening: the bare (non-``asyncio.``-prefixed) import
+        form is legal Python (``from asyncio import create_subprocess_exec``)
+        and would otherwise be a silent second blind spot of the same kind
+        this spinoff exists to fix. No live site uses this form; this
+        proves the call-site regex still requires a real console target
+        alongside it, per _PY_CONSOLE_TARGET_RE."""
+        content = (
+            'from asyncio import create_subprocess_exec\n'
+            'create_subprocess_exec("powershell.exe", "-Command", "dir")\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+
+class TestGitTargetPolicing:
+    """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
+    Part 1 -- the git exemption's premise ("git always spawns with
+    DETACHED_PROCESS semantics on Windows") was measured and refuted
+    (state/audits/2026-08-07-git-console-allocation-measurement.md); git and
+    git.exe are now policed like any other console-subsystem target."""
+
+    def test_unsuppressed_git_spawn_is_flagged(self):
+        """The exact refuting Case-5 shape from the measurement audit:
+        subprocess.run(["git", ...], capture_output=True) with no
+        creationflags."""
+        content = (
+            'import subprocess\n'
+            'result = subprocess.run(\n'
+            '    ["git", "rev-parse", "--show-toplevel"],\n'
+            '    capture_output=True,\n'
+            '    text=True,\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_suppressed_git_spawn_not_flagged(self):
+        content = (
+            'import subprocess\n'
+            'result = subprocess.run(\n'
+            '    ["git", "rev-parse", "--show-toplevel"],\n'
+            '    capture_output=True,\n'
+            '    text=True,\n'
+            '    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        assert guard.check(payload) is None
+
+
+class TestSuppressionDocstringProseFalseNegative:
+    """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
+    review finding [P2] -- ``_PY_SUPPRESSION_RE`` searched raw content, so a
+    triple-quoted docstring merely *mentioning* creationflags/CREATE_NO_WINDOW
+    in prose cleared the suppression check even when the actual spawn in the
+    same file is unsuppressed. This must still be flagged."""
+
+    def test_unsuppressed_spawn_with_docstring_mentioning_creationflags_still_flagged(self):
+        content = (
+            '"""Helper module.\n'
+            '\n'
+            'Note: pass creationflags: 0x08000000 (CREATE_NO_WINDOW) to suppress\n'
+            'the popup on Windows -- see the module README for details.\n'
+            '"""\n'
+            'import subprocess\n'
+            'subprocess.run(["powershell.exe", "-Command", "dir"])\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None, (
+            "a docstring merely mentioning creationflags/CREATE_NO_WINDOW must "
+            "not clear the suppression check for a genuinely unsuppressed spawn"
+        )
+        assert _is_advisory_envelope(result)
+
+    def test_genuinely_suppressed_spawn_with_docstring_still_clears(self):
+        """Sanity companion: a real suppression OUTSIDE the docstring still
+        clears -- proves the triple-quote strip is suppression-scoped, not a
+        blanket regression of true suppression detection."""
+        content = (
+            '"""Helper module.\n'
+            '\n'
+            'Note: pass creationflags to suppress the popup on Windows.\n'
+            '"""\n'
+            'import subprocess\n'
+            'subprocess.run(["powershell.exe", "-Command", "dir"],\n'
+            '                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))\n'
+        )
+        payload = _payload("Write", {"file_path": "run.py", "content": content})
+        assert guard.check(payload) is None
+
+    def test_pure_prose_docstring_only_file_still_surfaces_as_advisory(self):
+        """Case C is unaffected: the call/target regexes still search the
+        ORIGINAL (non-triple-quote-stripped) content, so a pure-prose file
+        with no real code still surfaces -- this pins that
+        _strip_triple_quoted_strings is not applied ahead of them."""
+        payload = _payload("Write", {"file_path": "helper.py", "content": _DOCSTRING_ONLY})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+
+class TestBareSubprocessFamilyWordBoundary:
+    """[P3] review finding -- the bare (unqualified) create_subprocess_*
+    alternative had no left word-boundary and could substring-match inside a
+    longer identifier."""
+
+    def test_longer_identifier_containing_create_subprocess_exec_not_matched(self):
+        content = (
+            'import subprocess\n'
+            'def my_create_subprocess_exec(cmd):\n'
+            '    return subprocess_target_helper("powershell.exe")\n'
+        )
+        assert guard._PY_SUBPROCESS_CALL_RE.search(content) is None
+
+    def test_qualified_and_bare_forms_still_match_at_a_real_boundary(self):
+        assert guard._PY_SUBPROCESS_CALL_RE.search(
+            'asyncio.create_subprocess_exec("x")'
+        )
+        assert guard._PY_SUBPROCESS_CALL_RE.search(
+            'create_subprocess_shell("x")'
+        )
+
+
 class TestClassAndAllowlistStillWork:
     def test_class_is_advisory(self):
         assert guard.CLASS == "advisory"

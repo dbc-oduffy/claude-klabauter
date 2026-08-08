@@ -195,7 +195,7 @@ def detect_project_stack(target_root: str | Path) -> dict:
 
 
 @register_op("cartography.stack")
-async def _cartography_stack(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_stack(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.stack" handler.
 
     Required params: target_root.

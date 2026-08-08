@@ -76,6 +76,7 @@ import os
 import re
 import shlex
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional, Tuple
 
@@ -129,6 +130,7 @@ def _default_scope_repo() -> str:
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
         if result.returncode == 0:
             top = result.stdout.strip()
@@ -220,7 +222,7 @@ def run_gate(scope_repo: Optional[str], *, override: Optional[bool] = None) -> T
             argv,
             cwd=source_path,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if result.returncode != 0:
             any_failed = True

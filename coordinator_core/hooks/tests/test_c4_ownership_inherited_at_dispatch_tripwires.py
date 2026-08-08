@@ -299,11 +299,6 @@ _EXPECTED_SCOPE_HELPER_CALL_SITES = frozenset(
             "_git_commit_agent_may_commit",
             "False",
         ),
-        (
-            "coordinator_core/ops/ceremony/scoped_git_commit.py",
-            "_run_ownership_gate",
-            "include_orphans",
-        ),
     }
 )
 
@@ -318,11 +313,6 @@ _EXPECTED_SCOPE_HELPER_IMPORT_SITES = frozenset(
             "coordinator_core/bash_guards/block_subagent_commit.py",
             "_import_assert_paths_in_session_scope",
             "assert_paths_in_session_scope",
-        ),
-        (
-            "coordinator_core/ops/ceremony/scoped_git_commit.py",
-            "<module>",
-            "_assert_paths_in_session_scope",
         ),
     }
 )

@@ -26,6 +26,7 @@ from coordinator_core.spawn_policy import (
     SpawnKind,
     SpawnParseError,
     is_sanctioned,
+    is_test_tree_site,
     load_allowlist,
     site_key,
     sites_in_source,
@@ -268,24 +269,6 @@ def test_allowlist_is_fully_pinned():
 _SHELL_SHAPED = frozenset({SpawnKind.SHELL_BINARY, SpawnKind.SHELL_TRUE})
 
 
-def _is_test_tree_site(site) -> bool:
-    """Test-tree membership: under a `tests/` dir, or a `test_*` basename.
-
-    Mirrors the plan's Out-of-scope carve-out for the 5,907-site test tree
-    (see module docstring's spec backlink) -- the same rule C4's census
-    follows. `walk_repo`'s `exclude` covers directory *names* uniformly
-    (scratch/scratchpad, vendored trees); it has no basename-prefix
-    concept, so the `test_*`-file half of this rule is applied here,
-    post-walk, rather than by widening the shared detector (out of scope
-    for this chunk).
-    """
-    parts = pathlib.PurePosixPath(site.path).parts
-    if "tests" in parts[:-1]:
-        return True
-    basename = parts[-1] if parts else ""
-    return basename.startswith("test_")
-
-
 def _scan_repo():
     """One `walk_repo(REPO_ROOT)` call, partitioned into reporting buckets.
 
@@ -308,7 +291,7 @@ def _scan_repo():
     test_tree_count = 0
     shell_unknown_count = 0
     for site in sites:
-        if _is_test_tree_site(site):
+        if is_test_tree_site(site.path):
             test_tree_count += 1
             continue
         if site.kind == SpawnKind.SHELL_UNKNOWN:
@@ -368,10 +351,12 @@ def test_repo_wide_no_unsanctioned_shell_spawn():
     `SHELL_UNKNOWN` (opaque `**kwargs` forwarding -- "can't tell", not
     "shell-shaped") never fails the gate but its count is surfaced below
     so it stays visible. Excludes: the test tree (files under a `tests/`
-    directory, or with a `test_*` basename -- out of scope per the plan,
-    5,907 call-sites, a different remedy) and everything in the detector's
-    own `DEFAULT_EXCLUDE` (scratch/scratchpad plus vendored/generated
-    trees such as `.venv`, `node_modules`, `dist`, `build`).
+    directory, or with a `test_*` basename -- out of scope per the plan, a
+    different remedy; 2,400 call-sites at this measurement, re-derived live
+    each run via `is_test_tree_site` rather than pinned to a stale count)
+    and everything in the detector's own `DEFAULT_EXCLUDE` (scratch/scratchpad
+    plus vendored/generated trees such as `.venv`, `node_modules`, `dist`,
+    `build`).
 
     The ONE named exception is `KNOWN_OPEN` above (the substrate.py
     `_powershell` site, with the PM as its own sized ask) -- matched by

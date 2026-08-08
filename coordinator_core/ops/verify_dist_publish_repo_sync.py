@@ -76,9 +76,11 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import home_dir, settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _MACHINE_LOCAL_KEY = "publish.mirrors.coordinator_claude.path"
 _SUBPROCESS_TIMEOUT_SECS = 15
 
@@ -117,7 +119,7 @@ def _run_machine_local(binary: str, key: str) -> Optional[str]:
             errors="replace",
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _run_machine_local: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -325,7 +327,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("")
         print("  Note on MISMATCH false-positives:")
         print("    publish-time-transform.sh rewrites dev-tree plugin paths to")
-        print("    publish-tree form at publish time (e.g. plugins/coordinator/")
+        print("    publish-tree form at publish time (e.g. plugins/coordinator-claude/coordinator/")
         print("    → plugins/coordinator/). Files whose source contains such paths will")
         print("    report MISMATCH by design — the publish-tree version is the intended")
         print("    OSS-facing shape. To distinguish real drift from path-rewrite delta:")

@@ -84,9 +84,11 @@ import sys
 import logging
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _parse_frontmatter, _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
@@ -206,7 +208,7 @@ def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
             text=True,
             check=False,
             cwd=str(worktree_root),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         print(f"skip: _read_meta_from_staged: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -243,7 +245,7 @@ def _resolve_plan_from_diff(worktree_root: Path) -> Optional[Dict[str, Optional[
             text=True,
             check=False,
             cwd=str(worktree_root),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         print(f"skip: _resolve_plan_from_diff: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -367,7 +369,7 @@ def _has_staged_completion_entry(worktree_root: Path, deliverable_id: Optional[s
             text=True,
             check=False,
             cwd=str(worktree_root),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         print(f"skip: _has_staged_completion_entry: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -409,6 +411,18 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
     Anchor: is a human-legible breadcrumb only — NOT a durable join key
     (claude-klabauter-commit-anchor-stamper.md § D1 co-design resolution: Anchor demoted from
     durable join to display breadcrumb; durable graph uses Plan-Id/Deliverable/Session-Id).
+
+    Claim-holder matching is ledger-first via `claim_state.resolve_claim_state` (C1,
+    coordinator_core/claim_state.py) — NOT a raw read of the frontmatter mirror's
+    `claimed_by`/`consumed_by` fields. On a desynced baton (mirror reverted by a
+    branch switch while the branch-independent claim ledger still holds the claim —
+    the incident `claim_state.py`'s module docstring names) the raw-mirror read used
+    to come back empty and the Anchor: trailer was permanently lost — there is no
+    later pass that reconstructs it once the commit is made. `resolve_claim_state`
+    surfaces the ledger holder in that case; a dead ledger holder degrades to
+    `source == "mirror"`/`"none"`, never falsely reported as `"ledger"`.
+    `picked_up_by` has no ledger counterpart and is still read from the mirror
+    directly — only the claimed_by/consumed_by hop is migrated.
     """
     if not session_id:
         return None
@@ -436,7 +450,6 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
             continue  # Terminal handoff — not a live continuity anchor.
 
         picked_up_by = fm.get("picked_up_by")
-        claimed_by = fm.get("claimed_by", fm.get("consumed_by"))
 
         # Review: code-reviewer — F3: use equality (not substring) so session IDs do not
         # false-match on prefix/suffix variants. List form (YAML sequence) uses exact
@@ -445,12 +458,11 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
             (isinstance(picked_up_by, str) and picked_up_by.strip() == session_id)
             or (isinstance(picked_up_by, list) and session_id in picked_up_by)
         )
-        session_in_consumed = (
-            (isinstance(claimed_by, str) and claimed_by.strip() == session_id)
-            or (isinstance(claimed_by, list) and session_id in claimed_by)
-        )
 
-        if session_in_picked or session_in_consumed:
+        claim_state = resolve_claim_state(path, repo_root=worktree_root)
+        session_in_claim = claim_state.holder == session_id
+
+        if session_in_picked or session_in_claim:
             matches.append(path.stem)  # filename without .md extension
 
     if len(matches) == 1:

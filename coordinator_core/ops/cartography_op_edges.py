@@ -79,7 +79,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("cartography.op_edges")
-async def _cartography_op_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_op_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.op_edges" handler.
 
     Args (via params):

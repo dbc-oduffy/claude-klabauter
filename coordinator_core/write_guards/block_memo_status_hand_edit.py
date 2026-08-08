@@ -102,7 +102,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -144,26 +146,37 @@ def _collapse_slashes(value: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel``. Fails open."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            # Windows console-popup suppression; no-op on POSIX.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    """``git rev-parse --show-toplevel``. Fails open.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn — same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``, so no verdict changes. The prior inline spawn only
+    logged a forensic diagnostic on an actual spawn ``OSError``; the shared
+    resolver has no way to distinguish "genuine resolution failure" from the
+    ordinary, non-exceptional case of ``cwd`` simply not being inside a git
+    repo (both come back as ``None``), so this print is WIDER than what the
+    prior code emitted — it now also fires for that ordinary not-in-a-repo
+    case (plausible for a memo-shaped write attempted in a scratch/test
+    checkout with no ``.git`` at all). Verdict is unaffected either way
+    (``_normalize_and_gate`` already treats ``None`` the same as any other
+    unresolved git root); this is a diagnostic-scope widening, not a
+    restoration, and is accepted as such rather than scoped back, since
+    scoping it to the genuine-failure case alone would require the shared
+    resolver to distinguish the two cases, which is out of this module's
+    scope (`write_guards/_repo_root.py` is peer-landed).
+    """
+    result = resolve_repo_root(cwd)
+    if result is None:
+        print(
+            f"block_memo_status_hand_edit: no git root resolved for cwd="
+            f"{cwd!r} (unresolvable OR simply not inside a git repo; both "
+            f"resolve to None here), treating as no git root (decision "
+            f"unaffected)",
+            file=sys.stderr,
         )
-    except OSError as exc:
-        print(f"block_memo_status_hand_edit: git rev-parse spawn failed, "
-              f"treating as no git root: {exc}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return result
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
@@ -206,12 +219,40 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
             print(f"block_memo_status_hand_edit: path resolve failed for "
                   f"{abs_cn!r}, gating on unresolved form: {exc}", file=sys.stderr)
             abs_cn_canon = abs_cn
-        # Case-folded per _MEMO_RECORD_RE's docstring — same bypass would
-        # otherwise apply here (git_root is real on-disk casing, but the
-        # candidate segment appended onto it is caller-supplied and may
-        # differ only in case on a case-insensitive filesystem).
-        expected_prefix = git_root.rstrip("/") + "/cross-repo/"
-        if not abs_cn_canon.casefold().startswith(expected_prefix.casefold()):
+        # Both sides through `casefold_path`, never a bare `.casefold()` --
+        # it folds separators AND case, and `abs_cn_canon` above is already
+        # built with it. A bare `.casefold()` here leaves the root side's
+        # native separators intact, so on Windows the two sides can never
+        # match and every candidate is gated out: the guard goes silently
+        # inert. Latent from this guard's first commit and live from the
+        # moment `_resolve_git_root` moved off `git rev-parse` (forward
+        # slashes) onto the shared resolver (native separators). Matches
+        # `block_consumed_handoff_edit`/`block_cutover_phase_hand_edit`,
+        # which spell it this way for the same reason.
+        # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH is not
+        # stripped by the latter, so a `git_root` of `X:\repo\` (or `X:\`, a
+        # drive-root repo) composes `X:\repo\/cross-repo/`, which casefolds to
+        # a DOUBLE-slash prefix and stops matching the single-slash form
+        # `Path.resolve()` produces on the candidate side -- the same silent
+        # inertness this fix exists to close, reintroduced through the one
+        # separator the strip did not cover. Reviewer finding, this close.
+        # Scope check: verified the drive-root repo is the ONLY reachable
+        # shape of this bug -- `resolve_repo_root`'s walk path returns
+        # `str(Path(...))`, which never carries a trailing separator except
+        # at a bare drive root (a one-letter Windows drive spec with no
+        # further path segment); an ordinary repo one level or more below a
+        # drive root never round-trips with a trailing separator, so this
+        # strip is not patching a broader class than the sidecar named.
+        # Honesty note (reviewer
+        # finding, not re-opened here): this `rstrip` closes the one
+        # reachable symptom, but the root side STILL never routes through
+        # `Path(...).resolve()` the way `abs_cn_canon` above does -- it is a
+        # raw string concatenation with a targeted strip, not the same
+        # normalization pipeline. That structural mismatch is real and
+        # deferred (matches the sibling guards, pre-existing, no other
+        # reachable symptom found) -- not claimed closed by this line.
+        expected_prefix = casefold_path(git_root.rstrip("/\\") + "/cross-repo/")
+        if not abs_cn_canon.startswith(expected_prefix):
             return None
 
     if not _MEMO_RECORD_RE.search(cn):
@@ -225,31 +266,25 @@ def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
     Fails open (``None``) on any resolution error — mirrors
     ``_resolve_git_root``'s fail-open discipline. Used only to locate the
     memo-claim directory (see ``_has_live_claim``); a failure here degrades
-    to "no claim dir found", never to a deny."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            # Windows console-popup suppression; no-op on POSIX.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError as exc:
-        print(f"block_memo_status_hand_edit: git rev-parse --git-common-dir "
-              f"spawn failed, treating as no claim dir: {exc}", file=sys.stderr)
+    to "no claim dir found", never to a deny.
+
+    D4 (docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md):
+    delegates to the shared, non-spawning
+    ``coordinator_core.git.git_dir.resolve_git_common_dir`` seam instead of
+    hand-rolling its own ``git rev-parse --git-common-dir`` spawn. That
+    resolver takes a REPO ROOT (not an arbitrary cwd) and builds its result
+    via join/normpath with no ``.resolve()`` — its output is absolute only
+    when the ``repo_root`` argument already is. ``resolve_repo_root`` (the
+    peer-landed shared seam, C2-C4 of
+    docs/plans/2026-08-06-eliminate-claude-klabauter-s-non-test-subprocess-spawn-population.md)
+    always returns an already-``Path.resolve()``d absolute string or
+    ``None``, so the semantic trap does not materialize here — the result
+    stays absolute exactly as the prior subprocess-plus-join did.
+    """
+    repo_root = resolve_repo_root(cwd)
+    if not repo_root:
         return None
-    if result.returncode != 0:
-        return None
-    out = result.stdout.strip()
-    if not out:
-        return None
-    common = Path(out)
-    if not common.is_absolute():
-        common = (Path(cwd) if cwd else Path.cwd()) / common
-    return str(common)
+    return str(resolve_git_common_dir(Path(repo_root)))
 
 
 def _has_live_claim(cwd: Optional[str], memo_filename: str) -> bool:

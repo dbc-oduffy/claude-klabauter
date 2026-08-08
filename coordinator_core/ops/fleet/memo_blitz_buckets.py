@@ -814,7 +814,7 @@ def _build_candidates(
 
 
 @register_op("memo.blitz_buckets")
-async def _memo_blitz_buckets(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _memo_blitz_buckets(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'memo.blitz_buckets' COMPUTE_ONLY UDS op handler.
 
     Return the mechanical half of an inbox blitz — buckets, sender/kind

@@ -272,19 +272,32 @@ def _resolve_source_mode(verb: str) -> str:
             "but must be \"dev\" or \"oss\""
         )
 
+    claude_home = _claude_home_dir()
+    flat = os.path.join(claude_home, "plugins", "coordinator-claude") if claude_home else None
+    oss_present = bool(flat) and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json"))
+
     # DR-071: registry `repos.example_doctrine_repo` (canonical) ranks above the
     # `.doe-root` pointer file mirror — inverted 2026-07-22 from the prior
-    # pointer-first order.
-    candidate = _registry_example_doctrine_repo() or _registry_live_path() or _read_doe_root_pointer() or ""
+    # pointer-first order. The flat marketplace-clone layout is added as a
+    # last-resort candidate rung (not just consulted via `oss_present` below)
+    # so an unmarked flat clone with no `.claude-plugin/plugin.json` manifest
+    # (e.g. a raw git checkout dropped at the flat path, no marketplace
+    # manifest, no .coordinator-dev-repo marker) is still a resolvable
+    # candidate instead of silently falling through to "no source found" —
+    # gated on `not oss_present` so a genuine marketplace install (which DOES
+    # carry the manifest) is never double-counted as both the OSS install AND
+    # the "unmarked candidate" in the ambiguity check below.
+    candidate = (
+        _registry_example_doctrine_repo()
+        or _registry_live_path()
+        or _read_doe_root_pointer()
+        or (flat if flat and not oss_present and os.path.isdir(flat) else "")
+        or ""
+    )
     candidate_resolved = bool(candidate) and os.path.isdir(candidate)
 
     dev_marker_present = candidate_resolved and os.path.isfile(
         os.path.join(candidate, ".coordinator-dev-repo")
-    )
-
-    claude_home = _claude_home_dir()
-    oss_present = bool(claude_home) and os.path.isfile(
-        os.path.join(claude_home, "plugins", "coordinator-claude", ".claude-plugin", "plugin.json")
     )
 
     if dev_marker_present:

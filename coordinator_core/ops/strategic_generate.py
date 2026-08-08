@@ -55,7 +55,7 @@ from coordinator_core.ops.strategic.version_highlights import derive_version_hig
 
 
 @register_op("strategic.generate")
-async def _strategic_generate(params: dict, repo_root=None) -> dict:
+def _strategic_generate(params: dict, repo_root=None) -> dict:
     """JSON-RPC "strategic.generate" handler.
 
     Required params: target_root. See module docstring "Wire params" / "Reply fields".

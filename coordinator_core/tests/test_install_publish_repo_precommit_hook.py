@@ -11,6 +11,7 @@ Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (r
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -18,8 +19,13 @@ import pytest
 
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
 
+# PATH lookup, not a spawn: the previous shape ran `git --version` at MODULE
+# level to compute this condition, so it spawned during collection on every
+# run — including --collect-only and -k-filtered ones. That is exactly the
+# import-time class test_no_new_spawning_tests.py's Rule 1 bans. shutil.which
+# answers the same question (is git on PATH) without a process.
 pytestmark = pytest.mark.skipif(
-    subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
+    shutil.which("git") is None,
     reason="git not available",
 )
 

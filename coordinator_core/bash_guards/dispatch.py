@@ -213,6 +213,9 @@ from coordinator_core.bash_guards._advisory_value import (
 from coordinator_core.bash_guards._platform_verdict import (
     resolve_host_is_windows as _resolve_host_is_windows_public,
 )
+from coordinator_core.bash_guards._tool_names import (
+    COMMAND_TOOL_NAMES,
+)
 from coordinator_core.session.guard_unlock_sentinel import (
     annotate_deny as _annotate_unlock,
     consume as _consume_unlock,
@@ -230,52 +233,74 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
     check as _check_plan_body_bash_write,
+    MATCHERS as _matchers_plan_body_bash_write,
 )
 from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
     check as _check_reviewer_bash_outside_allowlist,
+    MATCHERS as _matchers_reviewer_bash_outside_allowlist,
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     check as _check_subagent_destructive_action,
+    MATCHERS as _matchers_subagent_destructive_action,
 )
 from coordinator_core.bash_guards.block_illegal_filename import (
     check as _check_illegal_filename,
+    MATCHERS as _matchers_illegal_filename,
 )
 from coordinator_core.bash_guards.check_test_suite_invocation import (
     check as _check_test_suite_invocation,
+    MATCHERS as _matchers_test_suite_invocation,
 )
 from coordinator_core.bash_guards.block_subagent_commit import (
     check as _check_subagent_commit,
+    MATCHERS as _matchers_subagent_commit,
 )
 from coordinator_core.bash_guards.check_raw_pid_liveness import (
     check as _check_raw_pid_liveness,
+    MATCHERS as _matchers_raw_pid_liveness,
 )
 from coordinator_core.bash_guards.block_worktree_creation import (
     check as _check_worktree_creation,
+    MATCHERS as _matchers_worktree_creation,
 )
 from coordinator_core.bash_guards.block_approval_sentinel_creation import (
     check as _check_approval_sentinel_creation,
+    MATCHERS as _matchers_approval_sentinel_creation,
 )
 from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
     check as _check_worktree_sentinel_creation,
+    MATCHERS as _matchers_worktree_sentinel_creation,
 )
+# block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
+# but on the module whose registered leg here is `check_advisory` -- the
+# `check()` leg that pairs with the declaration was RETIRED from guard_chain
+# (see that registration's own comment below). Treat this registration as
+# having no applicable declaration: no MATCHERS import from this module, and
+# its GuardEntry below passes the ("Bash",) default literally, same as any
+# other registration whose backing module declares nothing.
 from coordinator_core.bash_guards.block_dev_repo_sentinel_removal import (
     check as _check_dev_repo_sentinel_removal,
     check_advisory as _check_dev_repo_sentinel_removal_advisory,
 )
 from coordinator_core.bash_guards.block_stash_destruction import (
     check as _check_stash_destruction,
+    MATCHERS as _matchers_stash_destruction,
 )
 from coordinator_core.bash_guards.block_subagent_stash_creation import (
     check as _check_subagent_stash_creation,
+    MATCHERS as _matchers_subagent_stash_creation,
 )
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
+    MATCHERS as _matchers_noncanonical_branch_creation,
 )
 from coordinator_core.bash_guards.guard_branch_set_precedence import (
     check as _check_branch_set_precedence,
+    MATCHERS as _matchers_branch_set_precedence,
 )
 from coordinator_core.bash_guards.guard_longlived_branch_naming import (
     check as _check_longlived_branch_naming,
+    MATCHERS as _matchers_longlived_branch_naming,
 )
 from coordinator_core.bash_guards.bump_foreign_repo_write import (
     check_bump_foreign_repo_write as _check_bump_foreign_repo_write,
@@ -285,24 +310,38 @@ from coordinator_core.bash_guards.bump_outside_repo_write import (
 )
 from coordinator_core.bash_guards.guard_inprocess_search import (
     check as _check_inprocess_search,
+    MATCHERS as _matchers_inprocess_search,
 )
 from coordinator_core.bash_guards.guard_offer_git_c import (
     check_offer_git_c as _check_offer_git_c,
+)
+from coordinator_core.bash_guards.guard_no_optional_locks import (
+    check_git_no_optional_locks as _check_git_no_optional_locks,
+)
+from coordinator_core.bash_guards.guard_reap_stale_git_lock import (
+    check_reap_stale_git_lock as _check_reap_stale_git_lock,
 )
 from coordinator_core.bash_guards.guard_head_tail_rewrite import (
     check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
 )
 from coordinator_core.bash_guards.guard_grep_via_bash import (
     check as _check_grep_via_bash,
+    MATCHERS as _matchers_grep_via_bash,
+)
+from coordinator_core.bash_guards.guard_powershell_via_bash import (
+    check as _check_powershell_via_bash,
+    MATCHERS as _matchers_powershell_via_bash,
 )
 from coordinator_core.bash_guards.guard_multiprobe_banner import (
     check as _check_multiprobe_banner,
+    MATCHERS as _matchers_multiprobe_banner,
 )
 from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
     check_offer_invoke_params_stdin as _check_offer_invoke_params_stdin,
 )
 from coordinator_core.bash_guards.guard_plumbing_and_loops import (
     check as _check_plumbing_and_loops,
+    MATCHERS as _matchers_plumbing_and_loops,
 )
 
 
@@ -372,6 +411,21 @@ class GuardEntry:
                         this explicitly, INCLUDING every `CONFINEMENT_DENY`
                         entry (an exemption for the band that matters most
                         would be a hole in AC-1).
+      matchers        -- (C1, docs/plans/2026-08-07-command-guards-fire-
+                        under-both-tool-names.md) the command tool names
+                        this entry's own detection can read, as a subset of
+                        `_tool_names.COMMAND_TOOL_NAMES`. Same defaulted-
+                        field shape as `advisory_value` above, for the same
+                        reason: the default (`("Bash",)`) is load-bearing --
+                        any entry not explicitly widened behaves EXACTLY as
+                        it did before this field existed, so introducing it
+                        is inert until a guard opts in. Governs CHAIN ENTRY
+                        ONLY (whether `evaluate_payload_json`'s loop calls
+                        this entry's `fn` at all for the observed
+                        `tool_name` -- see that loop's own skip) and confers
+                        nothing on a module a registered guard calls
+                        internally; widening a delegating guard requires
+                        auditing its own callee graph separately.
     """
 
     name: str
@@ -379,6 +433,7 @@ class GuardEntry:
     fail_closed: bool
     band: GuardBand
     advisory_value: AdvisoryValue = AdvisoryValue.UNCLASSIFIED
+    matchers: Tuple[str, ...] = ("Bash",)
 
 
 _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
@@ -578,6 +633,75 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
     }
 
 
+_ANY_DECLARED_MATCHERS_CACHE: Optional["frozenset[str]"] = None
+
+
+def _any_declared_matchers() -> "frozenset[str]":
+    """The union of every registered guard's own declared ``matchers`` --
+    computed ONCE per process and cached, never per dispatch call (C1,
+    docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md).
+
+    This is the master gate's cheap early-exit set in ``evaluate_payload_
+    json`` below: while every ``GuardEntry`` sits at its ``("Bash",)``
+    default, this union is just ``{"Bash"}``, so a ``PowerShell`` payload is
+    rejected at the master gate -- before ``resolve_command_positions``,
+    ``_build_guard_chain``, or the guard loop ever run -- and it widens
+    automatically the moment any guard's own ``MATCHERS`` does.
+
+    Deliberately NOT derived by calling ``_build_guard_chain`` itself:
+    constructing that list (every lambda, every ``GuardEntry``) is exactly
+    the chain-construction cost this gate exists to let a non-matching
+    payload skip (see ``evaluate_payload_json``'s own master-gate comment
+    below, and AC4 in the plan above). Instead this unions the SAME
+    per-module ``MATCHERS`` values (or the ``("Bash",)`` literal, for a
+    registration whose backing module declares none) that each
+    ``GuardEntry.matchers=`` in ``_build_guard_chain`` is built from -- kept
+    in step with that registration list by construction, since both read the
+    identical imported names; ``test_tool_name_membership.py`` asserts the
+    two agree.
+
+    ``block_disarm_marker_sentinel_creation`` is imported LOCALLY here, not
+    at module top, for the identical circular-import reason
+    ``_build_guard_chain`` already documents for its own deferred import of
+    the same module: that module imports ``_blanket_disarm``, which imports
+    ``GuardBand`` FROM this module at ITS top level, so a module-level
+    import here would resolve before ``GuardBand`` exists on a fresh
+    interpreter. Safe here because this function is only ever CALLED (never
+    imported-from-the-top), after this module has finished executing its
+    own top level -- the same safety argument ``_build_guard_chain`` already
+    makes for its own deferred import.
+    """
+    global _ANY_DECLARED_MATCHERS_CACHE
+    if _ANY_DECLARED_MATCHERS_CACHE is None:
+        from coordinator_core.bash_guards.block_disarm_marker_sentinel_creation import (
+            MATCHERS as _matchers_disarm_marker_sentinel_creation,
+        )
+
+        _ANY_DECLARED_MATCHERS_CACHE = frozenset(("Bash",)).union(
+            _matchers_plan_body_bash_write,
+            _matchers_reviewer_bash_outside_allowlist,
+            _matchers_subagent_destructive_action,
+            _matchers_illegal_filename,
+            _matchers_test_suite_invocation,
+            _matchers_subagent_commit,
+            _matchers_raw_pid_liveness,
+            _matchers_worktree_creation,
+            _matchers_approval_sentinel_creation,
+            _matchers_worktree_sentinel_creation,
+            _matchers_stash_destruction,
+            _matchers_subagent_stash_creation,
+            _matchers_noncanonical_branch_creation,
+            _matchers_branch_set_precedence,
+            _matchers_longlived_branch_naming,
+            _matchers_inprocess_search,
+            _matchers_grep_via_bash,
+            _matchers_multiprobe_banner,
+            _matchers_plumbing_and_loops,
+            _matchers_disarm_marker_sentinel_creation,
+        )
+    return _ANY_DECLARED_MATCHERS_CACHE
+
+
 def evaluate_payload_json(
     raw: str,
     policy_file: Optional[str] = None,
@@ -740,7 +864,22 @@ def evaluate_payload_json(
     if not isinstance(payload, dict):
         return None
 
-    if payload.get("tool_name") != "Bash":
+    # C1 master gate (docs/plans/2026-08-07-command-guards-fire-under-both-
+    # tool-names.md): union check against the DECLARED-matchers set, NOT
+    # against `_tool_names.COMMAND_TOOL_NAMES` (the observable universe) --
+    # gating on the universe would convert this early return from a
+    # zero-cost skip into a full chain traverse (the tokenizer walk, chain
+    # construction, disarm/host resolution, and the guard loop below) for
+    # every payload whose `tool_name` is IN the universe but matched by NO
+    # registered guard, on every command issued through this operator's
+    # PRIMARY shell, for zero coverage gain until a guard actually widens.
+    # `_any_declared_matchers()` is a cached union of exactly the `matchers`
+    # each `GuardEntry` below declares -- while every entry sits at its
+    # `("Bash",)` default, this restores today's cheap early exit exactly
+    # (a `PowerShell` payload is rejected HERE), and it widens automatically
+    # the moment any guard's own `MATCHERS` does, with no edit required at
+    # this call site.
+    if payload.get("tool_name") not in _any_declared_matchers():
         return None
 
     tool_input = payload.get("tool_input")
@@ -783,7 +922,8 @@ def evaluate_payload_json(
 
     # ------------------------------------------------------------------
     # Combined legacy cross-process order (module docstring 1a..1k, 2..6).
-    # Each entry is a `GuardEntry(name, fn, fail_closed, band, advisory_value)`.
+    # Each entry is a `GuardEntry(name, fn, fail_closed, band, advisory_value,
+    # matchers)`.
     #   fail_closed=True  -> hard-deny class: an exception is routed through
     #                        _crash_deny (F1 -- fails CLOSED per-guard).
     #   fail_closed=False -> soft/content/advisory class: an exception is
@@ -843,6 +983,18 @@ def evaluate_payload_json(
 
     for entry in guard_chain:
         name, fn, fail_closed, _band = entry.name, entry.fn, entry.fail_closed, entry.band
+        if payload.get("tool_name") not in entry.matchers:
+            # C1 edit 4: this entry's own declared `matchers` excludes the
+            # observed `tool_name` -- skip WITHOUT calling `fn()` at all,
+            # same skip-without-invoking shape as the `_disarm` band-
+            # suppression skip immediately below (the in-file precedent this
+            # edit follows). Deliberately silent (no stderr line, unlike the
+            # disarm skip below): once any guard widens (C3), a single
+            # non-matching payload can skip a large fraction of the chain
+            # this way, and a print per skipped entry would turn the common
+            # case into per-call log noise; the disarm skip stays print-
+            # loud because it is the rare, notable case.
+            continue
         if (
             _disarm.active
             and _disarm.bands
@@ -1085,6 +1237,7 @@ def _build_guard_chain(
     # chain(...)` structural call.
     from coordinator_core.bash_guards.block_disarm_marker_sentinel_creation import (
         check as _check_disarm_marker_sentinel_creation,
+        MATCHERS as _matchers_disarm_marker_sentinel_creation,
     )
 
     # `check_destructive_git_revert`'s hard-deny leg and its advisory sibling
@@ -1109,10 +1262,10 @@ def _build_guard_chain(
 
     guard_chain: List[GuardEntry] = [
         # 1. preuse-bash-dispatch.sh own internal 11-check order.
-        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
-        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
-        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
-        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Hard-deny leg ONLY -- never returns the advisory half (Review:
         # staff-eng, Finding 0: an advisory returned from THIS
         # CONFINEMENT_DENY slot would short-circuit `evaluate_payload_json`
@@ -1120,16 +1273,16 @@ def _build_guard_chain(
         # `GuardBand`'s own docstring forbids for this band). The advisory
         # leg is `destructive-git-revert-advisory`, registered below in
         # ADVISORY_REWRITE, after every CONFINEMENT_DENY guard.
-        GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
-        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
-        GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Must precede `offer-git-c`. That check rewrites `cd <dir> && git <sub>`
         # into `git -C <dir> <sub>` and returns allow+updatedInput, which
         # short-circuits the rest of the chain -- so a worktree guard placed
         # after it never sees `cd /tmp && git worktree add ...` and the ban is
         # bypassable by prefixing a `cd`. Hard-denies belong ahead of every
         # rewrite/offer check for exactly this reason.
-        GuardEntry("block-worktree-creation", lambda: _check_worktree_creation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("block-worktree-creation", lambda: _check_worktree_creation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_worktree_creation)),
         # Same ordering requirement as block-worktree-creation immediately
         # above, for the identical reason: `offer-git-c` short-circuits any
         # guard placed after it via allow+updatedInput, so a guard denying
@@ -1143,6 +1296,7 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_approval_sentinel_creation),
         ),
         # Same ordering requirement as block-worktree-creation and
         # block-approval-sentinel-creation immediately above, for the
@@ -1159,6 +1313,7 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_worktree_sentinel_creation),
         ),
         # `block-dev-repo-sentinel-removal`'s hard-deny leg was RETIRED here
         # (C13, docs/plans/2026-08-06-apply-guard-class-census.md), collapsing
@@ -1195,6 +1350,7 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_disarm_marker_sentinel_creation),
         ),
         # Same ordering requirement as the sentinel/worktree guards above,
         # for the identical `offer-git-c` short-circuit reason: a guard
@@ -1214,6 +1370,7 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_stash_destruction),
         ),
         # Same ordering requirement as the sentinel/worktree/stash guards
         # immediately above, for the identical `offer-git-c` short-circuit
@@ -1229,6 +1386,7 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_subagent_stash_creation),
         ),
         # `block-noncanonical-branch-creation` RETIRED from this CONFINEMENT_
         # DENY slot (C13, docs/plans/2026-08-06-apply-guard-class-census.md):
@@ -1257,13 +1415,14 @@ def _build_guard_chain(
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_reviewer_bash_outside_allowlist),
         ),
-        GuardEntry("block-subagent-destructive-action", lambda: _check_subagent_destructive_action(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("block-subagent-destructive-action", lambda: _check_subagent_destructive_action(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_destructive_action)),
         # block-subagent-commit -- structural teeth for the no-self-commit
         # rule. Own-module hard-deny, pinned alongside the three guards above
         # (all fire on git-history/identity confinement, which outrank a
         # machine-load deny); supersedes nudge-subagent-scoped-commit.
-        GuardEntry("block-subagent-commit", lambda: _check_subagent_commit(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("block-subagent-commit", lambda: _check_subagent_commit(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_commit)),
         # This one is a hard-deny (fail_closed) and belongs on this side of every
         # rewriting guard for the same reason as the three above. It previously sat
         # further down the chain, behind `offer-git-c`. No bypass was demonstrated for
@@ -1276,7 +1435,7 @@ def _build_guard_chain(
         # rot, so it moves here and joins the invariant's set. (`check-raw-pid-
         # liveness`, formerly its sibling in this pair, RETIRED from here in C13
         # -- see its own new ADVISORY_REWRITE registration below.)
-        GuardEntry("check-test-suite-invocation", lambda: _check_test_suite_invocation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("check-test-suite-invocation", lambda: _check_test_suite_invocation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_test_suite_invocation)),
         # Advisory (never a deny) sibling of `destructive-git-revert` above
         # (Review: staff-eng, Finding 0). Registered here -- after EVERY
         # CONFINEMENT_DENY hard-deny guard, and ahead of `offer-git-c`'s
@@ -1288,7 +1447,7 @@ def _build_guard_chain(
         # swallow to allow, never route through the hard-deny crash path --
         # the same reasoning `bump-foreign-repo-write`'s own registration
         # comment states for its identical choice.
-        GuardEntry("destructive-git-revert-advisory", lambda: _git_revert_full()[1], False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("destructive-git-revert-advisory", lambda: _git_revert_full()[1], False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Advisory (never a deny) sibling of `block-dev-repo-sentinel-
         # removal` above (same CONFINEMENT_DENY shadowing hazard
         # `destructive-git-revert-advisory` above fixes; see this guard's
@@ -1299,7 +1458,15 @@ def _build_guard_chain(
         # advisory and a later hard deny (e.g. `block-approval-sentinel-
         # creation` at an earlier chain position) still returns that deny
         # first, unaffected by this entry's position.
-        GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        # matchers=("Bash",) LITERAL, deliberately not sourced from this
+        # module's own MATCHERS declaration: that declaration sits on the
+        # module's `check()` leg, which is dead (see the retirement comment
+        # above) -- the leg actually registered here, `check_advisory`,
+        # carries no `tool_name` gate of its own. Per C1's sourcing rule, a
+        # registration whose applicable leg declares nothing gets the
+        # literal default, visible at the site rather than implied by a
+        # declaration that governs a different function.
+        GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Same ordering requirement as the sentinel/worktree/stash/branch
         # guards above, for the identical `offer-git-c` short-circuit
         # reason: that check rewrites `cd <dir> && git <sub>` into `git -C
@@ -1391,6 +1558,19 @@ def _build_guard_chain(
             fail_closed=False,
             band=GuardBand.ADVISORY_REWRITE,
             advisory_value=AdvisoryValue.NOT_COST_ARGUED,
+            # Widened from ("Bash",) to COMMAND_TOOL_NAMES by
+            # docs/plans/2026-08-07-liveness-seam-validates-its-repo-root.md
+            # C5 (2026-08-07): C4 (immediately above, same date) widened this
+            # guard's sibling `bump-outside-repo-write` because that module
+            # already carried a dead PowerShell leg; THIS module carried none
+            # at all, so C5 authored `_check_bump_foreign_repo_write_
+            # powershell` (candidate extraction via the PowerShell cmdlet
+            # write-sink table, judged through the SAME predicate the Bash
+            # body uses) before flipping this matcher -- widening the
+            # matcher alone, with no leg to reach, would have routed
+            # PowerShell payloads into a Bash-only code path for zero
+            # coverage gain.
+            matchers=COMMAND_TOOL_NAMES,
         ),
         # C5, docs/plans/2026-08-02-write-confinement-guards.md (example-doctrine-repo
         # repo) -- the Bash-surface OUTSIDE-repo write-confinement speed
@@ -1429,16 +1609,46 @@ def _build_guard_chain(
             fail_closed=False,
             band=GuardBand.ADVISORY_REWRITE,
             advisory_value=AdvisoryValue.NOT_COST_ARGUED,
+            # Widened from ("Bash",) to COMMAND_TOOL_NAMES by
+            # docs/plans/2026-08-07-liveness-seam-validates-its-repo-root.md
+            # C4 (2026-08-07): this module already carried a complete
+            # `_check_bump_outside_repo_write_powershell` leg behind a
+            # `Dialect.POWERSHELL` gate that could never fire while this
+            # entry stayed pinned to ("Bash",) -- the dispatcher's C1 master
+            # gate rejected any PowerShell payload before the chain ran, so
+            # the leg had been dead since it shipped. C4 does not author
+            # detection, only connects the built PowerShell leg to the
+            # dispatcher. `bump-foreign-repo-write` immediately above is
+            # deliberately NOT widened here -- it has no PowerShell leg yet;
+            # that is C5's job.
+            matchers=COMMAND_TOOL_NAMES,
         ),
-        # Soft: the ONLY check that receives `cwd` (F0-adjacent note above).
-        GuardEntry("offer-git-c", lambda: _check_offer_git_c(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        # Soft: one of two checks that receive `cwd` (F0-adjacent note
+        # above; the other is `reap-stale-git-lock` immediately below).
+        # Ungated chain member (C1 audit finding): guard_offer_git_c.py
+        # declares no MATCHERS and carries no tool_name gate of its own.
+        GuardEntry("offer-git-c", lambda: _check_offer_git_c(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Mechanical leg of the fleet-wide `.git/index.lock` contention
+        # campaign: auto-rewrites `git status`/bare `git diff` to insert
+        # `--no-optional-locks` pre-subcommand, prompt-free -- see
+        # guard_no_optional_locks.py's own module docstring for the
+        # measured evidence this rewrite is behavior-preserving.
+        GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Self-heal leg of the same campaign: a stat-gated (zero-subprocess
+        # in the common no-lock case) pre-op check that reaps an ORPHANED
+        # `.git/index.lock` ahead of a raw lock-taking git invocation
+        # (add/commit/status/diff/mv/stash), reusing `ops.reap_stale_locks`'
+        # own age-and-stability gate untouched -- see
+        # guard_reap_stale_git_lock.py's own module docstring. Always
+        # returns None (side-effect-only guard, never a rewrite/deny).
+        GuardEntry("reap-stale-git-lock", lambda: _check_reap_stale_git_lock(cmd, cwd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Content: deliberately NOT crash-deny-routed (see module docstring).
         # Review: code-reviewer (Finding 2) -- check_validate_commit's git
         # calls (staged-file list, scope-check toplevel resolution, CLAUDE.md
         # blob fetch, frontmatter diff) are all cwd-sensitive; thread cwd
         # through so they resolve against the payload's actual working
         # directory rather than this process's own os.getcwd().
-        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Review: review-integrator -- Finding 2. Registered AHEAD of
         # `probe-spray` (moved up from the dispatcher's own tail below it),
         # satisfying two ordering constraints at once:
@@ -1458,11 +1668,11 @@ def _build_guard_chain(
         #      it cannot answer, so moving it earlier cannot introduce a new
         #      bypass of anything below it (same reasoning already applied
         #      to its position relative to the rewrite guards further down).
-        GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
+        GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_inprocess_search)),
         # Advisory (dispatcher own tail).
-        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # 2. block-illegal-filename.sh (cohort 1, Bash leg, advisory).
-        GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
+        GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_illegal_filename)),
         # 5b. check-test-suite-invocation -- no legacy bash predecessor (new
         # 2026-07-23, example-doctrine-repo DR-088 layers 1/2/6). Positioned at the TAIL of the
         # hard-deny cohort-1 run rather than interleaved: it has no parity
@@ -1488,11 +1698,11 @@ def _build_guard_chain(
         # position relative to EACH OTHER carries no confinement risk.
         # `inprocess-search` (formerly registered here) moved up ahead of
         # `probe-spray` -- see that entry's own comment above for why.
-        GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY),
-        GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
-        GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
-        GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
-        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
+        GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
         # dispatch was sent to close (example-doctrine-repo docs/plans/2026-07-29-windows-
         # viability-stop-the-spawn-storms.md, row BX-16): MULTI_PROBE_BANNER
@@ -1504,8 +1714,10 @@ def _build_guard_chain(
         # rewrite/advisory-only checks carries no confinement risk, and both
         # still sit after every hard-deny above per the chain's own ordering
         # invariant (test_hard_denies_precede_rewrites.py).
-        GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
-        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY),
+        GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        # Ungated chain member (C1 audit finding): guard_head_tail_rewrite.py
+        # declares no MATCHERS and carries no tool_name gate of its own.
+        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
         # Registered in the rewrite band for the same reason as the entries
         # above it (its rewrite is provably params-identical -- see that
         # module's rung-A argument), with one difference worth naming: unlike
@@ -1526,7 +1738,10 @@ def _build_guard_chain(
         # calls don't look like `grep -r`, the multiprobe banner shape, or
         # `find | head`); it is an assumption, not an asserted invariant, and
         # any future guard added ahead of the tail band should re-check it.
-        GuardEntry("offer-invoke-params-stdin", lambda: _check_offer_invoke_params_stdin(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED),
+        # Ungated chain member (C1 audit finding): guard_offer_invoke_params_
+        # stdin.py declares no MATCHERS and carries no tool_name gate of its
+        # own.
+        GuardEntry("offer-invoke-params-stdin", lambda: _check_offer_invoke_params_stdin(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # `grep-via-bash-guard` moved from PLATFORM_CONDITIONED_DENY to
         # ADVISORY_REWRITE (H11(a), 2026-07-30, docs/plans/2026-07-30-os-
         # aware-guard-advisory-defaults.md) -- its own substitutable/deny
@@ -1572,7 +1787,16 @@ def _build_guard_chain(
         # HOST_INDEPENDENT (line above, in this same band) -- matching that
         # precedent rather than inventing a third value for a guard that is
         # now, in substance, this guard's own narrower cousin.
-        GuardEntry("grep-via-bash-guard", lambda: _check_grep_via_bash(payload, host_is_windows=host_is_windows), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT),
+        GuardEntry("grep-via-bash-guard", lambda: _check_grep_via_bash(payload, host_is_windows=host_is_windows), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_grep_via_bash)),
+        # cross-repo/inbox/ dispatch, "Guard powershell-via-bash mangling"
+        # (2026-08-08): registered adjacent to `grep-via-bash-guard` above --
+        # same theme (an advisory naming a Bash-spawn hazard, never a deny),
+        # same band-contiguity requirement (ADVISORY_REWRITE, ahead of the
+        # two PLATFORM_CONDITIONED_DENY guards below). Never denies (module
+        # docstring "Never denies"), so `fail_closed=False` -- a crash here
+        # degrades to allow/no-context, matching every other pure-advisory
+        # entry in this band.
+        GuardEntry("powershell-via-bash-guard", lambda: _check_powershell_via_bash(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_powershell_via_bash)),
         # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C5/C7.
         # Both are advisory-only (never deny -- see each module's own "the
         # one true never-denies template" posture), registered here in the
@@ -1587,6 +1811,7 @@ def _build_guard_chain(
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_branch_set_precedence),
         ),
         GuardEntry(
             "longlived-branch-naming",
@@ -1594,6 +1819,7 @@ def _build_guard_chain(
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_longlived_branch_naming),
         ),
         # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four
         # guard-class-census band flips, moved from CONFINEMENT_DENY to
@@ -1647,6 +1873,7 @@ def _build_guard_chain(
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_noncanonical_branch_creation),
         ),
         GuardEntry(
             "block-subagent-plan-body-bash-write",
@@ -1654,6 +1881,7 @@ def _build_guard_chain(
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_plan_body_bash_write),
         ),
         GuardEntry(
             "check-raw-pid-liveness",
@@ -1661,41 +1889,52 @@ def _build_guard_chain(
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_raw_pid_liveness),
         ),
-        # BX-7/BX-8's own platform-conditioned deny/advise policy
+        # BX-7/BX-8's own platform-conditioned advisory policy
         # (`guard_multiprobe_banner.py` / `guard_plumbing_and_loops.py`) --
         # deliberately registered at the very TAIL, AFTER every rewrite/
         # advise entry above (including `offer-git-c` and, as of H11,
         # `grep-via-bash-guard` right above this comment -- ADVISORY_REWRITE
-        # now, no longer part of this platform-conditioned-deny cohort, but
-        # still registered adjacent to it for the same reason: after every
-        # rewrite, before nothing else matters ordering-wise), NOT in the
-        # hard-deny cohort ahead of it, even though each of these two is
-        # CLASS="hard-deny" and denies on Windows. This looks backwards next
-        # to every other hard-deny in this chain (which all sit ahead of
-        # `offer-git-c` precisely so a rewrite can never short-circuit them)
-        # and an integration review recommended moving them there -- that
-        # recommendation was tested empirically and REVERTED, because it
-        # inverts these two guards' intended behaviour on both platforms
-        # (this rationale applied identically to `grep-via-bash-guard`
-        # before H11 narrowed its own deny branch away entirely -- see that
-        # guard's own registration comment above):
+        # now, no longer part of this cohort, but still registered adjacent
+        # to it for the same reason: after every rewrite, before nothing
+        # else matters ordering-wise).
         #
-        #   - Placed BEFORE the rewrites: on macOS, the guard's own shape
-        #     stops being auto-rewritten into the cheaper equivalent and
-        #     becomes an ignorable advisory instead -- the fix this guard
-        #     exists to encourage never applies. On Windows it is WORSE: the
-        #     command is denied outright and the auto-rewrite never runs, so
-        #     the agent must hand-type the alternative from the deny text
-        #     instead of the rewrite simply happening.
-        #   - Placed AFTER (here): every shape/platform combination
-        #     correctly auto-rewrites first, and each guard still falls
-        #     through to its own proper deny/advise when the rewrite's own
-        #     `COORDINATOR_ALLOW_*` override has disabled it (or the seam
-        #     offers no confirmed outlet for this exact command -- see
-        #     `guard_plumbing_and_loops._seam_confirmed_rewrite`). That
-        #     override/no-outlet case is each guard's actual value, and it
-        #     only works correctly at the tail.
+        # Each of these two is CLASS="hard-deny"/`fail_closed=True` (a crash
+        # inside either still fails closed), but NEITHER GUARD CAN ITSELF
+        # PRODUCE A DENY VERDICT ANY MORE (DR-280, 2026-08-07): each guard's
+        # own platform-conditioned deny branch gated on
+        # `_seam_confirmed_rewrite` against the SAME seam an
+        # earlier-registered `ADVISORY_REWRITE` chain entry (e.g.
+        # `multiprobe-banner-rewrite`) already consumes and returns on
+        # first, so that gate could never open through the real dispatcher
+        # -- the deny branch was retired as dead code, not narrowed. Both
+        # guards still fire, and still call
+        # `_platform_verdict.platform_verdict_for_shape`, but now always
+        # render its advisory template (see each guard's own `check()`
+        # docstring). `fail_closed=True` and `PLATFORM_CONDITIONED_DENY`
+        # membership are unchanged by this -- `band` is verdict-vocabulary
+        # classification, not a promise every member currently uses every
+        # verdict in that vocabulary (see `GuardBand`'s own docstring:
+        # `fail_closed` and `band` are explicitly orthogonal fields).
+        #
+        # Tail placement itself is UNCHANGED and still load-bearing: placed
+        # BEFORE the rewrites, on macOS the guard's own shape would stop
+        # being auto-rewritten into the cheaper equivalent and become an
+        # ignorable advisory instead -- the fix this guard exists to
+        # encourage would never apply. Placed AFTER (here), every
+        # shape/platform combination correctly auto-rewrites first, and
+        # each guard's own advisory still fires when the rewrite's own
+        # `COORDINATOR_ALLOW_*` override has disabled it (or the seam
+        # offers no confirmed outlet for this exact command -- see
+        # `guard_plumbing_and_loops._seam_confirmed_rewrite`); that
+        # override/no-outlet case is each guard's actual value, and it only
+        # works correctly at the tail. An integration review once
+        # recommended moving these two ahead of the rewrites (this rationale
+        # applied identically to `grep-via-bash-guard` before H11 narrowed
+        # its own deny branch away entirely -- see that guard's own
+        # registration comment above); that was tested empirically and
+        # REVERTED for the reason just given.
         #
         # Deliberately NOT added to `CONFINEMENT_HARD_DENIES` in
         # `test_hard_denies_precede_rewrites.py`: that invariant exists to
@@ -1706,8 +1945,8 @@ def _build_guard_chain(
         # reachable via the `cd <dir> && git ...` mechanism that invariant
         # closes -- so forcing them into that set would require the exact
         # ordering that causes the regression described above.
-        GuardEntry("multiprobe-banner", lambda: _check_multiprobe_banner(payload, host_is_windows=host_is_windows), True, GuardBand.PLATFORM_CONDITIONED_DENY, AdvisoryValue.HOST_INDEPENDENT),
-        GuardEntry("plumbing-and-loops", lambda: _check_plumbing_and_loops(payload, host_is_windows=host_is_windows), True, GuardBand.PLATFORM_CONDITIONED_DENY, AdvisoryValue.WINDOWS_COST_ONLY),
+        GuardEntry("multiprobe-banner", lambda: _check_multiprobe_banner(payload, host_is_windows=host_is_windows), True, GuardBand.PLATFORM_CONDITIONED_DENY, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_multiprobe_banner)),
+        GuardEntry("plumbing-and-loops", lambda: _check_plumbing_and_loops(payload, host_is_windows=host_is_windows), True, GuardBand.PLATFORM_CONDITIONED_DENY, AdvisoryValue.WINDOWS_COST_ONLY, matchers=tuple(_matchers_plumbing_and_loops)),
     ]
     return guard_chain
 

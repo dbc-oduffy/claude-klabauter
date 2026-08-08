@@ -78,7 +78,17 @@ def main(argv: List[str]) -> int:
     try:
         # resolve_launchable, not a bare path: the canonical guard is a .sh with a
         # shebang, which Windows CreateProcess cannot exec (WinError 193).
-        result = subprocess.run([*resolve_launchable(sibling), *passthrough])
+        # Left unsuppressed: this shim's whole job is delegating to a
+        # console-flash *measurement* guard, so suppressing the child's
+        # console changes what the child observes -- and, measured directly,
+        # actually breaks it: on Windows, CREATE_NO_WINDOW on the git-bash
+        # child makes its own `echo` writes fail, flipping a clean delegate
+        # (rc 0) to rc 1 with no guard-side violation. Suppressing here would
+        # corrupt the measurement, not just its packaging.
+        result = subprocess.run(
+            [*resolve_launchable(sibling), *passthrough],
+            # popup-intentional-last-resort
+        )
     except OSError as exc:
         print(f"{_PROG}: failed to invoke {sibling}: {exc}", file=sys.stderr)
         return 2

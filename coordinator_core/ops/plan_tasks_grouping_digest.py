@@ -312,10 +312,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
 def _resolve_git_root(cwd: Optional[str] = None) -> str:
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         raise GroupingDigestError(f"cannot resolve git repo root: {exc}") from exc

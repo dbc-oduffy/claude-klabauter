@@ -68,6 +68,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -99,25 +100,27 @@ def _collapse_slashes(value: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel``. Fails open."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    """``git rev-parse --show-toplevel``. Fails open.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn — same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``, so no verdict changes. The prior inline spawn also
+    logged a forensic diagnostic on ``OSError`` ("treating as no git root");
+    the shared resolver swallows all failures silently (never raises), so
+    that diagnostic is restored here explicitly rather than lost -- verdict
+    is still unaffected either way (``_normalize_and_gate`` already treats
+    ``None`` the same as any other unresolved git root).
+    """
+    result = resolve_repo_root(cwd)
+    if result is None:
+        print(
+            f"block_cutover_phase_hand_edit: no git root resolved for cwd="
+            f"{cwd!r}, treating as no git root (decision unaffected)",
+            file=sys.stderr,
         )
-    except OSError as exc:
-        print(f"block_cutover_phase_hand_edit: git rev-parse spawn failed, "
-              f"treating as no git root: {exc}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return result
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
@@ -153,7 +156,11 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
         if cn.startswith("/") or re.match(r"^[A-Za-z]:", cn):
             abs_cn = cn
         else:
-            abs_cn = git_root.rstrip("/") + "/" + cn
+            # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH
+            # (e.g. a drive-root `git_root` of `X:\`) survives the latter and
+            # composes a double-slash prefix below (see the matching note on
+            # `expected_prefix`).
+            abs_cn = git_root.rstrip("/\\") + "/" + cn
         try:
             abs_cn_canon = casefold_path(str(Path(abs_cn).resolve(strict=False)))
         except OSError as exc:
@@ -164,7 +171,9 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
         # is real on-disk casing, but the candidate segment appended onto it
         # is caller-supplied and may differ only in case on a case-insensitive
         # filesystem — comparing un-folded would silently miss that bypass.
-        expected_prefix = casefold_path(git_root.rstrip("/") + "/state/roadmap/")
+        # `rstrip("/\\")`, never `rstrip("/")` -- see block_memo_status_hand_edit.py's
+        # `_normalize_and_gate` for the drive-root double-slash-inertness this avoids.
+        expected_prefix = casefold_path(git_root.rstrip("/\\") + "/state/roadmap/")
         if not abs_cn_canon.startswith(expected_prefix):
             return None
 

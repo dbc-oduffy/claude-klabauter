@@ -162,7 +162,7 @@ def _collect_plan_handoffs(worktree_root: Path, plan_id: str) -> list[dict]:
 
 
 @register_op("fleet.handoffs_for_plan")
-async def _handoffs_for_plan(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handoffs_for_plan(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "fleet.handoffs_for_plan" handler.
 
     Enumerate every handoff (live + archived) whose ``origin_plan_id`` matches

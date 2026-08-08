@@ -72,7 +72,7 @@ def _real_cli_names() -> frozenset[str]:
     return frozenset(_derive_agent_helper_target_map(_AGENT_BIN))
 
 
-def _fully_stubbed_brief(monkeypatch, cadence: str) -> dict:
+def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
     """Drive `brief(cadence)` with every underlying reader I/O stubbed to a
     deterministic fixture producing at least one directive per emission
     site, reusing the same monkeypatch targets as
@@ -85,14 +85,17 @@ def _fully_stubbed_brief(monkeypatch, cadence: str) -> dict:
     monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
     monkeypatch.setattr(rco, "check_rag_state", lambda: ("stale", 1))
 
+    fake_worktree_path = str(tmp_path / "fake-worktree")
+    fake_repo_root = str(tmp_path / "fake-repo")
+
     class _FakeWorktree:
-        path = "/tmp/fake-worktree"
+        path = fake_worktree_path
 
     class _FakeClassification:
         state = "empty-clean"
         dirty_count = 0
 
-    monkeypatch.setattr(rco, "_wt_repo_root", lambda: "/tmp/fake-repo")
+    monkeypatch.setattr(rco, "_wt_repo_root", lambda: fake_repo_root)
     monkeypatch.setattr(rco, "_wt_active_branch", lambda root: "main")
     monkeypatch.setattr(rco, "_is_agent_worktree", lambda path: True)
     monkeypatch.setattr(rco, "_list_worktrees", lambda root: [_FakeWorktree()])
@@ -162,12 +165,16 @@ def _fully_stubbed_brief(monkeypatch, cadence: str) -> dict:
 
     from coordinator_core.ops import check_weekly_staleness
 
-    monkeypatch.setattr(check_weekly_staleness, "_resolve_state_root", lambda: "/tmp/fake-state-root-does-not-exist")
+    monkeypatch.setattr(
+        check_weekly_staleness,
+        "_resolve_state_root",
+        lambda: str(tmp_path / "fake-state-root-does-not-exist"),
+    )
 
     return brief(cadence)
 
 
-def test_every_directives_cli_is_a_member_of_the_derived_real_cli_set(monkeypatch):
+def test_every_directives_cli_is_a_member_of_the_derived_real_cli_set(monkeypatch, tmp_path):
     """Exact-match membership, never substring — a value like
     `"workday-start-handoff-triage.py stale-plans"` could slip past a
     substring-based allowlist check but must fail an exact membership
@@ -176,7 +183,7 @@ def test_every_directives_cli_is_a_member_of_the_derived_real_cli_set(monkeypatc
     assert real_names, "expected a non-empty derived CLI name set from coordinator/bin/"
 
     for cadence in CADENCES:
-        envelope = _fully_stubbed_brief(monkeypatch, cadence)
+        envelope = _fully_stubbed_brief(monkeypatch, cadence, tmp_path)
         for directive in envelope["directives"]:
             assert directive["cli"] in real_names, (
                 f"cadence={cadence!r} directive {directive['id']!r} names "
@@ -185,14 +192,14 @@ def test_every_directives_cli_is_a_member_of_the_derived_real_cli_set(monkeypatc
             )
 
 
-def test_no_directives_cli_contains_a_space(monkeypatch):
+def test_no_directives_cli_contains_a_space(monkeypatch, tmp_path):
     """A space in `cli` means a subcommand was baked into the string instead
     of populated into `args[]` (spec item 4) — a bare allowlist-membership
     check would not catch this class on its own (a space-joined string is
     simply absent from the allowlist and could coincidentally still look
     like a rejection for the wrong reason); assert directly."""
     for cadence in CADENCES:
-        envelope = _fully_stubbed_brief(monkeypatch, cadence)
+        envelope = _fully_stubbed_brief(monkeypatch, cadence, tmp_path)
         for directive in envelope["directives"]:
             assert " " not in directive["cli"], (
                 f"cadence={cadence!r} directive {directive['id']!r} cli="
@@ -201,12 +208,12 @@ def test_no_directives_cli_contains_a_space(monkeypatch):
             )
 
 
-def test_no_directives_cli_carries_a_dot_py_suffix(monkeypatch):
+def test_no_directives_cli_carries_a_dot_py_suffix(monkeypatch, tmp_path):
     """Settings-home forwarders are extension-less by construction (spec
     item 5) — a `.py` suffix in an emitted directive is wrong by
     construction, never a "the file happens to be missing" issue."""
     for cadence in CADENCES:
-        envelope = _fully_stubbed_brief(monkeypatch, cadence)
+        envelope = _fully_stubbed_brief(monkeypatch, cadence, tmp_path)
         for directive in envelope["directives"]:
             assert not directive["cli"].endswith(".py"), (
                 f"cadence={cadence!r} directive {directive['id']!r} cli="
@@ -215,14 +222,14 @@ def test_no_directives_cli_carries_a_dot_py_suffix(monkeypatch):
             )
 
 
-def test_no_directives_cli_is_a_ceremony_or_skill_name(monkeypatch):
+def test_no_directives_cli_is_a_ceremony_or_skill_name(monkeypatch, tmp_path):
     """Sites #12/#13 named `"workday-start"` (a ceremony/skill name, not a
     bin CLI) as if it were executable — the self-referential category-error
     bug the handoff reported (spec item 6). Asserted ABSENT rather than
     allowlisted: allowlisting a ceremony name here would encode the bug as
     intended behaviour instead of fixing the category error."""
     for cadence in CADENCES:
-        envelope = _fully_stubbed_brief(monkeypatch, cadence)
+        envelope = _fully_stubbed_brief(monkeypatch, cadence, tmp_path)
         for directive in envelope["directives"]:
             assert directive["cli"] not in _CEREMONY_OR_SKILL_NAMES, (
                 f"cadence={cadence!r} directive {directive['id']!r} cli="

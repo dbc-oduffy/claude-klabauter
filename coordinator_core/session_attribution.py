@@ -58,27 +58,14 @@ Spec backlink: docs/plans/2026-07-27-review-trail-scope-guard.md § C1.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
-log = logging.getLogger(__name__)
+from coordinator_core.win_portability import no_console_creationflags
 
-# Review: code-reviewer — Finding 3: coverage.py's own `_run` sets this same
-# portable CREATE_NO_WINDOW flag (its comment: "nt: inherited invalid stdin +
-# CREATE_NO_WINDOW hangs _execute_child"); `_git_run` below was a faithful port
-# of wsc_resolve.py's pre-existing `_git_run`, which had the identical gap —
-# not newly introduced here, but centralizing this classifier into a module
-# C2/C3 will build on widens the blast radius of an already-known Windows
-# subprocess hazard, so it is closed during this consolidation rather than
-# carried forward as inherited debt.
-_NO_CONSOLE: Dict[str, Any] = (
-    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    if os.name == "nt"
-    else {}
-)
+log = logging.getLogger(__name__)
 
 #: Signature of a "never raises, returns (returncode, stdout, stderr)" git
 #: runner — the contract coverage.py's own `_run` helper makes, and the one
@@ -233,7 +220,7 @@ def _git_run(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
             text=True,
             timeout=30,
             stdin=subprocess.DEVNULL,  # nt: inherited invalid stdin + CREATE_NO_WINDOW hangs _execute_child
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         # Review: code-reviewer — Finding 1: dropped during the "ported

@@ -90,6 +90,7 @@ from coordinator_core import chain_ancestry_waivers as _chain_ancestry_waivers
 # _parse_handoff_consumed_by / _parse_handoff_deliverable_id below for why a
 # local `\s*`-padded fork is a break-class defect, not a style preference.
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+from coordinator_core.claim_state import resolve_claim_state
 
 # Import archival seam (C0 interface pin; C4 fills the body).
 # At import time this resolves cleanly — NotImplementedError surfaces only at call-time
@@ -97,6 +98,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.archival import reverse_membership
 
 from coordinator_core.liveness import resolve_live_session_ids
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -234,11 +236,7 @@ _CONTINUATION_EDGE_KINDS: FrozenSet[str] = _DAG_CONTINUATION_EDGE_KINDS
 # Subprocess helper — no shell=True; portable CREATE_NO_WINDOW flag (AC9 safe)
 # ---------------------------------------------------------------------------
 
-_NO_CONSOLE: Dict[str, Any] = (
-    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    if os.name == "nt"
-    else {}
-)
+_NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 
 # Max concurrent `git rev-list` spawns in build_reviewed_set Phase 2. The distinct
 # ranges are independent read-only shell-outs; on Windows each git spawn costs ~90ms
@@ -322,77 +320,6 @@ def _verdict_counts(rec: dict) -> bool:
 _FOREIGN_STRIPPED_SCOPES: FrozenSet[str] = frozenset(
     {"session", "chain", "workstream-close-auto"}
 )
-
-
-#: state/review-trail/ subdirectory holding permanent, idempotent per-SHA
-#: PM-vouch waivers written by
-#: ``coordinator_core.ops.review_trail_write._record_pm_vouch_waivers`` under
-#: the write-side relaxation in that module's ``_guard_foreign_session_range``
-#: — see ``_pm_vouched_waiver_shas``'s docstring for the read-side half.
-_PM_VOUCH_WAIVER_DIRNAME = "pm-vouches"
-
-
-def _pm_vouched_waiver_shas(cwd: str) -> FrozenSet[str]:
-    """Return the set of commit SHAs carrying a permanent, PM-issued waiver
-    under ``<cwd>/state/review-trail/pm-vouches/<sha>.json`` — the read-side
-    half of the per-session, PM-granted Case-1 relaxation in
-    ``coordinator_core.ops.review_trail_write._guard_foreign_session_range``
-    (archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C7,
-    amended 2026-07-28).
-
-    Deliberately NOT liveness-gated and NOT re-validated against
-    ``coordinator_core.session.review_trail_vouch`` here: the write side
-    already performed that check (a live, per-session PM grant naming this
-    exact SHA) BEFORE creating the waiver file. A commit's waiver, once
-    created, is a durable historical fact — exactly like the review-trail
-    record it accompanies, which is also never re-validated against the
-    liveness of the session that wrote it. Re-checking liveness at READ time
-    here would make the relaxation evaporate the moment the writing/granting
-    session closes, which is precisely the situation this mechanism exists
-    to handle (a chain-terminal ``/workstream-complete`` session that closes
-    immediately after writing the vouching record). See
-    ``review_trail_write.py``'s ``_record_pm_vouch_waivers`` docstring for
-    the write-side rationale this mirrors.
-
-    AMENDED 2026-07-31 (docs/plans/2026-07-31-review-trail-chain-ancestry-
-    discriminator.md § C1): this is no longer the ONLY waiver source this
-    module's read side consults. A SECOND, gate-minted, chain-scoped
-    source now exists under ``state/review-trail/chain-ancestry-waivers/``
-    (see ``_chain_ancestry_waived_shas`` / ``chain_ancestry_waivers.py``) —
-    unlike this presence-only PM-vouch set (honoured for ANY record,
-    anywhere, once a waiver file exists), the gate-minted source is
-    honoured ONLY for a record whose own chain identity matches the chain
-    that minted it. The two sources are unioned by
-    ``_narrow_foreign_session_scope``, never merged into one directory or
-    one function — see that function's own amended docstring and AC3.
-
-    Only the waiver file's PRESENCE is consulted (filename stem == the
-    waived sha) — its content is informational/audit only, read by an
-    operator, never by this function.
-
-    Review: code-reviewer — Finding 2: this file's write-time integrity
-    rests on the SAME trust posture as every other artifact under
-    ``state/review-trail/`` — a direct ``Write`` to this path bypasses
-    ``review_trail_vouch`` entirely, exactly as a direct ``Write`` to an
-    ordinary review-trail record bypasses ``_guard_foreign_session_range``.
-    This mechanism narrows WHICH SHAs a guard-path write may claim to
-    cover; it does not add authenticity guarantees the surrounding
-    substrate lacks. A future hardening of the review-trail substrate
-    against forgery (e.g. a write-time signature) must treat this waiver
-    file as in scope, not a specially-guarded exception to it.
-
-    Fail-open on an unreadable/absent waiver directory (returns an empty
-    set, never raises) — mirrors this module's existing "an unresolvable
-    substrate degrades to no exclusion/no waiver" postures elsewhere; a
-    missing waiver dir is the overwhelmingly common case (no PM-vouch has
-    ever been granted in this repo) and must never fail a coverage-gate run.
-    """
-    waiver_dir = Path(cwd) / "state" / "review-trail" / _PM_VOUCH_WAIVER_DIRNAME
-    try:
-        entries = list(waiver_dir.iterdir())
-    except OSError:
-        return frozenset()
-    return frozenset(p.stem for p in entries if p.suffix == ".json" and p.is_file())
 
 
 def _chain_ancestry_waived_shas(cwd: str, reading_chain_id: Optional[str]) -> FrozenSet[str]:
@@ -529,32 +456,32 @@ def _narrow_foreign_session_scope(
     to a different session is stripped, with no exception.
 
     NEW semantics (2026-07-28, amending C7 — archive/specs/2026-07/
-    2026-07-27-review-trail-scope-guard.md § C7 amendment): a foreign-
-    attributed commit is NOT stripped when it carries a permanent PM-vouch
-    waiver (`_pm_vouched_waiver_shas`) — see
-    `coordinator_core.ops.review_trail_write._guard_foreign_session_range`'s
-    docstring for the narrow, evidenced, write-time-gated mechanism that
-    creates a waiver (never a blanket per-session or per-scope exemption; a
-    waiver names one specific SHA and requires a live PM grant to have been
-    held at write time).
+    2026-07-27-review-trail-scope-guard.md § C7 amendment; superseded by
+    the removal below): a foreign-attributed commit was, for a time, NOT
+    stripped when it carried a permanent PM-vouch waiver written by
+    `coordinator_core.ops.review_trail_write._guard_foreign_session_range`.
 
     AMENDED 2026-07-31 (docs/plans/2026-07-31-review-trail-chain-ancestry-
-    discriminator.md § C1): a waiver is no longer created EXCLUSIVELY by
-    the write-side guard. A SECOND source now exists — a per-SHA,
+    discriminator.md § C1): a SECOND source was introduced — a per-SHA,
     per-chain waiver minted by the coverage GATE at HALT
-    (`coordinator_core.ops.coverage_gate`, C2), stored separately under
-    `state/review-trail/chain-ancestry-waivers/<chain_id>/` (never
-    `pm-vouches/` — AC3, distinct provenance and trust basis). Unlike the
-    PM-vouch set, which this function honours for ANY record regardless of
-    which session wrote it (presence-only), the gate-minted set is
-    honoured ONLY when `own_session_id` (this record's own chain identity)
-    matches the `chain_id` that minted the waiver — see
-    `_chain_ancestry_waived_shas`'s docstring for why exact match, not
-    ancestry-node membership, was chosen, and for the AC3 scope-mismatch
-    test this narrowing exists to satisfy (a waiver minted for chain A
-    must not relax the strip for a record belonging to chain B). Neither
-    source can be minted from this read side or from any caller of this
-    function — both are facts this function only OBSERVES.
+    (`coordinator_core.ops.coverage_gate`, C2), stored under
+    `state/review-trail/chain-ancestry-waivers/<chain_id>/`. Unlike the
+    PM-vouch set (honoured for ANY record regardless of which session
+    wrote it, presence-only), the gate-minted set is honoured ONLY when
+    `own_session_id` (this record's own chain identity) matches the
+    `chain_id` that minted the waiver — see `_chain_ancestry_waived_shas`'s
+    docstring for why exact match, not ancestry-node membership, was
+    chosen, and for the AC3 scope-mismatch test this narrowing exists to
+    satisfy (a waiver minted for chain A must not relax the strip for a
+    record belonging to chain B).
+
+    REMOVED (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md §
+    C2/C3): the PM-vouch waiver source (`_pm_vouched_waiver_shas`,
+    `state/review-trail/pm-vouches/`) has been deleted outright — a
+    foreign-attributed commit is now waived ONLY via the gate-minted
+    chain-ancestry source above. No waiver can be minted from this read
+    side or from any caller of this function — it is a fact this function
+    only OBSERVES.
     """
     try:
         foreign = session_attribution.trailer_foreign_shas(
@@ -564,7 +491,7 @@ def _narrow_foreign_session_scope(
         raise _ForeignSessionLookupError(str(exc)) from exc
     if not foreign:
         return foreign
-    waived = _pm_vouched_waiver_shas(cwd) | _chain_ancestry_waived_shas(cwd, own_session_id)
+    waived = _chain_ancestry_waived_shas(cwd, own_session_id)
     if not waived:
         return foreign
     return foreign - waived
@@ -1036,6 +963,103 @@ def _batch_check_hex_tokens(tokens: List[str], cwd: str) -> Dict[str, Optional[s
     for token in tokens[len(lines):]:
         out[token] = None
     return out
+
+
+#: A range whose left endpoint is the right endpoint's sole immediate parent
+#: expression (`A^..A` or `A~1..A`, hex SHA only — the shape trail records
+#: actually carry, per fleet doctrine of one per-commit record per session on
+#: a shared branch). Group 1 is the shared hex token.
+_SINGLE_COMMIT_RANGE_RE = re.compile(r"^([0-9a-fA-F]{4,40})(?:\^|~1)\.\.\1$")
+
+
+def _batch_parent_counts(
+    tokens: List[str], cwd: str
+) -> Dict[str, Optional[Tuple[str, int]]]:
+    """Resolve, for MANY hex commit tokens in TWO batched spawns, each one's FULL
+    (canonical, 40-char) SHA and how many parents it has. Returns
+    {token: (full_sha, parent_count) or None}, where None means git could not
+    resolve the token at all (bad ref / missing object) — the caller must treat
+    that as "cannot short-circuit", never as "zero parents" (a root commit is a
+    REAL parent_count of 0, distinct from unresolvable).
+
+    The full SHA is returned alongside the count, not just the count, because a
+    caller's `token` may itself be an ABBREVIATED sha_range endpoint — crediting
+    the short input token as though it were the resolved commit would silently
+    fail every downstream set-membership check against full 40-char SHAs (chain_set,
+    intersect_shas), which is the exact defect an earlier draft of this function
+    shipped with (see below).
+
+    Two spawns, not one, and NEITHER trusts output-vs-input positional order:
+
+      1. `_batch_check_hex_tokens` (`git cat-file --batch-check`, already proven
+         order-preserving — see that function's own empirically-verified
+         docstring) resolves token -> full_sha.
+      2. `git rev-list --no-walk --parents --stdin`, fed the resolved full SHAs,
+         for parent counts. Its output is parsed into a dict KEYED BY THE FULL
+         SHA EACH LINE REPORTS (`parts[0]`), never by input position — an earlier
+         draft of this function assumed `--stdin` preserves input order the way
+         `--batch-check` does; empirically it does NOT (reorders, apparently by
+         commit topology/date), and a positional `zip(tokens, lines)` silently
+         paired each token with the WRONG commit's parent count — a false
+         `parent_count == 1` credited a completely unrelated SHA as this range's
+         sole member (verified live on this repo's own corpus: token `0d4afc29c`
+         paired against a different commit's output line). Keying by the SHA the
+         line itself names is immune to whatever order git chooses to emit in.
+
+    Fed via stdin (`--stdin`), not argv, mirroring `_dag_frontier_ancestry`'s own
+    stdin-feed rationale — a corpus with thousands of distinct single-commit
+    ranges must not risk Windows' 32K command-line ceiling.
+
+    A failure in EITHER spawn (rc != 0) degrades every token in this batch to
+    None (cannot short-circuit — never silently assign a wrong parent count).
+
+    Purely a resolution + parent-count PROBE — never a reachability query, and
+    never combines these commits into one positive/negative rev-list the way
+    `build_reviewed_set`'s own negative-spec forbids (see that function's
+    docstring: batching several `A^..A` ranges into one combined rev-list call
+    computes reachable(positives) \\ reachable(negatives), which is a DIFFERENT
+    and wrong operation). `--no-walk --parents` never subtracts one commit's
+    reachability from another's — each output line describes only its own
+    commit's own immediate parents, so this stays outside that negative-spec.
+    """
+    if not tokens:
+        return {}
+    resolved = _batch_check_hex_tokens(tokens, cwd)
+    full_shas = sorted({sha for sha in resolved.values() if sha is not None})
+    if not full_shas:
+        return {token: None for token in tokens}
+    # Deliberately NOT built on `_run` — same rationale as `_batch_check_hex_tokens`
+    # above: this spawn legitimately needs to WRITE to stdin (one token per line),
+    # which `_run`'s pinned `stdin=subprocess.DEVNULL` (the Windows hang fix) cannot
+    # support. Mirrors `_run`'s portability flag (`_NO_CONSOLE`) without inheriting
+    # its stdin behavior.
+    try:
+        proc = subprocess.run(
+            ["git", "rev-list", "--no-walk", "--parents", "--stdin"],
+            input="\n".join(full_shas) + "\n",
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+        rc, out = proc.returncode, proc.stdout
+    except Exception:
+        rc, out = 1, ""
+    if rc != 0:
+        return {token: None for token in tokens}
+    parent_counts_by_sha: Dict[str, int] = {}
+    for line in out.strip().splitlines():
+        parts = line.split()
+        if parts:
+            parent_counts_by_sha[parts[0]] = len(parts) - 1
+    result: Dict[str, Optional[Tuple[str, int]]] = {}
+    for token in tokens:
+        full_sha = resolved.get(token)
+        if full_sha is not None and full_sha in parent_counts_by_sha:
+            result[token] = (full_sha, parent_counts_by_sha[full_sha])
+        else:
+            result[token] = None
+    return result
 
 
 def _classify_out_of_window(
@@ -1531,6 +1555,55 @@ def _credit_from_kind_partition(
 # reviewed_set builder
 # ---------------------------------------------------------------------------
 
+#: Chunk size for `_bulk_trailer_lookup`'s positional-SHA `git log` batching —
+#: keeps each spawn's argv comfortably under Windows' ~32K command-line
+#: length ceiling (a 40-hex SHA plus separator is a few bytes; 300 per chunk
+#: leaves ample headroom for the rest of the argv).
+_TRAILER_LOOKUP_CHUNK = 300
+
+
+def _bulk_trailer_lookup(shas: Set[str], cwd: str) -> Optional[Dict[str, str]]:
+    """Return {sha: session_id} for every sha in `shas` that carries its own
+    Session-Id git trailer, via `git log --no-merges` over BARE SHA
+    positional args — never ranges. A bare SHA has no exclusion semantics
+    (it is simply "show this commit"), so batching many of them into one
+    spawn cannot silently drop a commit the way combining several `A..B`
+    ranges into one `git log` invocation could (multi-range `git log`
+    applies exclusions GLOBALLY across all ranges given, not per-range —
+    unsafe for this use). Chunked at `_TRAILER_LOOKUP_CHUNK` per spawn to
+    stay under Windows' argv length ceiling on a large `shas` set.
+
+    Returns None (never a partial map) on ANY chunk failure — callers must
+    treat that as "could not bulk-resolve" and fall back to their own
+    precise per-item resolution rather than trusting a partial result,
+    matching the fail-closed posture `session_attribution.GitLogFailed`
+    already promises for the per-range trailer classifier this batches.
+    """
+    if not shas:
+        return {}
+    ordered = sorted(shas)
+    result: Dict[str, str] = {}
+    for i in range(0, len(ordered), _TRAILER_LOOKUP_CHUNK):
+        chunk = ordered[i : i + _TRAILER_LOOKUP_CHUNK]
+        rc, out, _err = _run(
+            [
+                "git", "log", "--no-merges",
+                "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+            ] + chunk,
+            cwd=cwd,
+        )
+        if rc != 0:
+            return None
+        for line in out.splitlines():
+            if "\x1f" not in line:
+                continue
+            sha, trailer = line.split("\x1f", 1)
+            sha = sha.strip()
+            trailer = trailer.strip()
+            if sha and trailer:
+                result[sha] = trailer
+    return result
+
 
 def build_reviewed_set(
     trail_paths: List[str],
@@ -1744,6 +1817,50 @@ def build_reviewed_set(
         # else: fall through to the per-range fan-out (graceful degradation)
 
     # --- Strategy B: per-range git rev-list fan-out (fallback) --------------
+    #
+    # Single-commit short-circuit (the dominant spawn hazard measured on this
+    # corpus — fleet doctrine has sessions write one per-commit trail record
+    # each on a shared branch, so the overwhelming majority of distinct ranges
+    # here are `A^..A` / `A~1..A`). `A^..A` is provably `{A}` ONLY when A is
+    # NOT a merge commit: a bare `^`/`~1` suffix names A's FIRST parent only,
+    # so for a merge, `A^..A` also carries every commit reachable from A's
+    # OTHER parents but not the first — {A} would silently under-credit those.
+    # Establishing non-merge-ness is therefore batched — ONE
+    # `git rev-list --no-walk --parents --stdin` spawn resolves + counts
+    # parents for every candidate token at once (`_batch_parent_counts`) —
+    # rather than trusting the shape alone, which is what the caveat in this
+    # function's own dispatch brief warns against skipping. A candidate whose
+    # token doesn't resolve, or resolves with parent_count != 1 (root commit,
+    # 0 parents; merge commit, 2+), falls through to the ordinary per-range
+    # spawn below UNCHANGED — this short-circuit can only ever REMOVE spawns
+    # for provably-safe single-parent commits, never change which range is
+    # asked to resolve which way.
+    _single_commit_candidates: List[Tuple[str, str, Optional[str], Optional[str], str, str]] = []
+    _fanout_items: List[Tuple[str, str, Optional[str], Optional[str], str]] = []
+    for item in distinct_ranges:
+        sha_range = item[0]
+        m = _SINGLE_COMMIT_RANGE_RE.match(sha_range)
+        if m:
+            _single_commit_candidates.append(item + (m.group(1),))
+        else:
+            _fanout_items.append(item)
+
+    _short_circuit_results: List[Tuple[str, str, Optional[str], Optional[str], str, int, str]] = []
+    if _single_commit_candidates:
+        _tokens = sorted({c[5] for c in _single_commit_candidates})
+        _parent_info = _batch_parent_counts(_tokens, cwd)
+        for sha_range, artifact, scope, session_id, kind, token in _single_commit_candidates:
+            _info = _parent_info.get(token)
+            if _info is not None and _info[1] == 1:
+                _full_sha = _info[0]
+                _short_circuit_results.append(
+                    (sha_range, artifact, scope, session_id, kind, 0, _full_sha)
+                )
+            else:
+                _fanout_items.append((sha_range, artifact, scope, session_id, kind))
+
+    distinct_ranges = _fanout_items
+
     def _resolve(
         item: Tuple[str, str, Optional[str], Optional[str], str]
     ) -> Tuple[str, str, Optional[str], Optional[str], str, int, str]:
@@ -1757,6 +1874,7 @@ def build_reviewed_set(
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             results = list(pool.map(_resolve, distinct_ranges))
+    results = results + _short_circuit_results
 
     # Records whose scope is in _FOREIGN_STRIPPED_SCOPES (session, chain,
     # workstream-close-auto — widened by C7, docs/plans/2026-07-27-review-
@@ -1768,6 +1886,41 @@ def build_reviewed_set(
     # replaces. Cache is local to this call; many records commonly share a
     # range/session_id.
     session_cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]] = {}
+
+    # Bulk pre-scan (Strategy B's counterpart to _reviewed_via_graph_walk's
+    # own upfront batch pre-scan — see that function's equivalence argument
+    # for the general shape). Strategy B has no single graph_range window to
+    # walk trailers over in one shot, but the per-range `git rev-list` spawn
+    # just above has ALREADY resolved the exact SHA membership of every
+    # range (`shas_out`) — trailer lookup can therefore be batched over that
+    # fixed, already-known SHA set via bare-SHA `git log` positional args
+    # (never ranges, so there is no cross-range exclusion ambiguity: a bare
+    # SHA is always shown, unlike combining several `A..B` ranges in one
+    # invocation, where exclusions apply globally and could silently drop a
+    # commit that belongs to a DIFFERENT range) — see `_bulk_trailer_lookup`.
+    # This replaces what would otherwise be one `trailer_foreign_shas` ->
+    # `git log <sha_range>` spawn per distinct (sha_range, session_id) pair
+    # with ONE (chunked) bulk spawn for the whole call.
+    _narrowed_items: List[Tuple[str, Optional[str], List[str]]] = []
+    _narrowed_shas: Set[str] = set()
+    for sha_range, artifact, scope, session_id, kind, rc, shas_out in results:
+        if rc == 0 and scope in _FOREIGN_STRIPPED_SCOPES:
+            _shas = [s.strip() for s in shas_out.splitlines() if s.strip()]
+            _narrowed_shas.update(_shas)
+            _narrowed_items.append((sha_range, session_id, _shas))
+    if _narrowed_items:
+        _bulk_trailers = _bulk_trailer_lookup(_narrowed_shas, cwd)
+        if _bulk_trailers is not None:
+            for _sha_range, _session_id, _shas in _narrowed_items:
+                session_cache[(_sha_range, _session_id)] = frozenset(
+                    sha for sha in _shas
+                    if _bulk_trailers.get(sha) not in (None, _session_id)
+                )
+        # else: bulk lookup failed — session_cache stays unprimed for these
+        # pairs, and _narrow_foreign_session_scope's per-pair call below
+        # (via trailer_foreign_shas' own cache-miss path) resolves each one
+        # exactly as it did before this pre-scan existed — same fail-closed
+        # degrade-to-per-range posture the graph-walk pre-scan already uses.
 
     # Partitioned by kind (C5) — see _credit_from_kind_partition's docstring
     # for why "plan" is filtered against the planning classifier before
@@ -1836,73 +1989,58 @@ def _build_dag_index(repo_root: str) -> List[str]:
     return paths
 
 
-def _parse_handoff_consumed_by(handoff_path: str) -> Optional[str]:
-    """Raw frontmatter parse for claimed_by — raises on read/parse failure.
+def _parse_handoff_consumed_by(
+    handoff_path: str,
+    *,
+    common_dir: Optional[Path] = None,
+    repo_root: Optional[str] = None,
+) -> Optional[str]:
+    """Ledger-first claim holder for a handoff — routes through
+    ``coordinator_core.claim_state.resolve_claim_state`` (C1/C2, this plan).
 
-    DR-084 transitional ingest tolerance (C7): ``claimed_by`` is the canonical
-    field; the retired ``consumed_by`` name is still accepted because claude-klabauter's
-    ops run inside consumer repos whose on-disk handoff corpora are not
-    uniformly migrated (example-retrieval-repo: 0 ``claimed_by`` / 95 ``consumed_by``;
-    example-cockpit-repo: 2 ``claimed_by`` / 53 ``consumed_by``, surveyed
-    2026-07-23). Matches the dual-tolerant reads in ``ops/ceremony/resolver.py``
-    (``fm.get("claimed_by") or fm.get("consumed_by")``) and
-    ``session_hierarchy.derive._claimed_by``. Exit condition: retire this
-    fallback once every consumer repo's handoff corpus is migrated to
-    ``claimed_by`` AND a pre-flight consumer-corpus scan confirms zero
-    surviving ``consumed_by`` tokens. Spec backlink:
-    docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7.
+    Ledger-first, frontmatter-mirror fallback: the ledger wins whenever it
+    holds a live claim, regardless of what the tracked-frontmatter mirror
+    says — see ``claim_state.ClaimState``'s own docstring for the
+    branch-switch-revert incident this generalizes a fix for. Falls back to
+    the mirror (dual-tolerant ``claimed_by``/``consumed_by``, same
+    resolution order as before) only when the ledger has no live claim.
 
-    ``claimed_by`` wins when a record carries both names: this runs a
-    dedicated ``claimed_by`` search first and only falls back to a second
-    ``consumed_by`` search on a miss, rather than relying on regex-alternation
-    order — alternation with ``re.search``/``re.MULTILINE`` matches whichever
-    name occurs at the earliest line position in the file, not whichever
-    alternative is listed first, so a ``consumed_by:`` line preceding a
-    ``claimed_by:`` line in the same record would otherwise win by accident.
+    ``common_dir``/``repo_root`` are optional pre-resolution hooks — pass
+    ``common_dir`` on a hot path (this module's DAG fixpoint) to skip a
+    redundant ``git_common_dir`` cached-dict lookup per call; omit both to
+    let ``resolve_claim_state`` derive ``common_dir`` from ``handoff_path``'s
+    own parent directory, matching this function's original behavior when
+    called bare.
 
-    No try/except here by design: the two callers below (_get_handoff_consumed_by,
-    _handoff_session_live) need DIFFERENT failure treatment — the former's contract
-    is depended on verbatim by external call sites, the latter feeds the DAG-fixpoint
-    Guard-2 notes/indeterminate machinery — so each catches independently.
-    Returns None for unclaimed/open handoffs. Reads only the first 4 KiB to avoid
-    loading large handoff bodies.
+    No try/except here by design: the two callers below
+    (``_get_handoff_consumed_by``, ``_handoff_session_live``) need DIFFERENT
+    failure treatment — the former's contract is depended on verbatim by
+    external call sites, the latter feeds the DAG-fixpoint Guard-2
+    notes/indeterminate machinery — so each catches independently.
 
-    Negative-spec (break-class fix, 2026-07-28 — do NOT re-fork a local
-    ``^{field}:\\s*…`` regex here, for the ninth time). This function used to
-    carry ``rf'^{field}:\\s*["\\']?([^"\\'#\\n\\r]+)["\\']?\\s*$'``. Because
-    ``\\s`` matches a NEWLINE, the pad walked past the line break of a
-    present-but-empty ``claimed_by:`` and returned the FOLLOWING line's text —
-    reproduced on both LF and CRLF fixtures, where a handoff with an empty
-    ``claimed_by:`` above ``consumed_by: alice-session`` reported the literal
-    string ``'consumed_by: alice-session'`` as the claim HOLDER. That value
-    feeds session attribution and liveness, so a garbage holder drives
-    claim-takeover decisions. The ``[^"'#\\n\\r]+`` character class looks
-    newline-safe and is irrelevant: the pad had already consumed the newline
-    before the class began matching.
-
-    Key resolution now routes through
-    ``coordinator_core.frontmatter.primitives`` — the single canonical home for
-    this pattern (``[ \\t]*`` pads, ``(?=[ \\t]|\\r?$)`` boundary lookahead,
-    matched-pair unquoting, trailing-``# comment`` stripping). Reading a raw
-    4 KiB file prefix rather than a ``split_frontmatter``-parsed block is
-    deliberate and unchanged: the cap can truncate the block before its closing
-    ``---``, which ``split_frontmatter`` would reject outright. ``read_fm_field``
-    is a plain ``re.MULTILINE`` line resolver that needs no parsed block, so the
-    prefix read survives the routing.
-
-    ``read_fm_field_unquoted`` returns ``''`` for a present-but-empty key and
-    ``None`` for an absent one; both are falsy and both correctly mean "no
-    holder" here, alongside the explicit ``null``/``none`` literals.
+    Unreadable-file raise, restored (C2-fix): ``resolve_claim_state`` itself
+    degrades an unreadable/missing handoff file to "no claim" (``holder is
+    None``) rather than raising — deliberate on its side, since an absent
+    claim and an unreadable file are indistinguishable to a bare accessor.
+    But the two silent-fallback regression guards in
+    ``test_coverage_dag_silent_fallback_guards.py`` depend on THIS function
+    raising on an unreadable handoff file specifically — silent fallback
+    inside the DAG fixpoint is the named hazard those guards exist to catch.
+    So this leaf performs its own file-readability check first (matching the
+    pre-ledger-first behavior verbatim: a bare ``open(...).read(4096)`` with
+    no try/except, raising whatever ``OSError`` subtype the filesystem
+    produces), and only once the file is known readable does it delegate the
+    claim-answer itself to ``resolve_claim_state`` — ledger-first, as C2
+    intends. The re-read here is intentionally redundant with
+    ``resolve_claim_state``'s own internal read; that duplication is the
+    price of keeping the raise/degrade discrimination in the one place that
+    owns it (this leaf), per the EM ruling for this chunk.
     """
     with open(handoff_path, "r", encoding="utf-8", errors="replace") as fh:
-        content = fh.read(4096)
-    for field in ("claimed_by", "consumed_by"):
-        val = read_fm_field_unquoted(content, field)
-        if val:
-            val = val.strip()
-            if val and val.lower() not in ("null", "none"):
-                return val
-    return None
+        fh.read(4096)
+    return resolve_claim_state(
+        handoff_path, common_dir=common_dir, repo_root=repo_root
+    ).holder
 
 
 def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
@@ -1987,21 +2125,35 @@ def _commit_deliverable_id_trailers(shas: List[str], cwd: str) -> Dict[str, str]
     return result
 
 
-def _get_handoff_consumed_by(handoff_path: str) -> Optional[str]:
-    """Extract the claimed_by session-id from a handoff's frontmatter.
+def _get_handoff_consumed_by(
+    handoff_path: str,
+    *,
+    common_dir: Optional[Path] = None,
+    repo_root: Optional[str] = None,
+) -> Optional[str]:
+    """Extract the claimed_by session-id for a handoff — ledger-first (C2,
+    this plan), via ``_parse_handoff_consumed_by`` / ``claim_state.
+    resolve_claim_state``.
 
-    DR-084 transitional ingest tolerance (C7): reads ``claimed_by`` first,
-    falling back to the retired ``consumed_by`` name for not-yet-migrated
-    consumer-repo corpora (see ``_parse_handoff_consumed_by`` for the exit
-    condition and precedence rationale).
-    Returns None for unclaimed/open handoffs AND for read/parse failures
-    (conservative — callers treat None as "live"). This is the canonical
-    accessor: imported directly by ops/handoff_reconcile.py,
+    DR-084 transitional ingest tolerance (C7) still applies on the
+    frontmatter-mirror fallback leg: ``claimed_by`` wins over the retired
+    ``consumed_by`` name (see ``_parse_handoff_consumed_by`` for the exit
+    condition and precedence rationale) — but the ledger, when it holds a
+    live claim, now wins over the mirror outright.
+    Returns None for unclaimed/open handoffs (both sources) AND for
+    read/parse failures (conservative — callers treat None as "live"). This
+    is the canonical accessor: imported directly by ops/handoff_reconcile.py,
     ops/ceremony/{resolver,branch_resolution,commit_gates}.py, and
     ops/fleet/archive_handoffs.py, several of which compare the return value
     with `is None` / `== sid` — its Optional[str] contract must not change.
+    ``common_dir``/``repo_root`` are optional hot-path pre-resolution hooks,
+    threaded straight through to ``_parse_handoff_consumed_by``.
     """
     try:
+        if common_dir is not None or repo_root is not None:
+            return _parse_handoff_consumed_by(
+                handoff_path, common_dir=common_dir, repo_root=repo_root
+            )
         return _parse_handoff_consumed_by(handoff_path)
     except Exception as exc:
         # --- Tier 2 (behaviour change -- PM sign-off required) ---
@@ -2027,17 +2179,32 @@ def _get_handoff_consumed_by(handoff_path: str) -> Optional[str]:
 def _handoff_session_live(
     handoff_path: str,
     live_sids: FrozenSet[str],
+    *,
+    common_dir: Optional[Path] = None,
+    repo_root: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     """True if the session that claimed handoff_path is currently live.
+
+    Ledger-first (C2, this plan) via ``_parse_handoff_consumed_by`` —
+    calls it DIRECTLY, bypassing ``_get_handoff_consumed_by``, so this is
+    the DAG-fixpoint's own call path onto the same C1 accessor.
 
     Conservative default: if session cannot be resolved (unclaimed or unreadable)
     → return True (do not wrongly treat as stale → do not wrongly cover).
     Second element of the returned tuple carries a Guard-2-shaped note when
     resolution failed due to a read/parse exception (as opposed to a
     legitimately-unclaimed handoff) — None when there is nothing to surface.
+    ``common_dir``/``repo_root`` are optional hot-path pre-resolution hooks
+    (this function runs per-handoff inside the fixpoint) — see
+    ``_parse_handoff_consumed_by``.
     """
     try:
-        sid = _parse_handoff_consumed_by(handoff_path)
+        if common_dir is not None or repo_root is not None:
+            sid = _parse_handoff_consumed_by(
+                handoff_path, common_dir=common_dir, repo_root=repo_root
+            )
+        else:
+            sid = _parse_handoff_consumed_by(handoff_path)
     # --- Tier 2 (behaviour change -- PM sign-off required) ---
     # Previously (via _get_handoff_consumed_by's shared except Exception:
     # return None): a read/parse failure here was indistinguishable from a
@@ -2192,10 +2359,53 @@ class _DagChainResult:
     node_attribution: Dict[str, _DagNodeAttribution] = field(default_factory=dict)
 
 
+@dataclass
+class _DagChainSetContext:
+    """Optional cross-call cache for _derive_dag_chain_set (C6b), amortising
+    the per-call dag_index build (_build_dag_index) and the batched HEAD
+    Session-Id/Deliverable-Id git-log walk across multiple invocations that
+    share the same repo_root within one process run — e.g. a future caller
+    computing one oracle per baton, where every baton's fixpoint walks the
+    same repo history from scratch today.
+
+    Lifetime: construct ONE instance per repo_root per run (e.g. once at the
+    top of a multi-baton driver loop), pass it to every _derive_dag_chain_set
+    call for that repo_root, and discard it at the end of the run. It is NOT
+    safe to persist across processes or across a long-lived daemon's tick
+    boundary — git history and archived handoffs can change between runs,
+    and a stale dag_index or stale sid_to_shas/did_to_shas/sha_to_did map
+    would silently under- or over-count ancestors. Passing the same instance
+    across two DIFFERENT repo_root values is a caller bug this function does
+    not detect or guard against.
+
+    Fields are populated lazily: the first _derive_dag_chain_set call that
+    receives an instance with `dag_index is None` (unfilled) performs the
+    normal per-call build and stores the result back onto the instance;
+    every subsequent call sharing that same instance skips both the
+    dag_index build (_build_dag_index) and the batched `git log HEAD
+    --no-merges` walk entirely, reading the already-populated dicts instead.
+
+    MUST NOT hold a `dag.GitHistoryCache` (dag.py:924's `set` subclass
+    carrying `.complete`, read via `getattr(..., False)` in
+    `_memoized_ever_tracked`) or anything shaped to satisfy that contract —
+    this context is unrelated to it. In particular this class does NOT
+    adopt `dag.as_history_membership_set`'s "strip to a bare set before
+    reuse" requirement, because none of these fields are ever passed to a
+    `GitHistoryCache`-consuming seam; do not widen that association by
+    adding a cache-shaped field here without re-reading both contracts.
+    """
+
+    dag_index: Optional[List[str]] = None
+    sid_to_shas: Optional[Dict[str, List[str]]] = None
+    did_to_shas: Optional[Dict[str, List[str]]] = None
+    sha_to_did: Optional[Dict[str, str]] = None
+
+
 def _derive_dag_chain_set(
     from_handoff: str,
     repo_root: str,
     closing_session_id: str = "",
+    shared_context: Optional["_DagChainSetContext"] = None,
 ) -> _DagChainResult:
     """Derive the DAG-mode chain_set via ancestor walk + coverable-set fixpoint.
 
@@ -2245,6 +2455,17 @@ def _derive_dag_chain_set(
         repo_root:          Repository root for git calls.
         closing_session_id: Active session ID of the closing handoff (D3 case 3 —
                             equates to $CLAUDE_CODE_SESSION_ID in the bash gate).
+        shared_context:     Optional (C6b). When absent (default), this call
+                            builds and discards its own dag_index and
+                            sid_to_shas/did_to_shas/sha_to_did exactly as
+                            before — existing callers are unaffected. When a
+                            caller threads a shared `_DagChainSetContext`
+                            across multiple calls for the same repo_root,
+                            this call reuses the context's already-populated
+                            fields (skipping _build_dag_index and the batched
+                            git log HEAD walk) and, on first use with an
+                            unfilled context, populates it for later callers.
+                            See `_DagChainSetContext` for its lifetime rules.
     """
     closing_abs = os.path.abspath(from_handoff)
     result = _DagChainResult()
@@ -2273,7 +2494,14 @@ def _derive_dag_chain_set(
 
     # Build dag_index once for all reverse_membership calls in the fixpoint.
     # C4's reverse_membership will use this list as the in-memory frontmatter index.
-    dag_index = _build_dag_index(repo_root)
+    # C6b: reuse a caller-threaded shared_context's dag_index when present and
+    # already populated, instead of rebuilding it every call.
+    if shared_context is not None and shared_context.dag_index is not None:
+        dag_index = shared_context.dag_index
+    else:
+        dag_index = _build_dag_index(repo_root)
+        if shared_context is not None:
+            shared_context.dag_index = dag_index
 
     # Step 2: fixpoint.
     # closing_set: ancestors determined to be coverable. The closing handoff itself is
@@ -2423,6 +2651,103 @@ def _derive_dag_chain_set(
         if did is not None:
             walked_deliverable_ids.add(did)
 
+    # C6a batching (this chunk): the per-node segment-attribution loop below
+    # used to spawn THREE separate git processes per coverable node —
+    # (a) `git log HEAD --no-merges --grep=^Session-Id: <sid>$` (segment
+    #     enumeration), (b) `git log HEAD --no-merges --grep=^Deliverable-Id:
+    #     <did>$` (leg-a deliverable match), and (c)
+    #     `_commit_deliverable_id_trailers(seg, repo_root)` (leg-b legacy
+    #     fallback, itself already one batched call, but one PER node).
+    # All three read the SAME ref (HEAD) with no negative endpoint — a single
+    # positive walk, not a multi-range subtraction, so this is outside the
+    # set-algebra trap the module docstring warns about (reachable(positives)
+    # \ reachable(negatives) collapsing a linear chain to its tip): there is
+    # exactly one positive endpoint (HEAD) and zero negatives here. One
+    # `git log HEAD --no-merges` walk, reading both trailers per commit in
+    # the same `--format=`, replaces all three per-node call sites with a
+    # single spawn shared by the whole loop — segment/deliverable membership
+    # then becomes an in-memory dict lookup. This does NOT touch the
+    # `--follow -M100%` add-commit resolution above (still per-node,
+    # unavoidable — see module Out-of-scope) nor its own single-commit
+    # Session-Id trailer read (still per add_sha — batching that needs the
+    # add_sha values known ahead of the per-node `--follow` walk, which would
+    # mean restructuring THAT loop's early-exit ordering; out of scope here).
+    # `%(trailers:key=...,valueonly)` always emits its OWN trailing newline
+    # as part of the placeholder's own expansion (empirically verified on
+    # this repo: `A[%(trailers:key=Session-Id,valueonly)]B` renders as
+    # `A[<value>\n]B`, not `A[<value>]B`) — a per-record joined single line
+    # therefore does NOT stay one line; splitting the whole batched output on
+    # newlines (as `_commit_touched_paths` does for `--name-only`, which has
+    # no such embedded-newline placeholder) would silently shear each record
+    # into two ragged lines. Per-record framing instead uses
+    # `_COMMIT_HEADER_SENTINEL` and splits the WHOLE batched stdout on that
+    # sentinel, never on "\n".
+    #
+    # Field separator is `\x01` (SOH), deliberately NOT `\x1f` (Unit
+    # Separator, the choice this module's other batched-trailer helper
+    # `_commit_deliverable_id_trailers` uses): `_run`'s blanket
+    # `result.stdout.strip()` operates over Python's Unicode whitespace
+    # definition, which — surprisingly — classifies U+001C-U+001F
+    # (File/Group/Record/Unit Separator) as White_Space=Yes. When the LAST
+    # record in a batch has an empty trailing field (e.g. no Deliverable-Id
+    # trailer), that record's tail is `...<sid>\n\x1f\n` — an unbroken run of
+    # Unicode-whitespace at the very end of the whole string — and `_run`'s
+    # `.strip()` eats straight through the `\x1f` separator along with the
+    # surrounding newlines, silently truncating the batch's last record
+    # (empirically verified: reproduces on this repo's own two-commit
+    # fixture, confirmed via `'\x1f'.isspace() == True`). `\x01` is not
+    # White_Space, so it survives `.strip()` at any position, including the
+    # very end of the batched output.
+    # C6b: reuse a caller-threaded shared_context's batched-walk dicts when
+    # present and already populated (all three, since they're filled
+    # together from one spawn), instead of re-spawning `git log HEAD` here.
+    if (
+        shared_context is not None
+        and shared_context.sid_to_shas is not None
+        and shared_context.did_to_shas is not None
+        and shared_context.sha_to_did is not None
+    ):
+        sid_to_shas = shared_context.sid_to_shas
+        did_to_shas = shared_context.did_to_shas
+        sha_to_did = shared_context.sha_to_did
+    else:
+        rc_head, head_out, _ = _run(
+            [
+                "git", "log", "HEAD", "--no-merges",
+                f"--format={_COMMIT_HEADER_SENTINEL}%H\x01"
+                "%(trailers:key=Session-Id,valueonly)"
+                "\x01%(trailers:key=Deliverable-Id,valueonly)",
+            ],
+            cwd=repo_root,
+        )
+        sid_to_shas = {}
+        did_to_shas = {}
+        sha_to_did = {}
+        if rc_head == 0:
+            for record in head_out.split(_COMMIT_HEADER_SENTINEL):
+                if not record.strip():
+                    continue
+                fields = record.split("\x01", 2)
+                if len(fields) != 3:
+                    continue
+                h, sid_v, did_v = fields[0].strip(), fields[1].strip(), fields[2].strip()
+                if not h:
+                    continue
+                if sid_v:
+                    sid_to_shas.setdefault(sid_v, []).append(h)
+                sha_to_did[h] = did_v
+                if did_v:
+                    did_to_shas.setdefault(did_v, []).append(h)
+        # On rc_head != 0, all three dicts stay empty — every per-node lookup
+        # below then sees zero matches, exactly the same degraded shape the
+        # old per-node `rc3/rc4 != 0 -> []` branches produced, so the existing
+        # vacuous-match guard (INDETERMINATE, never silently COVERED) still
+        # fires downstream unchanged.
+        if shared_context is not None:
+            shared_context.sid_to_shas = sid_to_shas
+            shared_context.did_to_shas = did_to_shas
+            shared_context.sha_to_did = sha_to_did
+
     seen_sha: Set[str] = set()
     for node in closing_set:
         sid = ""
@@ -2528,14 +2853,7 @@ def _derive_dag_chain_set(
         # (a sibling EM's commits interleaved on a shared work/* branch remain
         # reachable from HEAD too) -- that class is bounded by correct
         # Session-Id attribution instead, see closing_session_id threading below.
-        rc3, seg_out, _ = _run(
-            [
-                "git", "log", "HEAD", "--no-merges", "--format=%H",
-                f"--grep=^Session-Id: {sid}$",
-            ],
-            cwd=repo_root,
-        )
-        seg = [s.strip() for s in seg_out.splitlines() if s.strip()] if rc3 == 0 else []
+        seg = sid_to_shas.get(sid, [])
 
         if not seg:
             # Vacuous-match guard (mirrors bash AC14 logic): valid SID, zero commits
@@ -2586,17 +2904,7 @@ def _derive_dag_chain_set(
         # Leg (a): commits directly stamped with THIS deliverable_id. Scoped
         # to HEAD + --no-merges for the same reachability/merge-commit
         # reasons as the Session-Id segment query above.
-        rc4, deliv_out, _ = _run(
-            [
-                "git", "log", "HEAD", "--no-merges", "--format=%H",
-                f"--grep=^Deliverable-Id: {deliverable_id}$",
-            ],
-            cwd=repo_root,
-        )
-        deliv_seg = (
-            [s.strip() for s in deliv_out.splitlines() if s.strip()]
-            if rc4 == 0 else []
-        )
+        deliv_seg = did_to_shas.get(deliverable_id, [])
 
         # Leg (b): legacy-history fallback — commits already matched by
         # Session-Id that carry no Deliverable-Id trailer AT ALL, or that
@@ -2612,11 +2920,14 @@ def _derive_dag_chain_set(
         # excluding it here too is redundant, not incorrect -- the union
         # below is unaffected either way. One batched trailer-lookup call for
         # all of `seg`, not one subprocess per commit.
-        trailers = _commit_deliverable_id_trailers(seg, repo_root)
+        # sha_to_did already covers every commit in `seg` (seg is itself
+        # sourced from the same `git log HEAD --no-merges` walk that built
+        # sha_to_did) — no separate `_commit_deliverable_id_trailers` spawn
+        # needed per node any more (see the batched pre-pass above).
         legacy_leg = [
             sha
             for sha in seg
-            if not trailers.get(sha) or trailers[sha] not in walked_deliverable_ids
+            if not sha_to_did.get(sha) or sha_to_did[sha] not in walked_deliverable_ids
         ]
 
         node_shas = set(deliv_seg) | set(legacy_leg)
@@ -3830,6 +4141,27 @@ def run_coverage_gate(
         bk_paths = sorted(p for p in touched if _is_bookkeeping_path(p))
         if not bk_paths:
             continue
+        if sha in planning_set:
+            # A planning commit that ALSO touches a bookkeeping path (e.g. a
+            # plan-sidecar sync alongside a debt-backlog edit) falls to the
+            # `other_paths`-non-empty branch below on a naive path-only
+            # re-derivation, because docs/plans/ is deliberately not a
+            # bookkeeping prefix — that would print the mixed-commit
+            # sentence for a sha the mixed-commit rule never touched
+            # (`_classify_bookkeeping_shas` already routed it to
+            # `planning_set`). Check `planning_set` first and use its own
+            # note, mirroring the aggregate PLANNING note's "NOT exempt"
+            # framing: PLANNING owes a plan review, not a code review, and
+            # stays inside uncovered_shas/the VERDICT.
+            planning_paths = sorted(p for p in touched if _is_planning_artifact_path(p))
+            notes.append(
+                "coverage: "
+                f"{sha} touches planning-artifact path(s) ({', '.join(planning_paths)}) "
+                f"and bookkeeping path(s) ({', '.join(bk_paths)}) — classified PLANNING "
+                "(not the fail-closed mixed-commit rule); it owes a plan review, not a "
+                "code review, and remains counted in uncovered_shas/the VERDICT."
+            )
+            continue
         other_paths = sorted(p for p in touched if not _is_bookkeeping_path(p))
         if other_paths:
             notes.append(
@@ -3917,15 +4249,31 @@ def run_coverage_gate(
             )
         )
 
-    # AC3/AC4: name WHICH of the four open-review-loop end-states this
-    # WARN is, in notes only — appended last, after every pre-existing
-    # note, and reached only on WARN so a COVERED run pays nothing (neither
-    # the graph-build spawn the injected resolver costs nor DAG mode's frontier-
-    # ancestry spawn — at most one of each, both lazy, ceiling two). The verdict
-    # and verdict_line above are already final at this point, by construction:
-    # nothing below this line may read as feeding them. Renamed from the
-    # pre-C10 "UNCOVERED" condition (C10) — same gate, WARN is its new name.
-    if verdict == "WARN":
+    # AC3/AC4: name WHICH of the four open-review-loop end-states this run
+    # hit, in notes only — appended last, after every pre-existing note. The
+    # verdict and verdict_line above are already final at this point, by
+    # construction: nothing below this line may read as feeding them.
+    #
+    # Gated on `uncovered_shas` (not `verdict == "WARN"`): C10 replaced the
+    # binary UNCOVERED verdict with a coverage RATIO over the code partition
+    # (DEFAULT_COVERAGE_RATIO_THRESHOLD = 0.66), so a corpus can carry
+    # uncovered code commits yet still resolve COVERED once ratio clears
+    # threshold — e.g. 2 reviewed commits + 1 unreviewed integration commit,
+    # ratio=0.67. Gating on WARN alone left that exact band, the one this
+    # diagnostic exists to police, silently undiagnosed. Firing whenever
+    # `uncovered_shas` is non-empty catches it while a genuinely clean run
+    # (uncovered_shas empty) still pays nothing — same spawn-cost bound as
+    # before: at most one lazy graph-build spawn (the injected resolver)
+    # plus DAG mode's one lazy frontier-ancestry spawn, ceiling two. Only a
+    # COVERED-with-uncovered-commits run newly pays that cost.
+    # `verdict == "WARN"` is deliberately NOT part of this predicate: WARN is
+    # only ever assigned in the `else` branch above, which itself requires
+    # `uncovered_shas` truthy — so `verdict == "WARN"` implies `uncovered_shas`
+    # always, and the disjunct could never change this predicate's result.
+    # `uncovered_shas` alone is the whole condition; if a future refactor adds
+    # another path that sets verdict="WARN" without uncovered_shas, this gate
+    # must be revisited, not silently reinstated as a disjunct.
+    if uncovered_shas:
         notes.extend(
             _diagnose_open_review_loop(
                 trail_paths,

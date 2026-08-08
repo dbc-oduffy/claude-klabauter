@@ -26,7 +26,7 @@ from coordinator_core.ops.emit.envelope import resolve_context
 # Helpers
 # ---------------------------------------------------------------------------
 
-_FAKE_REMOTE = "git@github.com:dbc-example-operator/claude-klabauter.git"
+_FAKE_REMOTE = "git@github.com:dbc-oduffy/claude-klabauter.git"
 _FAKE_SHA = "a" * 40
 
 
@@ -174,7 +174,7 @@ class TestNoTopLevelCoordinatorRootPathScalar:
             "aaaaaaaa",        # git_sha_short
             "2026-07-07T00:00:00Z",  # observed_at
             "test-host",       # hostname
-            "dbc-example-operator/test-repo",  # repo_name
+            "dbc-oduffy/test-repo",  # repo_name
         )
 
         with patch("coordinator_core.ops.emit.validate.assert_pin_integrity"), \

@@ -31,6 +31,7 @@ import pytest
 from coordinator_core.ceremony_common.apply_halt import UnrecognizedDirective
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure
 from coordinator_core.workstream_complete import apply as ws_apply
+from coordinator_core.workstream_complete import directives_session_hygiene
 
 
 def _fake_module(main_fn: Callable[..., Any], name: str = "fake_cli") -> ModuleType:
@@ -1758,3 +1759,177 @@ def test_brief_never_emits_a_directive_with_an_unresolved_token_at_dispatch_time
                 f"'{{...}}' token _resolve_arg_tokens's regex doesn't even "
                 "recognize — it would reach dispatch unresolved"
             )
+
+
+# ---------------------------------------------------------------------------
+# C3 (AC6) — a second `apply` pass must not mutate anything new
+# ---------------------------------------------------------------------------
+
+
+def test_double_apply_lands_nothing_new_via_genuine_cli_reentrancy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC6: a second `apply` pass over the SAME envelope must be a no-op on
+    disk (excluding timestamps). This directive is never `already_
+    satisfied` in either pass — satisfying AC6 by asserting the fixture's
+    `already_satisfied` would prove nothing about the real defect (see this
+    package's own premise: `already_satisfied` has no producer at HEAD).
+    Replay safety instead comes from the DISPATCHED CLI's own idempotent
+    write — mirroring `d-claim-plan-execution-lock`'s verified shape
+    (`directives_lessons_plan.py:297`, confirmed against `wsc-coverage-
+    gate-runner.py:189`'s own contract: "0 (claimed/re-entrant/stale-
+    takeover)") and `d-append-orientation-pinboard`'s verified
+    whole-section-replace shape (`directives_session_hygiene.py`'s
+    `build_pinboard_directive`, confirmed against `regenerate_cache.py::
+    patch_pinboard_only`'s `_PINBOARD_SECTION_RE.sub(..., count=1)`): a
+    directive can be safe to replay without ever claiming
+    `already_satisfied`.
+    """
+    disk: dict[str, str] = {}
+
+    def reentrant_replace_main(argv: list[str]) -> int:
+        # Models a whole-value REPLACE (patch_pinboard_only's own shape),
+        # never an append — re-running with the same argv converges to the
+        # same disk state instead of accumulating a second copy.
+        disk["pinboard_line"] = argv[0]
+        return 0
+
+    monkeypatch.setattr(
+        ws_apply, "_load_cli_module", lambda cli_name: _fake_module(reentrant_replace_main, cli_name)
+    )
+    directives = [_directive("d-append-orientation-pinboard", "fake-a", args=["same note"])]
+
+    exit_code_1, report_1 = ws_apply._execute_directives(directives, [], {})
+    disk_after_first_pass = dict(disk)
+    exit_code_2, report_2 = ws_apply._execute_directives(directives, [], {})
+
+    assert exit_code_1 == exit_code_2 == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+    assert report_1["landed"] == report_2["landed"] == ["d-append-orientation-pinboard"]
+    assert report_1["blocked"] == report_2["blocked"] == []
+    assert report_1["failed"] == report_2["failed"] == []
+    # The second pass dispatched again (never `already_satisfied`) but
+    # landed byte-identical disk state — the CLI's own replace semantics,
+    # not an envelope short-circuit, is what makes the replay safe.
+    assert disk == disk_after_first_pass
+
+
+# ---------------------------------------------------------------------------
+# C3 (AC5) — hardcoded-False sites that gained a real satisfaction check
+# ---------------------------------------------------------------------------
+
+
+def test_build_pinboard_directive_already_satisfied_when_existing_line_matches() -> None:
+    """`d-append-orientation-pinboard`'s new `existing_pinboard_line` param
+    (`directives_session_hygiene.py`) computes a REAL, disk-derived
+    `already_satisfied` — mirroring `baton_assemble`'s `d1_already_
+    satisfied` + `already_satisfied_reason` shape — rather than asserting
+    it. Matching text -> `already_satisfied=True` with a reason recorded."""
+    directive = directives_session_hygiene.build_pinboard_directive(
+        orientation_cache_exists=True,
+        pinboard_note="finished the thing",
+        existing_pinboard_line="finished the thing",
+    )
+    assert directive is not None
+    assert directive["already_satisfied"] is True
+    assert "already_satisfied_reason" in directive
+    assert "finished the thing" in directive["already_satisfied_reason"]
+
+
+def test_build_pinboard_directive_not_satisfied_when_existing_line_differs() -> None:
+    directive = directives_session_hygiene.build_pinboard_directive(
+        orientation_cache_exists=True,
+        pinboard_note="finished the thing",
+        existing_pinboard_line="a stale prior note",
+    )
+    assert directive is not None
+    assert directive["already_satisfied"] is False
+    assert "already_satisfied_reason" not in directive
+
+
+def test_build_pinboard_directive_not_satisfied_when_existing_line_unverified() -> None:
+    """The default (`existing_pinboard_line=None`, every call site until a
+    caller threads the new param through) must stay `False` — absence of
+    verification is never inferred as satisfaction (this package's own
+    negative-spec: never assert `already_satisfied: True` to fake
+    idempotence)."""
+    directive = directives_session_hygiene.build_pinboard_directive(
+        orientation_cache_exists=True,
+        pinboard_note="finished the thing",
+    )
+    assert directive is not None
+    assert directive["already_satisfied"] is False
+    assert "already_satisfied_reason" not in directive
+
+
+def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -> None:
+    """Review: coordinator:code-reviewer (P3) — `directives_session_hygiene.py`'s
+    module-docstring idempotence table names directive ids emitted by five
+    sibling `directives_*.py` modules it does not own, with no mechanical link
+    back; nothing failed if the table drifted. This is that link: a plain
+    source-text scan (not builder invocation — several builders need
+    elaborate fixture args out of this test's scope) asserting every id the
+    table names is still a literal substring of its owning module's source.
+
+    `d-harvest-deferrals-<n>` and `d-flip-memo-status:<basename>` need
+    PREFIX handling, not exact match — an exact-id assumption on the
+    ordinal-suffixed `d-harvest-deferrals-<n>` id already caused one real
+    defect this session (F6/directives_lessons_plan.py's own id-matching
+    docstring warns of the same pitfall). A prefix check still catches a
+    rename/removal of the base id; it does not (and cannot, without invoking
+    the builder) catch a suffix-only change.
+    """
+    siblings_dir = Path(directives_session_hygiene.__file__).parent
+
+    # (module basename, [(id-or-prefix, is_prefix), ...])
+    table: dict[str, list[tuple[str, bool]]] = {
+        "directives_lessons_plan.py": [
+            ("d-claim-plan-execution-lock", False),
+            ("d-stamp-plan-implemented", False),
+            ("d-harvest-deferrals-", True),
+        ],
+        "directives_completion.py": [
+            ("d-complete-entry", False),
+            ("d-reconcile-completion-commits", False),
+            ("d-fold-execution-observations", False),
+        ],
+        "directives_commit_tail.py": [
+            ("d-release-plan-claim", False),
+            ("d-close-tail-args", False),
+            ("d-run-wsc-tail", False),
+            ("d-emit-cadence", False),
+        ],
+        "directives_memo_lifecycle.py": [
+            ("d-flip-memo-status", True),
+            ("d-emit-deletion-blocks", False),
+        ],
+        "directives_review.py": [
+            ("d-run-review-brightline-gate", False),
+            ("d-run-chain-plan-brightline-gate", False),
+            ("d-freeze-and-dispatch-review-partition-", True),
+            ("d-freeze-and-dispatch-review-partition-integrator", False),
+            ("d-run-chain-coverage-gate", False),
+            ("d-write-review-trail", False),
+            ("d-run-ubt-pending-check", False),
+            ("d-classify-dispatch-shape", False),
+        ],
+    }
+
+    for module_basename, ids in table.items():
+        source = (siblings_dir / module_basename).read_text(encoding="utf-8")
+        for directive_id, is_prefix in ids:
+            needle = directive_id if is_prefix else f'"{directive_id}"'
+            assert needle in source, (
+                f"idempotence table names {directive_id!r} for {module_basename}, "
+                f"but {needle!r} is no longer a literal substring of that module's "
+                "source — the table has drifted from the builder(s) it describes"
+            )
+
+
+def test_build_machine_local_regeneratability_directive_stays_false_by_design() -> None:
+    """`d-check-machine-local-regeneratability` has no real satisfaction
+    check available (the invoked CLI is read-only — no disk artifact
+    signals "already done") — `already_satisfied` stays permanently
+    `False`, documented as a deliberate design choice, not a gap
+    (`directives_session_hygiene.py`'s own docstring)."""
+    directive = directives_session_hygiene.build_machine_local_regeneratability_directive()
+    assert directive["already_satisfied"] is False

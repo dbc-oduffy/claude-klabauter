@@ -8,7 +8,6 @@ the real `clone_idempotent()` — never the working claude-klabauter repo.
 """
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
@@ -228,10 +227,8 @@ def test_registered_handler_dispatches_and_requires_all_params(tmp_path, fake_re
     src = _make_source_repo(tmp_path)
     target = tmp_path / "cloned" / "via-handler"
 
-    result = asyncio.run(
-        rb._clone_and_register_sibling_repo_op(
-            {"repo_key": "repos.sibling", "clone_url": str(src), "dest_path": str(target)}
-        )
+    result = rb._clone_and_register_sibling_repo_op(
+        {"repo_key": "repos.sibling", "clone_url": str(src), "dest_path": str(target)}
     )
     assert result == {
         "cloned": True,
@@ -246,4 +243,4 @@ def test_registered_handler_dispatches_and_requires_all_params(tmp_path, fake_re
         {"repo_key": "x", "clone_url": "y"},
     ):
         with pytest.raises(ValueError):
-            asyncio.run(rb._clone_and_register_sibling_repo_op(missing))
+            rb._clone_and_register_sibling_repo_op(missing)

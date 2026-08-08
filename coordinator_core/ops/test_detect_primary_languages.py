@@ -25,7 +25,6 @@ inventory.md § Wave 2 "detect" cluster (detect-primary-languages-by-extension).
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -56,7 +55,7 @@ def _write(root, rel_path, content=""):
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError, match="target_root"):
-        asyncio.run(_detect_primary_languages({}))
+        _detect_primary_languages({})
 
 
 def test_op_invalid_top_n_raises_value_error(tmp_path):
@@ -64,9 +63,9 @@ def test_op_invalid_top_n_raises_value_error(tmp_path):
     root.mkdir()
     for bad in (0, -1, "3", 3.5, True):
         with pytest.raises(ValueError, match="top_n"):
-            asyncio.run(
+            
                 _detect_primary_languages({"target_root": str(root), "top_n": bad})
-            )
+            
 
 
 def test_happy_path_ranks_by_count_then_name(tmp_path):
@@ -79,9 +78,8 @@ def test_happy_path_ranks_by_count_then_name(tmp_path):
     _write(root, "e.ts")
     _write(root, "f.md")
 
-    result = asyncio.run(
-        _detect_primary_languages({"target_root": str(root), "top_n": 2})
-    )
+    result = _detect_primary_languages({"target_root": str(root), "top_n": 2})
+    
 
     assert result["counts"] == [
         {"extension": ".py", "count": 3},
@@ -161,7 +159,7 @@ def test_idempotent_repeated_invocation_returns_identical_result(tmp_path):
     _write(root, "b.ts")
 
     params = {"target_root": str(root), "top_n": 2}
-    first = asyncio.run(_detect_primary_languages(dict(params)))
-    second = asyncio.run(_detect_primary_languages(dict(params)))
+    first = _detect_primary_languages(dict(params))
+    second = _detect_primary_languages(dict(params))
 
     assert first == second

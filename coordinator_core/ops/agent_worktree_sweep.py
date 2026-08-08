@@ -118,6 +118,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.session.worktree_safety import history_rewrite_verdict
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 # subprocess timeouts (rule: every subprocess.run over looping/external input
 # needs a bound — a single hung `git` child must not wedge the whole sweep).
@@ -125,7 +129,6 @@ _GIT_TIMEOUT_SECS = 30
 _CHERRY_PICK_TIMEOUT_SECS = 60  # may run commit hooks; generous but bounded
 _PORCELAIN_TIMEOUT_SECS = 30
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _BENIGN_ALLOWLIST = frozenset({".claude/settings.local.json", ".last-cleanup"})
 
@@ -162,7 +165,7 @@ def _run(
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
 
 
@@ -482,7 +485,7 @@ def _cherry_pick_with_env(repo_root: Path, sha: str, wt_path: str) -> bool:
             text=True,
             timeout=_CHERRY_PICK_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
             env=proc_env,
         )
     except (OSError, subprocess.TimeoutExpired):

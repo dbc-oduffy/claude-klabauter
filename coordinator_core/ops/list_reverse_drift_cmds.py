@@ -60,10 +60,10 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.plugin_health.drift import read_merged_mirrors
 
-_PROG = "list-reverse-drift-cmds.sh"
+_PROG = "list-reverse-drift-cmds"
 
 _USAGE = """\
-Usage: list-reverse-drift-cmds.sh [--scope-repo <repo-root>]
+Usage: list-reverse-drift-cmds [--scope-repo <repo-root>]
 Emits "<plugin>|<source_path>|<reverse_drift_cmd>" per copy_install plugin with
 a reverse_drift_cmd registered.
   --scope-repo <repo-root>  Restrict emission to the releasing repo. The meta-repo

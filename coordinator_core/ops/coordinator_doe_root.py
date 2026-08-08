@@ -16,6 +16,31 @@ caller (or a bash→Python cutover of one of its callers, e.g.
 
 Resolution chain (mirrors the bash oracle's header comment verbatim, rung-for-rung):
   1. REPO_EXAMPLE_DOCTRINE_REPO env var — if already set (non-empty), return it unchanged.
+  1.5. Codename-free rung ladder (added 2026-08-07, C1B) — runs ahead of rung 2.
+     On the published mirror, the registry never carries `repos.example_doctrine_repo` nor its
+     scrubbed successor `repos.example_doctrine_repo`, so on a genuine OSS box every
+     rung below this one is dead (executed proof: `coordinator_doe_root()` returns
+     `None` from the mirror with registry reachability removed — see
+     `tasks/2026-08-07-published-engine-codename/briefs/C1B.md`). None of these
+     candidates carry a private codename, so the depersonalize scrub cannot touch
+     them:
+       a. `<settings-home>/machine-local/.doe-root`, then
+          `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` — via
+          `coordinator_core.doe_root_pointer.read_doe_root_pointer_file()` (the
+          file-rungs-only sibling of `read_doe_root_pointer()`, which additionally
+          has a registry-first rung this ladder does not want spliced in ahead of
+          its own registry rung below).
+       b. the flat `~/.claude/plugins/coordinator-claude` marketplace-clone layout,
+          gated on the `.claude-plugin/plugin.json` marker.
+       c. `CLAUDE_PLUGIN_ROOT` env var, normalized via
+          `_cf_repo_root_from_plugin_root_candidate()` (C1E fix) — the raw
+          env value is a *content* root, one level below the repo root the
+          private/dev layout expects; see that helper's docstring.
+       d. `plugin.mirrors.coordinator-claude.live_path` (registry) — same call as
+          rung 2.5 below, just tried earlier in this sub-ladder.
+     Each candidate is accepted only if it is a directory AND contains one of the
+     two published manifest layouts (OSS flat `schemas/...`, private
+     `coordinator/schemas/...`) — see `_cf_manifest_present`.
   2. `machine-local get repos.example_doctrine_repo` (CANONICAL) — the machine-local registry's
      own four-rung discovery ladder runs inside that CLI; not reimplemented here.
   3. Rung 2.5 fallback: `machine-local get plugin.mirrors.coordinator-claude.live_path`
@@ -92,12 +117,19 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
 from coordinator_core import resolve_coordinator_clone as _resolve_coordinator_clone
+from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_read_doe_root_pointer_file
 
 _SUBPROCESS_TIMEOUT_SECS = 15
+
+# Published-manifest relpath (OSS flat layout). The private example-doctrine-repo-repo layout
+# nests the same relpath under `coordinator/`. Shared by the codename-free
+# rung ladder's acceptance gate below.
+_CF_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.json")
 
 
 def _machine_local_get(key: str) -> Optional[str]:
@@ -114,7 +146,7 @@ def _machine_local_get(key: str) -> Optional[str]:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -123,6 +155,114 @@ def _machine_local_get(key: str) -> Optional[str]:
         return None
     resolved = (result.stdout or "").strip()
     return resolved or None
+
+
+def _cf_manifest_present(root: str) -> bool:
+    """True if `root` contains either published manifest layout: OSS flat
+    (`<root>/schemas/coordinator-registry.manifest.json`) or the private
+    example-doctrine-repo-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
+    Gates each codename-free rung so a resolved-but-empty/unrelated directory
+    is not accepted over a later, correct rung.
+
+    LIMITATION (C1E): probing both layouts here is deliberately
+    level-ambiguous by itself -- a CONTENT root (`<repo_root>/coordinator`)
+    satisfies the OSS-flat relpath (`<content_root>/schemas/...`) exactly as
+    readily as a genuine repo root satisfies the private relpath. This gate
+    cannot and does not disambiguate levels; it only confirms "some published
+    manifest lives under this directory." Every candidate reaching this gate
+    MUST already be repo-root-shaped BEFORE it gets here -- the pointer-file,
+    flat-layout, and live_path rungs already are (see module docstring rung
+    1.5 a/b/d); `CLAUDE_PLUGIN_ROOT` (rung c) is normalized to repo-root shape
+    by `_cf_repo_root_from_plugin_root_candidate()` immediately before being
+    passed in here, precisely so this gate never has to arbitrate the level
+    question it structurally cannot answer. Do not add a new rung 1.5
+    candidate without doing the same normalization first.
+    """
+    for relpath in (_CF_MANIFEST_RELPATH, os.path.join("coordinator", _CF_MANIFEST_RELPATH)):
+        if os.path.exists(os.path.join(root, relpath)):
+            return True
+    return False
+
+
+def _cf_repo_root_from_plugin_root_candidate(candidate: str) -> str:
+    """Normalize a CLAUDE_PLUGIN_ROOT-shaped value to the coordinator REPO
+    root this ladder must return.
+
+    CLAUDE_PLUGIN_ROOT is a *content* root (see
+    coordinator_registry.py::_mp_repo_root_from_plugin_root_candidate(),
+    which this function ports rung-for-rung): in the private/dev example-doctrine-repo layout
+    this is `<repo_root>/coordinator`, one level below the repo root this
+    module's docstring contracts to return. In the OSS flat layout the
+    content root and the repo root coincide. Disambiguate the same way:
+    gate on the `.claude-plugin/plugin.json` marketplace marker. If it sits
+    directly under `candidate`, candidate already IS the repo root (OSS flat
+    case). If it sits one level up (candidate's basename is "coordinator"
+    and the marker is beside it), the repo root is the parent (private/dev
+    layout). Otherwise return candidate unchanged as a best-effort fallback
+    — callers still gate on os.path.isdir() / manifest-presence before
+    trusting the result.
+
+    Do NOT edit coordinator_registry.py's own copy of this helper — this is
+    a deliberate duplicate (see chunk C1E task notes): that module cannot be
+    imported from here at this call site without violating this module's own
+    layering, so the same technique is ported rather than shared.
+    """
+    stripped = candidate.rstrip("/\\")
+    if os.path.isfile(os.path.join(stripped, ".claude-plugin", "plugin.json")):
+        return stripped
+    parent = os.path.dirname(stripped)
+    if os.path.basename(stripped) == "coordinator" and os.path.isfile(
+        os.path.join(parent, ".claude-plugin", "plugin.json")
+    ):
+        return parent
+    return candidate
+
+
+def _cf_flat_layout_probe() -> Optional[str]:
+    """Codename-free rung (b): the flat `~/.claude/plugins/coordinator-claude`
+    marketplace-clone layout, gated on the `.claude-plugin/plugin.json`
+    marker — same marker `resolve_coordinator_clone._resolve_source_mode`
+    gates its OSS-install check on.
+
+    Duplicated inline (matching C1's shape, `git show 067da377c1b0`) rather
+    than delegating into `resolve_coordinator_clone` for this specific probe:
+    that module exposes only the full `resolve_clone_root()` /
+    `resolve_content_root()` verbs (raise-on-failure, `.git`-gated /
+    plugin-manifest-marker-gated for their own different purposes), not a
+    standalone flat-marker check to import and reuse here.
+    """
+    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
+    if not home:
+        return None
+    candidate = os.path.join(home, ".claude", "plugins", "coordinator-claude")
+    marker = os.path.join(candidate, ".claude-plugin", "plugin.json")
+    return candidate if os.path.isfile(marker) else None
+
+
+def _cf_codename_free_root() -> Optional[str]:
+    """Codename-free rung ladder (rung 1.5, C1B) — runs ahead of rung 2.
+
+    Tries, in order: the `.doe-root` pointer file (durable, then legacy),
+    the flat marketplace-clone layout, `CLAUDE_PLUGIN_ROOT`, then the
+    `plugin.mirrors.coordinator-claude.live_path` registry key. Each
+    candidate is accepted only once it is a directory AND
+    `_cf_manifest_present` confirms one of the two published manifest
+    layouts lives under it. See module docstring § Resolution chain, rung
+    1.5, for why this ladder exists and why none of its rungs can be reached
+    by the OSS depersonalize scrub.
+    """
+    _plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    for candidate in (
+        _cf_read_doe_root_pointer_file() or None,
+        _cf_flat_layout_probe(),
+        _cf_repo_root_from_plugin_root_candidate(_plugin_root_env) if _plugin_root_env else None,
+        _machine_local_get("plugin.mirrors.coordinator-claude.live_path"),
+    ):
+        if not candidate or not os.path.isdir(candidate):
+            continue
+        if _cf_manifest_present(candidate):
+            return candidate
+    return None
 
 
 def _resolve_via_clone_root_script() -> Optional[str]:
@@ -191,19 +331,26 @@ def coordinator_doe_root() -> Optional[str]:
 
     resolved_root: Optional[str] = None
 
-    # Rung 2: machine-local registry (canonical).
-    resolved = _machine_local_get("repos.example_doctrine_repo")
-    if resolved:
-        resolved_root = resolved
-    else:
-        # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path.
-        resolved_fallback = _machine_local_get("plugin.mirrors.coordinator-claude.live_path")
-        if resolved_fallback:
-            resolved_root = resolved_fallback
+    # Rung 1.5: codename-free ladder (C1B) -- see module docstring. Ahead of
+    # rung 2 because the published mirror's registry never carries
+    # repos.example_doctrine_repo nor its scrubbed successor, so every rung below is
+    # dead on a genuine OSS box.
+    resolved_root = _cf_codename_free_root()
+
+    if resolved_root is None:
+        # Rung 2: machine-local registry (canonical).
+        resolved = _machine_local_get("repos.example_doctrine_repo")
+        if resolved:
+            resolved_root = resolved
         else:
-            # Rung 3: native resolve_coordinator_clone port.
-            # Rung 4 (hard failure) is `resolved_root` staying None here.
-            resolved_root = _resolve_via_clone_root_script()
+            # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path.
+            resolved_fallback = _machine_local_get("plugin.mirrors.coordinator-claude.live_path")
+            if resolved_fallback:
+                resolved_root = resolved_fallback
+            else:
+                # Rung 3: native resolve_coordinator_clone port.
+                # Rung 4 (hard failure) is `resolved_root` staying None here.
+                resolved_root = _resolve_via_clone_root_script()
 
     _RESOLVED_DOE_ROOT = resolved_root
     _DOE_ROOT_RESOLVED = True
@@ -217,7 +364,7 @@ _REMEDIATION = (
     "  Remediate (choose one):\n"
     "    machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c\n"
+    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c\n"
 )
 
 

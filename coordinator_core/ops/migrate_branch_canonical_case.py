@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def _git(repo_root: str, *args: str) -> subprocess.CompletedProcess:
         text=True,
         # Review: code-reviewer — Windows portability convention applied
         # inconsistently across this wave's siblings; align this call site.
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 

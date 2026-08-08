@@ -328,7 +328,7 @@ def set_kr_status(
 
 
 @register_op("goal.set_kr_status")
-async def _goal_set_kr_status(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _goal_set_kr_status(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'goal.set_kr_status' handler — locked KR-status write.
 
     MUTATING (rewrites one status: scalar in a state/goals/*.yaml artifact under

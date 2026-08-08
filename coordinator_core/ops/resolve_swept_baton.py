@@ -64,8 +64,10 @@ Spec backlink: state/audits/2026-07-22-command-payload-inventory/op-classificati
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional
 
@@ -191,7 +193,7 @@ def _archiving_commit(worktree_root: Path, fpath: Path) -> Optional[str]:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_GIT_TIMEOUT_SECONDS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _LOG.warning(
@@ -248,5 +250,5 @@ async def _resolve_swept_baton_in_archive(
         "found": True,
         "archive_path": str(match),
         "frontmatter": _read_frontmatter(match),
-        "archiving_commit": _archiving_commit(worktree_root, match),
+        "archiving_commit": await asyncio.to_thread(_archiving_commit, worktree_root, match),
     }

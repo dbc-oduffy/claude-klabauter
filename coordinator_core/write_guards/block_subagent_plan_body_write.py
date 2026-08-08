@@ -155,6 +155,8 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
@@ -229,27 +231,19 @@ def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
 
     Best-effort in both senses: the caller (``_write_block_log``) only ever
     uses the result to decide WHERE to append a log line, never to flip the
-    ALLOW/DENY decision -- so a timeout here degrades to "skip the log
-    line", exactly like the pre-existing OSError leg. 2.0s house value
-    (``dispatch_checks._run_git``) -- 2026-08-05 hardening pass.
+    ALLOW/DENY decision -- so an unresolvable root degrades to "skip the log
+    line", exactly like the pre-existing OSError leg.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn -- same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``, so no verdict changes. Note the timeout is now the
+    shared resolver's fixed 2.0s house value (``coordinator_core.git.
+    repo_root._TIMEOUT_SECS``), which already matched this guard's own prior
+    2.0s (2026-08-05 hardening pass) -- no change in practice.
     """
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            timeout=2.0,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return resolve_repo_root(cwd)
 
 
 def _resolve_git_dir(cwd: Optional[str]) -> Optional[str]:
@@ -257,25 +251,32 @@ def _resolve_git_dir(cwd: Optional[str]) -> Optional[str]:
 
     Same fail-open contract as ``_resolve_git_root`` above -- only feeds
     ``_write_hook_emit_log``'s diagnostic log path, never the guard's own
-    ALLOW/DENY decision. 2.0s house value -- 2026-08-05 hardening pass.
+    ALLOW/DENY decision.
+
+    D4 (docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md):
+    delegates to the shared, non-spawning
+    ``coordinator_core.git.git_dir.resolve_git_dir`` seam instead of
+    hand-rolling its own ``git rev-parse --git-dir`` spawn. That resolver
+    takes a REPO ROOT (not an arbitrary cwd) and builds its result via
+    join/normpath with no ``.resolve()`` -- its output is absolute only when
+    the ``repo_root`` argument already is. ``resolve_repo_root`` (the
+    peer-landed shared seam) always returns an already-``Path.resolve()``d
+    absolute string or ``None``, so that trap does not materialize here.
+
+    Byte-shape note (best-effort log path only, never the verdict): the
+    prior subprocess emitted whatever form ``git rev-parse --git-dir``
+    itself chose, typically a path RELATIVE to ``cwd`` (e.g. ``.git``) when
+    ``cwd`` was already the toplevel -- which ``_write_hook_emit_log`` then
+    joined against the log-writing PROCESS's own cwd, not necessarily the
+    hook's ``cwd``. This resolver always returns an ABSOLUTE path anchored
+    at the real repo. Since this value never feeds the ALLOW/DENY decision
+    (only where the best-effort diagnostic log line lands), the change is
+    accepted as a side effect of the migration rather than reproduced.
     """
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            timeout=2.0,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    repo_root = resolve_repo_root(cwd)
+    if not repo_root:
         return None
-    if result.returncode != 0:
-        return None
-    git_dir = result.stdout.strip()
-    return git_dir or None
+    return str(resolve_git_dir(Path(repo_root)))
 
 
 def _write_block_log(

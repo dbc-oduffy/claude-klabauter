@@ -448,11 +448,14 @@ def _grep_scan(search_root: Path, sentinels: list[str]) -> list[str]:
         cmd += ["-e", sentinel]
     cmd.append(str(search_root))
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         # Review: code-reviewer — grep-absent/grep-failed-to-run must not be

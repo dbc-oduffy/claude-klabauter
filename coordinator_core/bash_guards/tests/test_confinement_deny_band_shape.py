@@ -141,18 +141,32 @@ def _subagent_stash_identity_setup(
 #: run directly against the guard's own `check()` and confirmed to deny/
 #: advise, not guessed from reading the source alone).
 _EXTRA_FIRING_ROWS: List[CorpusRow] = [
-    CorpusRow(
-        "block-dev-repo-sentinel-removal",
-        "block-dev-repo-sentinel-removal-fire-direct",
-        "rm .coordinator-dev-repo",
-        True,
-        GuardBand.CONFINEMENT_DENY,
-        False,
-    ),
+    # `block-dev-repo-sentinel-removal`'s own CONFINEMENT_DENY firing row
+    # (previously here, direct `rm .coordinator-dev-repo`) was REMOVED --
+    # not stale-and-forgotten, but stale-and-VERIFIED: commit `d1113d2b8`
+    # ("C13: move 4 GuardEntry registrations to ADVISORY_REWRITE, correct
+    # two stale self-counts") retired this guard's hard-deny leg entirely,
+    # per `dispatch.py`'s own inline comment at the
+    # `block-worktree-sentinel-creation` registration site ("`block-dev-
+    # repo-sentinel-removal`'s hard-deny leg was RETIRED here (C13,
+    # docs/plans/2026-08-06-apply-guard-class-census.md), collapsing its
+    # former TWO-LEG SPLIT into the single already-registered
+    # `block-dev-repo-sentinel-removal-advisory` entry ... in
+    # ADVISORY_REWRITE"). The live chain no longer registers ANY entry
+    # named `block-dev-repo-sentinel-removal` in ANY band -- only
+    # `block-dev-repo-sentinel-removal-advisory` (ADVISORY_REWRITE), which
+    # is out of this file's CONFINEMENT_DENY-only scope (module docstring
+    # point 2). That same dispatch.py comment flags a known, ALREADY-
+    # TRACKED product gap this file does not re-report: `check_advisory`
+    # still returns `None` (silent allow, no comment) for the direct
+    # `rm`/`mv`/`git rm`/`git mv .coordinator-dev-repo` shape today, pending
+    # a peer chunk widening it -- that is dispatch.py's own module-body
+    # scope, not this test module's.
+    #
     # The former known exception's own trigger (module docstring point 4,
-    # RESOLVED 2026-08-05): a DIRECT match still denies via the row above.
-    # This xargs-indirection shape used to resolve to this guard's own
-    # ADVISORY posture returned DIRECTLY from `check()` -- allow+
+    # RESOLVED 2026-08-05): a DIRECT match used to still deny via the row
+    # removed above. This xargs-indirection shape used to resolve to this
+    # guard's own ADVISORY posture returned DIRECTLY from `check()` -- allow+
     # additionalContext, a CONFINEMENT_DENY-band shape violation. Since the
     # two-leg split, `check()` (the entry this file's `_classify_chain`
     # exercises) returns bare `None` for this input -- the advisory now
@@ -448,7 +462,18 @@ def test_extra_firing_rows_actually_fire():
                     policy_file=None,
                     host_is_windows=row.host_is_windows,
                 )
-                entry = next(e for e in chain if e.name == row.guard)
+                matches = [e for e in chain if e.name == row.guard]
+                assert matches, (
+                    "corpus row %r names guard %r, but the live chain "
+                    "(dispatch._build_guard_chain) registers no entry with "
+                    "that name -- either the row is stale (the guard was "
+                    "renamed or its CONFINEMENT_DENY leg was retired; check "
+                    "git log/dispatch.py's own registration-site comments "
+                    "for the guard name) or the chain wrongly stopped "
+                    "producing a guard that should still be there. Live "
+                    "chain names: %r" % (row.row_id, row.guard, sorted(e.name for e in chain))
+                )
+                entry = matches[0]
                 envelope = entry.fn()
                 assert envelope is not None, (
                     "row %r expected guard %r to fire (produce a non-None "

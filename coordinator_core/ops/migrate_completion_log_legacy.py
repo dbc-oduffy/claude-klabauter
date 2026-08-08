@@ -50,6 +50,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
@@ -94,7 +95,7 @@ def _git_mv(repo_root: str, src: str, dst: str) -> bool:
         text=True,
         # Review: code-reviewer — Windows portability convention applied
         # inconsistently across this wave's siblings; align this call site.
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if result.returncode != 0 and result.stderr.strip():
         print(f"  git mv stderr: {result.stderr.strip()}", file=sys.stderr)

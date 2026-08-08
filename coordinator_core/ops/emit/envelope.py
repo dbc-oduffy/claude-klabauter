@@ -57,9 +57,14 @@ Batch classification (2026-07-29): ``classify_shas_on_origin_main`` (private ali
 ``_classify_shas_on_origin_main``) replaces the per-SHA ``sha_on_origin_main`` spawn loop
 inside ``_stamp_shipped_sha`` / ``_stamp_node_shipped_sha`` / ``_stamp_closure_reachability``
 with two spawns total per stamp call, regardless of distinct-SHA count (measured 108 spawns
-on a real corpus before this change). ``sha_on_origin_main`` itself is unchanged and still
-used by ``main()`` (the ``check-shipped-on-main.sh`` CLI port, which classifies one ref at a
-time from argv — not a records-loop hot path).
+on a real corpus before this change).
+
+CLI migration (2026-08-07): ``main()`` (the ``check-shipped-on-main.sh`` CLI port) now resolves
+every argv ref first, then classifies every resolved sha in ONE ``classify_shas_on_origin_main``
+call — the same many-commits-against-ONE-ref batchable shape, not a records-loop hot path but
+the same tri-state contract. ``sha_on_origin_main`` itself is UNCHANGED and remains a public
+helper (other in-repo callers may still classify a single sha), but ``main()`` no longer calls
+it. Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § C32.
 """
 
 from __future__ import annotations
@@ -68,6 +73,7 @@ import json
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -606,7 +612,7 @@ def check_origin_main_reachable(repo_root: Path) -> bool:
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         ).returncode
         return rc == 0
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -622,7 +628,7 @@ def fetch_origin_main(repo_root: Path) -> None:
             check=False,
             timeout=120,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         # Offline degradation per the docstring contract above -- caller proceeds
@@ -643,7 +649,7 @@ def sha_on_origin_main(repo_root: Path, sha: str) -> Optional[bool]:
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         ).returncode
         if rc == 0:
             return True
@@ -692,7 +698,7 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
             check=False,
             timeout=120,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return {sha: None for sha in unique_shas}
@@ -713,7 +719,7 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
                 text=True,
                 check=False,
                 timeout=120,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return {sha: None for sha in unique_shas}
@@ -781,7 +787,7 @@ def resolve_ref(repo_root: Path, ref: str) -> Optional[str]:
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if proc.returncode != 0:
             return None
@@ -808,7 +814,7 @@ def _commit_age_label(repo_root: Path, sha: str) -> str:
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         commit_ts = int(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else now
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -853,7 +859,7 @@ def main(argv: list[str]) -> int:
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         ).returncode == 0
     except (OSError, ValueError, subprocess.TimeoutExpired):
         inside = False
@@ -874,16 +880,35 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
+    # Resolve every ref first (one `git rev-parse` per ref, unchanged — resolution of
+    # branch names / symbolic refs / HEAD~N is out of this migration's scope), then
+    # classify every resolved sha in ONE batched call rather than one
+    # `sha_on_origin_main` spawn per ref. Many-commits-against-ONE-ref is the shape
+    # `classify_shas_on_origin_main` already batches (its own docstring: two spawns
+    # total regardless of set size) — distinct from the many-independent-RANGES shape,
+    # which never batches (rev-list set-algebra collapse).
+    resolved: dict[str, Optional[str]] = {ref: resolve_ref(repo_root, ref) for ref in commits}
+    shas_to_classify = [sha for sha in resolved.values() if sha is not None]
+    classified = (
+        classify_shas_on_origin_main(repo_root, shas_to_classify) if shas_to_classify else {}
+    )
+
     any_not_on_main = 0
     for ref in commits:
-        sha = resolve_ref(repo_root, ref)
+        sha = resolved[ref]
         if sha is None:
             print(f"check-shipped-on-main: cannot resolve '{ref}' — skipping", file=sys.stderr)
             any_not_on_main = 1
             continue
 
         short = sha[:8]
-        result = sha_on_origin_main(repo_root, sha)
+        # Explicit reconciliation (§ Anti-scope 25): a sha absent from the returned
+        # classified map is NEVER read as a resolved classification — it degrades to
+        # the same None (unreachable/indeterminate) branch classify_shas_on_origin_main
+        # itself uses. classify_shas_on_origin_main's own contract returns an entry for
+        # every requested sha, so this ``in`` check is a belt-and-suspenders guard
+        # against a future contract change, not a case exercised by that function today.
+        result = classified[sha] if sha in classified else None
         if result:
             if verbose:
                 print(f"{short}: ON_MAIN")
@@ -1399,7 +1424,7 @@ def resolve_coordinator_root() -> Path:
 
     Purpose: locate the coordinator clone whose ``bin/query-records.py`` exists so section
     porters that read from it find the real records reader.  The W4.2 cutover relocated the
-    coordinator SOURCE out of ``~/.claude/plugins/coordinator/`` into the
+    coordinator SOURCE out of ``~/.claude/plugins/coordinator-claude/coordinator/`` into the
     example-doctrine-repo clone at ``<doe-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
     2026-07-22 de-node cutover then retired ``bin/query-records.js`` fleet-wide (claude-klabauter's own
     production dependency on it dropped to zero -- see
@@ -1485,11 +1510,14 @@ def resolve_coordinator_root() -> Path:
     # is empty post-W4.2 cutover. Spec backlink:
     # docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C4 (site 2).
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [str(Path.home() / ".claude" / "bin" / "resolve-coordinator-clone"), "--for-content"],
             capture_output=True,
             text=True,
             timeout=15,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         # Review: code-reviewer (Findings 2, 3) — added timeout=15 to match the

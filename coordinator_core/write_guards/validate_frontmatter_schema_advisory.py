@@ -120,6 +120,9 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._repo_root import (
+    resolve_repo_root as _shared_resolve_repo_root,
+)
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -209,20 +212,18 @@ def _js_object_keys(value: Any) -> list[str]:
 
 
 def resolve_repo_root(cwd: str) -> str:
-    import subprocess
+    """Repo root for `cwd` via the shared memoized resolver
+    (`coordinator_core.write_guards._repo_root.resolve_repo_root`), falling
+    back to `cwd` itself on any resolution failure -- preserves the
+    reference hook's own fall-back-to-cwd behavior (never `None`) exactly,
+    since downstream callers treat this return value as a directory to
+    join/relativize against, not an optional.
+    """
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return cwd
+        root = _shared_resolve_repo_root(cwd)
     except Exception:  # noqa: BLE001 — mirrors reference's bare catch-and-fall-back
         return cwd
+    return root or cwd
 
 
 def to_repo_relative(abs_path: str, repo_root: str) -> Optional[str]:
@@ -735,7 +736,14 @@ def _memo_guards_decision(
                     landing_is_central = landing_em_id == registry["central_canonical_id"]
                     if to_is_central and landing_is_central:
                         pass
-                    elif to_is_central and example_doctrine_repo_realpath is None:
+                    # Fail open when the example-doctrine-repo root is unresolvable. Deliberately does NOT also test
+                    # `to_is_central`: `central_em_ids` only populates once that root HAS resolved,
+                    # so `to_is_central and example_doctrine_repo_realpath is None` was unsatisfiable by
+                    # construction and the regex fallback below fired unconditionally on any
+                    # `-em`-suffixed `to:`. Root unresolvable means we cannot tell whether `to:` is
+                    # central, so emit nothing rather than guess. Mirrors the same fix in the deny
+                    # sibling; the two modules are mutually exclusive and must agree here.
+                    elif example_doctrine_repo_realpath is None:
                         pass
                     else:
                         to_em_id = to_field_raw.strip()

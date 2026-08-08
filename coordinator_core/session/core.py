@@ -38,6 +38,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 try:
     import psutil
 except ImportError:  # psutil is a declared engine dependency (pyproject.toml);
@@ -58,10 +60,6 @@ class MissingPsutilError(RuntimeError):
     returning/propagating False here is indistinguishable from a genuinely
     dead process (the exact wrongful-claim-takeover shape this class exists
     to prevent: every session would read DEAD)."""
-
-_NO_CONSOLE = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-)
 
 #: Platform seam for the PID-liveness branches (POSIX ``ps`` vs Windows
 #: ``psutil.create_time()``). A dedicated constant — not an inline
@@ -128,7 +126,7 @@ def git_root(cwd: Optional[str] = None) -> str:
             # leg: a hung git is indistinguishable from "not a git repo"
             # for every caller of this function.
             timeout=2.0,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -153,7 +151,7 @@ def _sessions_dir_resolve(cwd: Optional[str]) -> str:
             # House value -- 2026-08-05 hot-path hardening pass. Fail-open,
             # joining the pre-existing OSError leg (see git_root() above).
             timeout=2.0,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -689,7 +687,7 @@ def is_confined_findings_agent(effective_type: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Session-id resolution (4-tier chain, Tier-4 concurrency-ambiguity guard)
+# Session-id resolution (3-tier chain)
 # ---------------------------------------------------------------------------
 
 #: Canonical env-var precedence for tiers 1-3 of ``resolve_session_id`` —
@@ -713,79 +711,31 @@ SESSION_ENV_PRECEDENCE = (
 def resolve_session_id(cwd: Optional[str] = None) -> str:
     """Port of ``_cs_resolve_session_id`` / public alias ``cs_resolve_session_id``.
 
-    Resolve THIS session's id via the canonical 4-tier chain:
+    Resolve THIS session's id via the canonical 3-tier chain:
       1. ``COORDINATOR_SESSION_ID``  (explicit test override)
       2. ``CLAUDE_SESSION_ID``       (explicit override slot)
       3. ``CLAUDE_CODE_SESSION_ID``  (platform-injected, Claude Code >= ~2.1.150)
-      4. ``.git/coordinator-sessions/.current-session-id`` sentinel (old
-         Claude Code), anchored to the running (cwd) session — never a
-         baton repo.
 
-    Tier-4 ambiguity semantics (C2 — the sentinel is a last-writer-wins
-    file; under concurrent sessions it names whichever session most
-    recently initialized, not necessarily the caller's). Tier-4 returns
-    empty (the canonical "unresolvable" signal) under concurrency
-    ambiguity:
-      - >= 2 live sessions (always ambiguous)
-      - exactly 1 live but sentinel NOT in the live set (stale/phantom writer)
-      - 0 live but the sentinel names an existing session dir (dead/racing writer)
-    It returns the sentinel only when unambiguous:
-      - 0 live AND no session dirs exist (true legacy — tier-4's designed case)
-      - 1 live AND sentinel IS the live session (solo session, no ambiguity)
+    The former tier 4 (``.git/coordinator-sessions/.current-session-id``
+    sentinel, plus its concurrency-ambiguity guard) was REMOVED (KS-4,
+    2026-08-07): unsound under concurrency (a last-writer-wins file; under
+    ~18 concurrent sessions sharing this worktree it names whichever
+    session most recently initialized, not necessarily the caller's — see
+    coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
+    sole writer (session-init.py, the example-doctrine-repo SessionStart hook) was
+    deleted by PM directive 2026-07-15 — no production writer survives, so
+    it could never be refreshed. ``cwd`` is retained for API compatibility
+    with existing callers even though tiers 1-3 do not use it.
 
-    Tiers 1-3 (env vars) are byte-for-byte unchanged; the ambiguity guard
-    applies only to the tier-4 sentinel path. Always returns successfully
-    (empty string signals "unresolvable", never an exception) — callers
-    gate on empty.
+    Tiers 1-3 (env vars) are byte-for-byte unchanged. Always returns
+    successfully (empty string signals "unresolvable", never an
+    exception) — callers gate on empty.
     """
-    sid = ""
     for var in SESSION_ENV_PRECEDENCE:
         sid = os.environ.get(var, "")
         if sid:
-            break
-    if sid:
-        return sid
-
-    root = git_root(cwd)
-    if not root:
-        return ""
-
-    sentinel_file = Path(root) / ".git" / "coordinator-sessions" / ".current-session-id"
-    try:
-        # Review: code-reviewer nit — bash's `$(cat "$sentinel_file")` command
-        # substitution strips only trailing newline(s), never other whitespace
-        # or leading content; `.strip()` over-strips (leading/embedded spaces)
-        # relative to that. rstrip("\n") is the byte-parity-correct read.
-        sid = sentinel_file.read_text(encoding="utf-8").rstrip("\n")
-    except OSError:
-        sid = ""
-
-    if not sid:
-        return ""
-
-    # Tier-4 ambiguity guard. Live-set source: the in-package native
-    # liveness module's live_session_ids(cwd) — repointed off the old
-    # top-level bash-bridged coordinator_core.liveness now that
-    # coordinator_core.session.liveness has landed (RAW-PID-LIVENESS +
-    # the two-layer verdict preserved there; see liveness.py docstring).
-    # Review: code-reviewer (Finding 1) — must thread this function's own
-    # `cwd` param through to the live-set lookup; the zero-arg
-    # resolve_live_session_ids() alias always enumerates the process cwd's
-    # registry, silently querying the wrong repo when cwd != os.getcwd().
-    from coordinator_core.session import liveness as _liveness
-
-    live = _liveness.live_session_ids(cwd)
-    live_count = len(live)
-    sentinel_dir = Path(root) / ".git" / "coordinator-sessions" / sid
-
-    if live_count >= 2:
-        return ""
-    if live_count == 1:
-        return sid if sid in live else ""
-    # 0 live: trust the sentinel only when no session dir exists.
-    if sentinel_dir.is_dir():
-        return ""
-    return sid
+            return sid
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -836,7 +786,7 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
                 # bookkeeping field already tolerates on any other
                 # resolution failure.
                 timeout=2.0,
-                **_NO_CONSOLE,
+                **no_console_creationflags(),
             )
             head_sha = head.stdout.strip() if head.returncode == 0 else "unknown"
         except (OSError, subprocess.TimeoutExpired):
@@ -856,7 +806,7 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             # House value -- 2026-08-05 hot-path hardening pass. Fail-open,
             # joining the pre-existing OSError leg (see head_sha above).
             timeout=2.0,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
         branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else "unknown"
     except (OSError, subprocess.TimeoutExpired):

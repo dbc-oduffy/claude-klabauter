@@ -66,7 +66,7 @@ from typing import List, Optional
 from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 # Review: code-reviewer — module-level alias (not a re-derived duplicate) so this
 # module's own tests can keep monkeypatching a local name; the actual
@@ -86,7 +86,12 @@ def _claude_home() -> str:
     Note the oracle's own naming: the env var CLAUDE_HOME, when set, overrides
     $HOME (not the full .claude path) — reproduced verbatim, not "fixed".
     """
-    base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    base = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(base, ".claude")
 
 
@@ -120,7 +125,7 @@ def _resolve_doe_content_root(claude_home: str) -> str:
                 capture_output=True,
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT_SECS,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             candidate = (proc.stdout or "").strip()
             if proc.returncode == 0 and candidate and os.path.isdir(candidate):
@@ -215,7 +220,7 @@ def _count_universals(extract_script: str, lessons_path: str, cutoff: str) -> in
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _count_universals: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

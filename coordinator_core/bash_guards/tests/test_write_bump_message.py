@@ -356,6 +356,19 @@ def _measure(text: str):
     return measure_envelope(envelope)
 
 
+#: R1 (docs/plans/2026-08-08-the-bump-message-never-showed-the-operat.md)
+#: added a `raw_target`-populated branch to every template, rendering BOTH
+#: the raw token and the resolved path -- strictly longer prose than the
+#: pre-R1 short branch. A realistically long MSYS-spelled absolute path,
+#: not a three-character stub -- a stub would pass while the real
+#: production shape (an operator-typed `/x/claude-klabauter/...` or
+#: `/c/Users/...` token) fails.
+_LONG_RAW_MSYS_TOKEN = "/c/Users/example-operator/AppData/Local/Temp/claude/X--claude-klabauter/foreign-scratch-target.txt"
+_LONG_RESOLVED_NATIVE_PATH = (
+    r"C:\Users\example-operator\AppData\Local\Temp\claude\X--claude-klabauter\foreign-scratch-target.txt"
+)
+
+
 @pytest.mark.parametrize(
     "label,text_fn",
     [
@@ -379,6 +392,48 @@ def _measure(text: str):
             "publish-subagent",
             lambda gitdir: message.render_publish_subagent_message(
                 _TARGET_REPO, _MIRROR_OWNER, gitdir, _SESSION_ID, _SANDBOX_ROOT
+            ),
+        ),
+        (
+            "foreign-em-raw-target",
+            lambda gitdir: message.render_em_message(
+                _LONG_RESOLVED_NATIVE_PATH,
+                _SESSION_REPO,
+                gitdir,
+                _SESSION_ID,
+                raw_target=_LONG_RAW_MSYS_TOKEN,
+            ),
+        ),
+        (
+            "foreign-subagent-raw-target",
+            lambda gitdir: message.render_subagent_message(
+                _LONG_RESOLVED_NATIVE_PATH,
+                _SESSION_REPO,
+                gitdir,
+                _SESSION_ID,
+                _SANDBOX_ROOT,
+                raw_target=_LONG_RAW_MSYS_TOKEN,
+            ),
+        ),
+        (
+            "publish-em-raw-target",
+            lambda gitdir: message.render_publish_em_message(
+                _LONG_RESOLVED_NATIVE_PATH,
+                _MIRROR_OWNER,
+                gitdir,
+                _SESSION_ID,
+                raw_target=_LONG_RAW_MSYS_TOKEN,
+            ),
+        ),
+        (
+            "publish-subagent-raw-target",
+            lambda gitdir: message.render_publish_subagent_message(
+                _LONG_RESOLVED_NATIVE_PATH,
+                _MIRROR_OWNER,
+                gitdir,
+                _SESSION_ID,
+                _SANDBOX_ROOT,
+                raw_target=_LONG_RAW_MSYS_TOKEN,
             ),
         ),
     ],
@@ -521,3 +576,117 @@ def test_every_variant_self_attributes_as_coordinator_guard(tmp_path, text_fn):
         "message for prompt injection lifted from the write target's own "
         "content (see module docstring, SELF-ATTRIBUTION)"
     )
+
+
+# ---------------------------------------------------------------------------
+# R1 (docs/plans/2026-08-08-the-bump-message-never-showed-the-operat.md) --
+# the raw pre-translation token, shown distinguishably from the resolved
+# path, and never printed twice when the two are identical.
+# ---------------------------------------------------------------------------
+
+_RAW_MSYS_TOKEN = "/c/Users/example-operator/foreign/scratch.txt"
+_RESOLVED_NATIVE_PATH = r"C:\Users\example-operator\foreign\scratch.txt"
+
+
+def test_em_message_shows_both_raw_and_resolved_when_they_differ(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(
+        _RESOLVED_NATIVE_PATH, _SESSION_REPO, gitdir, _SESSION_ID, raw_target=_RAW_MSYS_TOKEN
+    )
+    assert f"`{_RAW_MSYS_TOKEN}`" in text
+    assert f"`{_RESOLVED_NATIVE_PATH}`" in text
+
+
+def test_em_message_does_not_double_print_when_raw_equals_resolved(tmp_path):
+    """AC2's own named failure mode inverted: when a caller has determined
+    raw and resolved are the SAME value, it passes `raw_target=""` (the
+    default) rather than the resolved value twice -- the message must then
+    degrade to the single pre-R1 form, byte-identical to no `raw_target` at
+    all."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    with_default = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
+    with_empty_raw = message.render_em_message(
+        _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, raw_target=""
+    )
+    assert with_default == with_empty_raw
+    assert with_default.count(f"`{_TARGET_REPO}`") == 1
+
+
+def test_subagent_message_shows_both_raw_and_resolved_when_they_differ(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_subagent_message(
+        _RESOLVED_NATIVE_PATH,
+        _SESSION_REPO,
+        gitdir,
+        _SESSION_ID,
+        _SANDBOX_ROOT,
+        raw_target=_RAW_MSYS_TOKEN,
+    )
+    assert f"`{_RAW_MSYS_TOKEN}`" in text
+    assert f"`{_RESOLVED_NATIVE_PATH}`" in text
+
+
+@pytest.mark.parametrize(
+    "text_fn",
+    [
+        lambda gitdir: message.render_publish_em_message(
+            _RESOLVED_NATIVE_PATH, _MIRROR_OWNER, gitdir, _SESSION_ID, raw_target=_RAW_MSYS_TOKEN
+        ),
+        lambda gitdir: message.render_publish_subagent_message(
+            _RESOLVED_NATIVE_PATH,
+            _MIRROR_OWNER,
+            gitdir,
+            _SESSION_ID,
+            _SANDBOX_ROOT,
+            raw_target=_RAW_MSYS_TOKEN,
+        ),
+    ],
+)
+def test_publish_variants_show_both_raw_and_resolved_when_they_differ(tmp_path, text_fn):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = text_fn(gitdir)
+    assert f"`{_RAW_MSYS_TOKEN}`" in text
+    assert f"`{_RESOLVED_NATIVE_PATH}`" in text
+
+
+def test_render_bump_message_threads_raw_target_through_to_em_template(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_bump_message(
+        agent_class=message.AGENT_CLASS_EM,
+        target_repo=_RESOLVED_NATIVE_PATH,
+        session_repo=_SESSION_REPO,
+        gitdir=gitdir,
+        session_id=_SESSION_ID,
+        raw_target=_RAW_MSYS_TOKEN,
+    )
+    assert text == message.render_em_message(
+        _RESOLVED_NATIVE_PATH, _SESSION_REPO, gitdir, _SESSION_ID, raw_target=_RAW_MSYS_TOKEN
+    )
+
+
+def test_render_bump_message_default_raw_target_is_backward_compatible(tmp_path):
+    """AC4: `raw_target` is optional with a safe default -- every pre-R1
+    caller (which never passes it) keeps rendering byte-identical output."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    with_kwarg_omitted = message.render_bump_message(
+        agent_class=message.AGENT_CLASS_EM,
+        target_repo=_TARGET_REPO,
+        session_repo=_SESSION_REPO,
+        gitdir=gitdir,
+        session_id=_SESSION_ID,
+    )
+    with_explicit_empty = message.render_bump_message(
+        agent_class=message.AGENT_CLASS_EM,
+        target_repo=_TARGET_REPO,
+        session_repo=_SESSION_REPO,
+        gitdir=gitdir,
+        session_id=_SESSION_ID,
+        raw_target="",
+    )
+    assert with_kwarg_omitted == with_explicit_empty

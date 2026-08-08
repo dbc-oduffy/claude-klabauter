@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
 )
@@ -48,6 +50,12 @@ def _make_claude_klabauter_fixture(root: Path, sentinel_executable: bool = True)
     sentinel = bin_dir / "archive-stamp-cli"
     sentinel.write_text("#!/bin/sh\necho SENTINEL\n", encoding="utf-8")
     sentinel.chmod(0o755 if sentinel_executable else 0o644)
+    if os.name == "nt" and sentinel_executable:
+        # An extensionless shebang file with POSIX exec bits set is inert
+        # on Windows -- `_resolve_claude_klabauter.py`'s own `_is_executable` probe
+        # (mirroring `win_portability.is_executable`) only recognizes a
+        # PATHEXT-suffixed sibling for an extensionless path.
+        sentinel.with_name(sentinel.name + ".exe").write_bytes(b"")
 
 
 def test_missing_both_registry_and_sentinel_raises_distinct_message(tmp_path: Path, monkeypatch):
@@ -125,7 +133,13 @@ def test_valid_fixture_resolves_bin_dir(tmp_path: Path, monkeypatch):
     (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
-    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir() == str(root / "coordinator" / "bin")
+    # `resolve_claude_klabauter_bin_dir` returns `claude_klabauter_root + "/coordinator/bin"`
+    # where `claude_klabauter_root` is read back verbatim from `.claude-klabauter-root` --
+    # i.e. it carries whatever separators `str(root)` used when the
+    # fixture wrote that file (native, backslash on Windows), not a
+    # normalized form. Compare backslash-insensitively rather than assume
+    # either separator shape.
+    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir().replace("\\", "/") == root.as_posix() + "/coordinator/bin"
 
 
 def test_registry_rung_wins_over_sentinel(tmp_path: Path, monkeypatch):
@@ -139,7 +153,7 @@ def test_registry_rung_wins_over_sentinel(tmp_path: Path, monkeypatch):
     (ml_dir / ".claude-klabauter-root").write_text(str(tmp_path / "sentinel-claude-klabauter-nonexistent"), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
-    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir() == str(registry_root / "coordinator" / "bin")
+    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir().replace("\\", "/") == registry_root.as_posix() + "/coordinator/bin"
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +321,7 @@ def _run_standalone_import_probe(shim_source: Path, tmp_path: Path) -> "subproce
         capture_output=True,
         text=True,
         timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -370,6 +384,173 @@ _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
         "all unset) — the source-tree leg above still runs unconditionally"
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# DR-132 two-tier ladder — `resolve_claude_klabauter_root_with_class()`. Mirrors
+# example-doctrine-repo `coordinator/hooks/scripts/_engine_root.py`'s
+# `resolve_claude_klabauter_root_with_class()` step order; a conformance fixture
+# (chunk C8) drives both implementations against the same registry-state
+# cases, so drift here WILL be caught cross-repo.
+# ---------------------------------------------------------------------------
+
+
+def _make_published_engine_fixture(root: Path) -> None:
+    (root / "coordinator_core").mkdir(parents=True)
+
+
+def test_live_tree_wins_when_session_is_working_repo(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    live_root = tmp_path / "live-claude-klabauter"
+    _make_claude_klabauter_fixture(live_root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root)
+
+    session_root = tmp_path / "session-repo"
+    session_root.mkdir()
+
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n'
+        f'"engine.working_repos.claude_klabauter" = \'{session_root}\'\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
+
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(live_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+
+
+def test_published_wins_when_gate_returns_false(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    live_root = tmp_path / "live-claude-klabauter"
+    _make_claude_klabauter_fixture(live_root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root)
+
+    other_working_repo = tmp_path / "other-working-repo"
+    other_working_repo.mkdir()
+    session_root = tmp_path / "session-repo"
+    session_root.mkdir()
+
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n'
+        f'"engine.working_repos.example_doctrine_repo" = \'{other_working_repo}\'\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
+
+    # Live tree is resolvable too, but step 1 of the ladder fires ahead of
+    # it once the gate concretely returns False — published wins even
+    # though the live tree would otherwise have resolved fine.
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
+
+
+def test_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    live_root = tmp_path / "live-claude-klabauter"
+    _make_claude_klabauter_fixture(live_root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root)
+
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+    )
+    session_root = tmp_path / "session-repo"
+    session_root.mkdir()
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
+
+    # No engine.working_repos.* registered at all -> the gate is
+    # undeterminable (None), which MUST NOT divert away from the live tree.
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(live_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+
+
+def test_no_klabauter_byte_identical_to_today(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    live_root = tmp_path / "live-claude-klabauter"
+    _make_claude_klabauter_fixture(live_root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(live_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir() == root + "/coordinator/bin"
+
+
+def test_both_unresolvable_raises(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="cannot resolve claude-klabauter"):
+        resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+
+
+def test_klabauter_only_resolves_published_engine(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root)
+
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    # No repos.claude_klabauter, no .claude-klabauter-root sentinel -- the
+    # klabauter-only consumer-machine case.
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
+
+
+def test_working_repo_union_across_both_registry_files(tmp_path: Path, monkeypatch):
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+
+    repo_in_tracked = tmp_path / "repo-in-tracked"
+    repo_in_tracked.mkdir()
+    repo_in_local = tmp_path / "repo-in-local"
+    repo_in_local.mkdir()
+
+    (ml_dir / "registry.toml").write_text(
+        f'"engine.working_repos.example_doctrine_repo" = \'{repo_in_tracked}\'\n', encoding="utf-8"
+    )
+    (ml_dir / "registry.local.toml").write_text(
+        f'"engine.working_repos.claude_klabauter" = \'{repo_in_local}\'\n', encoding="utf-8"
+    )
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    # A working repo registered in registry.toml ONLY and one registered in
+    # registry.local.toml ONLY must BOTH be recognised -- union, not
+    # first-hit-wins.
+    roots = resolve_claude_klabauter._engine_working_repo_roots(ml_dir)
+    assert set(roots) == {str(repo_in_tracked), str(repo_in_local)}
+
+
 def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_path: Path):
     """Same bootstrap-independence property as the source-tree test above,
     but against the artifact production actually runs: the copy installed

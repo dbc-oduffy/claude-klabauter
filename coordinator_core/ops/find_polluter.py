@@ -60,6 +60,7 @@ import glob
 import os
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
@@ -83,7 +84,7 @@ def _existence_detail(path: str) -> str:
             check=False,
             # Review: code-reviewer — Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         out = (result.stdout or "").rstrip("\n")
         return out if out else f"{path} (exists)"
@@ -151,7 +152,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             check=False,
             # Review: code-reviewer — Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
 
         if os.path.exists(pollution_check):

@@ -72,8 +72,11 @@ from coordinator_core.ops._git_root_util import git_root
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session.scope import relocate_touched_path
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _GIT_TIMEOUT = 30  # seconds — bounded per porter-brief addendum §2 (loop over disk-authored set)
 
 
@@ -84,7 +87,7 @@ def _run_git(args: List[str], timeout: int = _GIT_TIMEOUT) -> "subprocess.Comple
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
 
 

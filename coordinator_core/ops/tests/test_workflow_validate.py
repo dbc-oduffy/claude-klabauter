@@ -38,7 +38,9 @@ from coordinator_core.ops.workflow_validate import _workflow_validate
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    if asyncio.iscoroutine(coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+    return coro
 
 
 def _validate(script_path, target_root=None):

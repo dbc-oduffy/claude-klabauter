@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
 from coordinator_core.dag import referenced_by as _referenced_by
 from coordinator_core.lifecycle_constants import HANDOFF_ARCHIVAL_TERMINAL_STATUSES
@@ -422,10 +423,42 @@ def claimed_or_shipped_at_path(path: str) -> bool:
     already-extracted frontmatter blob. Reads `path` directly — no corpus scan,
     no `root` argument — so a caller checking a single candidate parent does not
     need to build a full children index first. A path with no frontmatter block
-    (unreadable, malformed, or missing entirely) is NOT claimed-or-shipped —
-    fails closed."""
+    (unreadable, malformed, or missing entirely) is NOT claimed-or-shipped on
+    the frontmatter half alone — but see the ledger-first widening below.
+
+    Ledger-first widening (C10, docs/plans/2026-08-07-claim-state-ledger-first-
+    authoritative-read.md, AC15): the CLAIM half of this predicate additionally
+    consults `coordinator_core.claim_state.resolve_claim_state`, which is
+    ledger-first with frontmatter-mirror fallback. This WIDENS what counts as
+    claimed-or-shipped — a handoff whose ledger still holds a live claim but
+    whose tracked-frontmatter mirror reverted (the branch-switch-revert desync
+    that module's docstring documents) is now also reported True, closing the
+    gap where `claimed_or_shipped`'s frontmatter-only reads let a fully-worked
+    baton look unclaimed and get archived/superseded out from under its own
+    claim. It never RELAXES: every input that returned True before this change
+    (via `claimed_or_shipped`'s frontmatter checks — claim vocabulary, shipped
+    `deployment_state`, or `shipped_in`) still returns True here first, before
+    the ledger is even consulted. The SHIPPED half (`deployment_state`,
+    `shipped_in`) has no ledger counterpart and is unaffected — it stays
+    exactly the frontmatter-only check `claimed_or_shipped` already performs.
+    Do NOT touch `shipped_in` here (DR-096: `archive_stamp.stamp_shipped_in`
+    is its sole writer).
+
+    Any error resolving the ledger side (missing git dir, unreadable claim
+    record, etc.) degrades to the pre-widening frontmatter-only answer —
+    fail-closed on the widening, never fail-open."""
     try:
         fm = _frontmatter(path)
     except OSError:
         return False
-    return claimed_or_shipped(fm)
+    if claimed_or_shipped(fm):
+        return True
+    try:
+        # Review: coordinator:code-reviewer (slice A, P3) — renamed from
+        # `claim_state` to avoid shadowing the sibling module
+        # `coordinator_core.claim_state` imported one line above this
+        # function.
+        state = resolve_claim_state(path)
+    except Exception:
+        return False
+    return state.holder is not None

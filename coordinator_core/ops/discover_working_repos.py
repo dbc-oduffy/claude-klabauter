@@ -44,12 +44,14 @@ from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
-_GIT_TIMEOUT_SECS = 10
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _MACHINE_LOCAL_TIMEOUT_SECS = 10
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
 
@@ -120,7 +122,7 @@ def _sort_unique(lines: Iterable[str]) -> List[str]:
             text=True,
             timeout=_SORT_TIMEOUT_SECS,
             check=False,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         if proc.returncode == 0:
             return [line for line in proc.stdout.split("\n") if line]
@@ -137,27 +139,42 @@ def _sort_unique(lines: Iterable[str]) -> List[str]:
 def _is_git_root(posix_dir: str) -> bool:
     """Returns True iff posix_dir is the root of a real git repo.
 
-    Idiom per [universal] lesson: `git -C <dir> rev-parse --show-toplevel` vs
-    `cd && pwd -P`. Not realpath — DR-148 (BSD portability of the bash
-    oracle); `os.path.realpath` is the direct Python equivalent of `pwd -P`
-    here (both physically resolve symlinks), so fidelity is preserved.
-    Worktree-safe: git rev-parse succeeds on both .git-dir repos and
-    .git-file worktrees. Subdirectory-safe: if posix_dir is a subdir of a
-    repo, `toplevel` identifies the repo root, not the subdir, so identity
-    fails and this returns False.
+    Non-spawning seam, not a per-candidate `git -C <dir> rev-parse
+    --show-toplevel`: delegates to `coordinator_core.git.repo_root.
+    show_toplevel`, which WALKS up from `posix_dir` looking for a `.git`
+    entry (dir or file — worktree-safe, same as the direct-spawn form this
+    replaces) and only falls back to a single spawn per distinct resolved
+    cwd if the walk finds nothing, memoized process-lifetime by that module
+    (see its docstring). `_gate_and_dedup` can call this once per candidate
+    dir it gates (spec backlink: this chunk's brief, C12 — "stops probing
+    `git rev-parse --show-toplevel` per candidate dir") — every candidate
+    that IS a real repo root resolves via the walk alone, zero spawns; only
+    candidates with no `.git` anywhere on their own ancestor chain (bogus
+    scratch paths, bare parent dirs) fall through to `show_toplevel`'s
+    single spawn fallback, exactly mirroring what a direct `git rev-parse`
+    there would have done anyway.
+
+    Not realpath — DR-148 (BSD portability of the bash oracle);
+    `os.path.realpath` is the direct Python equivalent of `pwd -P` here
+    (both physically resolve symlinks), so fidelity is preserved.
+    Worktree-safe: the walk (and its spawn fallback) succeeds on both
+    .git-dir repos and .git-file worktrees. Subdirectory-safe: if
+    posix_dir is a subdir of a repo, `toplevel` identifies the repo root,
+    not the subdir, so identity fails and this returns False.
 
     Identity is established via `os.path.samefile(toplevel, canon)`, not
-    plain string `==` — `git rev-parse --show-toplevel` always emits POSIX
-    (forward-slash) separators, while `os.path.realpath` emits native
-    separators (backslashes on Windows), so a plain `==` never holds on
-    Windows even when the two paths name the same directory on disk
-    (`toplevel='X:/example-doctrine-repo'` vs `canon='X:\\example-doctrine-repo'`). `samefile`
-    resolves separators, drive-letter case, and 8.3 short names via the
-    filesystem, which is the identity check actually intended here. Falls
-    back to a normcase/normpath string comparison if `samefile` raises
-    `OSError` (e.g. one of the two paths vanished between the git call and
-    the comparison — a real race on a shared tree); returns False only if
-    both approaches fail to establish identity.
+    plain string `==` — `show_toplevel` always emits POSIX (forward-slash)
+    separators on its spawn-fallback leg (mirroring `git rev-parse
+    --show-toplevel`), while `os.path.realpath` emits native separators
+    (backslashes on Windows), so a plain `==` never holds on Windows even
+    when the two paths name the same directory on disk (`toplevel=
+    'X:/example-doctrine-repo'` vs `canon='X:\\example-doctrine-repo'`). `samefile` resolves
+    separators, drive-letter case, and 8.3 short names via the filesystem,
+    which is the identity check actually intended here. Falls back to a
+    normcase/normpath string comparison if `samefile` raises `OSError`
+    (e.g. one of the two paths vanished between resolution and the
+    comparison — a real race on a shared tree); returns False only if both
+    approaches fail to establish identity.
 
     Spec backlink: X:/example-doctrine-repo/tasks/2026-07-20-install-dogfood-friction.md
     """
@@ -168,22 +185,9 @@ def _is_git_root(posix_dir: str) -> bool:
     except OSError:
         print(f"skip: _is_git_root: canon = os.path.realpath(posix_dir) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
-    try:
-        proc = subprocess.run(
-            ["git", "-C", posix_dir, "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            check=False,
-            creationflags=_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _is_git_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+    toplevel = show_toplevel(posix_dir)
+    if not toplevel:
         return False
-    if proc.returncode != 0:
-        return False
-    toplevel = proc.stdout.strip()
     try:
         return os.path.samefile(toplevel, canon)
     except OSError:
@@ -398,7 +402,7 @@ def _tier_a5() -> List[str]:
             timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
             check=False,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _tier_a5: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -415,7 +419,7 @@ def _tier_a5() -> List[str]:
                 timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
                 check=False,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
         except (OSError, subprocess.TimeoutExpired):
             print(f"skip: _tier_a5: get_proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

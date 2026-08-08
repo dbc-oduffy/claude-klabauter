@@ -386,3 +386,50 @@ class TestMarkerCannotSuppressThisGuard:
         itself denied by this guard before it ever reaches disk."""
         assert self._decision("touch %s" % SENTINEL) == "deny"
         assert not (tmp_path / bd.MARKER_BASENAME).exists()
+
+
+class TestPowerShellDialect:
+    """C4e (2026-08-07, guard-dialect-coverage.md row 23): PowerShell-syntax
+    coverage via `_dialect`/`_sentinel_creation_guard.SentinelCreationDetector
+    .evaluate_for_dialect`. A guard declaring `Dialect.POWERSHELL` must reach
+    a correct verdict or record SILENT -- never a bare clean (AC3)."""
+
+    @staticmethod
+    def _ps_payload(command):
+        return {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": command},
+            "session_id": "sess1",
+            "cwd": "/repo",
+        }
+
+    def test_new_item_cmdlet_denies(self):
+        out = guard.check(self._ps_payload("New-Item %s" % SENTINEL))
+        assert out is not None
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_redirect_denies(self):
+        out = guard.check(self._ps_payload("echo ok > %s" % SENTINEL))
+        assert out is not None
+
+    def test_unrelated_command_allows_with_no_silence(self):
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("Get-ChildItem"))
+        assert out is None
+        assert silences == []
+
+    def test_grammar_gap_shape_records_silent_not_clean(self):
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("Remove-Item x &> out.txt"))
+        assert out is None
+        assert any(
+            s.guard_name == "block_disarm_marker_sentinel_creation" for s in silences
+        )
+
+    def test_non_bash_non_powershell_tool_allows(self):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
+        assert guard.check(payload) is None

@@ -128,10 +128,12 @@ import datetime
 import logging
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.ops._path_guard import contained_path
@@ -698,60 +700,137 @@ def _collect_session_log(
 ) -> List[Tuple[str, str]]:
     """Collect (short_sha, full_sha) pairs across all chain session-ids (oracle Step 4).
 
-    Runs one ``git log --grep=^Session-Id: <sid>$`` per session-id and concatenates
-    results in session-id iteration order (oracle: per-csid loop, appended). No
-    inter-session dedup — the oracle's comment holds: a commit carries exactly one
+    BATCHED (2026-08 spawn-amplification fix, chunk C9): one ``git log`` walk of
+    ``merge_base..HEAD`` replaces one ``git log --grep=^Session-Id: <sid>$`` spawn
+    per session id — this loop resolves MANY session ids against ONE range, the
+    batchable "one ref, in-memory membership" shape (§ Anti-scope 1/2/4 governing
+    discrimination), NOT independent ranges: there is exactly one range
+    (``merge_base..HEAD``) shared by every iteration, so no
+    ``reachable(positives) \\ reachable(negatives)`` collapse risk applies. The
+    single walk emits each commit's short sha, full sha, and full body (``%B``,
+    which carries the ``Session-Id:`` trailer line the oracle's ``--grep`` matched
+    against); Python then re-applies the oracle's exact per-line anchored match
+    (``^Session-Id: <sid>$``) against that body, grouped by session id.
+
+    No inter-session dedup — the oracle's comment holds: a commit carries exactly one
     ``Session-Id:`` trailer, so cross-session duplicates don't occur in practice.
     Ordering: newest-first WITHIN each session-id's own contribution only — the
     per-session-id result blocks are concatenated in session-iteration order, not
     globally chronologically merged, so a widened multi-session chain's overall
     list is NOT a single newest-first ordering across the whole delta. (Review:
     code-reviewer — Finding 3: caller docstring's unqualified "newest-first"
-    overclaimed for the multi-session case.)
+    overclaimed for the multi-session case.) The batched walk preserves this: the
+    single ``git log`` output is itself newest-first, and per-session grouping is
+    a stable filter of that order, so within-session order is unchanged; the
+    final concatenation still iterates ``session_ids`` in caller order, not the
+    walk's chronological order.
     """
+    if not session_ids:
+        return []
+
+    result = _reality_git(
+        worktree_root,
+        ["log", "--pretty=%h%x1f%H%x1f%B%x1e", f"{merge_base}..HEAD"],
+    )
+    if result.returncode != 0:
+        return []
+
+    session_id_re = re.compile(r"^Session-Id: (.+)$", re.MULTILINE)
+    by_session: dict[str, List[Tuple[str, str]]] = {}
+    for record in result.stdout.split("\x1e"):
+        record = record.lstrip("\n")
+        if not record.strip():
+            continue
+        parts = record.split("\x1f", 2)
+        if len(parts) != 3:
+            continue
+        short_sha, full_sha, body = parts
+        short_sha = short_sha.strip()
+        full_sha = full_sha.strip()
+        for m in session_id_re.finditer(body):
+            csid = m.group(1)
+            by_session.setdefault(csid, []).append((short_sha, full_sha))
+
     pairs: List[Tuple[str, str]] = []
     for csid in session_ids:
-        result = _reality_git(
-            worktree_root,
-            [
-                "log",
-                "--pretty=%h %H",
-                f"--grep=^Session-Id: {csid}$",
-                f"{merge_base}..HEAD",
-            ],
-        )
-        if result.returncode != 0:
-            continue
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(" ", 1)
-            if len(parts) != 2:
-                continue
-            pairs.append((parts[0], parts[1]))
+        pairs.extend(by_session.get(csid, []))
     return pairs
 
 
 def _canonicalize_stored_shas(
     worktree_root: Path, stored_shas: Sequence[str]
 ) -> Tuple[Set[str], List[str]]:
-    """Canonicalize stored (possibly short) SHAs to full SHAs via ``git rev-parse``.
+    """Canonicalize stored (possibly short) SHAs to full SHAs via ``git cat-file --batch-check``.
 
-    Byte-parity port of the oracle's Step-5-adjacent canonicalization: a rev-parse
-    failure (ambiguous/unknown ref) is a WARN, never a crash — the SHA is simply
-    treated as unmatched (never false-folded).
+    BATCHED (2026-08 spawn-amplification fix, chunk C9): one ``git cat-file
+    --batch-check``, stdin-fed with every ``<sha>^{commit}`` candidate, replaces
+    one ``git rev-parse --verify`` spawn per stored sha — this loop resolves
+    independent OBJECT questions (each stdin line answered independently of
+    every other), the batchable shape (§ Anti-scope 1/2/4 governing
+    discrimination) — not a range walk, so no
+    ``reachable(positives) \\ reachable(negatives)`` collapse risk applies.
+    Mirrors ``coordinator_core.ops.emit.envelope.classify_shas_on_origin_main``'s
+    batch-check idiom: ``--batch-check`` emits exactly one output line per input
+    line, in input order, even for objects that don't resolve (printed as
+    ``<input> missing``) — line-for-line zip against the input list recovers
+    per-sha canonicalization without depending on ``%(objectname)`` prefix-matching
+    an abbreviated input string (§ Anti-scope 25: the returned-set-vs-requested-set
+    reconciliation this needs — unlike ``--ignore-missing`` batched ``git log``,
+    ``--batch-check`` never silently drops a line, so no separate reconciliation
+    pass is required here).
+
+    ``commit_reality._git`` is NOT reused for this spawn — it has no stdin-feed
+    parameter (a read-only-verb choke point, not a general git runner; out of
+    scope for this chunk to extend) — this composes ``subprocess.run`` directly,
+    the same shape ``classify_shas_on_origin_main`` itself uses for its own
+    ``--batch-check`` call.
+
+    A rev-parse-equivalent failure (ambiguous/unknown ref, or a genuine
+    subprocess failure) still WARNs, never crashes — the SHA is simply treated
+    as unmatched (never false-folded), same contract as the original per-sha loop.
     """
     full_set: Set[str] = set()
     warnings: List[str] = []
-    for sha in stored_shas:
-        if not sha:
-            continue
-        result = _reality_git(worktree_root, ["rev-parse", "--verify", f"{sha}^{{commit}}"])
-        if result.returncode != 0:
+    candidates = [sha for sha in stored_shas if sha]
+    if not candidates:
+        return full_set, warnings
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def _warn_all() -> Tuple[Set[str], List[str]]:
+        return full_set, [f"rev-parse failed for {sha} — treating as unmatched" for sha in candidates]
+
+    stdin_payload = "\n".join(f"{sha}^{{commit}}" for sha in candidates) + "\n"
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input=stdin_payload,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(worktree_root),
+            timeout=120,
+            **no_console_creationflags(),
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return _warn_all()
+
+    if result.returncode != 0:
+        return _warn_all()
+
+    lines = result.stdout.splitlines()
+    if len(lines) != len(candidates):
+        # Malformed/unexpected batch-check output shape — degrade every entry
+        # rather than risk misaligning a line to the wrong sha.
+        return _warn_all()
+
+    for sha, line in zip(candidates, lines):
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "commit":
+            full_set.add(parts[0])
+        else:
             warnings.append(f"rev-parse failed for {sha} — treating as unmatched")
-            continue
-        full_set.add(result.stdout.strip())
+
     return full_set, warnings
 
 
@@ -1580,22 +1659,51 @@ def _today_utc_date() -> str:
 def _contains_all_commits(worktree_root: Path, tag: str, commits: Sequence[str]) -> bool:
     """True iff every commit in ``commits`` is an ancestor of ``tag``.
 
-    Byte-parity port of the oracle's ``contains_all()``
-    (``all(git merge-base --is-ancestor <c> <tag> for c in commits)``). Same primitive
-    SHAPE as ``orphan_branch_sweep.py``'s ``_is_ancestor``, composed here over this
-    module's own cwd-aware ``_reality_git(worktree_root, args)`` rather than imported —
-    see module docstring for why the oracle module's two-arg ``_is_ancestor`` (no
-    ``cwd`` parameter, always runs against the process's own cwd) is not safe to reuse
-    for a ``common_dir``-scoped op resolving state in the CALLER's worktree. Empty
-    ``commits`` is never a match (oracle: ``if commits and contains_all(...)``).
+    BATCHED (2026-08 spawn-amplification fix, chunk C9): one ``git rev-list <tag>``
+    plus in-memory membership replaces one ``git merge-base --is-ancestor`` spawn
+    per commit — this loop resolves MANY commits against ONE ref (``tag``), the
+    batchable "one-ref-many-commits" shape (§ Anti-scope 1/2/4 governing
+    discrimination), NOT independent ranges: there is exactly one ref
+    involved, so no ``reachable(positives) \\ reachable(negatives)`` collapse risk
+    applies. Reuses the proven shape of
+    ``coordinator_core.ops.emit.envelope.classify_shas_on_origin_main`` (its
+    ancestor-set half): everything printed by ``git rev-list <tag>`` is, by
+    definition, both a valid commit AND an ancestor of ``tag``.
+
+    ``commits`` (this module's own ``commits:`` frontmatter values, always short
+    SHAs — see ``_apply_commits_fold``) must be canonicalized to full length
+    before the membership test, since ``git rev-list`` always prints full SHAs —
+    a short sha can never string-match a full one. Reuses
+    ``_canonicalize_stored_shas`` (this module's own batched canonicalizer, chunk
+    C9) rather than re-deriving a second canonicalization primitive; a commit
+    that fails to canonicalize (bad/unknown ref) is, by the original loop's own
+    contract (non-zero ``merge-base --is-ancestor`` returncode -> False), never
+    an ancestor.
+
+    Same primitive SHAPE as ``orphan_branch_sweep.py``'s ``_is_ancestor``, composed
+    here over this module's own cwd-aware ``_reality_git(worktree_root, args)``
+    rather than imported — see module docstring for why the oracle module's
+    two-arg ``_is_ancestor`` (no ``cwd`` parameter, always runs against the
+    process's own cwd) is not safe to reuse for a ``common_dir``-scoped op
+    resolving state in the CALLER's worktree. Empty ``commits`` is never a match
+    (oracle: ``if commits and contains_all(...)``).
     """
     if not commits:
         return False
-    for commit in commits:
-        result = _reality_git(worktree_root, ["merge-base", "--is-ancestor", commit, tag])
-        if result.returncode != 0:
-            return False
-    return True
+
+    rev_list = _reality_git(worktree_root, ["rev-list", tag])
+    if rev_list.returncode != 0:
+        return False
+    ancestor_set = set(rev_list.stdout.split())
+
+    unique_commits = set(commits)
+    canonical, _warnings = _canonicalize_stored_shas(worktree_root, list(unique_commits))
+    if len(canonical) != len(unique_commits):
+        # At least one commit failed to canonicalize (bad/unknown ref) — never
+        # an ancestor, matching the original loop's returncode-!=0 -> False.
+        return False
+
+    return canonical.issubset(ancestor_set)
 
 
 def _resolve_release_tag(
@@ -2386,6 +2494,16 @@ def day_coverage_sweep(worktree_root: Path, day: str) -> dict:
         worktree_root, sorted(all_stored_shas)
     )
 
+    # Ledger-first (coordinator_core.claim_state.resolve_claim_state): a
+    # branch-switch-reverted frontmatter mirror (the incident that module's
+    # docstring names) must not make an actively-claimed baton look
+    # unclaimed here — that is the false GENUINELY-ORPHANED alarm this read
+    # exists to close. Only widens what counts as claimed (never narrows):
+    # a live ledger holder is added to ``open_claimed_by`` in addition to
+    # whatever the raw mirror already contributed, so a commit that would
+    # otherwise land in ``orphaned`` can be reclassified ``in_flight``, but
+    # nothing already claimed/foreign/recoverable/sibling-homed loses that
+    # status and no commit gains ``orphaned`` status it didn't already have.
     open_claimed_by: Set[str] = set()
     handoff_dirs, _handoff_dirs_warning = _resolve_handoff_dirs(worktree_root)
     open_handoff_dir = handoff_dirs[0]  # state/handoffs (or meta-repo central root)
@@ -2399,6 +2517,15 @@ def day_coverage_sweep(worktree_root: Path, day: str) -> dict:
         )
         if claimed_by and claimed_by != "null":
             open_claimed_by.add(claimed_by)
+        try:
+            claim_state = resolve_claim_state(hf_path, repo_root=worktree_root)
+        except Exception:
+            # Fail-closed-to-mirror: an unreadable/errored ledger resolution
+            # is not evidence of a live claim — the raw mirror read above
+            # (already folded in) stays the only signal for this handoff.
+            claim_state = None
+        if claim_state is not None and claim_state.holder:
+            open_claimed_by.add(claim_state.holder)
 
     foreign_shas = _foreign_delivery_commits(
         worktree_root, day, {sha for sha, _sid in day_commits}

@@ -91,6 +91,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
 
 
 class GateVerdict(str, Enum):
@@ -177,10 +178,6 @@ _DETAIL_TAIL_CHARS = 2000
 _DEFAULT_CLI_TIMEOUT_SECONDS = 120.0
 
 
-def _no_console_creationflags() -> int:
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
 def _run(
     cli_path: Path,
     args: list[str],
@@ -225,7 +222,7 @@ def _run(
             text=True,
             check=False,
             timeout=effective_timeout,
-            creationflags=_no_console_creationflags(),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -700,7 +697,7 @@ Adding it later is additive (a new key here), not a reshape of this table."""
 
 
 @register_op("updatedocs.gates")
-async def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "updatedocs.gates" handler — runs the named gate subset and
     returns {"gates": [...], "rollup": {...}}.
 

@@ -3070,6 +3070,48 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (still the sole ledger writer) and moving every processed record file.
     # See coordinator_core/ops/priority_drain.py module docstring.
     "priority.drain": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # diagnostics.* — the three write-free transport-failure probes
+    # (coordinator_core/ops/diagnostics_probes.py). COMPUTE_ONLY is the
+    # substantive claim here, not a formality: `op_scopes` carries "none" for
+    # these, but that field keys REPO STATE, not write-freedom
+    # (install.write_identity_file is also "none" and writes a file). This
+    # entry is what carries the write-free property onto the authz surface,
+    # and it is the entire reason the family may be fired at a live, dirty,
+    # shared working tree.
+    #
+    # DR-208 five-question affirmation, derived by reading the module (all
+    # three handlers share one affirmation because they share one body shape:
+    # _always_succeeds returns a dict literal; _always_refuses and
+    # _always_structural_pin each raise a module-local exception constructed
+    # from a literal string — there is no third statement in any of them):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      No handler calls anything: no callee at all, so no transitive write
+    #      surface to audit. The module's only import beyond typing/pathlib is
+    #      `register_op`.
+    #   2. Writes into rag's relational store?                                 No.
+    #      No store client is imported or reachable. Dual-write ban trivially
+    #      satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      No open(), no pathlib write, no tempfile, no os.replace. `Path` is
+    #      imported for the `repo_root: Optional[Path]` signature-parity
+    #      annotation only and is never constructed or dereferenced.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      `params` and `repo_root` are accepted and deliberately ignored — not
+    #      read, not echoed, not mutated. The two exception classes are
+    #      module-local; `DiagnosticsStructuralPin.structurally_wedged` is a
+    #      class attribute set at definition time, not mutated per call.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      The only effects are the returned dict and the two raised
+    #      exceptions, both of which die with the invoke child's stdout.
+    #   Behaviour is unconditional in both directions: no param, env var, or
+    #   repo state can change what any of the three does — see the module's
+    #   negative-spec block, which forbids acquiring "useful" behaviour at all.
+    # Spec: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1b
+    # ---------------------------------------------------------------------------
+    "diagnostics.always_succeeds": OpClass.COMPUTE_ONLY,
+    "diagnostics.always_refuses": OpClass.COMPUTE_ONLY,
+    "diagnostics.always_structural_pin": OpClass.COMPUTE_ONLY,
 })
 
 

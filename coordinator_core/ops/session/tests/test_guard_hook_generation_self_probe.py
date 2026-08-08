@@ -131,6 +131,97 @@ def test_stale_doe_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypat
     assert marker.is_file()
 
 
+def test_migrated_doe_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
+    """Migrated-box shape (Ask 1, plan 2026-08-07-detector-effective-guard-
+    sets.md, C0): the `.doe-root` pointer now lives at
+    `<settings-home>/machine-local/.doe-root`, not `{config_dir}/.doe-root`
+    (retired — see that plan's C0 body for the cross-machine-clobber
+    history). `config_dir` here is a direct sibling of the settings home
+    (`home/.claude` next to `home/.coordinator-claude-settings`), the exact
+    shape `_settings_home_scoped_to` trusts and `settings_home()`'s own
+    default construction produces. No LEGACY `.doe-root` exists at all —
+    this fixture is unreachable pre-fix, which is the point: today's code
+    only ever reads `config_dir / .doe-root`."""
+    home = tmp_path / "home"
+    home.mkdir()
+    config_dir = home / ".claude"
+    config_dir.mkdir()
+    settings_home_dir = home / ".coordinator-claude-settings"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+    doe_root = tmp_path / "example-doctrine-repo-clone"
+    (doe_root / "coordinator").mkdir(parents=True)
+    ml_dir = settings_home_dir / "machine-local"
+    ml_dir.mkdir(parents=True)
+    (ml_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
+
+    text = run_self_probe(config_dir)
+
+    assert text == ""
+    marker = kill_switch_marker_path(str(config_dir / "settings.json"))
+    assert not marker.is_file()
+
+
+def test_migrated_doe_root_empty_pointer_does_not_fall_through_to_legacy(
+    tmp_path: Path, monkeypatch
+):
+    """Empty-migrated-pointer nitpick (Review: staff-eng, finding 9, plan
+    2026-08-07-detector-effective-guard-sets.md, C0): presence of the
+    migrated FILE suppresses the legacy rung regardless of its contents. A
+    migrated pointer that exists but is blank must resolve to False, NOT
+    fall through to a legacy pointer that is present and would otherwise
+    resolve True."""
+    home = tmp_path / "home"
+    home.mkdir()
+    config_dir = home / ".claude"
+    config_dir.mkdir()
+    settings_home_dir = home / ".coordinator-claude-settings"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+    doe_root = tmp_path / "example-doctrine-repo-clone"
+    (doe_root / "coordinator").mkdir(parents=True)
+    # Legacy rung: present and would resolve True on its own.
+    (config_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    # Migrated rung: present but blank.
+    ml_dir = settings_home_dir / "machine-local"
+    ml_dir.mkdir(parents=True)
+    (ml_dir / ".doe-root").write_text("", encoding="utf-8")
+    monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
+
+    text = run_self_probe(config_dir)
+
+    assert "RE-ARMED" in text
+    marker = kill_switch_marker_path(str(config_dir / "settings.json"))
+    assert marker.is_file()
+
+
+def test_migrated_doe_root_unscoped_config_dir_not_consulted(tmp_path: Path, monkeypatch):
+    """Scope-escape guard (Review: staff-eng, finding 4): `machine_local_dir()`
+    resolves off ambient env/host state, not `config_dir`. An unrelated
+    `config_dir` (not a sibling of the resolved settings home) must NOT pick
+    up a live migrated pointer that genuinely exists under that settings
+    home — the migrated rung is only consulted when `config_dir` is scoped
+    to it. Mirrors `test_ambient_settings_home_unrelated_to_config_dir_is_not_trusted`
+    in test_guard_settings_integrity_restore_rungs.py."""
+    ambient_home = tmp_path / "unrelated-real-home"
+    settings_home_dir = ambient_home / ".coordinator-claude-settings"
+    ml_dir = settings_home_dir / "machine-local"
+    doe_root = tmp_path / "example-doctrine-repo-clone"
+    (doe_root / "coordinator").mkdir(parents=True)
+    ml_dir.mkdir(parents=True)
+    (ml_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
+
+    config_dir = tmp_path / "config"  # NOT a sibling of settings_home_dir
+    config_dir.mkdir()
+    monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
+
+    text = run_self_probe(config_dir)
+
+    assert "RE-ARMED" in text
+    marker = kill_switch_marker_path(str(config_dir / "settings.json"))
+    assert marker.is_file()
+
+
 def test_rearmed_marker_is_schema_valid_for_sibling_parser(tmp_path: Path, monkeypatch):
     """The marker this probe writes must round-trip through
     `guard_settings_integrity._read_kill_switch_marker` as well-formed (real

@@ -25,7 +25,7 @@
     },
     "status": {
       "enum": ["open", "claimed", "consumed", "superseded"],
-      "description": "'superseded' is retired (2026-06-26) but retained here for archived/legacy/sibling read-tolerance — the archived corpus (archive/handoffs/) still holds records written under the retired vocabulary and this schema must keep reading them. (Retracted 2026-07-22: no emit path validates against this schema pre-coerce — example-doctrine-repo's emit-cockpit-snapshot.py is a fail-loud stub with no validation body, and claude-klabauter's records-query emit path reads handoffs without schema validation, coercing old→new vocabulary afterwards in Python. Do not re-derive an emit-narrowing constraint from this description.) DR-084 P4 narrow landed 2026-07-22 removing 'active'/'consumed' from this enum on the verified premise of a clean example-doctrine-repo corpus. Restored 2026-07-27: this schema is the fleet-shared reader validator for sibling repos' archived corpora too, and claude-klabauter's archive/handoffs/ holds 11 records written under the retired 'consumed' vocabulary — 'consumed' is restored here on exactly the read-tolerance grounds that retain 'superseded' above. 'active' remains retired — no record in any surveyed corpus carries it; restore it only on corpus evidence. The live handoff.schema.json keeps its narrow ['open','claimed'] and is unaffected by this restoration."
+      "description": "'superseded' is retired (2026-06-26) but retained here for archived/legacy/sibling read-tolerance — the archived corpus (archive/handoffs/) still holds records written under the retired vocabulary and this schema must keep reading them. (Retracted 2026-07-22: no emit path validates against this schema pre-coerce — example-doctrine-repo's emit-cockpit-snapshot.py is a fail-loud stub with no validation body, and claude-klabauter's records-query emit path reads handoffs without schema validation, coercing old→new vocabulary afterwards in Python. Do not re-derive an emit-narrowing constraint from this description.) DR-084 P4 narrow removed 'active'/'consumed' from this enum on the verified premise of a clean example-doctrine-repo corpus. Restored 2026-07-27: this schema is the fleet-shared reader validator for sibling repos' archived corpora too, and claude-klabauter's archive/handoffs/ holds 11 records written under the retired 'consumed' vocabulary — 'consumed' is restored here on exactly the read-tolerance grounds that retain 'superseded' above. 'active' remains retired — no record in any surveyed corpus carries it; restore it only on corpus evidence. The live handoff.schema.json keeps its narrow ['open','claimed'] and is unaffected by this restoration."
     },
     "predecessor": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
@@ -61,7 +61,7 @@
     },
     "continued_into": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "Successor pointer for deployment_state=continued — handoff_id (hnd-<slug>-<6hex>) preferred, state/handoffs/... path fallback (pre-existing successors carry no handoff_id; no backfill). The tooth that keeps 'continued' from becoming liveness-guess abandonment: an automated writer that cannot name the successor cannot stamp continued. Required-when-continued (landed at the P4 narrow, 2026-07-22)."
+      "description": "Successor pointer for deployment_state=continued — handoff_id (hnd-<slug>-<6hex>) preferred, state/handoffs/... path fallback (pre-existing successors carry no handoff_id; no backfill). The tooth that keeps 'continued' from becoming liveness-guess abandonment: an automated writer that cannot name the successor cannot stamp continued. Required-when-continued (per the P4 narrow)."
     },
     "disposed_successors": {
       "type": "array",
@@ -70,7 +70,7 @@
     },
     "closed_reason": {
       "anyOf": [{"enum": ["cancelled", "displaced", "stale"]}, {"type": "null"}],
-      "description": "Deliberate-stop subtype for deployment_state=closed (human/session only, never automated — DR-084). cancelled = deliberate stop; displaced = replaced with NO lineage edge (with an edge it's continued, not closed); stale = overtaken by events. Deliberately NO crashed/orphaned value: a successor-less dead-holder has no automated terminal — it surfaces for adjudication. Required-when-closed (landed at the P4 narrow, 2026-07-22)."
+      "description": "Deliberate-stop subtype for deployment_state=closed (human/session only, never automated — DR-084). cancelled = deliberate stop; displaced = replaced with NO lineage edge (with an edge it's continued, not closed); stale = overtaken by events. Deliberately NO crashed/orphaned value: a successor-less dead-holder has no automated terminal — it surfaces for adjudication. Required-when-closed (per the P4 narrow)."
     },
     "session_goal": {
       "type": "string",
@@ -82,7 +82,7 @@
     },
     "kind": {
       "enum": ["session-handoff", "spinoff", "spinoff-roadmap", "spinoff-goal", "spinoff-roadmap-creator", "recovery", "spike-result", "roadmap-baton", "goal-seed", "roadmap-seed"],
-      "description": "Kind of handoff. Synced to the live handoff.schema.json enum (2026-07-07 sister fork kinds spinoff-goal/spinoff-roadmap-creator; 2026-07-21 spike-result per DEC-3a) — archived records may carry any live kind, so this sibling schema must not drift narrower than the source. WIDENED, never narrowed (baton-kind-vocabulary-one-axis-per-field C10): the live schema's C10 bump RETIRED spinoff-roadmap/spinoff-goal/spinoff-roadmap-creator in favor of roadmap-baton/goal-seed/roadmap-seed, but this archived sibling ADDS the new names alongside the old ones rather than swapping — the archived corpus permanently retains every historical kind value a record was ever written under, exactly as this schema already does for the retired 'consumed'/'superseded' status values and the retired 'spike-result' kind above. Narrowing this enum would invalidate already-archived records written under the pre-C10 vocabulary."
+      "description": "Kind of handoff. Synced to the live handoff.schema.json enum (sister fork kinds spinoff-goal/spinoff-roadmap-creator; spike-result per DEC-3a) — archived records may carry any live kind, so this sibling schema must not drift narrower than the source. WIDENED, never narrowed (baton-kind-vocabulary-one-axis-per-field C10): the live schema's C10 bump RETIRED spinoff-roadmap/spinoff-goal/spinoff-roadmap-creator in favor of roadmap-baton/goal-seed/roadmap-seed, but this archived sibling ADDS the new names alongside the old ones rather than swapping — the archived corpus permanently retains every historical kind value a record was ever written under, exactly as this schema already does for the retired 'consumed'/'superseded' status values and the retired 'spike-result' kind above. Narrowing this enum would invalidate already-archived records written under the pre-C10 vocabulary."
     },
     "authoring_session": {
       "type": "string",
@@ -103,7 +103,7 @@
     },
     "deployment_state": {
       "enum": ["awaiting_gate", "ready_to_fire", "in_flight", "shipped", "continued", "closed"],
-      "description": "Deployment state at time of archival. DR-084 P4 narrow landed 2026-07-22: 'abandoned' retired; 'continued' and 'closed' are its replacements."
+      "description": "Deployment state at time of archival. DR-084 P4 narrow: 'abandoned' is retired; 'continued' and 'closed' are its replacements."
     },
     "gate_dependency": {
       "type": "string",
@@ -133,15 +133,15 @@
     },
     "handoff_id": {
       "type": "string",
-      "description": "Durable stable ID for this handoff/spinoff record, path-independent (survives archival move/rename). OPTIONAL — pre-existing handoffs authored before this field was introduced carry no handoff_id and are NOT backfilled. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator, 2026-07-08)."
+      "description": "Durable stable ID for this handoff/spinoff record, path-independent (survives archival move/rename). OPTIONAL — pre-existing handoffs authored before this field was introduced carry no handoff_id and are NOT backfilled. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator)."
     },
     "predecessor_id": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "ID-companion for predecessor (C2, add-not-swap) — the predecessor's handoff_id, resolved and stamped at author time from the SAME predecessor the path field names. Null when the predecessor has no handoff_id or predecessor is none/null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator, 2026-07-08). Widened to anyOf[string,null] (2026-07-17) to match the live handoff.schema.json shape and its own documented null case — the plain 'type: string' declaration rejected the documented null value."
+      "description": "ID-companion for predecessor (C2, add-not-swap) — the predecessor's handoff_id, resolved and stamped at author time from the SAME predecessor the path field names. Null when the predecessor has no handoff_id or predecessor is none/null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case — a plain 'type: string' declaration would reject the documented null value."
     },
     "origin_handoff_id": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "ID-companion for origin_handoff (C2, add-not-swap) — the originating baton's handoff_id, resolved and stamped at author time from the SAME baton origin_handoff names. Null when the originating baton has no handoff_id or origin_handoff is null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator, 2026-07-08). Widened to anyOf[string,null] (2026-07-27) to match the live handoff.schema.json shape and its own documented null case — the plain 'type: string' declaration rejected the documented null value."
+      "description": "ID-companion for origin_handoff (C2, add-not-swap) — the originating baton's handoff_id, resolved and stamped at author time from the SAME baton origin_handoff names. Null when the originating baton has no handoff_id or origin_handoff is null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case — a plain 'type: string' declaration would reject the documented null value."
     }
   },
   "allOf": [

@@ -133,7 +133,13 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
     token_matches_binary,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+)
 from coordinator_core.bash_guards._helpers import resolve_git_root
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._write_bump_applicability import (
     bump_applies,
     is_agent_memory_store_path,
@@ -157,8 +163,12 @@ from coordinator_core.bash_guards._write_bump_message import (
     resolve_agent_class,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    PS_SET_LOCATION_ALIASES,
+    extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
+    extract_write_sink_targets_powershell,
     nearest_existing_ancestor as _nearest_existing_ancestor,
+    resolve_relative as _resolve_relative,
 )
 from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
     _GIT_READONLY_SUBCOMMANDS,
@@ -272,19 +282,6 @@ def _deny(reason: str) -> Dict[str, Any]:
             "permissionDecisionReason": reason,
         }
     }
-
-
-def _resolve_relative(base: str, target: str) -> str:
-    """`target` resolved against `base` if relative, else `target` itself
-    verbatim. Never touches the filesystem -- callers resolve the RESULT
-    through `resolve_gitdir`/`realpath` themselves; this is a pure string
-    join."""
-    if not target:
-        return base
-    expanded = os.path.expanduser(target) if target.startswith("~") else target
-    if os.path.isabs(expanded):
-        return expanded
-    return os.path.join(base, expanded)
 
 
 def _resolve_and_casefold(raw: str) -> Optional[str]:
@@ -647,14 +644,20 @@ def _git_subcommand_and_target_cwd(
         tok = tokens[i]
         if tok == "-C":
             if i + 1 < n:
-                cwd_for_git = _resolve_relative(cwd_for_git, tokens[i + 1])
+                # `None` means untranslatable -- leave `cwd_for_git` at its
+                # previous value rather than clobbering it with `None`.
+                resolved = _resolve_relative(cwd_for_git, tokens[i + 1])
+                if resolved is not None:
+                    cwd_for_git = resolved
                 i += 2
                 continue
             i += 1
             continue
         m = _DASH_C_ATTACHED_RE.match(tok)
         if m:
-            cwd_for_git = _resolve_relative(cwd_for_git, m.group(1))
+            resolved = _resolve_relative(cwd_for_git, m.group(1))
+            if resolved is not None:
+                cwd_for_git = resolved
             i += 1
             continue
         if tok == "--git-dir":
@@ -717,9 +720,12 @@ def _git_subcommand_and_target_cwd(
         override = git_dir_override or cli_work_tree or env_work_tree or cli_config_worktree
         if override:
             resolved = _resolve_relative(cwd_for_git, override)
-            cwd_for_git = (
-                _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
-            )
+            # `None` means untranslatable -- leave `cwd_for_git` at its
+            # previous value rather than clobbering it with `None`.
+            if resolved is not None:
+                cwd_for_git = (
+                    _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
+                )
         return tok, cwd_for_git
     env_git_dir, env_work_tree = (
         _env_repo_overrides(raw_tokens, tokens) if raw_tokens is not None else (None, None)
@@ -728,24 +734,38 @@ def _git_subcommand_and_target_cwd(
     override = git_dir_override or cli_work_tree or env_work_tree or cli_config_worktree
     if override:
         resolved = _resolve_relative(cwd_for_git, override)
-        cwd_for_git = (
-            _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
-        )
+        # `None` means untranslatable -- leave `cwd_for_git` at its
+        # previous value rather than clobbering it with `None`.
+        if resolved is not None:
+            cwd_for_git = (
+                _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
+            )
     return None, cwd_for_git
 
 
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str]
-) -> Iterator[Tuple[str, str]]:
-    """Yield `(target_dir, label)` for every depth-0 segment of `cmd` that
-    is either a git WRITE subcommand (`git -C <dir> <sub>` / `cd <dir> &&
-    git <sub>`, tracked via a running `effective_cwd` that a `cd` segment
-    updates for later segments in the SAME compound command) or a
+) -> Iterator[Tuple[str, str, Optional[str]]]:
+    """Yield `(target_dir, label, raw_target)` for every depth-0 segment of
+    `cmd` that is either a git WRITE subcommand (`git -C <dir> <sub>` / `cd
+    <dir> && git <sub>`, tracked via a running `effective_cwd` that a `cd`
+    segment updates for later segments in the SAME compound command) or a
     recognised plain-bash write-sink shape (`_write_bump_sink_shapes`).
 
     `target_dir` is NOT YET resolved to a git root -- callers do that via
     `resolve_gitdir`. Reads (a git subcommand in `_GIT_READONLY_SUBCOMMANDS`)
     are never yielded at all (module docstring, "READS NEVER BUMP").
+
+    `raw_target` (R1, docs/plans/2026-08-08-the-bump-message-never-showed-
+    the-operat.md) is the literal token this segment carried BEFORE
+    `_resolve_relative`/`translate_msys_path` touched it, for the plain-
+    bash write-sink shape -- captured at extraction, never reconstructed
+    (AC2). For a `git` WRITE subcommand, `target_dir` is a CWD `-C`/
+    `--git-dir`/`--work-tree`/env-override CHAIN, not a single typed token
+    naming the write target -- there is no one raw string to show without
+    inventing one, so this leg yields `None` for `raw_target` rather than
+    synthesising a candidate (R1's own instruction: "if the raw token is
+    genuinely unavailable ... say so ... rather than synthesising one").
 
     Only depth-0 segments are inspected -- a segment recovered from inside
     a `$( )`/backtick substitution or an interpreter `-c` payload (depth>0)
@@ -770,7 +790,12 @@ def _iter_write_sink_candidates(
         if head_base == "cd":
             positional = [t for t in rc.tokens[1:] if not t.startswith("-")]
             if len(positional) == 1:
-                effective_cwd = _resolve_relative(effective_cwd, positional[0])
+                # `None` means untranslatable -- a `cd` we cannot resolve
+                # must not poison every subsequent candidate in this
+                # segment, so leave `effective_cwd` at its previous value.
+                resolved = _resolve_relative(effective_cwd, positional[0])
+                if resolved is not None:
+                    effective_cwd = resolved
             continue
 
         if head_base == "git":
@@ -778,11 +803,14 @@ def _iter_write_sink_candidates(
                 rc.tokens, effective_cwd, raw_tokens=rc.raw_tokens
             )
             if subcommand and subcommand not in _GIT_READONLY_SUBCOMMANDS:
-                yield (target_cwd, "git %s" % subcommand)
+                yield (target_cwd, "git %s" % subcommand, None)
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
-            yield (_resolve_relative(effective_cwd, raw_target), head_base)
+            resolved_target = _resolve_relative(effective_cwd, raw_target)
+            if resolved_target is None:
+                continue
+            yield (resolved_target, head_base, raw_target)
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +837,195 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The shared per-candidate JUDGMENT (AC9 -- the thing this leg must NOT
+# re-derive, only feed). Factored out of `check_bump_foreign_repo_write`'s
+# own loop body so the Bash and PowerShell legs share one verdict predicate
+# and can only ever differ in how a candidate `target_dir` is EXTRACTED --
+# see this guard's own dialect-gate comment below and the sibling
+# `bump_outside_repo_write.py` for why that split matters: this guard's own
+# defining predicate (a candidate resolving to SOME OTHER git root) lives
+# entirely in this function, unchanged by which dialect found the
+# candidate.
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_foreign_repo_candidate(
+    target_dir: str,
+    session_id: str,
+    payload: Dict[str, Any],
+    anchor: str,
+    anchor_has_repo: bool,
+    anchor_common_cf: Optional[str],
+    env: dict,
+    agent_id: str,
+    raw_target: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """One candidate write-sink `target_dir`, already resolved to an
+    absolute-or-cwd-relative string by the caller's own extraction leg,
+    judged against this guard's defining predicate -- returns a deny
+    envelope, or `None` when the candidate does not bump, exactly as
+    `check_bump_foreign_repo_write`'s own loop body did before this
+    factor-out. See that function's
+    docstring for the ordered-checks summary this preserves verbatim.
+
+    `raw_target` (R1) is the caller's own PRE-translation token for this
+    candidate, or `None` when the caller's extraction leg has no single raw
+    token to offer (see `_iter_write_sink_candidates`'s own docstring for
+    the git-subcommand case). Threaded into `render_bump_message` only when
+    it differs from `target_dir` -- identical values collapse to the single
+    display form (AC2's "never print the same string twice" instruction)."""
+    probe_dir = _nearest_existing_ancestor(target_dir)
+    if probe_dir is None:
+        # No existing ancestor at all -- cannot resolve a git root
+        # either way; fail open (see `_nearest_existing_ancestor`).
+        return None
+    target_gitdir = resolve_gitdir(probe_dir)
+    if target_gitdir is None:
+        # Not inside any git repo at all -- an outside-repo write, C5's
+        # concern, never this guard's.
+        return None
+
+    # Lessons-outbox exemption -- a DIFFERENT axis from the AC5
+    # cross-repo-memo carve-out (checked by the caller before this
+    # function ever runs). This exemption matches on DESTINATION PATH
+    # SHAPE, and can only be evaluated once a candidate's `target_gitdir`
+    # is known to be non-`None`. It also sits per-CANDIDATE rather than
+    # per-command: a compound command could write both an ordinary
+    # foreign-repo target and a lessons-outbox one, and only the latter
+    # should be silenced.
+    if _target_is_lessons_outbox_write(target_dir):
+        return None
+
+    # Agent memory store -- Claude Code's own per-project persistent
+    # memory (`<home>/.claude/projects/<slug>/memory/**`), never a
+    # sibling repo or a cross-repo delivery even though `~/.claude` is
+    # itself a git checkout on this fleet -- see
+    # `is_agent_memory_store_path`'s own docstring for the false
+    # positive this closes.
+    if is_agent_memory_store_path(target_dir):
+        return None
+
+    # Resolved once per candidate, reused below for the AC14 common-dir
+    # comparison (when `anchor_has_repo`) and unconditionally for
+    # `target_repo_label` -- see `_common_dir_cf_from_root`'s docstring
+    # for why this used to cost a second subprocess spawn per candidate.
+    probe_root = resolve_git_root(probe_dir)
+
+    if anchor_has_repo:
+        # AC14 -- compare COMMON dirs (worktree-safe), matching
+        # `sessions_dir`'s own comparison; see `_common_dir_cf_from_root`.
+        target_common_cf = _common_dir_cf_from_root(probe_root)
+        if (
+            anchor_common_cf is not None
+            and target_common_cf is not None
+            and _same_repo_root(anchor_common_cf, target_common_cf)
+        ):
+            return None
+        # C3 -- the marker moves to the TARGET's own gitdir, not the
+        # session anchor's: a target git repo is confirmed to exist at
+        # this point (`target_gitdir is not None`, checked above), so
+        # this branch now generalizes the no-repo-anchor branch's own
+        # `marker_probe = probe_dir` fallback below, per-(session,
+        # target) rather than per-session (AC4; see
+        # `_write_bump_marker`'s "MARKER SCOPE" docstring section).
+        marker_probe = probe_dir
+    else:
+        # § No-repo anchor branch -- the session itself owns no repo,
+        # so only a REGISTERED target still bumps (per § Where the
+        # bump does not fire), and the marker falls back to the
+        # TARGET's own gitdir (see module docstring for why).
+        if not target_is_registered_repo(str(target_gitdir), env=env):
+            return None
+        # `probe_dir`, not `target_dir` -- same latent-bug fix as
+        # above: `resolve_git_root`/`bump_is_cleared` also shell out
+        # with this as `cwd`, which requires an EXISTING directory.
+        marker_probe = probe_dir
+
+    marker_probe_root = resolve_git_root(marker_probe)
+    if bump_is_cleared(
+        marker_probe, session_id, git_root=marker_probe_root, agent_id=agent_id
+    ):
+        return None
+
+    marker_gitdir = resolve_gitdir(marker_probe)
+    if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+        # Cannot compose a clear line without a gitdir, OR the target
+        # gitdir exists but is not writable/readable (STAFF-ENG F0, AC5)
+        # -- fail open on the WRITE axis in BOTH cases: allow, rather
+        # than print a message the reader can never satisfy. See
+        # `_write_bump_marker.marker_gitdir_is_writable`'s own docstring
+        # -- a read-only target `.git` (a mirror synced under another
+        # uid) takes the identical disposition as an unresolvable one.
+        return None
+
+    agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, marker_probe_root)
+    sandbox_root = (
+        _sandbox_root_hint(marker_probe_root, effective_session_id(session_id, marker_probe_root, agent_id))
+        if agent_class == AGENT_CLASS_SUBAGENT
+        else ""
+    )
+    effective_sid = effective_session_id(session_id, marker_probe_root, agent_id)
+
+    target_repo_label = probe_root or target_dir
+    session_repo_label = resolve_git_root(anchor) or anchor
+
+    # C1 -- classify the target as a registered PUBLISH destination or
+    # an ordinary FOREIGN source repo (§ Design's three-class table;
+    # OUTSIDE_ANY_REPO is never reached here, since this guard only ever
+    # sees a resolved `target_gitdir` -- that predicate is C5's). Closed-
+    # set membership decides the verdict; `owner` is context only for
+    # C2's copy, never gating (see `target_is_publish_destination`'s own
+    # docstring).
+    destination_class = (
+        DESTINATION_PUBLISH
+        if target_is_publish_destination(target_repo_label, env=env)
+        else DESTINATION_FOREIGN
+    )
+    destination_owner = (
+        publish_destination_owner(target_repo_label, env=env)
+        if destination_class == DESTINATION_PUBLISH
+        else ""
+    )
+
+    # Finding #3 -- `cwd=anchor`, NOT the live payload `cwd`: the live
+    # `cwd` is (in this guard's own canonical scenario) the FOREIGN
+    # target repo, which would land this observability log in the very
+    # repo the guard is bumping the write away from. This binds the LOG
+    # ONLY, never the marker -- the two are different in kind. The
+    # OPERATOR writes the marker via a deliberate `touch` (an
+    # affirmative clear act the operator chooses to perform against a
+    # specific target -- see C3, `marker_probe = probe_dir` above,
+    # narrowed per-(session, target) rather than per-session); the
+    # GUARD writes this observability log unbidden, on every fire, with
+    # no operator choice involved. "The guard must not write into the
+    # repo it is bumping you away from" binds THIS call site (still
+    # `cwd=anchor`, still anchor-homed, still never the foreign one) --
+    # it does not bind the marker's own siting, so narrowing where the
+    # marker lives is not a contradiction of that principle, it is
+    # orthogonal to it.
+    record_applicability_event(
+        session_id,
+        repo=session_repo_label,
+        target=target_repo_label,
+        agent_class=agent_class,
+        cwd=anchor,
+    )
+
+    message = render_bump_message(
+        agent_class=agent_class,
+        target_repo=target_repo_label,
+        session_repo=session_repo_label,
+        gitdir=marker_gitdir,
+        session_id=effective_sid,
+        sandbox_root=sandbox_root,
+        destination_class=destination_class,
+        destination_owner=destination_owner,
+        raw_target=raw_target if raw_target and raw_target != target_dir else "",
+    )
+    return _deny(message)
+
+
+# ---------------------------------------------------------------------------
 # The guard itself.
 # ---------------------------------------------------------------------------
 
@@ -816,12 +1033,25 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
 def check_bump_foreign_repo_write(
     cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """The Bash-surface cross-repo write-confinement bump (C4). Returns a
-    deny envelope (the bump message) when this command's own write/commit
+    """The cross-repo write-confinement bump (C4/C5e). Returns a deny
+    envelope (the bump message) when this command's own write/commit
     targets a git root other than the session's own; `None` (allow,
     silently) in every other case, including every unresolvable one --
     see module docstring, § Design posture.
+
+    DIALECT GATE (C5e, 2026-08-07, guard-dialect-coverage.md row 16):
+    `Dialect.POWERSHELL` routes to `_check_bump_foreign_repo_write_
+    powershell`, which extracts candidates via the PowerShell cmdlet-shaped
+    write-sink table (`_write_bump_sink_shapes.PS_WRITE_SINK_CMDLETS`) and
+    then judges every candidate through the IDENTICAL predicate this Bash
+    body uses (`_evaluate_foreign_repo_candidate`) -- the two legs differ
+    ONLY in candidate extraction, never in verdict logic. `Dialect.BASH`/
+    `None` falls through unchanged below (AC4).
     """
+    dialect = dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None)
+    if dialect is Dialect.POWERSHELL:
+        return _check_bump_foreign_repo_write_powershell(cmd, session_id, cwd, payload)
+
     if not cmd or not cmd.strip() or not session_id:
         return None
 
@@ -847,160 +1077,221 @@ def check_bump_foreign_repo_write(
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
-    for target_dir, label in _iter_write_sink_candidates(cmd, cwd):
-        probe_dir = _nearest_existing_ancestor(target_dir)
-        if probe_dir is None:
-            # No existing ancestor at all -- cannot resolve a git root
-            # either way; fail open (see `_nearest_existing_ancestor`).
-            continue
-        target_gitdir = resolve_gitdir(probe_dir)
-        if target_gitdir is None:
-            # Not inside any git repo at all -- an outside-repo write, C5's
-            # concern, never this guard's.
-            continue
+    for target_dir, _label, raw_target in _iter_write_sink_candidates(cmd, cwd):
+        # Review: coordinator:code-reviewer -- keyword args at both call
+        # sites give this shared eight-parameter predicate a reorder-safe
+        # net across the Bash and PowerShell legs.
+        result = _evaluate_foreign_repo_candidate(
+            target_dir=target_dir,
+            session_id=session_id,
+            payload=payload,
+            anchor=anchor,
+            anchor_has_repo=anchor_has_repo,
+            anchor_common_cf=anchor_common_cf,
+            env=env,
+            agent_id=agent_id,
+            raw_target=raw_target,
+        )
+        if result is not None:
+            return result
 
-        # Lessons-outbox exemption -- a DIFFERENT axis from the AC5
-        # cross-repo-memo carve-out above, and placed deliberately later
-        # than it. AC5 matches on INVOKED EXECUTABLE IDENTITY and is checked
-        # unconditionally before `bump_applies`/anything else, because it
-        # must suppress the bump for the sanctioned memo CLI regardless of
-        # which repo it happens to write into. This exemption instead
-        # matches on DESTINATION PATH SHAPE, and can only be evaluated once
-        # a candidate's `target_gitdir` is known to be non-`None` -- unlike
-        # AC5, it depends on state this loop has already resolved (a real
-        # foreign repo, confirmed above), so it cannot run before
-        # `bump_applies`/`resolve_launch_anchor` the way AC5 does. It also
-        # sits per-CANDIDATE rather than per-command: a compound command
-        # could write both an ordinary foreign-repo target and a
-        # lessons-outbox one, and only the latter should be silenced.
-        if _target_is_lessons_outbox_write(target_dir):
+    return None
+
+
+# ---------------------------------------------------------------------------
+# PowerShell-dialect leg (C5e, 2026-08-07, guard-dialect-coverage.md row 16).
+# EXTRACTION ONLY differs from the Bash body above -- the PowerShell cmdlet
+# table (`PS_WRITE_SINK_CMDLETS`/`extract_write_sink_targets_powershell`)
+# replaces `_iter_write_sink_candidates`'s git-subcommand/plain-bash-sink
+# scan, but every resulting candidate is judged through the SAME
+# `_evaluate_foreign_repo_candidate` this guard's Bash body uses -- this is
+# the semantic difference from the sibling `bump_outside_repo_write.py`'s
+# own PowerShell leg (which fires on NO git root; this guard fires on a
+# DIFFERENT git root -- see this module's own docstring, "WHAT COUNTS AS
+# THE SESSION'S OWN REPO", and do not copy that sibling's resolution path).
+# Kept as a fully separate function (not interleaved into the bash body),
+# matching `block_subagent_destructive_action._check_powershell`'s own
+# "kept separate" reasoning for the identical structural reason.
+# ---------------------------------------------------------------------------
+
+
+def _check_bump_foreign_repo_write_powershell(
+    cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg. Detects ONLY the cmdlet-shaped write-sink
+    table `_write_bump_sink_shapes.PS_WRITE_SINK_CMDLETS` names (`New-Item`/
+    `Set-Content`/`Add-Content`/`Copy-Item`/`Move-Item`/`Out-File`/
+    `Tee-Object`). Every other PowerShell shape in a given command -- a bare
+    `>`/`>>` redirect, a `cp`/`mv` alias, an unrecognized cmdlet, `git`
+    invoked from PowerShell (this leg does not attempt `-C`/`--git-dir`
+    tracking the way the Bash body's `_git_subcommand_and_target_cwd` does),
+    or a segment this dialect's tokenizer cannot parse at all -- records
+    SILENT and is never treated as "inspected and clean", per this plan's
+    "prefer SILENT to a guess" posture (mirrors `bump_outside_repo_write.
+    _check_bump_outside_repo_write_powershell`'s own SILENT-on-unmatched-
+    shape discipline).
+
+    TRACKS `Set-Location`/`cd`/`sl`/`chdir` ACROSS SEGMENTS (fixed
+    2026-08-08, backlog row
+    `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`),
+    mirroring the bash body's own `effective_cwd` tracking
+    (`_iter_write_sink_candidates`'s `cd` branch) rather than inventing a
+    second mechanism: a running `effective_cwd` is threaded across
+    segments, updated by each resolvable `Set-Location`/alias target
+    (`extract_set_location_target_powershell`), so a cmdlet write-target
+    candidate extracted AFTER a directory change resolves against the
+    changed base, not the original `cwd`.
+
+    SILENT-NOT-DENY IS ABSOLUTE HERE: once a `Set-Location` target fails to
+    resolve (`_resolve_relative` returns `None` -- an unresolvable literal,
+    a `$var`-shaped or otherwise unexpanded target, same limitation this
+    package already carries for `-C $VAR`/`GIT_DIR="$VAR"`), `effective_cwd`
+    is left UNTRUSTED for the remainder of this command: every subsequent
+    write-sink candidate is declined outright (never judged, never a
+    guessed base) rather than resolved against a now-possibly-stale cwd.
+    This is a strictly WIDER silence than "just resolve against the last
+    known-good cwd" would be -- deliberately, since the whole point of this
+    fix is closing false negatives, and continuing to judge candidates
+    against a base already known wrong could manufacture either a false
+    bump or a false pass off a wrong parent. A `Set-Location` invoked with
+    no target at all (bare `cd`, real PowerShell's `$HOME` default this
+    module has no reliable way to resolve) is treated as "cwd unchanged",
+    never as "cwd now unknown" -- see `extract_set_location_target_
+    powershell`'s own docstring.
+
+    Only LITERAL `Set-Location` targets are followed -- a target containing
+    `$` (a PowerShell variable, `$env:` reference, or `$(...)`
+    subexpression -- `Set-Location $foo`/`Set-Location "$($x)/dir"`) is
+    NEVER handed to `_resolve_relative` at all, since composing it onto
+    `effective_cwd` would silently manufacture a wrong-but-plausible-
+    looking base (the exact "guess a base" this fix must not do, same
+    named, accepted limitation as the bash leg's env-override handling,
+    `_env_repo_overrides`'s own docstring for why a literal-text
+    interpretation is not attempted). It is treated identically to an
+    `_resolve_relative`-unresolvable target: `effective_cwd` goes
+    untrusted and every later candidate in this command is declined.
+    """
+    if not cmd or not cmd.strip() or not session_id:
+        return None
+
+    env = os.environ
+
+    # AC5 -- unconditional, checked before applicability/marker/anything
+    # else, identically to the Bash body above.
+    if _command_invokes_cross_repo_memo(cmd, cwd, env=env):
+        return None
+
+    if not bump_applies(session_id, cwd=cwd, env=env):
+        return None
+
+    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
+    if not anchor:
+        return None
+    anchor_gitdir = resolve_gitdir(anchor)
+    anchor_has_repo = anchor_gitdir is not None
+    anchor_common_cf = (
+        _common_dir_cf_from_root(resolve_git_root(anchor)) if anchor_has_repo else None
+    )
+
+    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
+
+    segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="bump-foreign-repo-write")
+    if segments is None:
+        # SILENT already recorded by `resolve_segments_for_dialect` itself
+        # (ImportError, `has_error` parse residue, absent dialect) -- no
+        # second SILENT path needed for that case.
+        return None
+
+    effective_cwd = cwd or os.getcwd()
+    matched_any_cmdlet = False
+    cwd_unresolved = False
+
+    for tokens, _pipe_before in segments:
+        if not tokens:
             continue
+        head_low = tokens[0].lower()
 
-        # Agent memory store -- Claude Code's own per-project persistent
-        # memory (`<home>/.claude/projects/<slug>/memory/**`), never a
-        # sibling repo or a cross-repo delivery even though `~/.claude` is
-        # itself a git checkout on this fleet -- see
-        # `is_agent_memory_store_path`'s own docstring for the false
-        # positive this closes.
-        if is_agent_memory_store_path(target_dir):
-            continue
-
-        # Resolved once per candidate, reused below for the AC14 common-dir
-        # comparison (when `anchor_has_repo`) and unconditionally for
-        # `target_repo_label` -- see `_common_dir_cf_from_root`'s docstring
-        # for why this used to cost a second subprocess spawn per candidate.
-        probe_root = resolve_git_root(probe_dir)
-
-        if anchor_has_repo:
-            # AC14 -- compare COMMON dirs (worktree-safe), matching
-            # `sessions_dir`'s own comparison; see `_common_dir_cf_from_root`.
-            target_common_cf = _common_dir_cf_from_root(probe_root)
-            if (
-                anchor_common_cf is not None
-                and target_common_cf is not None
-                and _same_repo_root(anchor_common_cf, target_common_cf)
-            ):
+        if head_low in PS_SET_LOCATION_ALIASES:
+            target = extract_set_location_target_powershell(tokens, head_low)
+            if target is None:
+                # Bare `Set-Location`/`cd` with no argument -- treated as
+                # "cwd unchanged", never as "cwd now unknown" (see this
+                # function's own docstring).
                 continue
-            # C3 -- the marker moves to the TARGET's own gitdir, not the
-            # session anchor's: a target git repo is confirmed to exist at
-            # this point (`target_gitdir is not None`, checked above), so
-            # this branch now generalizes the no-repo-anchor branch's own
-            # `marker_probe = probe_dir` fallback below, per-(session,
-            # target) rather than per-session (AC4; see
-            # `_write_bump_marker`'s "MARKER SCOPE" docstring section).
-            marker_probe = probe_dir
-        else:
-            # § No-repo anchor branch -- the session itself owns no repo,
-            # so only a REGISTERED target still bumps (per § Where the
-            # bump does not fire), and the marker falls back to the
-            # TARGET's own gitdir (see module docstring for why).
-            if not target_is_registered_repo(str(target_gitdir), env=env):
+            if cwd_unresolved:
+                # Already lost track of the base -- nothing this segment
+                # resolves against can be trusted either, so skip without
+                # re-recording (one SILENT per command is enough signal).
                 continue
-            # `probe_dir`, not `target_dir` -- same latent-bug fix as
-            # above: `resolve_git_root`/`bump_is_cleared` also shell out
-            # with this as `cwd`, which requires an EXISTING directory.
-            marker_probe = probe_dir
-
-        marker_probe_root = resolve_git_root(marker_probe)
-        if bump_is_cleared(
-            marker_probe, session_id, git_root=marker_probe_root, agent_id=agent_id
-        ):
+            if "$" in target:
+                # Variable-valued target -- never composed onto
+                # `effective_cwd` (would guess a base); go SILENT for the
+                # rest of this command instead.
+                cwd_unresolved = True
+                record_silent(
+                    "bump-foreign-repo-write",
+                    "PowerShell leg's Set-Location target %r is variable-"
+                    "valued -- every subsequent write-sink candidate in "
+                    "this command is declined rather than resolved "
+                    "against a guessed base (see this function's own "
+                    "docstring)" % target,
+                )
+                continue
+            resolved = _resolve_relative(effective_cwd, target)
+            if resolved is None:
+                cwd_unresolved = True
+                record_silent(
+                    "bump-foreign-repo-write",
+                    "PowerShell leg's Set-Location target %r could not be "
+                    "resolved -- every subsequent write-sink candidate in "
+                    "this command is declined rather than judged against "
+                    "an untrusted base cwd (see this function's own "
+                    "docstring)" % target,
+                )
+            else:
+                effective_cwd = resolved
             continue
 
-        marker_gitdir = resolve_gitdir(marker_probe)
-        if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
-            # Cannot compose a clear line without a gitdir, OR the target
-            # gitdir exists but is not writable/readable (STAFF-ENG F0, AC5)
-            # -- fail open on the WRITE axis in BOTH cases: allow, rather
-            # than print a message the reader can never satisfy. See
-            # `_write_bump_marker.marker_gitdir_is_writable`'s own docstring
-            # -- a read-only target `.git` (a mirror synced under another
-            # uid) takes the identical disposition as an unresolvable one.
+        raw_targets = extract_write_sink_targets_powershell(tokens, head_low)
+        if not raw_targets:
+            continue
+        matched_any_cmdlet = True
+
+        if cwd_unresolved:
+            # The base this segment's candidates would resolve against is
+            # untrusted (an earlier Set-Location in this command failed to
+            # resolve) -- decline every candidate rather than judge them
+            # against a wrong parent (see this function's own docstring).
             continue
 
-        agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, marker_probe_root)
-        sandbox_root = (
-            _sandbox_root_hint(marker_probe_root, effective_session_id(session_id, marker_probe_root, agent_id))
-            if agent_class == AGENT_CLASS_SUBAGENT
-            else ""
-        )
-        effective_sid = effective_session_id(session_id, marker_probe_root, agent_id)
+        for raw_target in raw_targets:
+            target_dir = _resolve_relative(effective_cwd, raw_target)
+            if target_dir is None:
+                # Untranslatable -- fail open, no verdict for this
+                # candidate (this guard family's FAIL OPEN posture).
+                continue
+            result = _evaluate_foreign_repo_candidate(
+                target_dir=target_dir,
+                session_id=session_id,
+                payload=payload,
+                anchor=anchor,
+                anchor_has_repo=anchor_has_repo,
+                anchor_common_cf=anchor_common_cf,
+                env=env,
+                agent_id=agent_id,
+                raw_target=raw_target,
+            )
+            if result is not None:
+                return result
 
-        target_repo_label = probe_root or target_dir
-        session_repo_label = resolve_git_root(anchor) or anchor
-
-        # C1 -- classify the target as a registered PUBLISH destination or
-        # an ordinary FOREIGN source repo (§ Design's three-class table;
-        # OUTSIDE_ANY_REPO is never reached here, since this guard only ever
-        # sees a resolved `target_gitdir` -- that predicate is C5's). Closed-
-        # set membership decides the verdict; `owner` is context only for
-        # C2's copy, never gating (see `target_is_publish_destination`'s own
-        # docstring).
-        destination_class = (
-            DESTINATION_PUBLISH
-            if target_is_publish_destination(target_repo_label, env=env)
-            else DESTINATION_FOREIGN
+    if not matched_any_cmdlet and not cwd_unresolved:
+        record_silent(
+            "bump-foreign-repo-write",
+            "PowerShell leg matched no recognized cmdlet write-sink verb "
+            "(New-Item/Set-Content/Add-Content/Copy-Item/Move-Item/Out-File/"
+            "Tee-Object) -- redirection operators, cp/mv aliases, git "
+            "invocations, and any other PowerShell shape are declined "
+            "rather than guessed at (see this function's own docstring)",
         )
-        destination_owner = (
-            publish_destination_owner(target_repo_label, env=env)
-            if destination_class == DESTINATION_PUBLISH
-            else ""
-        )
-
-        # Finding #3 -- `cwd=anchor`, NOT the live payload `cwd`: the live
-        # `cwd` is (in this guard's own canonical scenario) the FOREIGN
-        # target repo, which would land this observability log in the very
-        # repo the guard is bumping the write away from. This binds the LOG
-        # ONLY, never the marker -- the two are different in kind. The
-        # OPERATOR writes the marker via a deliberate `touch` (an
-        # affirmative clear act the operator chooses to perform against a
-        # specific target -- see C3, `marker_probe = probe_dir` above,
-        # narrowed per-(session, target) rather than per-session); the
-        # GUARD writes this observability log unbidden, on every fire, with
-        # no operator choice involved. "The guard must not write into the
-        # repo it is bumping you away from" binds THIS call site (still
-        # `cwd=anchor`, still anchor-homed, still never the foreign one) --
-        # it does not bind the marker's own siting, so narrowing where the
-        # marker lives is not a contradiction of that principle, it is
-        # orthogonal to it.
-        record_applicability_event(
-            session_id,
-            repo=session_repo_label,
-            target=target_repo_label,
-            agent_class=agent_class,
-            cwd=anchor,
-        )
-
-        message = render_bump_message(
-            agent_class=agent_class,
-            target_repo=target_repo_label,
-            session_repo=session_repo_label,
-            gitdir=marker_gitdir,
-            session_id=effective_sid,
-            sandbox_root=sandbox_root,
-            destination_class=destination_class,
-            destination_owner=destination_owner,
-        )
-        return _deny(message)
 
     return None

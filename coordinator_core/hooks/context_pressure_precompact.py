@@ -113,6 +113,8 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
     """
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -120,6 +122,7 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            **no_console_creationflags(),
         )
     except Exception:
         return ""
@@ -205,7 +208,7 @@ def _build_git_section(cwd: Optional[str]) -> List[str]:
             lines.extend(log.splitlines())
         lines.append("")
         lines.append("Modified files:")
-        modified = _run_git(["diff", "--name-only"], cwd=cwd)
+        modified = _run_git(["--no-optional-locks", "diff", "--name-only"], cwd=cwd)
         if modified:
             lines.extend(modified.splitlines()[:20])
         staged = _run_git(["diff", "--staged", "--name-only"], cwd=cwd)
@@ -331,7 +334,7 @@ def run(raw_stdin: str) -> None:
 
 
 @register_op("hooks.context_pressure_precompact")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """IPC/dispatch_message adapter over `run()` — flat-scalar input, thin
     JSON-reconstruction shim so both call shapes (direct `run(raw_json)` and
     dispatch-routed `_handler(params_dict)`) execute identical logic.

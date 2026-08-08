@@ -51,6 +51,7 @@ import os
 import re
 import socket
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 import tempfile
 from pathlib import Path
@@ -136,7 +137,7 @@ def _get_hostname() -> str:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             if r.returncode == 0 and r.stdout.strip():
                 return r.stdout.strip()
@@ -613,7 +614,7 @@ def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         return r.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
@@ -2461,7 +2462,7 @@ def main(argv: List[str]) -> int:
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         proc = None

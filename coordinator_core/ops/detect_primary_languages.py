@@ -120,7 +120,7 @@ def detect_primary_languages(target_root: str | Path, top_n: int = _DEFAULT_TOP_
 
 
 @register_op("detect.primary_languages")
-async def _detect_primary_languages(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _detect_primary_languages(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "detect.primary_languages" handler.
 
     Required params: target_root. Optional params: top_n (default 3).

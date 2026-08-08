@@ -387,7 +387,7 @@ def _read_owning_text(root: Path, globs: Iterable[str] = _OWNING_GLOBS) -> Tuple
 
 
 @register_op("deferral.detect_orphan_memo")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'deferral.detect_orphan_memo' handler — probe THIS repo's
     cross-repo/inbox/ for orphaned-aging deferral memos.
 

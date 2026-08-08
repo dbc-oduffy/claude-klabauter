@@ -844,6 +844,24 @@ def test_is_planning_artifact_path_excludes_doctrine_paths():
     assert _is_planning_artifact_path("docs/wiki/foo.md") is False
 
 
+def test_planning_artifact_prefixes_shared_with_coverage_module():
+    """Regression guard: the brightline gate must resolve to the SAME prefix
+    tuple as coverage.py's crediting classifier, not a re-duplicated one —
+    otherwise the two gate legs can silently diverge on which paths are
+    planning artifacts."""
+    from coordinator_core import coverage as _coverage
+    from coordinator_core.ops import review_brightline_gate as _brightline
+
+    assert (
+        _brightline._PLANNING_ARTIFACT_PATH_PREFIXES
+        is _coverage._PLANNING_ARTIFACT_PATH_PREFIXES
+    )
+    # The predicate is the symbol brightline's own call site actually uses
+    # (_compute_chain_oracle), so its identity is what stops a re-duplication
+    # from going unnoticed while the tuple import stays technically correct.
+    assert _brightline._is_planning_artifact_path is _coverage._is_planning_artifact_path
+
+
 def test_compute_chain_oracle_deweights_plan_prose_not_code(tmp_path, monkeypatch):
     """AC8 negative case, watched to fail before the fix: a commit that is
     ENTIRELY a large plan-prose edit must NOT drive chain_oracle to the same

@@ -29,11 +29,27 @@ one-liner rather than a matrix cell.
 """
 from __future__ import annotations
 
+import os
 import stat
 
 import pytest
 
 from coordinator_core.install.substrate import _install_one
+
+# NTFS has no POSIX exec bit, and `os.chmod` cannot fabricate one on Windows
+# (`os.stat(...).st_mode`'s S_IXUSR/S_IXGRP/S_IXOTH bits are unaffected by
+# any chmod call there — verified empirically: chmod(mode | 0o111) is a
+# silent no-op on the reported mode). `_install_one`'s `exec_bit` request is
+# consequently a POSIX-only mechanism with no Windows-side equivalent to
+# assert instead — Windows resolves executability via file extension/
+# PATHEXT and the separate `.cmd` forwarder companion (see
+# test_forwarder_trust_guard.py), never via the stat mode bits this file's
+# exec-bit-only tests probe.
+_EXEC_BIT_SKIP = pytest.mark.skipif(
+    os.name == "nt",
+    reason="NTFS has no POSIX exec bit; os.chmod cannot set S_IXUSR/GRP/OTH "
+    "on Windows, so this exec-bit-only assertion has no Windows analogue",
+)
 
 # (src filename, name asserted force_overwrite=True) — force-overwrite classes.
 _FORCE_OVERWRITE_CASES = [
@@ -74,6 +90,7 @@ def test_install_one_absent_dst_installs_for_every_class(tmp_path, filename):
     assert dst.read_text(encoding="utf-8") == "template content\n"
 
 
+@_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
 def test_install_one_absent_dst_applies_exec_bit_when_requested(tmp_path, filename):
     src = _make_src(tmp_path, filename)
@@ -103,6 +120,7 @@ def test_install_one_identical_dst_is_a_noop_for_every_class(tmp_path, filename)
     assert dst.read_text(encoding="utf-8") == "template content\n"
 
 
+@_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
 def test_install_one_identical_dst_still_applies_exec_bit(tmp_path, filename):
     # Both the identical-content preserve branch (substrate.py:236-238) and
@@ -151,6 +169,7 @@ def test_install_one_diverging_dst_force_overwrites_code_and_wrapper_classes(
     assert "re-install overwrites" in out
 
 
+@_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES)
 def test_install_one_diverging_dst_force_overwrite_applies_exec_bit(tmp_path, filename):
     src = _make_src(tmp_path, filename, content="new template content\n")
@@ -254,7 +273,12 @@ def test_install_one_non_allowlisted_extensionless_diverging_force_overwrite_tru
     _install_one(src, dst, True, "machine-local", False, force_overwrite=True)
 
     assert dst.read_text(encoding="utf-8") == "new template content\n"
-    assert dst.stat().st_mode & stat.S_IXUSR
+    if os.name != "nt":
+        # See `_EXEC_BIT_SKIP`'s docstring: NTFS has no POSIX exec bit and
+        # os.chmod cannot fabricate one, so this half of the assertion has
+        # no Windows analogue — the content-overwrite half above still
+        # applies on every platform.
+        assert dst.stat().st_mode & stat.S_IXUSR
     out = capsys.readouterr().out
     assert "updated" in out
     assert "re-install overwrites" in out
@@ -308,4 +332,8 @@ def test_install_one_identical_content_missing_mode_bit_is_not_reported_as_drift
 
     out = capsys.readouterr().out
     assert "updated" not in out
-    assert dst.stat().st_mode & stat.S_IXUSR
+    if os.name != "nt":
+        # See `_EXEC_BIT_SKIP`'s docstring: no Windows analogue for a
+        # POSIX exec-bit reapply; the "not reported as drift" half above
+        # (the actual AC17 subject) still applies on every platform.
+        assert dst.stat().st_mode & stat.S_IXUSR

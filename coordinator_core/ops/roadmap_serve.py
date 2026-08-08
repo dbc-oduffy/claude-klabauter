@@ -68,7 +68,7 @@ _LOG = logging.getLogger(__name__)
 
 
 @register_op("roadmap.serve")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "roadmap.serve" handler.

@@ -446,3 +446,45 @@ class TestNonMatches:
         # Unterminated quote -- tokenize_full_command returns None, so this
         # guard has nothing to classify and must not deny on that alone.
         assert _result("grep 'unterminated") is None
+
+
+class TestPowerShellDialect:
+    """Row 12, docs/reference/guard-dialect-coverage.md: `Select-String`/
+    `sls` carry no PowerShell alias for grep, and this guard's rewrite
+    payload is POSIX-grep-flag-shaped, so it cannot translate cleanly --
+    the guard must declare SILENT rather than return a false clean for a
+    Select-String/sls invocation it can see but not safely offer a rewrite
+    for. A PowerShell command with no grep-family invocation at all stays a
+    genuine, undeclared clean."""
+
+    def _ps_payload(self, command):
+        return {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": command},
+            "session_id": "sess1",
+            "cwd": None,
+        }
+
+    def test_select_string_declares_silent_not_false_clean(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(self._ps_payload("Select-String -Pattern TODO -Path ."))
+        assert result is None
+        assert was_silent("guard_grep_via_bash", silences)
+
+    def test_sls_alias_declares_silent(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(self._ps_payload("sls TODO ."))
+        assert result is None
+        assert was_silent("guard_grep_via_bash", silences)
+
+    def test_non_grep_powershell_command_is_a_genuine_clean(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(self._ps_payload("Get-ChildItem -Path ."))
+        assert result is None
+        assert not was_silent("guard_grep_via_bash", silences)

@@ -85,6 +85,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 
@@ -173,11 +174,14 @@ def _candidate_actioned_date(path: Path, repo_root: Path) -> str | None:
         determine" as "must be recent" (the whole point of Guard 6's
         fail-closed posture)."""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "log", "--follow", "--format=%ad", "--date=short", "--", str(path)],
             cwd=repo_root,
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError:
         return None
@@ -351,7 +355,11 @@ def check_commitment_closure(needle: str, repo_root: Path) -> GuardResult:
     return GuardResult("commitment-closure", True, "no open commitment references candidate")
 
 
-def resolve_realized_by(value: str, repo_root: Path) -> bool:
+def resolve_realized_by(
+    value: str,
+    repo_root: Path,
+    existence_map: Mapping[str, bool] | None = None,
+) -> bool:
     """Resolve a `realized_by:` value to True/False based on its SHAPE.
 
     Dispatch order (shape-first, before any numeric handling):
@@ -365,14 +373,28 @@ def resolve_realized_by(value: str, repo_root: Path) -> bool:
     `realized-by-short-sha-scientific-notation-trap`. Checking SHA-shape (hex
     digits only, length 7-40) before any numeric interpretation avoids that trap
     entirely; this function never calls `float()`/`int()` on the value. SHA
-    existence is verified via `git cat-file -e` only (see `_git_object_exists`)."""
+    existence is verified via `git cat-file -e` only (see `_git_object_exists`).
+
+    `existence_map` (C31, `coordinator/bin/distill-delete-guard.py`'s multi-
+    candidate batching seam): OPTIONAL, keyed by lower-cased SHA, sourced from
+    `_git_objects_exist`'s single-spawn batch resolution. Absent (default) ->
+    behavior is byte-identical to before this parameter existed — every
+    SHA-shaped value falls through to the scalar `_git_object_exists`. When
+    supplied, a SHA PRESENT in the map uses its value directly (no spawn); a
+    SHA ABSENT from the map still falls through to `_git_object_exists` — a
+    caller-supplied map is a PREFETCH, not an authoritative closed set, so a
+    map miss must never be read as "does not exist" (that would invert C29's
+    fail-closed direction into a guard that blocks nothing). This function
+    itself decides nothing about existence beyond that lookup-or-fallback;
+    `_git_objects_exist`'s index-paired fail-closed reconciliation remains the
+    only place SHA existence is actually decided."""
     value = value.strip()
     if value in _INLINE_SENTINELS:
         return True
     lowered = value.lower()
-    if _FULL_SHA_RE.match(lowered):
-        return _git_object_exists(lowered, repo_root)
-    if _SHORT_SHA_RE.match(lowered):
+    if _FULL_SHA_RE.match(lowered) or _SHORT_SHA_RE.match(lowered):
+        if existence_map is not None and lowered in existence_map:
+            return existence_map[lowered]
         return _git_object_exists(lowered, repo_root)
     # Path-shaped fallback.
     candidate = Path(value)
@@ -390,16 +412,113 @@ def _git_object_exists(sha: str, repo_root: Path) -> bool:
     40-char-hex-looking string (exit 0) even when no such object exists in the
     repo; that would silently defeat this guard's whole purpose (a nonexistent
     SHA passing as "resolved")."""
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
         ["git", "cat-file", "-e", sha],
         cwd=repo_root,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     return result.returncode == 0
 
 
-def check_realized_by(frontmatter_text: str, repo_root: Path) -> GuardResult:
+def _git_objects_exist(shas: list[str], repo_root: Path) -> dict[str, bool]:
+    """Batched sibling of `_git_object_exists`: resolve EXISTENCE for MANY shas in
+    ONE `git cat-file --batch-check` spawn instead of one spawn per sha.
+
+    PUBLISHED CONTRACT — `coordinator/bin/distill-delete-guard.py` (C31) consumes
+    this next wave; do not change its accepted/returned shapes without updating
+    that caller.
+
+      - Accepts: a list of sha strings (full 40-char hex or bare-short 7-39 char
+        hex, already lower-cased by the caller — this function does not
+        normalize case). Duplicates are fine; each is resolved independently.
+      - Returns: `{sha: bool}`, ONE entry per element of the input list
+        (duplicates collapse to one dict key, value shared) — never a partial
+        map. `True` means git resolved the sha to a real, existing object;
+        `False` covers every other outcome (unresolvable token, ambiguous
+        prefix, a `<sha> missing` batch-check record, a short-circuited/failed
+        git invocation) — this function FAILS CLOSED, never treats an
+        unreconciled or absent record as existing. An empty input list
+        returns `{}` without spawning git.
+
+    `--batch-check` is the correct form here (existence only, metadata-only) —
+    NOT `--batch`, which additionally streams full blob content and would be
+    wasted work for an existence probe (contrast `coordinator_core.coverage`
+    callers that read blob content and need `--batch`).
+
+    This is EXISTENCE batching, not RANGE batching: `cat-file --batch-check`
+    resolves each stdin line independently against the object store, so
+    grouping many candidate shas into one spawn is safe — it must never be
+    read as license to combine distinct `git log`/`git rev-list` RANGE queries
+    into one call elsewhere.
+
+    Reconciliation is EXPLICIT (mirrors `emit/sections/handoffs.py`'s
+    `_resolve_shipped_in_dates`, and the empirically-verified one-line-per-token,
+    input-order-preserving output shape documented on `coverage._batch_check_hex_tokens`):
+    each of the N requested shas is paired index-wise with its corresponding
+    stdout line, and a line is only counted as "exists" when it parses as
+    `<sha> <type>` (this call's `--batch-check` format string is
+    `%(objectname) %(objecttype)`, deliberately omitting `%(objectsize)` —
+    an existence probe needs no size) with `<type>` in `_GIT_OBJECT_TYPES` —
+    a `<token> missing` (or `<token> ambiguous`) line, or a shortfall in the
+    number of output lines (fewer lines than requested shas — a truncated or
+    failed spawn), is never read as "exists". A wrongly-reported existing
+    object is a guard permitting a deletion it should have blocked, so every
+    unreconciled case defaults to False, never True.
+
+    Windows stdin note: feeds the token list via `input=<bytes>`, NOT
+    `text=True` — a text-mode stdin pipe on Windows translates each `\n` to
+    `\r\n`, corrupting the one-token-per-line feed `--batch-check` expects
+    (the exact hazard chunk C10 hit). Output is decoded manually and CRLF is
+    normalized before splitting.
+    """
+    if not shas:
+        return {}
+    from coordinator_core.win_portability import no_console_creationflags
+
+    unique_shas = list(dict.fromkeys(shas))
+    stdin_payload = ("\n".join(unique_shas) + "\n").encode("utf-8")
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input=stdin_payload,
+            cwd=repo_root,
+            capture_output=True,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return {sha: False for sha in unique_shas}
+    if result.returncode != 0:
+        return {sha: False for sha in unique_shas}
+
+    stdout_text = result.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    lines = stdout_text.splitlines()
+
+    exists: dict[str, bool] = {}
+    for sha, line in zip(unique_shas, lines):
+        parts = line.split()
+        exists[sha] = len(parts) == 2 and parts[1] in _GIT_OBJECT_TYPES
+    for sha in unique_shas[len(lines):]:
+        exists[sha] = False
+    return exists
+
+
+_GIT_OBJECT_TYPES = frozenset({"blob", "tree", "commit", "tag"})
+"""Valid `git cat-file --batch-check` `%(objecttype)` values — mirrors
+`coordinator_core.coverage._GIT_OBJECT_TYPES`, kept as an independent module-
+local constant rather than a cross-module import (this module has no other
+dependency on `coverage.py`, and the value is a stable git-format-string
+vocabulary, not project-specific behavior)."""
+
+
+def check_realized_by(
+    frontmatter_text: str,
+    repo_root: Path,
+    existence_map: Mapping[str, bool] | None = None,
+) -> GuardResult:
     """Guard 5: `realized_by:` must resolve on disk (per resolve_realized_by shape
     dispatch). Absence of the field entirely is a distinct condition from an
     unresolvable value — both block, with different detail strings.
@@ -409,11 +528,15 @@ def check_realized_by(frontmatter_text: str, repo_root: Path) -> GuardResult:
     (`memo_transition.py`) and round-trips through `read_fm_field` still
     quoted (`'44379324'`), which `resolve_realized_by`'s SHA regex does not
     match — a legitimately-resolvable value would otherwise be reported as
-    not resolving on disk and falsely block an eligible delete."""
+    not resolving on disk and falsely block an eligible delete.
+
+    `existence_map` is forwarded verbatim to `resolve_realized_by` (see that
+    function's docstring) — absent means no behavior change; present is a
+    prefetch, never an authoritative closed set."""
     value = read_fm_field_unquoted(frontmatter_text, "realized_by")
     if not value:
         return GuardResult("realized_by", False, "realized_by absent or empty")
-    if resolve_realized_by(value, repo_root):
+    if resolve_realized_by(value, repo_root, existence_map=existence_map):
         return GuardResult("realized_by", True, value)
     return GuardResult("realized_by", False, f"realized_by does not resolve on disk: {value}")
 
@@ -638,7 +761,11 @@ def _is_memory_pointer(ref: str) -> bool:
     return ref.startswith("~/.claude") or "/.claude/" in ref or ref.startswith(".claude/")
 
 
-def evaluate_candidate_detailed(path: Path, repo_root: Path) -> tuple[str | None, list[GuardResult]]:
+def evaluate_candidate_detailed(
+    path: Path,
+    repo_root: Path,
+    existence_map: Mapping[str, bool] | None = None,
+) -> tuple[str | None, list[GuardResult]]:
     """Run the CLASS-APPLICABLE mechanical guard set (per `classify_artifact`)
     against one on-disk candidate and return `(artifact_class, guard_results)`
     — the single dispatch-order authority both `evaluate_candidate` (below,
@@ -668,7 +795,11 @@ def evaluate_candidate_detailed(path: Path, repo_root: Path) -> tuple[str | None
     `basis_refs`, which is a per-caller delete-eligibility-basis concern, not
     part of the guard dispatch order itself; each caller applies it separately
     (both callers do, identically).
-    """
+
+    `existence_map` (C31): forwarded verbatim to `check_realized_by` /
+    `resolve_realized_by`. Absent -> no behavior change; present -> a
+    multi-candidate caller's batched prefetch (see `resolve_realized_by`'s
+    docstring for the fail-closed-on-miss contract)."""
     text = path.read_text(encoding="utf-8")
     fm_split = split_frontmatter(text)
     frontmatter_text = fm_split.fm_text if fm_split is not None else ""
@@ -701,7 +832,7 @@ def evaluate_candidate_detailed(path: Path, repo_root: Path) -> tuple[str | None
         [
             check_active_reference(needle, repo_root),
             check_commitment_closure(needle, repo_root),
-            check_realized_by(frontmatter_text, repo_root),
+            check_realized_by(frontmatter_text, repo_root, existence_map=existence_map),
             check_distill_fate(frontmatter_text, path, repo_root),
             check_harvest_provenance(frontmatter_text, path, repo_root),
         ]
@@ -709,7 +840,10 @@ def evaluate_candidate_detailed(path: Path, repo_root: Path) -> tuple[str | None
     return artifact_class, guard_results
 
 
-def evaluate_candidate(candidate: DeleteCandidate) -> dict:
+def evaluate_candidate(
+    candidate: DeleteCandidate,
+    existence_map: Mapping[str, bool] | None = None,
+) -> dict:
     """Run the candidate's CLASS-APPLICABLE mechanical guards (via
     `evaluate_candidate_detailed`) + the #12 memory-pointer exclusion. Returns
     `{"eligible": bool, "artifact_class": "memo"|"handoff"|None, "blocked_by":
@@ -724,8 +858,16 @@ def evaluate_candidate(candidate: DeleteCandidate) -> dict:
     when it fires, appends a synthetic `"memory-pointer-exclusion"` blocker and
     forces `eligible=False` regardless of the other guards' outcome (RETAIN +
     surface).
+
+    `existence_map` (C31, optional): a caller's batched-prefetch of
+    SHA-shaped `realized_by:` existence (see `resolve_realized_by`'s
+    docstring for the fail-closed-on-miss contract). Absent -> byte-identical
+    to pre-C31 behavior; `coordinator/bin/distill-delete-guard.py` is the
+    multi-candidate caller that supplies it.
     """
-    artifact_class, guard_results = evaluate_candidate_detailed(candidate.path, candidate.repo_root)
+    artifact_class, guard_results = evaluate_candidate_detailed(
+        candidate.path, candidate.repo_root, existence_map=existence_map
+    )
 
     blocked_by = [r.guard for r in guard_results if not r.passed]
 

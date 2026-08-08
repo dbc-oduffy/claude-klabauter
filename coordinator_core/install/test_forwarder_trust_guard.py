@@ -39,10 +39,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.substrate import (
     _LEGACY_CMD_MARKER,
     SubstrateFatalError,
@@ -117,20 +119,45 @@ def _make_claude_klabauter_fixture(root: Path, target_name: str = "cross-repo-me
     sentinel = bin_dir / "archive-stamp-cli"
     sentinel.write_text("#!/bin/sh\necho SENTINEL\n", encoding="utf-8")
     sentinel.chmod(0o755 if sentinel_executable else 0o644)
+    if sentinel_executable and os.name == "nt":
+        # `_resolve_claude_klabauter.py`'s Windows-side executability probe checks
+        # PATHEXT extensions, not stat mode bits (NTFS has neither) — the
+        # extensionless POSIX sentinel above is invisible to it. The real
+        # on-disk archive-stamp-cli ships an actual `.cmd` companion
+        # (coordinator/bin/archive-stamp-cli.cmd) for exactly this reason;
+        # mirror that shape here rather than a bare chmod, which is a
+        # silent no-op on Windows (os.chmod cannot set S_IXUSR/GRP/OTH on
+        # NTFS — verified empirically).
+        (bin_dir / "archive-stamp-cli.cmd").write_text("@echo SENTINEL\r\n", encoding="utf-8")
     target = bin_dir / target_name
     target.write_text(f'print("TARGET_REACHED_{target_name}")\n', encoding="utf-8")
     target.chmod(0o755)
 
 
 def _run(forwarder: Path, ml_dir: Path, extra_env: dict | None = None) -> subprocess.CompletedProcess:
-    os.chmod(forwarder, 0o755)
+    # POSIX: exec the forwarder directly, exercising its own `#!/usr/bin/env
+    # python3` shebang + exec bit — the real invocation shape a Unix shell
+    # uses. Windows: `CreateProcess` never interprets a `#!` line (WinError
+    # 193, "%1 is not a valid Win32 application" if invoked directly), and
+    # NTFS has no exec bit for `os.chmod` to set in the first place — the
+    # REAL Windows invocation path is always through the co-located `.cmd`
+    # twin (`_write_agent_cmd_forwarder`), which resolves an interpreter and
+    # runs `<interpreter> <forwarder>` explicitly. Emulate that real
+    # mechanism here rather than a direct exec Windows has no equivalent of.
+    if os.name == "nt":
+        argv = [sys.executable, str(forwarder)]
+    else:
+        os.chmod(forwarder, 0o755)
+        argv = [str(forwarder)]
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "MACHINE_LOCAL_REGISTRY_DIR": str(ml_dir),
     }
     if extra_env:
         env.update(extra_env)
-    return subprocess.run([str(forwarder)], env=env, capture_output=True, text=True)
+    return subprocess.run(
+        argv, env=env, capture_output=True, text=True, **no_console_creationflags()
+    )
 
 
 def test_registry_rung_wins_over_sentinel(tmp_path: Path):
@@ -364,6 +391,10 @@ def test_forwarder_missing_target_exits_127_without_traceback(tmp_path: Path):
     sentinel = bin_dir / "archive-stamp-cli"
     sentinel.write_text("#!/bin/sh\necho SENTINEL\n", encoding="utf-8")
     sentinel.chmod(0o755)
+    if os.name == "nt":
+        # See `_make_claude_klabauter_fixture`'s matching comment: the Windows-side
+        # executability probe is PATHEXT-based, not stat-mode-based.
+        (bin_dir / "archive-stamp-cli.cmd").write_text("@echo SENTINEL\r\n", encoding="utf-8")
     # cross-repo-memo itself deliberately absent from bin_dir.
     (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
 

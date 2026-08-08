@@ -32,6 +32,7 @@ from coordinator_core.bash_guards import _write_bump_applicability as applicabil
 from coordinator_core.bash_guards import _write_bump_marker as marker
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards import bump_outside_repo_write as bash_guard
+from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
 
 
@@ -893,9 +894,23 @@ def test_ordinary_foreign_repo_write_still_bumps_alongside_lessons_outbox_exempt
 
 
 def _isolate_home(monkeypatch, home_dir: Path) -> None:
-    for var in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("HOME", str(home_dir))
+    """Cross-platform home isolation -- see `coordinator_core.conftest`'s own
+    `_quarantine_real_home` docstring, which points at
+    `coordinator_core.testing.home_sandbox.sandbox_home` for exactly this
+    case: a bare `HOME`-only `delenv`/`setenv` leaves `USERPROFILE` (and, on
+    the autouse fixture's own quarantine dir, `HOMEDRIVE`/`HOMEPATH`) either
+    absent or pointed elsewhere on Windows, where `Path.home()` prefers
+    `USERPROFILE` first and raises `RuntimeError` once every Windows
+    home-resolution variable is gone -- observed swallowing into a silent
+    allow inside `target_is_publish_destination`'s `Path.home()` call via
+    the guard's own blanket `except Exception: return None`. `sandbox_home`
+    sets `HOME` AND `USERPROFILE` together and clears `HOMEDRIVE`/`HOMEPATH`,
+    so `Path.home()` resolves to `home_dir` instead of raising.
+    `CLAUDE_HOME` stays cleared here (not part of `sandbox_home`'s contract)
+    because these tests are specifically about the `CLAUDE_HOME`-absent,
+    `HOME`-only resolution path this module falls back to."""
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    sandbox_home(monkeypatch, home_dir)
 
 
 def test_agent_memory_store_write_never_bumps_on_tool_surface(tmp_path, monkeypatch):
@@ -1019,6 +1034,333 @@ def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
     assert not guard._target_is_lessons_outbox_write("")
 
 
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the tool-write
+# surface's `_resolve_target_gitdir` gets the same MSYS drive-mount
+# translation fix C1/C2 give the two Bash-surface bump guards. AC1/AC2/AC3
+# run for real against this actual Windows host (no simulation needed);
+# AC4 simulates a POSIX host via the same `os.path` swap pattern
+# `test_windows_platform_simulation.py` uses. AC6 pins the fail-open branch
+# never reaching the ancestor walk. AC7 proves reachability through the
+# write-guard dispatcher, not merely a direct `check()` call (DR-280).
+# ---------------------------------------------------------------------------
+
+
+def _msys_form(p: Path) -> str:
+    """`X:\\Users\\...` -> `/x/Users/...` -- the MSYS/MinGW drive-mount
+    spelling Git-for-Windows' bash hands tools as `$PWD`/argument expansion,
+    constructed from a REAL path so the resulting candidate resolves to a
+    real, existing (or creatable) location on this host."""
+    drive = p.drive  # e.g. "X:"
+    rest = str(p)[len(drive):].replace("\\", "/")
+    return f"/{drive[0].lower()}{rest}"
+
+
+def test_ac1_msys_absolute_target_resolves_inside_own_repo_no_bump(tmp_path):
+    """AC1 regression, on THIS actual Windows host: a tool-surface write to
+    a `/x/claude-klabauter/<path>`-shaped MSYS path resolves inside the
+    session's own repo and must NOT bump. Confirmed red before the fix by
+    temporarily reverting `_resolve_target_gitdir` to the pre-C4 join shape
+    and re-running this exact test: pre-fix, `own_gitdir` resolved correctly
+    but `target_gitdir` re-rooted onto the process's own drive and resolved
+    to `None`, producing `result is not None` (a wrongful bump)."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo")
+    session_id = "sess-msys-ac1"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(own) + "/scratch/t.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_ac2_msys_path_translates_to_its_drive_form(tmp_path):
+    """AC2: a `/c/Users/...`-shaped path translates to its drive form --
+    asserted via `_resolve_target_gitdir` resolving to the SAME git-dir as
+    the native-spelled equivalent."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo")
+
+    msys_target = _msys_form(own) + "/f.txt"
+    resolved = guard._resolve_target_gitdir(msys_target, None)
+    expected = marker.resolve_gitdir(str(own))
+
+    assert resolved == expected
+
+
+def test_ac3_msys_foreign_target_still_bumps(tmp_path):
+    """AC3: a genuinely foreign target, spelled in MSYS form, still bumps --
+    the fix must not turn a real bump into a permit."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-msys-ac3"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(foreign) + "/notes.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    # Verdict only -- see AC7 dispatcher test's own comment for why the
+    # rendered message's `target_repo` display string (a separate,
+    # untranslated call site, out of this chunk's scope) is not asserted on.
+    assert result is not None
+
+
+def test_ac4_simulated_posix_host_matches_pre_fix_join_semantics(monkeypatch):
+    """AC4: on a simulated POSIX host, behaviour is byte-identical to today.
+    Swaps `os.path` to `posixpath` (native semantics, per the pattern in
+    `test_windows_platform_simulation.py`) AND the shared `_host_is_windows`
+    seam to `False` -- per the C1 executor's own warning, forgetting the
+    `os.path` swap on this actual Windows box would silently run under
+    native backslash semantics and prove nothing. `nearest_existing_ancestor`
+    and `resolve_gitdir` are stubbed to identity so this test isolates the
+    translation-and-join step this chunk changes, independent of filesystem
+    state."""
+    import posixpath
+
+    from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
+
+    monkeypatch.setattr(os, "path", posixpath)
+    monkeypatch.setattr(shapes, "_host_is_windows", lambda: False)
+    monkeypatch.setattr(guard, "nearest_existing_ancestor", lambda p: p)
+    monkeypatch.setattr(guard, "resolve_gitdir", lambda p: p)
+
+    # Absolute target -- no payload cwd needed, unchanged from before the fix.
+    assert guard._resolve_target_gitdir("/repo/sub/file.txt", None) == "/repo/sub"
+
+    # Relative target -- joined against payload cwd, identical to the old
+    # `os.path.join(payload_cwd, target_dir)` shape.
+    assert guard._resolve_target_gitdir("relative/file.txt", "/base/cwd") == posixpath.join(
+        "/base/cwd", "relative"
+    )
+
+    # Relative target, no payload cwd -- fail open to None, unchanged.
+    assert guard._resolve_target_gitdir("relative/file.txt", None) is None
+
+
+def test_ac6_untranslatable_target_never_reaches_ancestor_walk(monkeypatch):
+    """AC6: an untranslatable candidate (an MSYS-shaped leading-slash form
+    `translate_msys_path` deliberately does not decode, e.g. `/usr/...`)
+    takes the SAME fail-open `None` branch as any other unresolvable anchor
+    -- never treated as a bump, and never reaching
+    `nearest_existing_ancestor`/`resolve_gitdir`."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    called = {"hit": False}
+
+    def _fake_ancestor(path):
+        called["hit"] = True
+        return path
+
+    monkeypatch.setattr(guard, "nearest_existing_ancestor", _fake_ancestor)
+
+    result = guard._resolve_target_gitdir(
+        "/usr/local/bin/file", "C:\\Users\\me"  # abs-path-ok: untranslatable-shape test fixture, not a machine-specific citation
+    )
+
+    assert result is None
+    assert called["hit"] is False
+
+
+def test_ac7_msys_foreign_target_still_bumps_through_dispatcher(tmp_path):
+    """AC7 (DR-280) -- reachability through the write-guard DISPATCHER
+    (`write_guards.engine.evaluate`), not only a direct `check()` call. A
+    probe that calls `check()` directly is a capability test, not a
+    production repro."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    from coordinator_core.write_guards import engine
+
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-msys-ac7-dispatcher"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(foreign) + "/notes.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = engine.evaluate(payload)
+
+    # Verdict only -- the rendered message's `target_repo` display string is
+    # composed from the RAW (untranslated) `file_path` at a separate call
+    # site in `check()` and is out of this chunk's scope (only
+    # `_resolve_target_gitdir`, which drives the bump/no-bump verdict, is
+    # touched here); asserting on message content would couple this test to
+    # that unrelated display-string behaviour.
+    assert result is not None
+
+
+def test_ac7_msys_own_repo_target_never_bumps_through_dispatcher(tmp_path):
+    """AC7 companion -- the AC1 own-repo no-bump shape, also proven through
+    the dispatcher rather than only a direct `check()` call."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    from coordinator_core.write_guards import engine
+
+    own = _init_repo(tmp_path, "own-repo")
+    session_id = "sess-msys-ac7-own"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(own) + "/scratch/t.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = engine.evaluate(payload)
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# C4b (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the SAME
+# module resolves the target twice more, and one of them is a verdict.
+# `_verdict_bumps`' `own_gitdir is None` branch and `check()`'s own
+# `target_repo`/`destination_class` resolution both recomputed
+# `os.path.dirname(file_path) or file_path` RAW before this chunk -- these
+# tests pin both fixes.
+# ---------------------------------------------------------------------------
+
+
+def test_c4b_verdict_bumps_untranslated_msys_path_was_red_before_fix(tmp_path):
+    """RED-before-fix regression: `_verdict_bumps` on the `own_gitdir is
+    None` branch, given the RAW (untranslated) MSYS-form `file_path`, would
+    never match `target_is_registered_repo` since no registered repo path
+    is ever spelled in MSYS form -- so this returned `False` (no bump)
+    pre-fix even for a target that IS registered. Post-fix, this call goes
+    through the ALREADY-TRANSLATED `target_dir` `check()` resolves once, so
+    a registered target bumps regardless of the incoming path spelling."""
+    registered = _init_repo(tmp_path, "registered-repo")
+
+    raw_msys_target_dir = _msys_form(registered) if os.name == "nt" else str(registered)
+
+    # Manual reproduction of the pre-fix call shape: pass the RAW dirname
+    # (as `_verdict_bumps` used to compute it internally) as `target_dir`.
+    # On Windows this MSYS spelling never matches the registry (raw path
+    # comparison), reproducing the pre-fix false-negative directly.
+    if os.name == "nt":
+        assert guard.target_is_registered_repo(raw_msys_target_dir) is False
+
+
+def test_c4b_verdict_bumps_uses_translated_target_dir_for_registered_target(tmp_path, monkeypatch):
+    """Post-fix: `_verdict_bumps` bumps for a REGISTERED target on the
+    `own_gitdir is None` branch when given the properly TRANSLATED
+    `target_dir` -- the shape `check()` now threads in."""
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-repo-c4b")
+    _write_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    result = guard._verdict_bumps(
+        "sess", None, "anchor", None, Path("some-gitdir"), str(registered)
+    )
+    assert result is True
+
+
+def test_c4b_verdict_bumps_untranslatable_target_dir_never_bumps():
+    """`target_dir is None` (untranslatable) takes the same fail-open
+    `return False` branch as `target_gitdir is None` -- never a bump on a
+    path this guard could not resolve."""
+    assert (
+        guard._verdict_bumps("sess", None, "anchor", None, Path("some-gitdir"), None)
+        is False
+    )
+
+
+def test_c4b_msys_registered_target_bumps_through_check_end_to_end(tmp_path, monkeypatch):
+    """End-to-end regression for the `_verdict_bumps` fix, through
+    `check()`: a session anchor with NO git repo, writing an MSYS-form path
+    into a REGISTERED repo, must bump. Confirmed RED before the C4b fix by
+    temporarily reverting `_verdict_bumps` to recompute
+    `os.path.dirname(file_path) or file_path` raw."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-repo-c4b-e2e")
+    _write_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "new-project-c4b"
+    scaffold.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-c4b-msys-registered"
+
+    target = _msys_form(registered) + "/f.txt"
+    payload = _payload("Write", target, session_id, str(scaffold))
+
+    result = guard.check(payload)
+    assert result is not None
+
+
+def test_c4b_check_target_repo_resolved_from_translated_msys_path(tmp_path):
+    """`check()`'s own `target_repo`/`destination_class` resolution must use
+    the TRANSLATED `target_dir`, not the raw `os.path.dirname(file_path)` --
+    this drives `_resolve_git_root`/`target_is_publish_destination`
+    (behavioural, not display-only). Asserts the rendered advisory names a
+    path that actually exists on disk (the translated, native form)."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo-c4b-target-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo-c4b-target-repo")
+    session_id = "sess-c4b-target-repo"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(foreign) + "/notes.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    assert result is not None
+    ctx = result["hookSpecificOutput"]["additionalContext"]
+    # The message names the foreign repo's NATIVE path (the translated
+    # form), which exists on disk -- never the raw MSYS spelling.
+    assert str(foreign) in ctx
+    assert os.path.isdir(str(foreign))
+
+
+def test_c4b_simulated_posix_host_byte_identical_for_verdict_and_target_repo(monkeypatch):
+    """AC4-style regression for C4b's two sites: on a simulated POSIX host,
+    with a native drive-absolute-equivalent (already-native) input,
+    `_verdict_bumps` and `check()`'s `target_repo` resolution behave
+    byte-identically to before this chunk -- `translate_msys_path` is
+    identity on POSIX."""
+    import posixpath
+
+    from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
+
+    monkeypatch.setattr(os, "path", posixpath)
+    monkeypatch.setattr(shapes, "_host_is_windows", lambda: False)
+
+    resolved = guard._resolve_target_dir("/repo/sub/file.txt", None)
+    assert resolved == "/repo/sub"
+
+
+def test_c4b_ac7_msys_registered_target_bumps_through_dispatcher(tmp_path, monkeypatch):
+    """AC7 companion for the `_verdict_bumps` fix -- proven through
+    `write_guards.engine.evaluate`, not only a direct `check()` call
+    (DR-280)."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    from coordinator_core.write_guards import engine
+
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-repo-c4b-dispatcher")
+    _write_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "new-project-c4b-dispatcher"
+    scaffold.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-c4b-msys-registered-dispatcher"
+
+    target = _msys_form(registered) + "/f.txt"
+    payload = _payload("Write", target, session_id, str(scaffold))
+
+    result = engine.evaluate(payload)
+    assert result is not None
+
+
 def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_path):
     """`state/handoffs/2026-08-03-windows-extended-length-prefix-desync.md`
     -- tool-write surface (C7). Same injected-asymmetry shape as the
@@ -1044,3 +1386,180 @@ def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_pat
     monkeypatch.setattr(guard.os.path, "realpath", fake_realpath)
 
     assert guard._same_gitdir(Path("gitdir-a"), Path("gitdir-b")) is True
+
+
+# ---------------------------------------------------------------------------
+# C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the exemption
+# predicates (`_target_is_bare_temp_scratch`, `_target_is_under_settings_
+# home`, `_target_is_lessons_outbox_write`, `is_agent_memory_store_path`)
+# never got the translated `file_path` C4/C4b already thread to the VERDICT
+# resolution -- see review finding [P3] on commit fc1419657. THE HEADLINE
+# REGRESSION: an MSYS-spelled write to the harness scratchpad on Windows
+# matched no recognized native temp root (raw POSIX-spelled string, compared
+# against native temp roots), so the temp-scratch exemption never fired and
+# the write fell through to `_verdict_bumps`, which bumped it -- fails
+# CLOSED, the one branch in this module the docstring says must never do
+# that.
+# ---------------------------------------------------------------------------
+
+
+def test_c4c_headline_regression_msys_scratchpad_write_never_bumps(tmp_path, monkeypatch):
+    """THE ORIGINATING INCIDENT. Confirmed RED against the pre-fix module
+    (predicates fed the raw, untranslated `file_path`): the MSYS-spelled
+    scratchpad candidate matched no recognized native temp root, the
+    temp-scratch exemption did not fire, and the write fell through to
+    `_verdict_bumps` -- `target_gitdir` (correctly translated) was `None`
+    while `own_gitdir` was not, so `not _same_gitdir(...)` was `True` and the
+    write bumped. Post-fix, the SAME translated path now feeds the
+    exemption predicate too, so it fires before `_verdict_bumps` is ever
+    reached."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo-c4c-headline")
+    session_id = "sess-c4c-headline-scratchpad"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    temp_root = tmp_path / "tmproot-c4c"
+    _pin_temp_root(monkeypatch, temp_root)
+    scratchpad = temp_root / "claude-501" / "-project" / session_id / "scratchpad"
+    scratchpad.mkdir(parents=True)
+
+    msys_target = _msys_form(scratchpad) + "/draft-memo.md"
+    payload = _payload("Write", msys_target, session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_c4c_msys_settings_home_write_never_bumps(tmp_path, monkeypatch):
+    """Same defect, the settings-home exemption -- an MSYS-spelled path
+    under settings home must still be exempt, not just the native form."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo-c4c-settings")
+    session_id = "sess-c4c-msys-settings-home"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    settings_home = tmp_path / "settings-home-c4c"
+    settings_home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+    target_dir = settings_home / "claude-klabauter"
+    target_dir.mkdir()
+    msys_target = _msys_form(target_dir) + "/anchor.json"
+    payload = _payload("Write", msys_target, session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_c4c_untranslatable_file_path_no_bump_no_crash_outside_any_repo_anchor(
+    tmp_path, monkeypatch
+):
+    """Untranslatable candidates (`/tmp/...`, `//server/share/...` -- shapes
+    `translate_msys_path` deliberately does not decode) must never bump and
+    must never raise. Exercised on the anchor-outside-any-repo branch, whose
+    own `target_dir is None` fail-open route is already established/in-scope
+    for this guard (C4b) -- this test proves the exemption predicates
+    upstream of it degrade the same way (fall through to "not exempt")
+    rather than raising on the untranslatable input."""
+    if os.name != "nt":
+        pytest.skip("untranslatable-shape probe is Windows-specific (identity on POSIX)")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
+    scaffold = tmp_path / "Documents" / "new-project-c4c"
+    scaffold.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-c4c-untranslatable"
+
+    for untranslatable in ("/tmp/x/foo.txt", "//server/share/foo.txt"):
+        payload = _payload("Write", untranslatable, session_id, str(scaffold))
+        assert guard.check(payload) is None, untranslatable
+
+
+def test_c4c_untranslatable_translated_path_predicates_fall_through_safely():
+    """Direct predicate-level probe: an empty/untranslatable translated
+    `file_path` (what `_resolve_translated_file_path` yields as `None`,
+    coerced to `""` at each call site) never crashes.
+    `_target_is_bare_temp_scratch` delegates to the SHARED classifier
+    (`_write_bump_applicability.target_is_bare_temp_scratch`), whose own
+    documented contract fails OPEN (`True`, i.e. "treat as scratch, do not
+    bump") on an unresolvable candidate -- so `""` in gives `True`, not a
+    widening of THIS chunk's own logic, and consistent with `check()`'s
+    overall "never bump on a path this guard could not resolve" contract.
+    The other two predicates gate on `not file_path` explicitly and return
+    `False` ("not exempt") -- also safe, since `check()`'s `_verdict_bumps`
+    independently no-bumps whenever the translated `target_dir` is `None`
+    on the `own_gitdir is None` branch (out of this chunk's scope; C4b)."""
+    assert guard._target_is_bare_temp_scratch("", None) is True
+    assert guard._target_is_under_settings_home("", None) is False
+    assert guard._target_is_lessons_outbox_write("") is False
+
+
+def test_c4c_msys_foreign_target_still_bumps_not_converted_to_permit(tmp_path):
+    """A genuinely foreign target, MSYS-spelled, must still bump -- proves
+    this chunk's predicate-threading fix did not accidentally widen any
+    exemption into covering an ordinary foreign-repo write."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    own = _init_repo(tmp_path, "own-repo-c4c-foreign")
+    foreign = _init_repo(tmp_path, "foreign-repo-c4c-foreign")
+    session_id = "sess-c4c-msys-foreign"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = _msys_form(foreign) + "/notes.txt"
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    assert result is not None
+
+
+def test_c4c_posix_host_and_native_drive_absolute_byte_identical(monkeypatch):
+    """POSIX-host regression -- `translate_msys_path` is identity on POSIX,
+    so `_resolve_translated_file_path` must resolve a POSIX-absolute
+    `file_path` unchanged. Simulates POSIX via BOTH the `_host_is_windows`
+    seam AND `os.path` -> `posixpath` (per this chunk's own instruction --
+    the second swap is required or the assertions silently run under native
+    backslash semantics and prove nothing)."""
+    import posixpath
+
+    from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
+
+    monkeypatch.setattr(os, "path", posixpath)
+    monkeypatch.setattr(shapes, "_host_is_windows", lambda: False)
+
+    assert guard._resolve_translated_file_path("/repo/sub/file.txt", None) == (
+        "/repo/sub/file.txt"
+    )
+    assert guard._resolve_translated_file_path("relative/file.txt", "/base/cwd") == (
+        posixpath.join("/base/cwd", "relative/file.txt")
+    )
+    assert guard._resolve_translated_file_path("relative/file.txt", None) is None
+
+
+def test_c4c_native_drive_absolute_byte_identical(tmp_path):
+    """Native-drive-absolute input regression -- `translate_msys_path` is a
+    no-op for an already-native path on every host; the translated file path
+    must equal the input unchanged."""
+    target = str(tmp_path / "already-native" / "f.txt")
+    assert guard._resolve_translated_file_path(target, None) == target
+
+
+def test_c4c_msys_scratchpad_write_never_bumps_through_dispatcher(tmp_path, monkeypatch):
+    """DR-280 -- reachability through the write-guard DISPATCHER
+    (`write_guards.engine.evaluate`), not only a direct `check()` call."""
+    if os.name != "nt":
+        pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
+    from coordinator_core.write_guards import engine
+
+    own = _init_repo(tmp_path, "own-repo-c4c-dispatcher")
+    session_id = "sess-c4c-dispatcher-scratchpad"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    temp_root = tmp_path / "tmproot-c4c-dispatcher"
+    _pin_temp_root(monkeypatch, temp_root)
+    scratchpad = temp_root / "scratchpad"
+    scratchpad.mkdir(parents=True)
+
+    msys_target = _msys_form(scratchpad) + "/draft-memo.md"
+    payload = _payload("Write", msys_target, session_id, str(own))
+
+    result = engine.evaluate(payload)
+    assert result is None

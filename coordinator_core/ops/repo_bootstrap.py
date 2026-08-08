@@ -78,15 +78,17 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import home_dir, normalize_native_path, settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.clone_sibling_repo import (
     CloneSiblingRepoError,
     clone_idempotent,
 )
 from coordinator_core.ipc import register_op
 
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _MACHINE_LOCAL_TIMEOUT_SECS = 15
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class RepoBootstrapError(RuntimeError):
@@ -127,7 +129,7 @@ def _machine_local_get(machine_local_bin: str, key: str) -> Optional[str]:
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _machine_local_get: proc = subprocess.run(...) failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -148,7 +150,7 @@ def _machine_local_set(machine_local_bin: str, key: str, value: str) -> bool:
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _machine_local_set: proc = subprocess.run(...) failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -221,7 +223,7 @@ def clone_and_register_sibling_repo(repo_key: str, clone_url: str, dest_path: st
 
 
 @register_op("repo.clone_and_register")
-async def _clone_and_register_sibling_repo_op(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _clone_and_register_sibling_repo_op(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "repo.clone_and_register" handler.
 
     Params:

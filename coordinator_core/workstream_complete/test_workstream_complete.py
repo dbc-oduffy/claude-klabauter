@@ -13,6 +13,7 @@ Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md, chunk W2-B1
 
 from __future__ import annotations
 
+import functools
 import importlib.machinery
 import importlib.util
 import json
@@ -1233,14 +1234,20 @@ def _write_session_handoff_plan(
     body: str,
     deliverable_id: str = "dlv-thing",
     status: str = "approved",
+    close_out_last_partial: str | None = None,
 ) -> None:
     plan_path = tmp_path / rel_path
     plan_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_line = (
+        f"close_out_last_partial: {close_out_last_partial}\n" if close_out_last_partial is not None else ""
+    )
     plan_path.write_text(
-        f"---\nstatus: {status}\ndeliverable_id: {deliverable_id}\n---\n\n{body}\n", encoding="utf-8"
+        f"---\nstatus: {status}\ndeliverable_id: {deliverable_id}\n{marker_line}---\n\n{body}\n",
+        encoding="utf-8",
     )
 
 
+@functools.lru_cache()
 def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     """Mirrors `test_leg_a_terminal_plan_status_covers_every_terminal_member_
     of_the_schema_enum`'s own schema-fetch mechanism (example-doctrine-repo HEAD `git show`,
@@ -1271,14 +1278,24 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     return sorted(schema_enum - wsc._LEG_A_TERMINAL_PLAN_STATUS)
 
 
-_LEG_A_NON_TERMINAL_SCHEMA_STATUSES = _leg_a_non_terminal_schema_statuses()
+def pytest_generate_tests(metafunc):
+    """Lazy parametrize source for `status` below — deferred to pytest's own
+    collection-generation hook (a function body, not a module-level
+    statement) rather than a module-level constant, so the `git show`
+    subprocess in `_leg_a_non_terminal_schema_statuses` fires only when
+    pytest actually generates this test's cases, never merely on import."""
+    if "status" not in metafunc.fixturenames:
+        return
+    if metafunc.function is not test_session_handoff_leg_a_open_when_joined_plan_status_not_terminal:
+        return
+    statuses = _leg_a_non_terminal_schema_statuses()
+    metafunc.parametrize(
+        "status",
+        statuses
+        or [pytest.param("draft", marks=pytest.mark.skip(reason="example-doctrine-repo repo not registered/found on this machine"))],
+    )
 
 
-@pytest.mark.parametrize(
-    "status",
-    _LEG_A_NON_TERMINAL_SCHEMA_STATUSES
-    or [pytest.param("draft", marks=pytest.mark.skip(reason="example-doctrine-repo repo not registered/found on this machine"))],
-)
 def test_session_handoff_leg_a_open_when_joined_plan_status_not_terminal(monkeypatch, tmp_path, status):
     """AC3, the inversion: a resolved plan whose own `status:` is NOT in
     `_LEG_A_TERMINAL_PLAN_STATUS` now blocks -- the join is the sole
@@ -1367,6 +1384,93 @@ def test_session_handoff_leg_a_not_applicable_when_joined_plan_status_terminal(m
     leg_a = gate_evidence["elements"][0]["leg_a"]
     assert leg_a["verdict"] == "not-applicable"
     assert leg_a["detail"] == "plan docs/plans/2026-08-03-thing.md: status 'implemented' is terminal"
+
+
+def test_session_handoff_leg_a_indeterminate_when_terminal_plan_still_carries_close_out_marker(
+    monkeypatch, tmp_path
+):
+    """C4/AC5-AC6: a terminal-status joined plan that STILL carries
+    `close_out_last_partial:` cannot be trusted the way an ordinary
+    terminal plan can -- the marker itself records that the last close-out
+    attempt found the plan not fully shipped. This must resolve
+    `indeterminate` (non-blocking, but reported), not `not-applicable`
+    (silent)."""
+    _write_session_handoff(tmp_path, "state/handoffs/x.md", "dlv-thing")
+    _write_session_handoff_plan(
+        tmp_path,
+        "docs/plans/2026-08-03-thing.md",
+        "no AC heading at all\n",
+        status="implemented",
+        close_out_last_partial="2026-08-06T14:31:36Z -- 1 missing (joined): C5",
+    )
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    gate_evidence = decision_object["gates"]["consumed_handoff_completeness"]
+    leg_a = gate_evidence["elements"][0]["leg_a"]
+    assert leg_a["verdict"] == "indeterminate"
+    assert "docs/plans/2026-08-03-thing.md" in leg_a["detail"]
+    assert "'implemented'" in leg_a["detail"]
+    assert "close_out_last_partial" in leg_a["detail"]
+    assert "2026-08-06T14:31:36Z -- 1 missing (joined): C5" in leg_a["detail"]
+    # indeterminate is non-blocking (AC8): no new blocking condition.
+    assert gate_evidence["elements"][0]["blocks"] is False
+    assert gate_evidence["blocks"] is False
+
+
+def test_session_handoff_leg_a_not_applicable_when_terminal_plan_has_no_close_out_marker(
+    monkeypatch, tmp_path
+):
+    """C4's noise-suppression regression test -- the single most important
+    case in this chunk: the ordinary 30-of-34 terminal-and-clean case must
+    keep returning `not-applicable`, SILENTLY -- it must not appear in the
+    gate's `indeterminate_notes` summary tail."""
+    _write_session_handoff(tmp_path, "state/handoffs/x.md", "dlv-thing")
+    _write_session_handoff_plan(
+        tmp_path,
+        "docs/plans/2026-08-03-thing.md",
+        "no AC heading at all\n",
+        status="implemented",
+    )
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    gate_evidence = decision_object["gates"]["consumed_handoff_completeness"]
+    leg_a = gate_evidence["elements"][0]["leg_a"]
+    assert leg_a["verdict"] == "not-applicable"
+    assert leg_a["detail"] == "plan docs/plans/2026-08-03-thing.md: status 'implemented' is terminal"
+    assert "indeterminate:" not in gate_evidence["summary_line"]
+    assert gate_evidence["summary_line"] == "Consumed-handoff completeness: all consumed handoffs clear"
+
+
+def test_consumed_handoff_completeness_summary_line_names_plan_for_uncleared_marker(monkeypatch, tmp_path):
+    """AC6, gate-level: `summary_line` must stop reading 'all consumed
+    handoffs clear' and instead name the plan and the reason -- traced end
+    to end through `compute_consumed_handoff_completeness_gate`'s own
+    `indeterminate_notes` wiring, not merely inferred from leg_a's verdict."""
+    _write_session_handoff(tmp_path, "state/handoffs/x.md", "dlv-thing")
+    _write_session_handoff_plan(
+        tmp_path,
+        "docs/plans/2026-08-03-thing.md",
+        "no AC heading at all\n",
+        status="implemented",
+        close_out_last_partial="2026-08-06T14:31:36Z -- 1 missing (joined): C5",
+    )
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    gate_evidence = decision_object["gates"]["consumed_handoff_completeness"]
+    assert gate_evidence["summary_line"] != "Consumed-handoff completeness: all consumed handoffs clear"
+    assert "docs/plans/2026-08-03-thing.md" in gate_evidence["summary_line"]
+    assert "indeterminate:" in gate_evidence["summary_line"]
+    # Still non-blocking end to end (AC8).
+    assert gate_evidence["blocks"] is False
 
 
 @pytest.mark.parametrize("terminal_status", ["shipped", "superseded", "deferred", "abandoned", "complete"])
@@ -3651,3 +3755,90 @@ def test_open_spine_row_gate_free_value_keys_appear_in_decisions_template(monkey
     assert set(_dc_spine_worklist.FREE_VALUE_KEYS).issubset(template.keys())
     for key in _dc_spine_worklist.FREE_VALUE_KEYS:
         assert template[key] is None
+
+
+# ---------------------------------------------------------------------------
+# C2a — a blocked judgment point does not abort its siblings (narration)
+# ---------------------------------------------------------------------------
+
+
+def test_next_move_with_open_judgment_points_states_a_block_does_not_abort_siblings():
+    """AC4 (C2a): the `next_move` text for >= 1 open judgment point must
+    tell the operator that leaving one open only blocks the directives
+    that depend on it, not the whole run."""
+    gate = _gate("single-session", consumed_handoff_paths=())
+    _narration, next_move = wsc._narration_and_next_move(
+        gate,
+        directives=[{"id": "d-1"}],
+        judgment_points=[{"id": "jp-1"}],
+    )
+    assert "only block" in next_move or "does not abort" in next_move or "not the rest" in next_move
+    assert "resolve" in next_move.lower()
+
+
+def test_next_move_with_no_judgment_points_omits_the_partial_resolution_line():
+    """Complement: a brief with no open judgment points never carries the
+    partial-resolution sentence — it isn't relevant when there's nothing
+    to leave open."""
+    gate = _gate("single-session", consumed_handoff_paths=())
+    _narration, next_move = wsc._narration_and_next_move(
+        gate,
+        directives=[{"id": "d-1"}],
+        judgment_points=[],
+    )
+    assert "only block" not in next_move
+    assert "not the rest of the run" not in next_move
+
+
+# ---------------------------------------------------------------------------
+# C2b — the replay-safety footnote is scoped, never an unconditional claim
+# ---------------------------------------------------------------------------
+
+
+def test_next_move_states_which_directives_are_verified_replay_safe():
+    """AC4 (C2b): with open judgment points AND a verified-re-entrant
+    directive present in this run, the next_move names it as safe to
+    replay — scoped to what C3 actually verified."""
+    gate = _gate("single-session", consumed_handoff_paths=())
+    _narration, next_move = wsc._narration_and_next_move(
+        gate,
+        directives=[{"id": "d-claim-plan-execution-lock"}, {"id": "d-run-wsc-tail"}],
+        judgment_points=[{"id": "jp-1"}],
+    )
+    assert "d-claim-plan-execution-lock" in next_move
+    assert "verified safe to replay" in next_move
+    assert "re-fire" in next_move
+
+
+def test_next_move_never_asserts_unconditional_replay_safety():
+    """AC4 (C2b): C3's verdict is MIXED, so the brief must never say
+    every/nothing-already-landed re-fires as a blanket claim — the
+    unconditional line is forbidden regardless of which directives are
+    present in a given run."""
+    gate = _gate("single-session", consumed_handoff_paths=())
+    for directives in (
+        [{"id": "d-claim-plan-execution-lock"}],
+        [{"id": "d-run-wsc-tail"}],
+        [],
+    ):
+        _narration, next_move = wsc._narration_and_next_move(
+            gate,
+            directives=directives,
+            judgment_points=[{"id": "jp-1"}],
+        )
+        assert "nothing already landed re-fires" not in next_move
+        assert "everything is safe to replay" not in next_move.lower()
+
+
+def test_next_move_with_no_verified_safe_directives_states_all_reFire():
+    """Complement: when no directive in this run is in the verified-safe
+    set, the footnote says so plainly rather than silently omitting the
+    replay caveat."""
+    gate = _gate("single-session", consumed_handoff_paths=())
+    _narration, next_move = wsc._narration_and_next_move(
+        gate,
+        directives=[{"id": "d-run-wsc-tail"}],
+        judgment_points=[{"id": "jp-1"}],
+    )
+    assert "None of this run's directives are verified safe to replay" in next_move
+    assert "re-fire" in next_move

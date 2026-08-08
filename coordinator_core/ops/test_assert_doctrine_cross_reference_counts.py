@@ -17,14 +17,13 @@ Import guard (lesson: state/lessons/2026-07-04-universal-registry-completeness-t
   @register_op("doctrine.assert_cross_reference_counts") before any test that
   relies on registry state.
 
-Harness: asyncio.run() in sync test fns — no pytest-asyncio dependency. Handler
-called directly with repo_root=<tmp git common dir>. A throwaway git repo under
-tmp_path stands in for the caller's own worktree — never the working repo.
+Harness: _handler is a plain sync function — called directly with
+repo_root=<tmp git common dir>. A throwaway git repo under tmp_path stands in
+for the caller's own worktree — never the working repo.
 """
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
@@ -35,11 +34,6 @@ import coordinator_core.ops.assert_doctrine_cross_reference_counts  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.assert_doctrine_cross_reference_counts import _handler
-
-
-def _run(coro):
-    """Run async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -84,10 +78,10 @@ def test_all_thresholds_met(tmp_path):
     worktree = common_dir.parent
     _write_skill(worktree, "plan/SKILL.md", "Eighth dimension\ntrampoline: true\nplan⇄spike\n")
 
-    result = _run(_handler(
+    result = _handler(
         {"expected": {"skills/plan/SKILL.md::Eighth dimension": 1}},
         repo_root=common_dir,
-    ))
+    )
 
     assert result == {"ok": True, "mismatches": []}
 
@@ -102,10 +96,10 @@ def test_below_threshold_reported(tmp_path):
     worktree = common_dir.parent
     _write_skill(worktree, "plan/SKILL.md", "no matching token here\n")
 
-    result = _run(_handler(
+    result = _handler(
         {"expected": {"skills/plan/SKILL.md::Eighth dimension": 1}},
         repo_root=common_dir,
-    ))
+    )
 
     assert result["ok"] is False
     assert result["mismatches"] == [
@@ -124,10 +118,10 @@ def test_line_semantics_not_substring_count(tmp_path):
     # "tok" appears twice on line 1, once on line 2 -> grep -c == 2 lines, not 3 occurrences.
     _write_skill(worktree, "plan/SKILL.md", "tok tok\ntok\nno match\n")
 
-    result = _run(_handler(
+    result = _handler(
         {"expected": {"skills/plan/SKILL.md::tok": 3}},
         repo_root=common_dir,
-    ))
+    )
 
     assert result["ok"] is False
     assert result["mismatches"] == [
@@ -147,8 +141,8 @@ def test_idempotent_double_invocation(tmp_path):
 
     params = {"expected": {"skills/plan/SKILL.md::Eighth dimension": 1}}
 
-    first = _run(_handler(dict(params), repo_root=common_dir))
-    second = _run(_handler(dict(params), repo_root=common_dir))
+    first = _handler(dict(params), repo_root=common_dir)
+    second = _handler(dict(params), repo_root=common_dir)
 
     assert first == second == {"ok": True, "mismatches": []}
     status = subprocess.run(
@@ -169,10 +163,10 @@ def test_escaping_path_rejected(tmp_path):
     outside = worktree / "elsewhere.md"
     outside.write_text("Eighth dimension\n", encoding="utf-8")
 
-    result = _run(_handler(
+    result = _handler(
         {"expected": {"../elsewhere.md::Eighth dimension": 1}},
         repo_root=common_dir,
-    ))
+    )
 
     assert result["ok"] is False
     assert "escapes" in result["error"]
@@ -185,7 +179,7 @@ def test_escaping_path_rejected(tmp_path):
 
 
 def test_repo_root_none_is_setup_error():
-    result = _run(_handler({"expected": {"skills/plan/SKILL.md::x": 1}}, repo_root=None))
+    result = _handler({"expected": {"skills/plan/SKILL.md::x": 1}}, repo_root=None)
 
     assert result["ok"] is False
     assert "repo_root is None" in result["error"]
@@ -209,7 +203,7 @@ def test_repo_root_none_is_setup_error():
 def test_malformed_expected_rejected(tmp_path, expected):
     common_dir = _init_repo(tmp_path)
 
-    result = _run(_handler({"expected": expected}, repo_root=common_dir))
+    result = _handler({"expected": expected}, repo_root=common_dir)
 
     assert result["ok"] is False
     assert result["error"]

@@ -105,7 +105,7 @@ def _render_node(node: dict[str, Any], harvested_bug_signal: Optional[bool]) -> 
 
 
 @register_op("ceremony.session_instructions")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'ceremony.session_instructions' handler — instruction-set render op.
 
     Reads disk (via the same `_resolve_branches` call the retired ``ceremony.wsc_resolve``

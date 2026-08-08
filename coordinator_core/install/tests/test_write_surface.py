@@ -20,6 +20,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
     validate,
 )
+from coordinator_core.ops.write_surface_manifest import _flatten_declaration
 
 
 def test_all_eight_kinds_present_and_exact() -> None:
@@ -175,6 +176,43 @@ def test_unrecognized_kind_produces_structured_error_not_a_raise() -> None:
     assert isinstance(errors[0], ValidationError)
     assert "not-a-real-kind" in errors[0].message
     assert errors[0].writer_id == "bad-writer"
+
+
+def test_unset_group_does_not_change_emitted_manifest_entry_keys() -> None:
+    decl = WriteSurfaceDeclaration(
+        writer_id="grouped-writer",
+        source_module="coordinator_core.install.grouped",
+        clauses=(
+            StaticClause(
+                entries=(
+                    WriteSurfaceEntry(
+                        kind="git-config-key",
+                        key="gc.autoDetach",
+                        unset_group="gc-group",
+                    ),
+                ),
+            ),
+        ),
+    )
+    flattened = _flatten_declaration(decl)
+    assert len(flattened) == 1
+    assert set(flattened[0].keys()) == {
+        "status",
+        "writer_id",
+        "source_module",
+        "form",
+        "kind",
+        "key",
+        "path",
+        "begin_marker",
+        "end_marker",
+        "effect",
+        "reason",
+        "discovered_by",
+        "discovered_by_normalized",
+        "validation_errors",
+    }
+    assert "unset_group" not in flattened[0]
 
 
 def test_shaped_clause_missing_discovered_by_is_reported() -> None:

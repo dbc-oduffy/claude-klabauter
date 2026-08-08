@@ -82,13 +82,32 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: WIDENED 2026-08-07 (C4, docs/plans/2026-08-07-command-guards-fire-under-
+#: both-tool-names.md) -- unlike its two former cohort-mates
+#: (`guard_plumbing_and_loops.py`, `guard_multiprobe_banner.py`, still
+#: held), this guard is deny-incapable at the chain level: its
+#: `GuardEntry` registration in `dispatch.py`'s `guard_chain` (the
+#: "check-raw-pid-liveness" entry) declares `GuardBand.ADVISORY_REWRITE`
+#: with `fail_closed=False`, and `check()` below never constructs a deny
+#: envelope in any branch. `CLASS = "hard-deny"` immediately above is a
+#: DEAD attribute (DR-277) -- C1 deliberately did not revive it as a live
+#: signal, and reading it as evidence this guard can deny is exactly the
+#: misreading that put this file in the held cohort in the first place.
+#: It also already dialect-branches to SILENT for `Dialect.POWERSHELL`
+#: rather than guessing (its three POSIX-only idioms have no recognized
+#: PowerShell analogue) -- a declined verdict, never a scan of unreadable
+#: text. `MATCHERS` therefore references the shared tool-name universe
+#: directly, not a guard-local subset.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 46
 
 #: Escape hatch -- inline env read only, never hoisted (F2 discipline).
@@ -160,7 +179,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # fail_closed=True entries, which route an uncaught exception from this
     # function through its crash-deny wrapper) -- catching and swallowing an
     # unexpected error into a silent allow here would defeat that contract.
-    if (payload.get("tool_name") or "") != "Bash":
+    tool_name = payload.get("tool_name") or ""
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is Dialect.POWERSHELL:
+        # C5 (row 19, `docs/reference/guard-dialect-coverage.md`): this
+        # guard's own segment splitter (`_SEGMENT_SPLIT_RE`) and all three
+        # detection forms (`ps -p`, `kill -0`, `os.kill(pid, 0)`) are
+        # POSIX-only -- no PowerShell liveness idiom (`Get-Process -Id`) is
+        # recognized at all. A PowerShell command is therefore never a
+        # confirmed clean verdict here; record SILENT rather than let an
+        # unscanned command read as cleared. Does NOT scan `cmd` -- the
+        # splitter itself is the closed hole the tokenizer docstring warns
+        # about (module docstring "Detection shape"), so re-using it against
+        # PowerShell input would be exactly the guess this plan forbids.
+        record_silent(
+            "check_raw_pid_liveness",
+            "PowerShell dialect: no recognized liveness idiom "
+            "(ps -p / kill -0 / os.kill are POSIX-only)",
+        )
+        return None
+    if dialect is not Dialect.BASH:
         return None
 
     tool_input = payload.get("tool_input") or {}

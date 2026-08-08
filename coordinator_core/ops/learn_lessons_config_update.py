@@ -34,7 +34,7 @@ import re
 import subprocess
 import sys
 from typing import List, Optional
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
 def _norm(path: str) -> str:
@@ -69,7 +69,7 @@ def _machine_local_keys(ml: str) -> List[str]:
             timeout=10,
             # Review: code-reviewer — Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _machine_local_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -92,7 +92,7 @@ def _machine_local_get(ml: str, key: str) -> str:
             timeout=10,
             # Review: code-reviewer — Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _machine_local_get: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

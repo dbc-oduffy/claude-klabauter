@@ -713,9 +713,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     root = args.root
     if not root:
         try:
+            from coordinator_core.win_portability import no_console_creationflags
+
             proc = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
                 capture_output=True, text=True, check=True,
+                **no_console_creationflags(),
             )
         except (subprocess.CalledProcessError, OSError) as exc:
             print(f"--root not given and not inside a git repo: {exc}", file=sys.stderr)

@@ -97,8 +97,11 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _GIT_TIMEOUT_SECS = 30
 _SCHEMA_VERSION_RE = re.compile(r"^[1-9][0-9]*$")
 _STAMP_LINE_RE = re.compile(r"^schema_version:\s*(.*)$", re.MULTILINE)
@@ -231,7 +234,7 @@ def _which_git() -> bool:
             capture_output=True,
             timeout=_GIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _which_git: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -246,7 +249,7 @@ def _git(args: List[str], root: str, timeout: int = _GIT_TIMEOUT_SECS) -> "subpr
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
 
 
@@ -495,7 +498,12 @@ def main(argv: List[str]) -> int:
         return 1
 
     # ---- resolve working-repos.yaml -------------------------------------
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     working_repos_yaml = os.path.join(home, ".claude", "working-repos.yaml")
 
     if not os.path.isfile(working_repos_yaml):
@@ -692,7 +700,7 @@ def main(argv: List[str]) -> int:
                             ],
                             timeout=_GIT_TIMEOUT_SECS,
                             stdin=subprocess.DEVNULL,
-                            creationflags=_CREATIONFLAGS,
+                            **_CREATIONFLAGS,
                         )
                         if commit_proc.returncode != 0:
                             _print(

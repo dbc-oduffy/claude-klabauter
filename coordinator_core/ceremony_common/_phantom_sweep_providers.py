@@ -225,6 +225,15 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
     wt_path = str(tmp_path / "wt")
 
     def run_git(args: list[str], cwd: Path) -> SimpleNamespace:
+        # Pre-subcommand global flags (`--no-optional-locks`, adopted on the
+        # read-only sites) sit BEFORE the subcommand, so every matcher below
+        # would silently stop matching and fall through to the catch-all
+        # AssertionError. Dispatch on the SUBCOMMAND, never on raw argv[0].
+        # Only valueless global flags are stripped here — a value-taking one
+        # (`-C <path>`) would need its argument dropped too, and this fake
+        # passes cwd separately rather than via `-C`.
+        while args and args[0].startswith("-"):
+            args = args[1:]
         if args[:2] == ["config", "user.email"]:
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[:2] == ["rev-parse", "--abbrev-ref"]:

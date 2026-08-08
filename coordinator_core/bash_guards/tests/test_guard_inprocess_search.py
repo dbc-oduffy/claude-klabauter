@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import guard_inprocess_search as guard
 
 
@@ -169,3 +170,20 @@ class TestHelpers:
         path = guard._latch_path(str(repo), "sess-x")
         assert path is not None
         assert path.parts[-3:] == ("coordinator-sessions", "sess-x", guard._LATCH_MARKER_NAME)
+
+
+class TestPowerShellDialectStaysBashOnly:
+    """Row 21, `docs/reference/guard-dialect-coverage.md` -- disposition is
+    "stay bash-only (c), declare SILENT", by design, not bigger-than-sized
+    fixed. Never delegates to `search.answer` for a PowerShell command."""
+
+    def test_powershell_command_returns_none_and_records_silent(self, repo):
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Select-String -Pattern foo -Path bar.py"},
+            "cwd": str(repo),
+        }
+        with _verdict.collecting() as silences:
+            result = guard.check(payload)
+        assert result is None
+        assert _verdict.was_silent("guard_inprocess_search", silences)

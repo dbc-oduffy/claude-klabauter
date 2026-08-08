@@ -19,15 +19,13 @@ The invariants worth pinning, in priority order:
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from coordinator_core.hooks.nudge_named_agent_report_delivery import _handler
 
 
 def _run(params: dict) -> dict:
-    return asyncio.run(_handler(params))
+    return _handler(params)
 
 
 def _advisory_text(result: dict) -> str:

@@ -37,6 +37,14 @@ calling `resolve_gitdir`, since a write-sink TARGET is very often a path
 that does not exist yet. See that function's own docstring for the
 latent-bug history.
 
+Also carries `translate_msys_path()` / `resolve_relative()` (C1,
+`docs/plans/2026-08-07-guard-posix-path-rerooting.md`) -- the MSYS/MinGW
+drive-mount path translator and its `_resolve_relative` twin, LIFTED here
+from `bump_outside_repo_write.py:275` / `bump_foreign_repo_write.py:277`
+(previously duplicated verbatim in both) so C2/C4 import one copy rather
+than restating it, mirroring `nearest_existing_ancestor`'s own precedent
+above. See each function's own docstring for the defect this fixes.
+
 Negative-spec:
   - Does NOT resolve a candidate path to an absolute location, a git root, or
     anything else -- this module returns RAW candidate strings exactly as
@@ -57,6 +65,8 @@ from __future__ import annotations
 import os
 import re
 from typing import List, Optional
+
+from ._dialect import _strip_ps_quotes
 
 #: Redirection operator token shape shlex's tokenizer emits when `>`/`>>`
 #: (optionally fd-prefixed, e.g. `2>`, `1>>`) is surrounded by whitespace --
@@ -175,6 +185,163 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
     return targets
 
 
+#: PowerShell cmdlet-shaped write-sink table (C4e follow-up, 2026-08-07,
+#: `docs/reference/guard-dialect-coverage.md` row 15). ADDITIVE to the
+#: `WRITE_SINK_BINARIES` table above, not a replacement -- `cp`/`mv`/`tee`/
+#: `mkdir`/`install`/`sed`/`rsync`/`tar` stay a BASH-only table exactly as
+#: before; this is a SEPARATE, PowerShell-only table for the cmdlets C3's
+#: triage named as the genuinely unmatched gap (row 15's own worked list):
+#: `New-Item`, `Set-Content`, `Add-Content`, `Copy-Item`, `Move-Item`,
+#: `Out-File`, `Tee-Object`. `cp`/`mv` PowerShell ALIASES are deliberately
+#: NOT duplicated here (C3's triage: they already fire via alias collision
+#: on the bash-shaped classifier reused elsewhere in this fleet); `>`/`>>`
+#: are the same operator characters in both dialects and are likewise left
+#: alone here, not re-derived. Every entry is a lowercased FULL cmdlet name
+#: only -- short aliases (`ni`, `sc`, `ac`, `cpi`, `mi`) are NOT covered,
+#: same "do not enumerate evasions" posture the rest of this module
+#: applies; a caller consulting this table must lowercase its own head
+#: token first, mirroring `WRITE_SINK_BINARIES`'s own basename-normalize
+#: contract.
+PS_WRITE_SINK_CMDLETS = frozenset(
+    {"new-item", "set-content", "add-content", "copy-item", "move-item", "out-file", "tee-object"}
+)
+
+
+def _ps_flag_value(args: List[str], prefixes: tuple) -> Optional[str]:
+    """First token immediately following a `-`-prefixed arg whose lowercased
+    text starts with one of `prefixes` (PowerShell parameter PREFIX-MATCH --
+    see module-level callers' own docstrings for why a literal flag name
+    would have near-zero recall), or `None` if no such flag/value pair is
+    present. Each prefix below is chosen to be UNAMBIGUOUS against every
+    other named parameter the same cmdlet accepts (see
+    `extract_write_sink_targets_powershell`'s own per-cmdlet comments)."""
+    for i, tok in enumerate(args):
+        low = tok.lower()
+        if low.startswith("-") and any(low.startswith(p) for p in prefixes) and i + 1 < len(args):
+            return _strip_ps_quotes(args[i + 1])
+    return None
+
+
+def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> List[str]:
+    """Raw candidate write-target strings for ONE already-tokenized
+    PowerShell segment (`tokens`, from `_dialect.resolve_segments_for_dialect`),
+    given `head_low` -- `tokens[0].lower()`, mirroring `extract_write_sink_
+    targets_for_segment`'s own `head_base` contract but for the PowerShell
+    cmdlet table (`PS_WRITE_SINK_CMDLETS`) rather than the bash binary table.
+
+    Best-effort, same fail-open direction as the bash-leg function above: an
+    over-broad candidate is dropped harmlessly by the caller's own
+    `resolve_gitdir` check; an under-recognised shape just means no bump,
+    never a false deny. Does NOT attempt `cd`/`Set-Location` cwd-tracking --
+    that parity gap is the caller's to note, not this extraction helper's.
+    """
+    if head_low not in PS_WRITE_SINK_CMDLETS:
+        return []
+
+    args = tokens[1:]
+    # Flag-shaped detection happens on the RAW (still-quoted) token
+    # deliberately -- a quoted literal like `"-Path"` is data, not a real
+    # PowerShell parameter name (quoting it is exactly how a script would
+    # spell "the string `-Path`, not the flag"), so filtering BEFORE
+    # stripping is the correct order: stripping first would make a quoted
+    # literal indistinguishable from an actual `-Path` flag and wrongly
+    # exclude it from the positional set.
+    positional = [_strip_ps_quotes(t) for t in args if not t.startswith("-")]
+    targets: List[str] = []
+
+    if head_low == "new-item":
+        # `-Path` (prefix `-pa`, unambiguous against `-ItemType`/`-Value`/
+        # `-Force`/`-Name`) or the first positional argument.
+        v = _ps_flag_value(args, ("-pa",))
+        if v is not None:
+            targets.append(v)
+        elif positional:
+            targets.append(positional[0])
+    elif head_low in ("set-content", "add-content"):
+        # `-Path` (`-pa`) or `-LiteralPath` (`-li`), unambiguous against
+        # `-Value`/`-Encoding`/`-Force`; else first positional.
+        v = _ps_flag_value(args, ("-pa", "-li"))
+        if v is not None:
+            targets.append(v)
+        elif positional:
+            targets.append(positional[0])
+    elif head_low in ("copy-item", "move-item"):
+        # `-Destination` (`-de`, unambiguous against `-Path`/`-Force`/
+        # `-Recurse`) or the LAST positional when two-or-more are present --
+        # the same `SRC... DEST` shape the bash-leg `cp`/`mv` branch uses.
+        v = _ps_flag_value(args, ("-de",))
+        if v is not None:
+            targets.append(v)
+        elif len(positional) >= 2:
+            targets.append(positional[-1])
+    elif head_low == "out-file":
+        # `-FilePath` (`-fi`, unambiguous against `-InputObject`/`-Encoding`/
+        # `-Append`/`-Force`) or the first positional -- `Out-File` accepts
+        # `FilePath` positionally (position 0), including the common
+        # `... | Out-File dest.txt` pipeline-tail shape.
+        v = _ps_flag_value(args, ("-fi",))
+        if v is not None:
+            targets.append(v)
+        elif positional:
+            targets.append(positional[0])
+    elif head_low == "tee-object":
+        # `-FilePath` (`-fi`) or the first positional -- but ONLY when no
+        # `-Variable` (`-va`) flag is present. `Tee-Object`'s `-FilePath`
+        # and `-Variable` parameter sets are mutually exclusive and share
+        # the SAME position-0 positional slot; `Tee-Object -Variable foo`
+        # writes to an in-memory PowerShell variable, not the filesystem,
+        # and `foo` there is `-Variable`'s own value, not a bare positional
+        # `-FilePath` argument -- treating it as one would be a false
+        # write-sink candidate (confirmed live: without this guard, `foo`
+        # was wrongly extracted as a target).
+        v = _ps_flag_value(args, ("-fi",))
+        has_variable_flag = any(t.lower().startswith("-va") for t in args)
+        if v is not None:
+            targets.append(v)
+        elif positional and not has_variable_flag:
+            targets.append(positional[0])
+
+    return targets
+
+
+#: `Set-Location` and its built-in aliases (`cd`, `sl`, `chdir`) -- the
+#: PowerShell-leg cwd-tracking parity fix (2026-08-07/08, backlog row
+#: `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`).
+#: Lowercased full names only, matching `PS_WRITE_SINK_CMDLETS`'s own
+#: "caller lowercases its head token first" contract.
+PS_SET_LOCATION_ALIASES = frozenset({"set-location", "cd", "sl", "chdir"})
+
+
+def extract_set_location_target_powershell(tokens: List[str], head_low: str) -> Optional[str]:
+    """The raw (unresolved) target string of a `Set-Location`/`cd`/`sl`/
+    `chdir` segment, or `None` when `head_low` is not one of
+    `PS_SET_LOCATION_ALIASES` or the segment carries no target at all (a
+    bare `cd` with no argument -- real PowerShell then goes to `$HOME`, but
+    this module has no reliable `$HOME` resolution for the invoking shell
+    and, per this package's fail-open posture, a caller that gets `None`
+    back MUST treat this as "cwd unchanged", never as "cwd is now unknown"
+    -- see `-Path`/`-LiteralPath`.
+
+    `-Path` (`-pa`) or `-LiteralPath` (`-li`) -- unambiguous against
+    `Set-Location`'s only other parameters (`-PassThru`/`-Stack`/
+    `-StackName`) -- or the first positional argument, mirroring
+    `extract_write_sink_targets_powershell`'s own per-cmdlet flag-then-
+    positional shape.
+    """
+    if head_low not in PS_SET_LOCATION_ALIASES:
+        return None
+    args = tokens[1:]
+    v = _ps_flag_value(args, ("-pa", "-li"))
+    if v is not None:
+        return v
+    # Same filter-before-strip ordering as `extract_write_sink_targets_
+    # powershell` above -- see that function's own comment.
+    positional = [_strip_ps_quotes(t) for t in args if not t.startswith("-")]
+    if positional:
+        return positional[0]
+    return None
+
+
 def nearest_existing_ancestor(path: str) -> Optional[str]:
     """Walk `path` up to the nearest EXISTING directory ancestor, or `None`
     if none exists at all (fail open -- never raises).
@@ -216,3 +383,160 @@ def nearest_existing_ancestor(path: str) -> Optional[str]:
             return None
         candidate = parent
     return None
+
+
+#: Windows drive-letter absolute form, e.g. `C:\Users\...` or `C:/Users/...`.
+#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
+#: `_WINDOWS_DRIVE_ABSOLUTE_RE` -- `bash_guards` must not import `coordinator_
+#: core.ops` (see `translate_msys_path`'s own docstring for why).
+_WINDOWS_DRIVE_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+#: Git-for-Windows MSYS toplevel drive-mount form, e.g. `/c/Users/...`.
+#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
+#: `_MSYS_ABSOLUTE_RE`, same provenance note as above.
+_MSYS_ABSOLUTE_RE = re.compile(r"^/[A-Za-z]/")
+
+#: A bare drive-mount with no trailing path segment at all, e.g. `/c` or
+#: `/C` -- `_MSYS_ABSOLUTE_RE` requires a trailing `/`, so this second
+#: pattern exists purely to catch that one-segment edge the first misses.
+_MSYS_BARE_DRIVE_RE = re.compile(r"^/[A-Za-z]$")
+
+
+def _host_is_windows() -> bool:
+    """`os.name == "nt"`. A monkeypatchable seam -- tests drive both the
+    Windows and POSIX branches of `translate_msys_path`/`resolve_relative`
+    through this one function rather than mocking `os.name` directly."""
+    return os.name == "nt"
+
+
+def translate_msys_path(path: str) -> Optional[str]:
+    """MSYS/MinGW drive-mount form (`/c/Users/...`, the shape Git-for-Windows'
+    bash hands to tools as `$PWD`/argument expansion) translated to a native
+    Windows path (`C:\\Users\\...`), or `None` if `path` is a leading-slash  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    form this function deliberately does not attempt to resolve.
+
+    Pattern: normalize at the single get seam, not at each of the N
+    consumers -- see example-doctrine-repo `coordinator/docs/wiki/bash-on-windows-
+    gotchas.md` §10/§14. This function IS that single seam for the two
+    `bump_*_write.py` guards (C2, C4): `resolve_relative` below calls it on
+    both `base` and `target` before either ever reaches `os.path`.
+
+    Rules, in order:
+
+    - POSIX host (`_host_is_windows()` False): IDENTITY, always, for every
+      input -- `/x/foo` is a real directory on a POSIX host, never an MSYS
+      drive-mount spelling to decode. No translation, ever.
+    - Windows, `^/[A-Za-z]/rest` or a bare `^/[A-Za-z]$` (no trailing
+      `rest`): `<LETTER>:\\rest` (drive letter upper-cased, backslash
+      separator; the bare form maps to `<LETTER>:\\`).
+    - Windows, already `_WINDOWS_DRIVE_ABSOLUTE_RE`-shaped, or no leading
+      `/` at all: returned unchanged -- not this function's business, the
+      caller's `os.path.isabs`/`os.path.join` already handle native forms
+      and plain relative segments correctly.
+    - Windows, any OTHER leading-slash form: `None` (untranslatable; the
+      caller drops the candidate -- these guards FAIL OPEN, never invent a
+      fail-closed default for a shape this function cannot decode). Three
+      shapes are DELIBERATELY unhandled here, not by oversight:
+        * `/tmp/x`, `/usr/...` -- no MSYS install-root guessing and no
+          `cygpath` shell-out: the repo's shell-out ban forbids the latter,
+          and MSYS2's install-root is environment-dependent, not a fixed
+          algorithm safe to reimplement.
+        * `//server/share` (MSYS-spelled UNC only -- the forward-slash form
+          bash hands us, NOT the native backslash `\\\\server\\share` spelling,
+          which starts with neither `/` nor a drive letter and so never
+          reaches this function's leading-slash branches at all) -- `os.path.
+          isabs` returns True for a double-slash path on Windows, so an
+          unhandled `//c/foo` would otherwise fall through to the
+          "unchanged" branch above and have `os.path.realpath` treat `c` as
+          a UNC SERVER NAME -- a different wrong resolution than the one
+          this module exists to fix, which `_WINDOWS_DRIVE_ABSOLUTE_RE`
+          (single leading slash only) does not catch on its own.
+        * `/cygdrive/...` -- Cygwin's own drive-mount spelling, a different
+          convention from MSYS's; not attempted.
+
+    Negative-spec (bounding this against the sibling `foreign-platform-
+    path-guard.md` "detect-only, never auto-repair" doctrine -- which does
+    NOT bar this translator; that doctrine is scoped to mutating a
+    persisted, bidirectionally-synced artifact, and nothing here is
+    persisted, nor is decoding this host's own shell's spelling a "repair"):
+      (1) the result is used ONLY to compute a verdict -- the guard never
+          rewrites, persists, or hands back the user's command;
+      (2) an emitter-side fix is unavailable because the emitter is the
+          harness Bash tool, outside this repo, and `_command_tokenizer`
+          was rejected as the seam for blast radius.
+    Negative-spec (environment-variable suppression is a SCOPE MISMATCH):
+    `MSYS2_ARG_CONV_EXCL` / `MSYS2_ENV_CONV_EXCL` govern MSYS2's OWN
+    conversion when MSYS2 invokes a native process; this defect lives
+    entirely inside OUR `isabs`/`join`/`realpath` call on a string we
+    already hold, a different layer those variables cannot reach.
+    """
+    if not _host_is_windows():
+        return path
+    if _WINDOWS_DRIVE_ABSOLUTE_RE.match(path) or not path.startswith("/"):
+        return path
+    m = _MSYS_ABSOLUTE_RE.match(path)
+    if m:
+        # `rest` still carries MSYS-style forward slashes past the drive
+        # segment (bash never emits backslashes) -- normalize those to the
+        # native separator too, not just the drive prefix, so the WHOLE
+        # result is a well-formed Windows path a subsequent `os.path.join`
+        # (native `ntpath.join`) treats consistently.
+        rest = path[3:].replace("/", "\\")
+        return f"{path[1].upper()}:\\{rest}"
+    if _MSYS_BARE_DRIVE_RE.match(path):
+        return f"{path[1].upper()}:\\"
+    return None
+
+
+def resolve_relative(base: str, target: str) -> Optional[str]:
+    """`target` resolved against `base` if relative, else `target` itself --
+    the lifted, translation-aware twin of the `_resolve_relative` previously
+    duplicated verbatim in `bump_outside_repo_write.py:275` and
+    `bump_foreign_repo_write.py:277` (C2 replaces both local defs with
+    module-level aliases onto this one, the same precedent
+    `nearest_existing_ancestor` above already set: imported and aliased,
+    never copied).
+
+    `None` means untranslatable -- the caller drops the candidate, per this
+    guard family's FAIL OPEN posture (see `translate_msys_path`).
+
+    THE FIX this function exists for: on Windows, handing a POSIX-absolute
+    string like `/x/claude-klabauter/scratch/t.txt` to bare `os.path` anchors
+    it onto the process's current drive (`os.path.isabs` True on Python
+    3.11/3.12 -> returned verbatim -> `os.path.realpath` anchors it later;
+    `os.path.isabs` False on 3.13+ -> `os.path.join(base, expanded)`
+    re-roots it onto `base`'s drive) -- both routes converge on the same
+    wrong, nonexistent path, denying a write that is actually inside the
+    session's own repo. Translating BOTH `base` and `target` to native form
+    BEFORE either reaches `os.path.isabs`/`os.path.join` makes the fix
+    version-independent by construction: neither of those two calls ever
+    sees a drive-relative string, so there is no per-interpreter branch left
+    to diverge on. (One narrow exception: a `~`-prefixed `target` is first
+    handed to `os.path.expanduser` -- itself an `os.path` call -- BEFORE
+    `translate_msys_path` sees it, since expansion has to happen before
+    MSYS-drive-mount translation can even recognise the resulting string.
+    Harmless on Windows because native `ntpath.expanduser` reads
+    `USERPROFILE`, not the invoking shell's MSYS `HOME`, so it already
+    returns native-drive-letter form that `translate_msys_path` then passes
+    through unchanged -- but the "neither call ever sees a drive-relative
+    string" guarantee below is therefore about `isabs`/`join`, not literally
+    every `os.path` call in this function.)
+
+    `base` is translated too, deliberately: `base` is the effective cwd
+    threaded from the payload, and on Windows the Bash tool hands us
+    `/x/claude-klabauter` there just as readily as in `target` -- joining a
+    relative target onto an untranslated POSIX `base` would reproduce the
+    identical defect one level up.
+    """
+    if not target:
+        return translate_msys_path(base)
+    expanded = os.path.expanduser(target) if target.startswith("~") else target
+    t = translate_msys_path(expanded)
+    if t is None:
+        return None
+    b = translate_msys_path(base)
+    if b is None:
+        return None
+    if os.path.isabs(t):
+        return t
+    return os.path.join(b, t)

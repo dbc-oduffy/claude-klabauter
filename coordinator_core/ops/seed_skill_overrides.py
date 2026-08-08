@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
@@ -98,7 +99,7 @@ def main(
     python_cmd = sys.executable or "python3"
     result = subprocess.run(
         [python_cmd, helper] + args,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )  # popup-safe-env-suppressed
     return result.returncode
 

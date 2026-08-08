@@ -11,7 +11,6 @@ names, no live codenames, no consumer-home literals.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 
@@ -107,22 +106,20 @@ class TestIdempotency:
 class TestOpHandler:
     def test_handler_requires_source_dir(self):
         with pytest.raises(ValueError, match="source_dir"):
-            asyncio.run(_list_files_newer_than_marker({}))
+            _list_files_newer_than_marker({})
 
     def test_handler_rejects_non_directory_source_dir(self, tmp_path):
         not_a_dir = tmp_path / "nope.txt"
         not_a_dir.write_text("x", encoding="utf-8")
 
         with pytest.raises(ValueError, match="not a directory"):
-            asyncio.run(_list_files_newer_than_marker({"source_dir": str(not_a_dir)}))
+            _list_files_newer_than_marker({"source_dir": str(not_a_dir)})
 
     def test_handler_returns_wire_shape(self, tmp_path):
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         _touch(tmp_path / "newer.py", mtime=base + 100)
 
-        result = asyncio.run(
-            _list_files_newer_than_marker({"source_dir": str(tmp_path), "limit": 5})
-        )
+        result = _list_files_newer_than_marker({"source_dir": str(tmp_path), "limit": 5})
 
         assert result == {"files": ["newer.py"], "marker_missing": False}

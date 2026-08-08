@@ -20,15 +20,24 @@ Public surface
 
 ``platform_verdict_for_shape(shape_name, matched_cmd, outlet_summary,
 outlet_example, host_is_windows=None)``
-    Convenience: renders both messages from a shared template so every
-    shape-guard's deny/advisory text reads as one family (AC-7 — a
-    misdescribing deny message is a release blocker, and a shared template
-    is cheaper to keep correct than N independently hand-written ones).
-    Both rendered messages carry the working alternative in the SAME
-    model-visible field the harness surfaces to the agent
-    (``permissionDecisionReason`` on deny, ``additionalContext`` on
-    advise) — see "Seam-advisory-vs-doctrine-rule" below for why that
-    placement is the mechanism, not decoration.
+    Convenience: renders an advisory message from a shared template so
+    every shape-guard's advisory text reads as one family (AC-7 — a
+    misdescribing message is a release blocker, and a shared template is
+    cheaper to keep correct than N independently hand-written ones).
+    ADVISORY-ONLY (DR-280, 2026-08-07): both live callers
+    (``guard_multiprobe_banner``, ``guard_plumbing_and_loops``) fix
+    ``host_is_windows=False`` at the call site because the Windows deny leg
+    is structurally unreachable through the real dispatch chain — an
+    earlier-registered ``ADVISORY_REWRITE`` rewrite sibling for the same
+    shape always wins first (see
+    ``docs/decisions/DR-280-unreachable-deny-legs-retire-rather-than.md``).
+    This function no longer renders a deny message at all; the rendered
+    advisory carries the working alternative in the SAME model-visible
+    field the harness surfaces to the agent (``additionalContext``) — see
+    "Seam-advisory-vs-doctrine-rule" below for why that placement is the
+    mechanism, not decoration. The low-level ``platform_verdict`` below is
+    unaffected and still renders either envelope shape from caller-supplied
+    text.
 
 Platform-override contract (AC-8 / AC-11)
 ------------------------------------------
@@ -151,6 +160,11 @@ Negative-spec
     env-var override for this key (Review: code-reviewer F1, P1).
   - Does NOT edit ``dispatch.py`` — that threading is C7/C8's surface; the
     section above is the contract, not the implementation.
+  - ``platform_verdict_for_shape`` does NOT render a deny envelope for any
+    input, at any ``host_is_windows`` value — that leg was retired as dead
+    code (DR-280, 2026-08-07; see ``platform_verdict_for_shape``'s own
+    docstring). Only the low-level ``platform_verdict`` still renders a
+    deny envelope, and only when a caller explicitly asks for one.
 
 Spec backlink: docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md § C6
 """
@@ -321,37 +335,44 @@ def platform_verdict_for_shape(
     outlet_example: str,
     host_is_windows: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Render the standard deny/advisory message pair for a detected
-    bash-spawn shape and return the platform-conditioned envelope.
+    """Render the standard advisory message for a detected bash-spawn shape
+    and return the advisory envelope.
+
+    ADVISORY-ONLY (DR-280, 2026-08-07): this function never returns a deny
+    envelope. It used to platform-condition its verdict via the low-level
+    ``platform_verdict`` (DENY on Windows, ADVISE elsewhere); that deny leg
+    was retired as dead code because every live caller
+    (``guard_multiprobe_banner``, ``guard_plumbing_and_loops``) fixes
+    ``host_is_windows=False`` at the call site -- the deny branch could
+    never open through the real dispatch chain (see the module docstring's
+    "Negative-spec" section and DR-280 for the reachability evidence).
 
     Args:
         shape_name: the classifier's shape label (e.g. "grep-via-bash"),
-            surfaced verbatim in both messages so a reader can match the
+            surfaced verbatim in the advisory so a reader can match the
             finding back to `_shape_classifier`'s taxonomy.
-        matched_cmd: the raw command string that matched; truncated to 200
-            chars in the deny path (mirrors ``block_worktree_creation.
-            _deny_reason``'s truncation convention) so a pathological
-            command does not blow out the deny message.
+        matched_cmd: accepted for signature/template-family compatibility
+            with the caller sites; not currently rendered into the
+            advisory text (the advisory does not echo the raw command).
         outlet_summary: one-line description of the working alternative
             (design-as-offers — the alternative leads, not the violation).
         outlet_example: a concrete equivalent invocation using the
-            alternative, shown in BOTH the deny and the advisory message.
-        host_is_windows: platform override — see module docstring.
+            alternative, shown in the advisory message.
+        host_is_windows: VESTIGIAL as of this function's DR-280 fix --
+            accepted and still threaded because every guard chain entry
+            and ``dispatch.py``'s registration lambdas already pass it
+            (see module docstring's threading contract), but the value has
+            no effect on this function's output: the message rendered is
+            identical for every value. Retired rather than dropped from
+            the signature to avoid an unrelated signature-break across
+            every caller; see this chunk's run report for the tradeoff.
     """
-    cmd_safe = matched_cmd if len(matched_cmd) <= 200 else matched_cmd[:200] + "..."
-    deny_reason = (
-        "BLOCKED: `%s` shell fan-out is denied on Windows -- this shape is "
-        "one of the dominant bash-spawn cost drivers this fleet's Windows "
-        "hosts pay a per-process cold-start tax on.\n\n"
-        "  Command:  %s\n\n"
-        "Use instead: %s\n\n"
-        "  Example:  %s\n"
-    ) % (shape_name, cmd_safe, outlet_summary, outlet_example)
+    del matched_cmd, host_is_windows
     advisory_context = (
         "BASH-SPAWN ADVISORY (non-blocking): this command matches the "
-        "`%s` shape. On Windows this same command is DENIED (per-process "
-        "spawn cost); consider %s here too so behavior stays consistent "
-        "across the fleet.\n\n"
+        "`%s` shape, one of this fleet's per-process cold-start-cost "
+        "drivers on Windows; consider %s here too so behavior stays "
+        "consistent across the fleet.\n\n"
         "  Example:  %s\n"
     ) % (shape_name, outlet_summary, outlet_example)
-    return platform_verdict(deny_reason, advisory_context, host_is_windows=host_is_windows)
+    return allow_advisory(_EVENT_NAME, advisory_context)

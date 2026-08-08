@@ -6,13 +6,13 @@ Coverage:
   (a) tier-1 env — CLAUDE_SESSION_ID set → returned immediately, no lower tiers tried.
   (b) tier-2 env — CLAUDE_CODE_SESSION_ID set (CLAUDE_SESSION_ID absent) → returned.
   (c) tier-1 precedence — both env vars set → CLAUDE_SESSION_ID wins.
-  (d) tier-3 sentinel — neither env var set, sentinel file present → file content returned.
-  (e) tier-3 stripped — sentinel content with leading/trailing whitespace → stripped.
-  (f) null when unresolvable — no env vars, no sentinel file → None returned.
-  (g) null when worktree_root is None — skip sentinel tier → None (tiers 1+2 absent).
-  (h) null when sentinel empty — sentinel exists but contains only whitespace → None.
-  (i) null when sentinel missing — worktree_root given but .git/... path absent → None.
-  (j) env vars take priority over sentinel — tier-1 returns even when sentinel exists.
+  (d) sentinel ignored — neither env var set, sentinel file present and well-formed →
+      None returned (the former tier-3 sentinel read was removed KS-2 2026-08-07; see
+      session_context.py module docstring negative-spec).
+  (e) null when unresolvable — no env vars, no sentinel file → None returned.
+  (f) null when worktree_root is None → None (tiers 1+2 absent).
+  (g) env vars take priority over an (ignored) sentinel — tier-1 returns even when
+      sentinel exists.
 
 Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
 Extraction source: coordinator_core/ops/review_trail_write.py:_resolve_session_id
@@ -54,7 +54,7 @@ class TestTier1Env:
         assert result == "sess-tier1-wins"
 
     def test_tier1_wins_over_sentinel(self, monkeypatch, tmp_path):
-        """Tier-1 env var wins even when sentinel file is present."""
+        """Tier-1 env var wins even when a (now-ignored) sentinel file is present."""
         sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel\n", encoding="utf-8")
@@ -76,54 +76,32 @@ class TestTier2Env:
         result = resolve_current_session_id(worktree_root=None)
         assert result == "sess-tier2-xyz789"
 
-    def test_tier2_empty_string_falls_through(self, monkeypatch, tmp_path):
-        """CLAUDE_CODE_SESSION_ID set to empty string → falls through to tier-3."""
+    def test_tier2_empty_string_ignores_sentinel(self, monkeypatch, tmp_path):
+        """CLAUDE_CODE_SESSION_ID set to empty string → sentinel is ignored → None."""
         sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel", encoding="utf-8")
 
         monkeypatch.delenv(_ENV1, raising=False)
-        monkeypatch.setenv(_ENV2, "")  # empty → fall through
+        monkeypatch.setenv(_ENV2, "")  # empty → falls through, sentinel no longer consulted
 
         result = resolve_current_session_id(worktree_root=tmp_path)
-        assert result == "sess-from-sentinel"
+        assert result is None
 
 
-class TestTier3Sentinel:
-    """Tier-3: sentinel file at {worktree_root}/.git/coordinator-sessions/.current-session-id."""
+class TestSentinelRemoved:
+    """Former tier-3: sentinel file at
+    {worktree_root}/.git/coordinator-sessions/.current-session-id — removed KS-2
+    2026-08-07. A present, well-formed sentinel must now be ignored entirely."""
 
-    def test_sentinel_content_returned(self, monkeypatch, tmp_path):
-        """No env vars; sentinel file present with content → content returned."""
+    def test_sentinel_present_and_well_formed_is_ignored(self, monkeypatch, tmp_path):
+        """No env vars; sentinel file present with valid content → still None (ignored)."""
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
 
         sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel-abc", encoding="utf-8")
-
-        result = resolve_current_session_id(worktree_root=tmp_path)
-        assert result == "sess-from-sentinel-abc"
-
-    def test_sentinel_content_stripped(self, monkeypatch, tmp_path):
-        """Sentinel file with surrounding whitespace/newline → stripped content returned."""
-        monkeypatch.delenv(_ENV1, raising=False)
-        monkeypatch.delenv(_ENV2, raising=False)
-
-        sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
-        sentinel.parent.mkdir(parents=True)
-        sentinel.write_text("  sess-whitespace-test  \n", encoding="utf-8")
-
-        result = resolve_current_session_id(worktree_root=tmp_path)
-        assert result == "sess-whitespace-test"
-
-    def test_sentinel_empty_returns_none(self, monkeypatch, tmp_path):
-        """Sentinel file exists but contains only whitespace → None returned."""
-        monkeypatch.delenv(_ENV1, raising=False)
-        monkeypatch.delenv(_ENV2, raising=False)
-
-        sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
-        sentinel.parent.mkdir(parents=True)
-        sentinel.write_text("   \n", encoding="utf-8")
 
         result = resolve_current_session_id(worktree_root=tmp_path)
         assert result is None

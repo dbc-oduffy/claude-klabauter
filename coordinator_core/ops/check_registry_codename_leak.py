@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from coordinator_core._settings_home import home_dir, settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 # D1 keep-set — prefix-matched against slug (strip repos. prefix first).
 # 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
@@ -166,6 +166,7 @@ def _resolve_registry_keys(env: dict) -> List[str]:
             capture_output=True,
             text=True,
             env=env,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _resolve_registry_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

@@ -87,8 +87,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _GIT_TIMEOUT_SECS = 10
 
 _PROG = "classify-dispatch-shape.sh"
@@ -239,7 +242,7 @@ def _resolve_git_dir(near_path: str) -> Optional[str]:
                 text=True,
                 timeout=_GIT_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
         except (OSError, subprocess.TimeoutExpired):
             print(f"skip: _resolve_git_dir: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -326,7 +329,7 @@ Was this a serial grind (one agent handling chunks sequentially), or an intentio
 pilot-then-expand shape, or did the EM author some chunks inline?
 
 If serial grind: consider re-dispatching with true fan-out parallelism — e.g.
-  bash ~/.claude/plugins/coordinator/bin/fan-out-dispatch.sh <tsv>
+  bash ~/.claude/plugins/coordinator-claude/coordinator/bin/fan-out-dispatch.sh <tsv>
 
 If intentional (pilot-then-expand / inline EM / other valid shape): no action needed.
 

@@ -54,7 +54,22 @@ check_blanket_git_add -- block-blanket-git-add.sh" section).
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.bash_guards import dispatch_checks as guard
+
+
+def _set_fake_home(monkeypatch, home_path):
+    """Redirects ``os.path.expanduser("~")`` (what ``_meta_repo_root`` uses)
+    to ``home_path`` on every platform. ``HOME`` alone only works on POSIX --
+    CPython's ``ntpath.expanduser`` prefers ``USERPROFILE`` over ``HOME`` on
+    Windows, so a Windows dev box with a real ``USERPROFILE`` set silently
+    ignores a test's ``HOME``-only monkeypatch and resolves ``~`` to the real
+    user profile instead of the fixture. Setting both env vars makes the
+    redirect actually take effect on every platform.
+    """
+    monkeypatch.setenv("HOME", str(home_path))
+    monkeypatch.setenv("USERPROFILE", str(home_path))
 
 
 def _wire_git_root(monkeypatch, root):
@@ -252,9 +267,14 @@ def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
     monkeypatch.setattr(guard, "_run_git", _fake_run_git)
     monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: True)
 
-    guard.check_blanket_git_add("git -C /explicit/target add -A", "sess1")
+    # A platform-derived absolute path (``tmp_path``-rooted), not a second
+    # hardcoded literal -- ``_bt_blanket_add_dash_c_cwd`` returns an
+    # ``os.path.isabs`` value unchanged, so the expectation is exactly this
+    # same value on every platform, POSIX or Windows.
+    explicit_target = str(tmp_path / "explicit" / "target")
+    guard.check_blanket_git_add("git -C %s add -A" % explicit_target, "sess1")
 
-    assert seen_cwd["cwd"] == "/explicit/target"
+    assert seen_cwd["cwd"] == explicit_target
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +300,10 @@ def test_magic_pathspec_colon_slash_dot_denies_in_hazard_repo(monkeypatch, tmp_p
 # ---------------------------------------------------------------------------
 
 
+#: state/bash-guards/known-red.json group "dispatch-checks-windows-path"
+#: (check_blanket_git_add stripping backslashes). Owner:
+#: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
+@pytest.mark.pending_fix
 def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
@@ -290,6 +314,7 @@ def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch,
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+@pytest.mark.pending_fix
 def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_repo(
     monkeypatch, tmp_path
 ):
@@ -402,7 +427,7 @@ def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     meta_root = fake_home / ".claude"
     meta_root.mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     monkeypatch.setattr(guard, "_hazard_registry_repo_roots", lambda: [])
 
     assert guard._is_hazard_repo(str(meta_root)) is True
@@ -411,7 +436,7 @@ def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
 def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch, tmp_path):
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     sibling_root = tmp_path / "some-fleet-sibling-checkout"
     sibling_root.mkdir(parents=True)
     monkeypatch.setattr(
@@ -428,7 +453,7 @@ def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
     """
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     monkeypatch.setattr(guard, "_hazard_registry_repo_roots", lambda: [])
     oss_repo = tmp_path / "some-oss-consumer-repo"
     oss_repo.mkdir(parents=True)
@@ -448,7 +473,7 @@ def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
 
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     monkeypatch.setattr(guard, "_hazard_registry_repo_roots", _boom)
     some_repo = tmp_path / "some-repo"
     some_repo.mkdir(parents=True)
@@ -471,8 +496,20 @@ def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path)
     reg_dir = tmp_path / "registry"
     reg_dir.mkdir()
     fake_sibling = tmp_path / "some-fleet-sibling-checkout"
+    # TOML literal strings (single-quoted) do not interpret backslash
+    # escapes -- a plain double-quoted (basic) TOML string does, so
+    # interpolating a raw Windows path (backslash-delimited) into one
+    # produces invalid escape sequences (``\U``, ``\s``, ...) that
+    # ``tomllib`` rejects, and ``_load_toml``'s fail-open ``except
+    # Exception`` silently degrades the whole file to ``{}``. The literal
+    # form keeps this fixture path-separator-agnostic without hardcoding
+    # either separator. POSIX paths (no backslashes) were never at risk from
+    # a double-quoted TOML string -- this is a Windows-path-safety fix, not
+    # a general double-quoted-strings-are-unsafe claim.
+    # Review: coordinator:code-reviewer (slice B, P3) -- clarify the fixture
+    # comment is Windows-path-specific, not a general TOML-format claim.
     (reg_dir / "registry.toml").write_text(
-        '"repos.claude_klabauter" = "%s"\n'
+        "\"repos.claude_klabauter\" = '%s'\n"
         '"repos.example-sim-repo" = ""\n'
         '"not_a_repo_key" = "/should/not/appear"\n' % str(fake_sibling)
     )

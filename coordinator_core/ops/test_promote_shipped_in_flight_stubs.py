@@ -383,20 +383,75 @@ def test_select_best_sha_picks_max_committer_timestamp_among_real_shas(git_fixtu
 
 
 def test_select_best_sha_treats_real_epoch_zero_as_a_winning_candidate(git_fixture, monkeypatch):
-    """Review: code-reviewer — _committer_timestamp's docstring warns that a
-    REAL committer timestamp of literal epoch 0 must never be conflated with
-    "unresolvable" (that conflation is the exact P4 fail-open defect class
-    fixed above). Pin it: a genuinely-epoch-0 commit mixed with an
-    unresolvable garbage SHA must be selected, not treated as a resolution
-    failure that falls closed to "".
+    """Review: code-reviewer — _batch_committer_timestamps' docstring warns
+    that a REAL committer timestamp of literal epoch 0 must never be
+    conflated with "unresolvable" (that conflation is the exact P4 fail-open
+    defect class fixed above). Pin it: a genuinely-epoch-0 commit mixed with
+    an unresolvable garbage SHA must be selected, not treated as a
+    resolution failure that falls closed to "".
     """
     repo = git_fixture
     monkeypatch.chdir(repo)
     monkeypatch.setenv("GIT_COMMITTER_DATE", "1970-01-01T00:00:00Z")
     monkeypatch.setenv("GIT_AUTHOR_DATE", "1970-01-01T00:00:00Z")
     sha_epoch_zero = _commit(repo, "epoch-zero commit", "epoch0.txt")
-    assert subject._committer_timestamp(sha_epoch_zero) == 0
+    assert subject._batch_committer_timestamps([sha_epoch_zero]) == {sha_epoch_zero: 0}
     assert _select_best_sha(["also-garbage", sha_epoch_zero]) == sha_epoch_zero
+
+
+def test_batch_committer_timestamps_makes_exactly_one_git_call(git_fixture, monkeypatch):
+    """C35 — batching regression: resolving N candidate SHAs must spawn ONE
+    git process (`git log --no-walk=unsorted --ignore-missing`), not one per
+    candidate. Counts real `subprocess.run` invocations rather than asserting
+    call args, so the test survives incidental argv reshaping.
+    """
+    repo = git_fixture
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00")
+    sha_a = _commit(repo, "commit a", "a.txt")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-02-01T00:00:00")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-02-01T00:00:00")
+    sha_b = _commit(repo, "commit b", "b.txt")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-03-01T00:00:00")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-03-01T00:00:00")
+    sha_c = _commit(repo, "commit c", "c.txt")
+
+    real_run = subprocess.run
+    calls = []
+
+    def _counting_run(*args, **kwargs):
+        calls.append(args)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subject.subprocess, "run", _counting_run)
+
+    assert _select_best_sha(["garbage-unresolvable", sha_a, sha_b, sha_c]) == sha_c
+    assert len(calls) == 1
+
+
+def test_batch_committer_timestamps_never_reads_a_dropped_sha_as_resolved(git_fixture, monkeypatch):
+    """`--ignore-missing` exits 0 with an unresolvable SHA simply absent from
+    stdout — pin that absence is reconciled explicitly (a missing key), never
+    defaulted to a winning/losing timestamp. Mixing one real SHA with several
+    unresolvable ones must both (a) not raise/degrade the batch call and
+    (b) never populate the unresolvable SHAs' map entries.
+    """
+    repo = git_fixture
+    monkeypatch.chdir(repo)
+    sha_real = _commit(repo, "the only real commit", "real.txt")
+    unresolvable = ["deadbeef00", "0000000000", "not-a-sha-at-all"]
+
+    result = subject._batch_committer_timestamps([*unresolvable, sha_real])
+
+    assert set(result.keys()) == {sha_real}
+    for missing in unresolvable:
+        assert missing not in result
+
+    # And the caller-facing selection still falls closed correctly when
+    # ONLY unresolvable candidates are supplied (no real SHA to reconcile
+    # against at all).
+    assert _select_best_sha(unresolvable) == ""
 
 
 def test_shipped_token_with_all_garbage_shas_does_not_promote(git_fixture, monkeypatch, capsys):

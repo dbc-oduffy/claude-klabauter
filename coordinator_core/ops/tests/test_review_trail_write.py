@@ -58,6 +58,8 @@ import pytest
 from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _build_json_record,
     _compute_timestamp,
+    _diagnose_zero_chain_terminal_credit,
+    _walk_range_commit_session_trailers,
     write_review_trail_entry,
 )
 
@@ -1481,52 +1483,24 @@ class TestForeignSessionScopeGuard:
             "aaaa..bbbb", _GUARD_OWN_SESSION, not_a_repo,
         )
 
+    def test_guard_refuses_exactly_the_same_ranges_after_vouch_removal(
+        self, tmp_path
+    ) -> None:
+        """AC7 negative-spec pin (2026-08-08 vouch-free-review-coverage-gates
+        C2/C4b): commit c4a8e5e864c3 deleted the Case-1 PM-vouch relaxation
+        mechanism (`coordinator_core/session/review_trail_vouch.py` and its
+        `check_review_trail_vouch` consult inside `_guard_foreign_session_range`).
+        That deletion did NOT touch the guard's refusal logic itself — it only
+        removed one caller-supplied escape hatch the guard used to consult.
 
-# ---------------------------------------------------------------------------
-# Case-1 PM-vouch relaxation (2026-07-28 amendment — archive/specs/2026-07/
-# 2026-07-27-review-trail-scope-guard.md § C7 amendment,
-# coordinator_core/session/review_trail_vouch.py). AC1/AC2/AC3/AC4 from the
-# dispatch brief.
-# ---------------------------------------------------------------------------
-
-import json as _json  # noqa: E402
-
-from coordinator_core.session import review_trail_vouch as _vouch  # noqa: E402
-
-
-def _write_session_meta_live(repo: Path, sid: str) -> None:
-    import datetime as _dt
-
-    sdir = repo / ".git" / "coordinator-sessions" / sid
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "meta.json").write_text(
-        _json.dumps({"pid": "999", "last_activity": _dt.datetime.now(_dt.timezone.utc).isoformat()}),
-        encoding="utf-8",
-    )
-
-
-def _write_session_meta_dead(repo: Path, sid: str) -> None:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "meta.json").write_text(
-        _json.dumps({"pid": "999", "last_activity": "2000-01-01T00:00:00Z"}),
-        encoding="utf-8",
-    )
-
-
-class TestForeignSessionScopePMVouchRelaxation:
-    """AC1: with no grant present, Case 1 behaviour is behaviorally
-    identical to today (same exception type, same offending SHA set; the
-    refusal message text gained a trailing PM-vouch-grant mention — see
-    `ForeignSessionRangeRefused`'s new closing sentence — so it is NOT
-    byte-identical, Review: code-reviewer — Finding 4b), pinned by
-    test_foreign_trailer_sha_in_range_is_refused_and_named above (unmodified,
-    and deliberately only asserting exception type + offending-SHA
-    membership via `match=`, not the full message text). AC2-AC4 below."""
-
-    def test_ac2_live_grant_naming_the_foreign_sha_allows_the_write(self, tmp_path):
-        """AC2: with a valid grant naming the foreign SHA, review_trail.write
-        succeeds over a range containing it."""
+        This test exists so a future reader looking at the vouch removal
+        cannot conclude "the guard got weaker" or "the guard got stronger"
+        from that change alone: it pins that a foreign-attributed SHA in
+        range is refused today with the exact same exception type and the
+        exact same offending-SHA-in-message behaviour the guard exhibited
+        before the vouch escape hatch existed at all. If this test goes red,
+        the guard's refusal strength itself changed — stop and report it as
+        a break-class regression, do not adjust this test to match."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -1536,76 +1510,30 @@ class TestForeignSessionScopePMVouchRelaxation:
             repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
         )
 
-        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
-        ok = _vouch.write_review_trail_vouch(
-            [foreign_sha],
-            "reviewed live during workstream-complete, found two P1 security bypasses",
-            session_id=_GUARD_OWN_SESSION,
-            cwd=str(repo),
-        )
-        assert ok is True
-
-        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-        assert result["sha_range"] == f"{base_sha}..{foreign_sha}"
-
-        waiver = repo / "state" / "review-trail" / "pm-vouches" / f"{foreign_sha}.json"
-        assert waiver.is_file(), (
-            "AC5 precondition: a permanent waiver must be persisted so the "
-            "coverage read side can credit this commit after this session ends"
-        )
-
-    def test_ac3_grant_naming_x_does_not_authorize_range_containing_y(self, tmp_path):
-        """AC3: a grant naming SHA X does not authorize a range containing
-        foreign SHA Y."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        # A real, resolvable commit that is genuinely NOT in the range under
-        # test below — proves AC3's narrow-by-sha semantics without relying
-        # on a fabricated hex string (Finding 3: write_review_trail_vouch
-        # now resolves every sha token via `git rev-parse`, so a fabricated
-        # token would raise ValueError instead of exercising AC3 at all).
-        vouched_but_absent_sha = base_sha
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
-        _vouch.write_review_trail_vouch(
-            [vouched_but_absent_sha],
-            "vouched for a DIFFERENT sha, not the one in this range",
-            session_id=_GUARD_OWN_SESSION,
-            cwd=str(repo),
-        )
-
         with pytest.raises(ValueError, match="names a different session") as exc_info:
             _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-        assert foreign_sha in str(exc_info.value)
-
-    def test_ac4_dead_session_grant_never_authorizes(self, tmp_path):
-        """AC4: a grant from a dead session never authorizes the current one
-        (mirrors tier-u-grant-cli's liveness semantics)."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        assert foreign_sha in str(exc_info.value), (
+            f"expected the offending SHA {foreign_sha!r} named in the "
+            f"refusal, got: {exc_info.value}"
         )
 
-        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
-        _vouch.write_review_trail_vouch(
-            [foreign_sha],
-            "vouched while live, but the session crashed before writing",
-            session_id=_GUARD_OWN_SESSION,
-            cwd=str(repo),
-        )
-        _write_session_meta_dead(repo, _GUARD_OWN_SESSION)
+        # No vouch, no chain-ancestry waiver, no grant of any kind exists
+        # anywhere on disk for this repo — the refusal above is unconditional,
+        # not merely "unconditional because nobody happened to vouch."
+        assert not (repo / "state" / "review-trail" / "pm-vouches").exists()
 
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-        assert foreign_sha in str(exc_info.value)
+
+# ---------------------------------------------------------------------------
+# NOTE: the Case-1 PM-vouch relaxation mechanism (2026-07-28 amendment —
+# archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C7
+# amendment, coordinator_core/session/review_trail_vouch.py) was removed by
+# commit c4a8e5e864c3 (this plan's C2). The `TestForeignSessionScopePMVouchRelaxation`
+# class that pinned it, and every test elsewhere in this file that used
+# `review_trail_vouch.write_review_trail_vouch` as setup, were deleted along
+# with it here — the mechanism they exercised no longer exists, and there is
+# nothing left to salvage or rewrite without inventing coverage for a
+# different behaviour.
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -1623,8 +1551,8 @@ from coordinator_core import chain_ancestry_waivers as _chain_waivers  # noqa: E
 # Chain identity must satisfy chain_ancestry_waivers._CHAIN_ID_RE (hex chars
 # and dashes only, first/last char hex) — a real closing session's own id is
 # a UUID and always shaped this way, unlike `_GUARD_OWN_SESSION` above (a
-# human-readable slug used elsewhere in this file for the PM-vouch tests,
-# which never key off a directory-name-safety-checked chain_id).
+# human-readable slug used elsewhere in this file's guard tests, which never
+# key off a directory-name-safety-checked chain_id).
 _CHAIN_OWN_SESSION = "abcdef01-1111-2222-3333-444444444444"
 _CHAIN_OTHER_SESSION = "abcdef02-5555-6666-7777-888888888888"
 
@@ -1801,47 +1729,6 @@ class TestForeignSessionScopeChainAncestryWaiver:
             f"got: {message}"
         )
 
-    def test_pm_vouch_and_chain_waiver_together_admit_full_range(
-        self, tmp_path
-    ) -> None:
-        """AC9: DR-243's PM-vouch path still works untouched alongside the
-        new chain-ancestry source — a range with TWO foreign SHAs, one
-        covered by a live PM-vouch grant and the other by a gate-minted
-        chain-ancestry waiver, is admitted by the UNION of both sources
-        (neither source alone names both offending SHAs)."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        pm_vouched_sha = _make_commit_touching(
-            repo, "peer-pm.py", "peer work (pm-vouched)", session_id=_GUARD_FOREIGN_SESSION,
-        )
-        chain_waived_sha = _make_commit_touching(
-            repo, "peer-chain.py", "peer work (chain-waived)", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        _write_session_meta_live(repo, _CHAIN_OWN_SESSION)
-        ok = _vouch.write_review_trail_vouch(
-            [pm_vouched_sha],
-            "reviewed live during workstream-complete, DR-243 vouch",
-            session_id=_CHAIN_OWN_SESSION,
-            cwd=str(repo),
-        )
-        assert ok is True
-
-        _chain_waivers.record_chain_ancestry_waiver(
-            str(repo),
-            frozenset({chain_waived_sha}),
-            chain_id=_CHAIN_OWN_SESSION,
-        )
-
-        result = _write_guarded(
-            repo, f"{base_sha}..{chain_waived_sha}", scope="chain",
-            own_session_id=_CHAIN_OWN_SESSION,
-        )
-        assert Path(result["out_path"]).is_file()
-
 
 # ---------------------------------------------------------------------------
 # Write-time zero-chain-terminal-credit diagnostic (state/audits/2026-08-07-
@@ -1880,18 +1767,19 @@ class TestZeroChainTerminalCreditDiagnostic:
         with pytest.raises(ValueError, match="names a different session"):
             _write_guarded(repo, f"{foreign_sha}^..{foreign_sha}", scope="chain")
 
-    def test_plan_scope_kind_foreign_unvouched_range_emits_diagnostic(
+    def test_plan_scope_kind_foreign_unvouched_range_is_guard_refused_not_diagnosed(
         self, tmp_path
     ) -> None:
-        """THE reachable gap this diagnostic exists to close: a
-        `scope_kind='plan'` record never passes through
-        `_guard_foreign_session_range` at all (only `scope_kind='diff'`
-        does — see `write_review_trail_entry`'s call site), so a
-        single-commit range naming a predecessor session's own, unvouched
-        commit is accepted with ZERO write-time check today. It is 100%
-        foreign and unvouched, so the record is a provable zero-credit
-        write at the chain-terminal path — the write still succeeds, but
-        now carries the diagnostic."""
+        """2026-08-07 fix: `scope_kind='plan'` now runs through
+        `_guard_foreign_session_range` exactly like `scope_kind='diff'`
+        (see `write_review_trail_entry`'s call site) — a single-commit range
+        naming a predecessor session's own, unvouched commit is refused
+        outright at write time, the same as the diff sibling test above,
+        rather than accepted with zero write-time check and left to the
+        advisory diagnostic alone. This supersedes the prior pinned
+        behaviour (accepted-with-diagnostic), which was the reported
+        defect: an unvouched foreign plan record used to slip through with
+        no write-time signal at all."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -1901,70 +1789,19 @@ class TestZeroChainTerminalCreditDiagnostic:
             session_id=_GUARD_FOREIGN_SESSION,
         )
 
-        result = write_review_trail_entry(
-            sha_range=f"{foreign_sha}^..{foreign_sha}",
-            reviewer="staff-eng",
-            scope="chain",
-            verdict="ok",
-            diff_loc=1,
-            scope_kind="plan",
-            session_id=_GUARD_OWN_SESSION,
-            workstream="",
-            caller_worktree=repo,
-        )
-
-        assert Path(result["out_path"]).is_file()
-        diagnostic = result.get(_ZERO_CREDIT_KEY)
-        assert diagnostic is not None, (
-            f"expected a {_ZERO_CREDIT_KEY!r} diagnostic on a 100%-foreign, "
-            f"unvouched single-commit 'plan' range; result={result!r}"
-        )
-        assert diagnostic["reason"] == "foreign_session_narrowing"
-        assert foreign_sha in diagnostic["shas"]
-
-    def test_plan_scope_kind_foreign_pm_vouched_range_emits_no_diagnostic(
-        self, tmp_path
-    ) -> None:
-        """A `scope_kind='plan'` record over a foreign range covered by a
-        live PM-vouch grant must NOT false-positive — this diagnostic
-        resolves the vouch/waiver evidence itself (independently of the
-        guard, which never runs for 'plan') and must reach the same "still
-        credits" conclusion the read side will."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        foreign_sha = _make_commit_touching(
-            repo, "predecessor.py", "predecessor work",
-            session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
-        ok = _vouch.write_review_trail_vouch(
-            [foreign_sha],
-            "reviewed live during workstream-complete",
-            session_id=_GUARD_OWN_SESSION,
-            cwd=str(repo),
-        )
-        assert ok is True
-
-        result = write_review_trail_entry(
-            sha_range=f"{foreign_sha}^..{foreign_sha}",
-            reviewer="staff-eng",
-            scope="chain",
-            verdict="ok",
-            diff_loc=1,
-            scope_kind="plan",
-            session_id=_GUARD_OWN_SESSION,
-            workstream="",
-            caller_worktree=repo,
-        )
-
-        assert Path(result["out_path"]).is_file()
-        assert _ZERO_CREDIT_KEY not in result, (
-            f"a PM-vouched foreign sha is credited at the read side, not "
-            f"stripped — the diagnostic must stay silent, got: {result.get(_ZERO_CREDIT_KEY)!r}"
-        )
+        with pytest.raises(ValueError, match="names a different session") as exc_info:
+            write_review_trail_entry(
+                sha_range=f"{foreign_sha}^..{foreign_sha}",
+                reviewer="staff-eng",
+                scope="chain",
+                verdict="ok",
+                diff_loc=1,
+                scope_kind="plan",
+                session_id=_GUARD_OWN_SESSION,
+                workstream="",
+                caller_worktree=repo,
+            )
+        assert foreign_sha in str(exc_info.value)
 
     def test_scope_kind_integration_emits_diagnostic_regardless_of_shas(
         self, tmp_path
@@ -2059,33 +1896,131 @@ class TestZeroChainTerminalCreditDiagnostic:
             "actually applies it to."
         )
 
-    def test_foreign_but_pm_vouched_range_emits_no_diagnostic(self, tmp_path) -> None:
-        """A foreign single-commit range covered by a live PM-vouch grant is
-        NOT stripped by the read side's narrowing either (vouched shas are
-        subtracted out of the foreign set before subtraction) — the write-
-        time diagnostic must not false-positive on this case."""
+
+# ---------------------------------------------------------------------------
+# A4: _walk_range_commit_session_trailers adopts P2
+# (coordinator_core.chain_attribution) bulk plus the grep leg it never had.
+# docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md,
+# task A4; fork-adjudication.md § 11.1 demonstrated 5 real on-disk records
+# this exact shape would have false-positived on.
+# ---------------------------------------------------------------------------
+
+
+class TestWalkRangeAdoptsP2GrepLeg:
+    """Direct regression coverage for the P2 adoption, exercising the two
+    module-level functions directly (bypassing the write-side scope guard,
+    which is a different, already-covered chokepoint) so the grep-leg
+    behaviour is pinned in isolation."""
+
+    #: `chain_attribution.bulk_grep_attributed_shas`'s `_UUID_RE` shape-
+    #: validation (hex + hyphen only) rejects `_GUARD_OWN_SESSION`
+    #: ("own-session-abcdef01" — not hex-shaped), which would silently
+    #: return an empty grep result before the grep leg is ever exercised.
+    #: A hex-shaped id is required here so the grep leg actually engages.
+    _HEX_OWN_SESSION = "a1b2c3d4e5f60718"
+
+    def test_grep_only_attributed_commit_is_not_classified_foreign(
+        self, tmp_path
+    ) -> None:
+        """A commit whose Session-Id line is NOT recognised by git as a
+        trailer (an extra paragraph after it defeats trailer-block
+        detection) but IS grep-matchable as a raw message line — the
+        'grep-only-attributed' shape AC6's invariant names
+        (`P2 - P1 subseteq {untrailered} | {merges} | {grep-only-attributed}`).
+        The OLD single-`git log`-with-trailers-only walk here had no grep
+        leg at all and would have classified this commit as foreign
+        (trailer is None != own_session_id) — exactly the false positive
+        fork-adjudication.md § 11.1 found firing on 5 real records."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
         base_sha = _make_commit(repo, "base")
-        foreign_sha = _make_commit_touching(
-            repo, "predecessor.py", "predecessor work",
-            session_id=_GUARD_FOREIGN_SESSION,
+
+        message = (
+            f"Session-Id: {self._HEX_OWN_SESSION}\n\n"
+            "grep-only attributed work — the Session-Id line sits at the "
+            "message's own start (matched by git --grep's whole-message "
+            "^ anchor) rather than as the message's final trailer-shaped "
+            "paragraph, so git's trailer parser does not recognise it"
+        )
+        _git(["commit", "--allow-empty", "-m", message], repo)
+        tip_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, encoding="utf-8", check=True,
+        ).stdout.strip()
+
+        # Confirm the fixture premise: git's own trailer parser does NOT
+        # recognise this line as a trailer atom (otherwise this test would
+        # pass for the wrong reason — the pre-existing trailer-only path).
+        trailer_check = subprocess.run(
+            ["git", "log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", tip_sha],
+            cwd=str(repo), capture_output=True, encoding="utf-8", check=True,
+        ).stdout.strip()
+        assert trailer_check == "", (
+            "fixture premise failed — git still recognised the Session-Id "
+            f"line as a trailer ({trailer_check!r}); this test needs a "
+            "commit shape git's trailer parser does NOT recognise"
         )
 
-        _write_session_meta_live(repo, _GUARD_OWN_SESSION)
-        ok = _vouch.write_review_trail_vouch(
-            [foreign_sha],
-            "reviewed live during workstream-complete",
-            session_id=_GUARD_OWN_SESSION,
-            cwd=str(repo),
+        foreign_map = _walk_range_commit_session_trailers(
+            f"{base_sha}..{tip_sha}", self._HEX_OWN_SESSION, repo,
         )
-        assert ok is True
-
-        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-
-        assert Path(result["out_path"]).is_file()
-        assert _ZERO_CREDIT_KEY not in result, (
-            f"a PM-vouched foreign sha is credited at the read side, not "
-            f"stripped — the diagnostic must stay silent, got: {result.get(_ZERO_CREDIT_KEY)!r}"
+        assert foreign_map is not None
+        assert foreign_map[tip_sha] is False, (
+            "a grep-only-attributed commit (P2's grep leg) must be "
+            "classified NOT foreign, not merely 'untrailered therefore "
+            "foreign'"
         )
+
+    def test_untrailered_non_grep_commit_still_predicted_zero_credit(
+        self, tmp_path
+    ) -> None:
+        """Sanity check the opposite direction: adopting P2's grep leg must
+        not silence a real positive — a genuinely foreign, non-grep-
+        attributable single-commit range is still predicted zero-credit."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit(repo, "peer work", session_id=_GUARD_FOREIGN_SESSION)
+
+        diagnostic = _diagnose_zero_chain_terminal_credit(
+            f"{base_sha}..{foreign_sha}", "chain", "plan", _GUARD_OWN_SESSION, repo,
+        )
+        assert diagnostic is not None
+        assert diagnostic["reason"] == "foreign_session_narrowing"
+
+    def test_merge_commit_is_classified_foreign(self, tmp_path) -> None:
+        """The window walk must see merges (no `--no-merges`) so a merge is
+        classified foreign by `foreign_shas_from_window`'s merge rule — this
+        module's walk previously had no merge-awareness at all (a merge
+        commit simply carried whatever trailer/parents `%H%x1f%(trailers:...)`
+        happened to report, with no `is_merge` signal feeding the
+        classification)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+        _git(["checkout", "-b", "side"], repo)
+        side_sha = _make_commit(repo, "side work", session_id=_GUARD_OWN_SESSION)
+        _git(["checkout", "main"], repo)
+        _make_commit(repo, "main work", session_id=_GUARD_OWN_SESSION)
+        _git(
+            ["merge", "--no-ff", "-m", f"merge\n\nSession-Id: {_GUARD_OWN_SESSION}", side_sha],
+            repo,
+        )
+        merge_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, encoding="utf-8", check=True,
+        ).stdout.strip()
+
+        foreign_map = _walk_range_commit_session_trailers(
+            f"{base_sha}..{merge_sha}", _GUARD_OWN_SESSION, repo,
+        )
+        assert foreign_map is not None
+        assert foreign_map[merge_sha] is True, (
+            "a merge commit must be classified foreign regardless of its "
+            "own Session-Id trailer — the window walk must see merges "
+            "(no --no-merges) so this classification can even happen"
+        )
+

@@ -309,7 +309,7 @@ def compute_closure_status(
 
 
 @register_op("crossrepo.closure_status")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "crossrepo.closure_status" handler.
 
     Params:

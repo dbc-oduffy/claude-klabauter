@@ -19,17 +19,33 @@ explicitly a best-effort static scan, NOT the enforcement net — the
 commit/merge backstop is. Four false-positive incidents motivated the
 advisory-only posture on this arm specifically.
 
-This is a faithful engine-ification, not a redesign: it ports the reference
-hook's Bash-arm pipeline in order —
+This is a faithful engine-ification of the reference hook's pipeline, with
+one deliberate departure (C3,
+``docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md``):
+the reference hook's redirect-target scan was quote-BLIND (it ran over the
+same quoted-span-stripped text as the mv/dest scan), which made every
+quoted redirect target — spaced or unspaced — invisible. This port's
+redirect extraction is quote-AWARE instead; see below and
+``_extract_redir_candidates``'s own docstring for the mechanism.
+
+Pipeline, in order —
   1. backslash-newline continuation join,
   2. heredoc-body strip (state-machine, mirroring the reference hook's awk),
-  3. quoted-span strip (double- then single-quoted) to build ``CMD_FOR_SCAN``,
-  4. fast-bail if neither ``\bmv\b`` nor ``>`` survives the stripped text,
+  3. quoted-span strip (double- then single-quoted) to build ``CMD_FOR_SCAN``
+     — used by the mv/dest scan only (step 5's dest source),
+  4. fast-bail if neither ``\bmv\b`` survives ``CMD_FOR_SCAN`` nor ``>``
+     survives the quote-INTACT heredoc-stripped text (the text the redirect
+     extractor actually reads — bailing on ``CMD_FOR_SCAN`` here would miss
+     a command whose only ``>`` sits inside a quoted target),
   5. candidate extraction from THREE sources — ``mv``/``git mv`` 2nd non-flag
-     arg, ``>``/``>>`` redirect targets (token-boundary anchored to exclude
-     ``->``/``=>`` arrows), ``--out``/``-o`` flag values (scanned from the
-     heredoc-stripped-but-quote-INTACT text, not ``CMD_FOR_SCAN`` — a
-     deliberate asymmetry the reference hook itself documents),
+     arg (from ``CMD_FOR_SCAN``), ``>``/``>>`` redirect targets (quote-AWARE
+     scan over the quote-INTACT text: a '>' only counts as an operator at
+     quote-depth 0 with an allowed preceding character, which is what
+     excludes ``->``/``=>`` arrows AND a quoted '>' that is merely argument
+     content; the captured target may itself be quoted and may contain
+     spaces), ``--out``/``-o`` flag values (scanned from the
+     heredoc-stripped-but-quote-INTACT text — the same asymmetry the
+     reference hook itself documents, now shared with the redirect scan),
   6. per-candidate basename extraction + ``csn_check`` — first illegal
      candidate wins (mirrors the reference hook's ``advise()`` helper, which
      emits its envelope and ``exit 0``s immediately on the FIRST match across
@@ -92,12 +108,15 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import csn_check as _csn_check
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core._hook_envelope import allow_advisory
 
 CLASS = "advisory"
-MATCHERS = ["Bash"]
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
 #: Escape hatch — shared name with the
@@ -110,10 +129,22 @@ _MV_WORD_RE = re.compile(r"\bmv\b")
 #: mv/git mv token-scan tokenizer (reference hook lines 422-437's awk split).
 _TOKEN_SPLIT_RE = re.compile(r"[ \t\n\r\f\v]+")
 
-#: >/>> redirect-target scan (reference hook lines 458-460): '>' must be
-#: preceded by whitespace, a fd-digit, or line-start — excludes '->'/'=>'.
-_REDIR_RE = re.compile(r"(?:^|[ \t]|[0-9])>{1,2}[ \t]*[^ \t>|;&]+", re.MULTILINE)
-_REDIR_STRIP_RE = re.compile(r"^[ \t0-9]*>*")
+#: Preceding-char whitelist for a '>' to count as a redirect OPERATOR
+#: (mirrors the retired ``_REDIR_RE``'s ``(?:^|[ \t]|[0-9])`` prefix class):
+#: start-of-command, start-of-line (after '\n'), whitespace, or an fd digit.
+#: '-' and '=' are deliberately excluded, which is what makes '->'/'=>'
+#: arrows fall through untouched — no separate arrow check needed. '&' is
+#: included (review: MINOR-2) so ``&>`` (combined stdout+stderr redirect) is
+#: recognised as an operator instead of being silently missed.
+_REDIR_PRECEDING_OK = set(" \t\n0123456789&")
+
+#: Characters that end an unquoted redirect-target word (mirrors the retired
+#: ``_REDIR_RE``'s target class ``[^ \t>|;&]+`` upper bound). ``\n``/``\r``
+#: are load-bearing (review: BLOCKER-1) -- without them an unquoted target
+#: runs past its own line and swallows the next command as part of the
+#: "filename". ``(``/``)`` (review: NIT-1) keep a process-substitution body
+#: (``tee >(grep foo) < in``) from becoming a candidate at all.
+_REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 
 #: --out/-o flag-value scan (reference hook lines 463-465).
 _OUT_RE = re.compile(r"(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
@@ -189,16 +220,138 @@ def _extract_dest_candidates(cmd_for_scan: str) -> List[str]:
     return dest
 
 
-def _extract_redir_candidates(cmd_for_scan: str) -> List[str]:
-    """Port of the reference hook's redirect-target grep+sed+tr pipeline
-    (lines 458-460)."""
+def _extract_redir_candidates(cmd: str) -> List[str]:
+    """Quote-AWARE redirect-target scan (C3,
+    ``docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md``),
+    superseding the retired quote-blind ``_REDIR_RE`` regex-over-``cmd_for_scan``
+    approach. Scans the heredoc-stripped, quote-INTACT ``cmd`` directly (same
+    input the OUT extractor already reads) so a quoted target is captured as
+    ONE unit including any embedded spaces, instead of being erased by the
+    upstream quoted-span strip or truncated at the first space.
+
+    A '>' only counts as a redirect OPERATOR when it occurs at quote-depth 0
+    AND its preceding character is start-of-command, start-of-line, whitespace,
+    or an fd digit (``_REDIR_PRECEDING_OK`` — same whitelist the retired regex
+    encoded via ``(?:^|[ \\t]|[0-9])``). This is what excludes both '->'/'=>'
+    arrows (preceding char '-'/'=' is not in the whitelist) AND a '>' that is
+    merely quoted ARGUMENT content, e.g. ``git commit -m "see foo > bar?"``
+    (that '>' sits at quote-depth 1, inside the ``-m`` string, never reached
+    as an operator candidate at all — see AC9).
+
+    Once a real operator '>' or '>>' is found, the target word is captured by
+    continuing to consume characters — toggling quote state on unescaped
+    quote characters so a quoted span is swallowed whole — until an unquoted
+    whitespace/operator character (``_REDIR_TARGET_STOP``) or end of string.
+    The captured target keeps its quote characters intact; ``_check_candidate``
+    already strips them via its existing ``.replace('"', "").replace("'", "")``
+    pass, so no new unquoting path is needed here.
+
+    Backslash escaping (C3,
+    ``docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md``,
+    regression fix, tightened during C3 rework): on encountering a backslash,
+    the scanner unconditionally consumes the backslash AND the single
+    character following it, then resumes scanning from the character after
+    that — it does NOT special-case "only if the next char is a quote". That
+    uniform rule is required for ``\\\\`` (a literal escaped backslash) to
+    parse correctly: the first backslash escapes the SECOND backslash, so a
+    ``"`` immediately following the pair is a REAL delimiter that DOES
+    close/open a quoted span, not an escaped one. An "only skip if next is a
+    quote" rule misreads that ``"`` as escaped, desyncs quote depth, and
+    swallows the rest of the line (including a genuine redirect after it) —
+    a false negative against HEAD's behavior. The consume-two rule correctly
+    handles ``\\"``, ``\\'``, ``\\\\``, and every other escape the same way
+    at quote-depth 0 and inside ``"..."`` — but NOT inside ``'...'`` (review:
+    MAJOR-3): bash never honours backslash escapes inside a single-quoted
+    span, where ``\\`` is a literal character and the very next ``'`` always
+    closes the span. Both loops below gate the escape branch on
+    ``in_quote != "'"`` / ``target_quote != "'"`` accordingly. This applies
+    at BOTH the top-level depth-tracking loop and the per-candidate
+    target-capture loop below — same hazard, two call sites, and the two
+    MUST agree or they desync on the same input.
+
+    Unterminated quote (requirement 3): if a quoted span is opened and never
+    closed before end-of-string, the scan is unparseable from that point on.
+    This is DELIBERATE SILENCE, not an oversight — an advisory-only guard
+    must never guess past a malformed/unterminated command, so the scanner
+    simply stops emitting candidates once state desyncs this way (mirrors the
+    existing fail-open posture: an extraction failure degrades to "no
+    advisory," never a crash or a guess).
+    """
     redir: List[str] = []
-    for line in cmd_for_scan.split("\n"):
-        for m in _REDIR_RE.finditer(line):
-            frag = _REDIR_STRIP_RE.sub("", m.group(0))
-            frag = frag.replace(" ", "").replace("\t", "")
-            if frag:
-                redir.append(frag)
+    n = len(cmd)
+    i = 0
+    in_quote: Optional[str] = None
+    while i < n:
+        ch = cmd[i]
+        if ch == "\\" and i + 1 < n and in_quote != "'":
+            # Backslash unconditionally escapes the NEXT character, whatever
+            # it is -- consume both and advance. Special-casing "only if the
+            # next char is a quote" desyncs quote-depth tracking on `\\`
+            # (the first backslash escapes the SECOND backslash, so a `"`
+            # immediately following is a REAL delimiter, not an escaped one).
+            # This rule applies at depth 0 and inside "..." only (review:
+            # MAJOR-3) -- bash never processes backslash escapes inside
+            # '...': there `\` is a literal character and the very next `'`
+            # always closes the span, escaped-looking or not.
+            i += 2
+            continue
+        if in_quote is not None:
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            i += 1
+            continue
+        if ch != ">":
+            i += 1
+            continue
+        prev = cmd[i - 1] if i > 0 else "\n"
+        if prev not in _REDIR_PRECEDING_OK:
+            i += 1
+            continue
+        # Two-char operator forms: '>>' (append) and '>|' (noclobber
+        # override, review: MINOR-2) -- both must consume the second
+        # character before target capture starts, or the '|' of '>|' is
+        # misread as the target and immediately terminates it empty.
+        op_len = 2 if (i + 1 < n and cmd[i + 1] in (">", "|")) else 1
+        j = i + op_len
+        while j < n and cmd[j] in (" ", "\t"):
+            j += 1
+        start = j
+        target_quote: Optional[str] = None
+        while j < n:
+            tch = cmd[j]
+            if tch == "\\" and j + 1 < n and target_quote != "'":
+                # Same escape rule as the top-level scan above -- consume
+                # backslash + next char, EXCEPT inside a single-quoted
+                # target, where bash treats '\' as a literal (review:
+                # MAJOR-3).
+                j += 2
+                continue
+            if target_quote is not None:
+                if tch == target_quote:
+                    target_quote = None
+                j += 1
+                continue
+            if tch in ("'", '"'):
+                target_quote = tch
+                j += 1
+                continue
+            if tch in _REDIR_TARGET_STOP:
+                break
+            j += 1
+        if target_quote is not None:
+            # Ran off the end of the string still inside a quoted target —
+            # unterminated quote. Deliberate silence: emit nothing and stop
+            # scanning entirely, since everything past this point is inside
+            # the unterminated span and unparseable.
+            break
+        target = cmd[start:j]
+        if target:
+            redir.append(target)
+        i = j
     return redir
 
 
@@ -284,7 +437,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         tool_name = payload.get("tool_name") or ""
-        if tool_name != "Bash":
+        dialect = dialect_from_tool_name(tool_name)
+        if dialect is Dialect.POWERSHELL:
+            # C5 (row 20, `docs/reference/guard-dialect-coverage.md`): this
+            # guard's own heredoc stripper, glued-heredoc/process-substitution
+            # strip, and fd-prefixed redirect scan are all POSIX shell
+            # syntax with no PowerShell equivalent parsed here -- re-using
+            # them against PowerShell input would be a guess, not a
+            # verdict, on a shell this guard's own text scanning was never
+            # built to read. Declares SILENT rather than clean, per the
+            # plan's "prefer SILENT to a guess" mandate.
+            record_silent(
+                "block_illegal_filename",
+                "PowerShell dialect: heredoc/process-substitution/redirect "
+                "scanning here is POSIX-only shell text syntax",
+            )
+            return None
+        if dialect is not Dialect.BASH:
             return None
 
         tool_input = payload.get("tool_input") or {}
@@ -314,12 +483,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd_for_scan = re.sub(r'"[^"]*"', "", cmd)
         cmd_for_scan = re.sub(r"'[^']*'", "", cmd_for_scan)
 
-        # Fast bail: no move or redirect-like operator survives at all.
-        if not (_MV_WORD_RE.search(cmd_for_scan) or ">" in cmd_for_scan):
+        # Fast bail: no move or redirect-like operator survives in the text
+        # the extractors actually read. ``mv`` is scanned from the
+        # quote-stripped ``cmd_for_scan`` (dest extraction); ``>`` must be
+        # checked against the quote-INTACT ``cmd`` (C3 quote-aware redirect
+        # extraction now reads ``cmd`` directly, not ``cmd_for_scan``) —
+        # bailing on ``cmd_for_scan`` here would under-cover a command whose
+        # only '>' lives inside a quoted redirect target.
+        if not (_MV_WORD_RE.search(cmd_for_scan) or ">" in cmd):
             return None
 
         dest_candidates = _extract_dest_candidates(cmd_for_scan)
-        redir_candidates = _extract_redir_candidates(cmd_for_scan)
+        redir_candidates = _extract_redir_candidates(cmd)
         out_candidates = _extract_out_candidates(cmd)
 
         # First-match-wins across DEST -> REDIR -> OUT, mirroring advise()'s

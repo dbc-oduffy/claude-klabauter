@@ -110,8 +110,14 @@ Two shapes that work — pick by whether you need to message it mid-flight:
       delivered to you normally. This is the default for fire-and-collect investigation.
 
   (b) Need mid-flight contact (or want it addressable later) -> KEEP `name` and add to the brief:
-      'When you are done, deliver your report by calling SendMessage to "main". Your plain text
-      output is not visible to the dispatcher.'
+      'Your plain text output is not visible to the dispatcher. When you are done, SendMessage to
+      "main" with a POINTER ONLY — your sidecar path plus a one-line verdict. The findings, the
+      detail, and the exit interview go in the sidecar; do not restate them in the message.'
+
+      A SendMessage carrying the full report pastes it verbatim into the dispatcher's context —
+      the same content it already wrote to its sidecar. That is the report delivered twice, once
+      at the dispatcher's expense. If the dispatch carries a `sidecar_path:`, the body already has
+      a home; the message is an address, not a copy.
 
 Either is fine. What does not work is a named dispatch briefed to "report back".
 
@@ -121,7 +127,7 @@ agents having completed their work; the unnamed dispatch in the same session del
 
 
 @register_op("hooks.nudge_named_agent_report_delivery")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse advisory: warn that a NAMED Agent dispatch cannot deliver its report.
 
     Pinned input fields (mcp_tool forwards only declared fields; ""=absent):

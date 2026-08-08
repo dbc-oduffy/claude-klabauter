@@ -112,7 +112,8 @@ from coordinator_core.coverage import _TrailParseError, _parse_trail_file
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.session_attribution import GitLogFailed, trailer_foreign_shas
+from coordinator_core.session_attribution import GitLogFailed, bulk_trailer_session_map
+from coordinator_core.win_portability import no_console_creationflags
 
 #: The two scope values C7 newly subjects to foreign-session stripping.
 #: ``scope="session"`` is deliberately excluded here — its stripping
@@ -120,7 +121,7 @@ from coordinator_core.session_attribution import GitLogFailed, trailer_foreign_s
 #: report's business.
 _C7_NEWLY_STRIPPED_SCOPES: FrozenSet[str] = frozenset({"chain", "workstream-close-auto"})
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 
 def _run(cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
@@ -149,14 +150,72 @@ class GitRevListFailed(RuntimeError):
     """Raised when ``git rev-list <sha_range>`` fails for a record's range."""
 
 
-def _full_range_shas(sha_range: str, cwd: str) -> FrozenSet[str]:
+def _full_range_shas(
+    sha_range: str,
+    cwd: str,
+    cache: Dict[Tuple[str, str], FrozenSet[str]],
+) -> FrozenSet[str]:
     """Return every commit `git rev-list` resolves within `sha_range` — the
     record's PRE-C7 credited set for `chain`/`workstream-close-auto` scope
-    (the full window, no foreign-session narrowing)."""
+    (the full window, no foreign-session narrowing).
+
+    Cached per `(sha_range, cwd)` in the caller-supplied `cache` — this is
+    this function's FIRST cache (C4): distinct records commonly repeat a
+    `sha_range` (e.g. a workstream re-recording the same window), and the
+    live-corpus scan grows monotonically with repo age. Mirrors the sibling
+    trailer cache's keying discipline in this same function
+    (`compute_readjudication_report`) rather than inventing a second
+    convention. Not cached on failure — a transient `git rev-list` failure
+    must not pin a wrong (or absent) answer for the rest of the cache's
+    lifetime.
+    """
+    key = (sha_range, cwd)
+    if key in cache:
+        return cache[key]
     rc, out, err = _run(["git", "rev-list", sha_range], cwd)
     if rc != 0:
         raise GitRevListFailed(f"git rev-list {sha_range!r} failed: {err.strip()}")
-    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+    result: FrozenSet[str] = frozenset(line.strip() for line in out.splitlines() if line.strip())
+    cache[key] = result
+    return result
+
+
+def _bulk_trailer_map(
+    sha_range: str,
+    cwd: str,
+    cache: Dict[Tuple[str, str], Dict[str, str]],
+) -> Dict[str, str]:
+    """Return `{sha: session_id}` for every own-Session-Id-trailered, non-merge
+    commit within `sha_range`, via `session_attribution.bulk_trailer_session_map`
+    — cached per `(sha_range, cwd)` in the caller-supplied `cache`.
+
+    This is the P1 bulk sibling this module now migrates onto (C4): the same
+    `--no-merges` + trailer-scan semantics `trailer_foreign_shas` used before
+    this migration, restated over a whole window and cached by range rather
+    than by `(range, session_id)`. That is a strictly WIDER cache key than the
+    site's prior `session_cache` (keyed on `(sha_range, session_id)`) because
+    the underlying map does not depend on `session_id` at all — two records
+    sharing a `sha_range` but differing `session_id` now share one `git log`
+    spawn instead of two.
+
+    Untrailered and merge commits are simply ABSENT from the returned map —
+    unchanged from `trailer_foreign_shas`'s exclusion-based posture, so a
+    caller computing `{sha for sha, trailer in map.items() if trailer !=
+    own_session_id}` reproduces `trailer_foreign_shas`'s foreign-set exactly
+    (§10.7 negative-spec item 1 of the fork-adjudication contract: this is the
+    sanctioned P1-per-range -> P1-bulk migration, NOT the forbidden collapse
+    of the looser P1 semantics onto a stricter P2 caller — this site was
+    already P1 before and after this change).
+
+    Raises `GitLogFailed` on a non-zero `git log` returncode — propagated,
+    never swallowed to an empty map (module docstring's failure-posture note).
+    """
+    key = (sha_range, cwd)
+    if key in cache:
+        return cache[key]
+    result = bulk_trailer_session_map(sha_range, cwd, _run)
+    cache[key] = result
+    return result
 
 
 class CorpusRootUnresolved(RuntimeError):
@@ -398,7 +457,8 @@ def compute_readjudication_report(repo_root: str) -> ReadjudicationReport:
     paths = sorted(live_dir.glob("*.json")) if live_dir.is_dir() else []
 
     ceremony_index = _build_ceremony_index(corpus_root)
-    session_cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]] = {}
+    range_shas_cache: Dict[Tuple[str, str], FrozenSet[str]] = {}
+    bulk_trailer_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
 
     stripped_scope_records = 0
     flips: List[RecordFlip] = []
@@ -434,18 +494,19 @@ def compute_readjudication_report(repo_root: str) -> ReadjudicationReport:
                 continue
 
             try:
-                full_shas = _full_range_shas(sha_range, repo_root)
+                full_shas = _full_range_shas(sha_range, repo_root, range_shas_cache)
             except GitRevListFailed as exc:
                 skipped.append(f"{str_path}: {exc}")
                 continue
 
             try:
-                foreign = trailer_foreign_shas(
-                    sha_range, session_id, repo_root, session_cache, run=_run
-                )
+                trailer_map = _bulk_trailer_map(sha_range, repo_root, bulk_trailer_cache)
             except GitLogFailed as exc:
                 skipped.append(f"{str_path}: foreign-session lookup failed: {exc}")
                 continue
+            foreign = frozenset(
+                sha for sha, trailer in trailer_map.items() if trailer != session_id
+            )
 
             dropped = sorted(full_shas & foreign)
             if not dropped:

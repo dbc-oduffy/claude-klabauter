@@ -45,6 +45,7 @@ the plan carries one C5 task-spine row).
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -53,6 +54,11 @@ from typing import Optional
 import pytest
 
 from coordinator_core import coverage, session_attribution
+from coordinator_core.ops import review_trail_write
+from coordinator_core.win_portability import no_console_creationflags
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_GOLDEN_PATH = Path(__file__).resolve().parent / "session_attribution_golden.json"
 
 
 def _git(args: list[str], cwd: Path) -> None:
@@ -289,3 +295,156 @@ def test_wsc_resolve_caller_fails_empty_on_git_failure(repo_root):
         repo_root, sid, bad_range, frozenset(),
     )
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# A0 — golden fixture: P1 (`trailer_foreign_shas`) and the write guard's
+# disposition (`_guard_foreign_session_range`), replayed against THIS repo's
+# real history at real, pinned SHAs.
+#
+# docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md
+# § Tasks, chunk A0 / AC5. The golden JSON
+# (`coordinator_core/tests/session_attribution_golden.json`) was generated
+# ONCE, from today's UNMODIFIED code, by
+# `coordinator_core/tests/generate_session_attribution_golden.py` (committed
+# alongside for auditable provenance) — this test reads the golden, it never
+# regenerates it (fork-adjudication.md § 10.4: a test that regenerates its
+# own oracle proves only self-consistency).
+#
+# MUST LAND FIRST relative to any P1/P2 production change (A1-A4): this is
+# the oracle those chunks are reviewed against.
+# ---------------------------------------------------------------------------
+
+
+def _golden_git_run(args, cwd):
+    """The same never-raises `GitRunner` contract the generator used."""
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return 2, "", str(exc)
+
+
+def _classify_sha(sha: str, own_session_id: str) -> str:
+    """Best-effort classification of WHY a golden sha differs, for a
+    reviewer-facing diagnostic — never used to decide pass/fail, only to
+    annotate a failure. Categories per this chunk's brief:
+    `untrailered | merge | foreign-trailer | grep-only`.
+    """
+    rc, out, _err = _golden_git_run(
+        ["git", "log", "-1", "--format=%P%x1f%(trailers:key=Session-Id,valueonly)", sha],
+        str(_REPO_ROOT),
+    )
+    if rc != 0 or "\x1f" not in out:
+        return "unknown"
+    parents, trailer = out.strip("\n").split("\x1f", 1)
+    if len(parents.split()) > 1:
+        return "merge"
+    trailer = trailer.strip()
+    if not trailer:
+        # No trailer ATOM — but a --grep over the message may still match
+        # (the d21d8b0 shape: a Session-Id line present but not the last
+        # message block, so git's own trailer parser ignores it).
+        grep_rc, _grep_out, _grep_err = _golden_git_run(
+            ["git", "log", "-1", f"--grep=^Session-Id: {own_session_id}$", sha],
+            str(_REPO_ROOT),
+        )
+        return "grep-only" if grep_rc == 0 else "untrailered"
+    return "foreign-trailer" if trailer != own_session_id else "own-trailer"
+
+
+def _load_golden() -> dict:
+    return json.loads(_GOLDEN_PATH.read_text(encoding="utf-8"))
+
+
+def _golden_case_ids() -> list:
+    return sorted(_load_golden()["cases"].keys())
+
+
+@pytest.fixture(scope="module")
+def golden() -> dict:
+    return _load_golden()
+
+
+def test_golden_pinned_head_is_reachable(golden):
+    """The golden's basis commit must still be an ancestor of HEAD — history
+    is append-only forward, so this only fails if history was rewritten."""
+    rc, _out, _err = _golden_git_run(
+        ["git", "merge-base", "--is-ancestor", golden["pinned_head_sha"], "HEAD"],
+        str(_REPO_ROOT),
+    )
+    assert rc == 0, (
+        f"golden's pinned_head_sha={golden['pinned_head_sha']!r} is no longer an "
+        "ancestor of HEAD — history was rewritten; the golden's provenance no "
+        "longer holds and must be regenerated (see generate_session_attribution_"
+        "golden.py's module docstring)."
+    )
+
+
+@pytest.mark.parametrize("case_id", _golden_case_ids())
+def test_trailer_foreign_shas_matches_golden(golden, case_id):
+    case = golden["cases"][case_id]
+    sha_range = case["sha_range"]
+    own_session_id = case["own_session_id"]
+    expected = case["trailer_foreign_shas"]
+
+    if expected["ok"]:
+        actual = session_attribution.trailer_foreign_shas(
+            sha_range, own_session_id, str(_REPO_ROOT), {}, _golden_git_run,
+        )
+        actual_sorted = sorted(actual)
+        expected_sorted = expected["foreign_shas"]
+        if actual_sorted != expected_sorted:
+            golden_set, actual_set = set(expected_sorted), set(actual_sorted)
+            diff = golden_set ^ actual_set
+            annotated = {
+                sha: _classify_sha(sha, own_session_id) for sha in diff
+            }
+            pytest.fail(
+                f"case={case_id!r} sha_range={sha_range!r} own_session_id="
+                f"{own_session_id!r}: trailer_foreign_shas drifted from the golden.\n"
+                f"golden={expected_sorted}\nactual={actual_sorted}\n"
+                f"symmetric_difference (sha: classification)={annotated}"
+            )
+    else:
+        with pytest.raises(session_attribution.GitLogFailed):
+            session_attribution.trailer_foreign_shas(
+                sha_range, own_session_id, str(_REPO_ROOT), {}, _golden_git_run,
+            )
+
+
+@pytest.mark.parametrize("case_id", _golden_case_ids())
+def test_guard_disposition_matches_golden(golden, case_id):
+    case = golden["cases"][case_id]
+    sha_range = case["sha_range"]
+    own_session_id = case["own_session_id"]
+    expected = case["guard"]
+
+    try:
+        waived = review_trail_write._guard_foreign_session_range(
+            sha_range, own_session_id, _REPO_ROOT,
+        )
+        actual = {"disposition": "proceed", "waived": sorted(waived)}
+    except review_trail_write.ForeignSessionRangeRefused as exc:
+        actual = {"disposition": "refused", "message": str(exc)}
+    except ValueError as exc:
+        actual = {"disposition": "error", "exception_type": "ValueError", "message": str(exc)}
+
+    assert actual["disposition"] == expected["disposition"], (
+        f"case={case_id!r} sha_range={sha_range!r} own_session_id={own_session_id!r}: "
+        f"guard disposition drifted from the golden.\n"
+        f"golden={expected}\nactual={actual}"
+    )
+    if expected["disposition"] == "proceed":
+        assert actual["waived"] == expected["waived"], (
+            f"case={case_id!r}: waived-sha set drifted from the golden.\n"
+            f"golden={expected['waived']}\nactual={actual['waived']}"
+        )

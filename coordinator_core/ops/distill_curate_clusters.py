@@ -484,7 +484,7 @@ def curate_clusters(
 
 
 @register_op("distill.curate_clusters")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """JSON-RPC "distill.curate_clusters" handler.
 
     Scope "none" (see coordinator_core/op_scopes.py): reads no repo-specific

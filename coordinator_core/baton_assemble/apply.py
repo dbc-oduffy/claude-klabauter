@@ -79,6 +79,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -113,7 +114,16 @@ import coordinator_core.ops.handoff_author_fork  # noqa: F401
 import coordinator_core.ops.handoff_phase_stamp  # noqa: F401
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+# `handoff.transition` (verb="claim") is the single writer d6's ledger
+# reconcile delegates its re-stamp to (`_reconcile_claim_from_ledger`). The
+# import is the REGISTRATION TRIGGER, not decoration: `_invoke_op_in_process`
+# resolves handlers out of `coordinator_core.ipc`'s registry, which is empty
+# for an op whose module was never imported -- the exact defect that surfaced
+# once as `unrecognized op 'handoff.stamp_phase'` (see this module's d3 note).
+import coordinator_core.ops.handoff_transition  # noqa: F401
+from coordinator_core.win_portability import no_console_creationflags
+
+_NO_CONSOLE = no_console_creationflags()
 
 _SESSION_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID")
 _SESSION_ENV_READ_ORDER = (
@@ -515,6 +525,114 @@ def _dispatch_render_project_tracker(args: list[str], repo_root: Path) -> dict[s
     }
 
 
+def _ledger_claim_record(predecessor_path: str, repo_root: Path) -> Optional[dict[str, str]]:
+    """The durable, PREDECESSOR-SIDE claim record for `predecessor_path`, read
+    off the branch-independent claim ledger
+    (`<common_dir>/coordinator-sessions/handoff-claims/<basename>/`), or None
+    when no such record exists.
+
+    This is a SECOND, independent evidence source for DR-242's "was this baton
+    ever claimed?" question, and it is emphatically NOT the successor-named-child
+    evidence DR-242 § 2 forbids: the ledger entry is written only by
+    `coordinator_core.session.claims.claim_artifact` at the instant a session
+    takes the baton, names the baton by its own basename, and knows nothing
+    about any successor. It is also the SAME ledger `_resolve_held_handoff_for_
+    session` reads to NAME this predecessor in the first place -- so consulting
+    it here closes a split-brain in which the resolver and the DR-242 gate read
+    two different halves of one claim.
+
+    Delegates to `coordinator_core.claim_state.resolve_claim_state` (2026-08-07,
+    claim-state-ledger-first-authoritative-read plan, C1) -- this function's own
+    ledger-only read was the reference implementation that accessor was
+    generalized FROM; the shared core now lives there and this is the sole
+    remaining call site re-shaped around its return.
+    """
+    from coordinator_core.claim_state import resolve_claim_state
+
+    state = resolve_claim_state(Path(predecessor_path), repo_root=repo_root)
+    if state.ledger_holder is None:
+        # Mirrors the original degrade: no live ledger record is "no
+        # evidence" here, regardless of what the mirror side answers --
+        # this function's contract is ledger-only.
+        return None
+    return {
+        "session_id": state.ledger_holder,
+        "claimed_at": state.claimed_at
+        if state.source == "ledger" and state.claimed_at
+        else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _reconcile_claim_from_ledger(predecessor_path: str, repo_root: Path) -> bool:
+    """Re-stamps a predecessor's claim frontmatter FROM the durable claim ledger
+    when the two have desynchronized, and reports whether the record now
+    satisfies DR-242. False leaves d6's refusal exactly as it was.
+
+    THE DEFECT THIS CLOSES (live repro, claude-klabauter 2026-08-07). The claim
+    ledger lives under `.git/` -- branch-independent and shared by every
+    worktree -- while its frontmatter mirror (`status: claimed` / `claimed_by` /
+    `claimed_at`) is a TRACKED FILE, and therefore branch-dependent. A session
+    claimed a baton on branch `two-tier-engine-root` (commit 11fe08d51 stamped
+    the frontmatter); the tree was later on `main`, which never carried that
+    commit, so the on-disk record read `status: open` / `ready_to_fire` with no
+    claim fields while the ledger still held the claim. `brief()` resolved the
+    predecessor FROM the ledger and armed d6; d6's DR-242 gate then read the
+    frontmatter half and declined `predecessor-not-claimed-or-shipped`. Net
+    effect: a fully-worked baton left advertising `pickup_ready: true`, with the
+    manual `handoff-archive-transition supersede` route refusing for the same
+    reason, so the only remaining remedy was hand-editing frontmatter -- exactly
+    the undischarged rule this repo's north star forbids.
+
+    WHY THIS IS NOT A WEAKENING OF DR-242, and why it is not a `--force`. No
+    evidence is invented and no operator assertion is accepted: the claim is
+    re-derived from a durable artifact that records the claim event itself, and
+    the re-stamp is delegated to the existing single writer for that transition
+    (`handoff.transition` verb="claim"), never hand-rolled here. If the ledger
+    holds nothing, this returns False and the refusal stands verbatim -- an
+    unclaimed predecessor is still never superseded, by this path or any other.
+    The op's own choke point (`handoff_archive_transition`'s supersede block)
+    re-reads the frontmatter afterwards and is deliberately left untouched, so
+    the reconcile has to genuinely succeed to change any outcome.
+    """
+    record = _ledger_claim_record(predecessor_path, repo_root)
+    if record is None:
+        return False
+
+    from coordinator_core.archival import claimed_or_shipped_at_path
+
+    result = _invoke_op_in_process(
+        "handoff.transition",
+        {
+            "verb": "claim",
+            "handoff_path": predecessor_path,
+            "session_id": record["session_id"],
+            "at": record["claimed_at"],
+        },
+        repo_root,
+    )
+    if result.get("exit_code") != 0:
+        print(
+            "baton-assemble apply: handoff.supersede_predecessor -- the durable "
+            f"claim ledger holds a claim on {predecessor_path!r} (session "
+            f"{record['session_id']}) but the frontmatter re-stamp failed "
+            f"({result.get('error')!r}); DR-242's refusal stands.",
+            file=sys.stderr,
+        )
+        return False
+    if not claimed_or_shipped_at_path(str(repo_root / predecessor_path)):
+        return False
+    print(
+        "baton-assemble apply: handoff.supersede_predecessor reconciled "
+        f"{predecessor_path!r} from the durable claim ledger -- its frontmatter "
+        "carried no claim (a branch that never received the claiming commit, or "
+        f"a discarded working-tree edit) while the ledger recorded session "
+        f"{record['session_id']} holding it since {record['claimed_at']}. The "
+        "claim was re-stamped from that record and the succession proceeds.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) -> dict[str, Any]:
     """kind=handoff's d6 (2026-07-27, computed-skills-b4 plan C1 -- the
     push-side succession writer): the fix for a continuation baton's
@@ -658,15 +776,18 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
 
     from coordinator_core.archival import claimed_or_shipped_at_path
 
-    if not claimed_or_shipped_at_path(str(repo_root / predecessor_path)):
+    if not claimed_or_shipped_at_path(
+        str(repo_root / predecessor_path)
+    ) and not _reconcile_claim_from_ledger(predecessor_path, repo_root):
         print(
             "baton-assemble apply: handoff.supersede_predecessor degraded -- "
-            f"{predecessor_path!r} was never claimed or shipped, so DR-242 leaves "
-            "it nothing to supersede (a successor-named child is not evidence of "
-            "succession). The predecessor was left exactly as it was; the mint and "
-            "every other directive in this run proceeded normally. If that "
-            "predecessor SHOULD have been superseded, claim it and re-run -- do "
-            "not hand-stamp the succession.",
+            f"{predecessor_path!r} was never claimed or shipped -- neither its own "
+            "frontmatter nor the durable handoff-claims ledger carries a claim "
+            "record -- so DR-242 leaves it nothing to supersede (a successor-named "
+            "child is not evidence of succession). The predecessor was left exactly "
+            "as it was; the mint and every other directive in this run proceeded "
+            "normally. If that predecessor SHOULD have been superseded, claim it and "
+            "re-run -- do not hand-stamp the succession.",
             file=sys.stderr,
         )
         return {

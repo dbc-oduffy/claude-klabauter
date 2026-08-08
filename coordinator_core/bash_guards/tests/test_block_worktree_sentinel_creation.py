@@ -438,3 +438,50 @@ class TestReachableThroughTheDispatchChain:
         module's ordering-regression coverage. This test exists only to
         state that intent in words rather than leaving it implicit."""
         assert self._decision("cd /tmp && touch %s" % SENTINEL) == "deny"
+
+
+class TestPowerShellDialect:
+    """C4e (2026-08-07, guard-dialect-coverage.md row 24): PowerShell-syntax
+    coverage via `_dialect`/`_sentinel_creation_guard.SentinelCreationDetector
+    .evaluate_for_dialect`. A guard declaring `Dialect.POWERSHELL` must reach
+    a correct verdict or record SILENT -- never a bare clean (AC3)."""
+
+    @staticmethod
+    def _ps_payload(command):
+        return {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": command},
+            "session_id": "sess1",
+            "cwd": "/repo",
+        }
+
+    def test_new_item_cmdlet_denies(self):
+        out = guard.check(self._ps_payload("New-Item %s" % SENTINEL))
+        _reason(out)
+
+    def test_redirect_denies(self):
+        out = guard.check(self._ps_payload("echo ok > %s" % SENTINEL))
+        _reason(out)
+
+    def test_unrelated_command_allows_with_no_silence(self):
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("Get-ChildItem"))
+        assert out is None
+        assert silences == []
+
+    def test_grammar_gap_shape_records_silent_not_clean(self):
+        """`cmd &> out.txt` is the plan's own named `has_error=True`
+        residue (see `_dialect.py` module docstring) -- must route to
+        SILENT, never a bare clean."""
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("Remove-Item x &> out.txt"))
+        assert out is None
+        assert any(s.guard_name == "block_worktree_sentinel_creation" for s in silences)
+
+    def test_non_bash_non_powershell_tool_allows(self):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
+        assert guard.check(payload) is None

@@ -114,10 +114,13 @@ def _resolve_git_root(plan_path: str) -> str:
     resolving) grandparent-of-plan-dir fallback."""
     plan_dir = os.path.dirname(plan_path) or "."
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             ["git", "-C", plan_dir, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
         if proc.returncode == 0:
             candidate = proc.stdout.strip()

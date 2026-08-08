@@ -83,6 +83,18 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
 _MISSING = object()
 
 
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized. Accepts a ``Path`` or a
+    plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
+
+
 def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
@@ -204,10 +216,10 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
     monkeypatch.setattr(tool_guard, "render_bump_message", _spy_render(tool_captured))
 
     if kind == "outside_any_repo":
-        cmd = f"echo hi > {target_file}"
+        cmd = f"echo hi > {_posix(target_file)}"
         bash_result = outside_guard.check_bump_outside_repo_write(cmd, session_id, str(anchor), {})
     else:
-        cmd = f"git -C {target_repo} commit --allow-empty -m x"
+        cmd = f"git -C {_posix(target_repo)} commit --allow-empty -m x"
         bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
 
     payload = {
@@ -286,7 +298,7 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
 
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
 
-    cmd = f"echo hi > {lessons_file}"
+    cmd = f"echo hi > {_posix(lessons_file)}"
     bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
     assert bash_result is None, (
         "Bash surface bumped on a foreign-repo state/lessons-outbox write -- "
@@ -325,7 +337,7 @@ def test_ordinary_foreign_write_still_bumps_on_both_surfaces(tmp_path, monkeypat
 
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
 
-    cmd = f"git -C {foreign_root} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(foreign_root)} commit --allow-empty -m x"
     bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
     assert bash_result is not None, "Bash surface failed to bump on an ordinary foreign-repo write"
 

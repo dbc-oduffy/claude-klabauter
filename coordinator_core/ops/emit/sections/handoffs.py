@@ -129,8 +129,11 @@ _REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
 # restored 2026-07-23. Old-vocabulary ``status``/``deployment_state`` values are coerced UP to
 # the NEW wire vocabulary here; new-vocabulary values pass through untouched (absent from these
 # maps). ``_STATUS_RECOGNIZED``/``_DEPLOYMENT_RECOGNIZED`` are the union of old-and-new legal
-# values for each axis — a value outside that union is neither, and is left to raise uncaught
-# (today's whole-emit hard-abort posture; not softened to a per-record quarantine).
+# values for each axis — a value outside that union is neither, and is per-record quarantined
+# into ``malformed`` (2026-08-08), not raised. These records arrive from a corpus this repo does
+# not own — a sibling repo authors handoffs into a shared vocabulary — so a whole-emit hard-abort
+# gives one foreign artifact's unrecognized value fleet-wide blast radius over an unrelated
+# ceremony (every other workstream's cadence step wedged by one record it has no stake in).
 # ``superseded`` is the already-retired handoff status (2026-06-26); it maps to ``claimed``
 # under the new vocabulary for the same reason it mapped to ``consumed`` under the old one —
 # a superseded handoff is no longer "in play" (see ``HandoffStatus`` docstring, contract), and
@@ -197,6 +200,8 @@ def _resolve_shipped_in_dates(ctx: EmitContext, raw_shas: list[str]) -> dict[str
     # jq `unique` sorts ascending — replicate so the prefix-match tiebreak order matches bash.
     ordered = sorted(set(raw_shas))
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [
                 "git", "-C", str(ctx.repo_root), "log",
@@ -207,6 +212,7 @@ def _resolve_shipped_in_dates(ctx: EmitContext, raw_shas: list[str]) -> dict[str
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return {}
@@ -459,15 +465,23 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         # retired tokens land on ``claimed``), so a single lookup handles all three
         # legacy/retired inputs.
         if status not in _STATUS_RECOGNIZED:
-            raise ValueError(f"unrecognized handoff status {status!r} at {path!r}")
+            malformed.append({
+                "path": path,
+                "reason": f"unrecognized status {status!r}",
+                "frontmatter_keys": sorted(fm.keys()),
+            })
+            continue
         status = _STATUS_OLD_TO_NEW.get(status, status)
 
         deployment_state = fm["deployment_state"]
         # DR-084 transitional coerce shim (module-level constants' docstring).
         if deployment_state not in _DEPLOYMENT_RECOGNIZED:
-            raise ValueError(
-                f"unrecognized handoff deployment_state {deployment_state!r} at {path!r}"
-            )
+            malformed.append({
+                "path": path,
+                "reason": f"unrecognized deployment_state {deployment_state!r}",
+                "frontmatter_keys": sorted(fm.keys()),
+            })
+            continue
         if deployment_state == "abandoned":
             deployment_state, continued_into, closed_reason = _coerce_legacy_abandoned(fm)
         elif deployment_state == "continued":

@@ -123,6 +123,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -757,14 +758,28 @@ async def _handler(
                 "a terminal (shipped/continued/closed) archived baton's body"
             )
 
-    # Ownership gate (DR-247 D2(viii) as amended — AC2/AC3a/AC4/AC13).
-    # `claimed_by` frontmatter is the AUTHORITATIVE ownership oracle;
-    # `pickup_assemble._claim_already_self_held` is consulted ONLY for
-    # disagreement-detection below (never as a competing predicate). If
-    # `claimed_by` is absent/empty (legacy status:consumed batons), fall
+    # Ownership gate (DR-247 D2(viii) as amended — AC2/AC3a/AC4/AC13; widened
+    # C6a: ledger-first authoritative read, docs/plans/2026-08-07-claim-
+    # state-ledger-first-authoritative-read.md). The frontmatter `claimed_by`
+    # mirror is branch-dependent and silently reverts on a branch switch
+    # (see `coordinator_core.claim_state` module docstring's motivating
+    # incident) — reading it alone means a desynced baton (ledger holds a
+    # live claim, mirror empty) refuses the sanctioned body-correction door
+    # AGAINST the session that is actually entitled to use it. The
+    # ownership ORACLE is now `resolve_claim_state`'s `holder` (ledger wins
+    # whenever it holds a live claim, mirror is the fallback when it does
+    # not) — this WIDENS what the gate can see, it does not relax who it
+    # lets through: a ledger claim naming a *different* session still
+    # refuses exactly as before. `pickup_assemble._claim_already_self_held`
+    # remains consulted ONLY for disagreement-detection below (never as a
+    # competing predicate). If no holder resolves from either source
+    # (legacy status:consumed batons with no ledger/mirror claim), fall
     # through to the author-arm rather than treating the caller as neither.
     claimed_by_raw = read_fm_field_unquoted(split.fm_text, "claimed_by")
     claimed_by = (claimed_by_raw or "").strip()
+
+    claim_state = resolve_claim_state(p, repo_root=worktree)
+    resolved_holder = (claim_state.holder or "").strip()
 
     authoring_session_raw = read_fm_field_unquoted(split.fm_text, "authoring_session")
     authoring_session = (authoring_session_raw or "").strip()
@@ -773,18 +788,24 @@ async def _handler(
     override_reason: str = ""
 
     if (
-        claimed_by
-        and not _is_sentinel_or_malformed_session(claimed_by)
-        and claimed_by == session_id
+        resolved_holder
+        and not _is_sentinel_or_malformed_session(resolved_holder)
+        and resolved_holder == session_id
     ):
         # Holder arm (AC2) — the executing session's happy path. ALLOW
         # regardless of authoring_session; disagreement-detection below
-        # still runs on this arm (staff-eng re-review Finding 5).
+        # still runs on this arm (staff-eng re-review Finding 5). Sourced
+        # from `resolve_claim_state` (ledger-first, mirror fallback) rather
+        # than the raw `claimed_by` field alone (C6a) — a live ledger claim
+        # by THIS session opens the door even when the tracked mirror is
+        # desynced/empty; a live ledger claim by a DIFFERENT session still
+        # fails this comparison and falls through to the author/neither arms
+        # exactly as a mismatched `claimed_by` always did.
         # Review: staff-eng chain-review F3 — the author arm already runs
         # `_is_sentinel_or_malformed_session`; without the same check here a
-        # scaffold/sentinel `claimed_by` (`none`/`null`/`PLACEHOLDER`, live
+        # scaffold/sentinel holder value (`none`/`null`/`PLACEHOLDER`, live
         # corpus shapes) is a skeleton key any caller can match by setting
-        # the same env literal. A sentinel `claimed_by` falls through to the
+        # the same env literal. A sentinel holder falls through to the
         # author arm instead, the correct treatment of "this field records
         # nothing".
         basis = "holder"
@@ -827,7 +848,7 @@ async def _handler(
                 if "override_reason" not in params or params.get("override_reason") is None:
                     return _err(
                         f"calling session {session_id!r} is neither the claim "
-                        f"holder ({claimed_by!r}) nor the authoring session "
+                        f"holder ({(resolved_holder or claimed_by)!r}) nor the authoring session "
                         f"({authoring_session!r}) of {handoff_path_raw} — claim "
                         "it via /pickup (a sanctioned path), or resubmit with a "
                         "non-empty override_reason param"

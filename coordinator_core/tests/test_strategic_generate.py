@@ -53,8 +53,15 @@ _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
+    """Run an async coroutine synchronously — no pytest-asyncio needed.
+
+    ``_strategic_generate`` is a plain ``def`` (no ``await`` in its body) and
+    already resolves to a plain value by the time it reaches here; pass
+    those through unchanged.
+    """
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 def _make_env(**overrides: str) -> dict[str, str]:

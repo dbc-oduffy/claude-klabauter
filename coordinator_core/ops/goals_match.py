@@ -170,7 +170,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
 
 
 @register_op("goal.match_candidates")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "goal.match_candidates" handler.

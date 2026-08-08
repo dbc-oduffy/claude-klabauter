@@ -111,6 +111,143 @@ Negative-spec:
       Tasks-API state, and never calls `git fetch`. Every mutating
       action this module names is an existing CLI for the apply half to
       invoke, never invoked in-process here.
+
+Idempotence-mechanism classification (C3,
+docs/plans/2026-08-08-wsc-judgment-directive-boundary.md AC5/AC6):
+`already_satisfied` (`apply.py::execute_directives`) has NO PRODUCER
+anywhere in this package outside a test fixture (`test_apply.py`) — every
+`_directive()` helper across the six `directives_*.py` siblings defaults
+it to `False` and no production call site overrides it. Four DISTINCT
+mechanisms are in play; recorded here (not split across the five
+`directives_*.py` siblings this chunk does not own) so the classification
+stays internally consistent and reviewable in one read:
+
+  M1 envelope `already_satisfied` short-circuit (`apply.py`) — computed
+     from disk, mirroring `baton_assemble/__init__.py`'s `d1_already_
+     satisfied` + `already_satisfied_reason` shape. THIS MODULE'S TWO
+     directives now use it (see below) — no other builder in the six
+     siblings does (grepped: zero `already_satisfied=True` sites outside
+     `test_apply.py`).
+  M2 CLI-level re-entrancy — no envelope short-circuit; the DISPATCHED
+     CLI itself is safe to re-fire. VERIFIED (read the invoked CLI/op,
+     not accepted from a docstring) for:
+       - `d-claim-plan-execution-lock` (directives_lessons_plan.py
+         build_plan_claim_and_stamp_directives) — `wsc-coverage-gate-
+         runner.py:189` own contract: "claim-plan — 0 (claimed/
+         re-entrant/stale-takeover)".
+       - `d-complete-entry` (directives_completion.py
+         build_complete_entry_directive) — `coordinator/bin/coordinator-
+         complete-entry.py:43`: "0 — entry written, OR idempotent no-op
+         (entry already exists for this chain slug)".
+       - `d-harvest-deferrals-<n>` (directives_lessons_plan.py
+         build_deferral_harvest_directives, one per governing plan, so
+         this id carries an ordinal suffix and never matches an
+         exact-id lookup) — `coordinator/bin/
+         coordinator-harvest-deferrals:658-980`: dedup key `harvest-key:
+         <plan_id>:<row_id>`, `_already_harvested` skip-if-present.
+       - `d-release-plan-claim` (directives_commit_tail.py
+         build_release_plan_claim_directive) —
+         `coordinator_core/session/claims.py::release_artifact:594`:
+         "ALWAYS returns True... the no-op paths are successes, not
+         errors" (not-the-holder / claim-already-absent -> no-op).
+     UNVERIFIED beyond a bare docstring assertion — recorded as
+     `unverified-re-entrancy`, settled by reading the named CLI's own
+     dedup/detection logic:
+       - `d-stamp-plan-implemented` (directives_lessons_plan.py, same
+         builder as d-claim-plan-execution-lock above, but the re-
+         entrancy prose covers ONLY the claim directive, not this one) —
+         settled by reading `archive-stamp-cli stamp-plan-implemented`'s
+         own write path for an existing-stamp guard.
+       - `d-reconcile-completion-commits` (directives_completion.py
+         build_reconcile_completion_commits_directive) — docstring says
+         "Detection (which commits are new)... [is] the CLI's own job"
+         but never asserts idempotence — settled by reading
+         `reconcile-completion-commits.py`'s Steps 1-2 client-side
+         validation for a re-run-safe append guard.
+  M3 hardcoded `already_satisfied: False` dict literal, emitted
+     unconditionally once the builder fires — re-fires on every pass,
+     unverified whether the dispatched CLI itself tolerates that. This is
+     every OTHER directive across the five sibling modules this chunk
+     does not own: `d-close-tail-args`, `d-run-wsc-tail`, `d-emit-
+     cadence` (directives_commit_tail.py); `d-fold-execution-
+     observations` (directives_completion.py); lesson-capture entries
+     (directives_lessons_plan.py build_lesson_capture_directives);
+     `d-flip-memo-status` entries, `d-emit-deletion-blocks`
+     (directives_memo_lifecycle.py); `d-run-review-brightline-gate`,
+     `d-run-chain-plan-brightline-gate`, per-slice `d-freeze-and-
+     dispatch-review-partition-*`, `d-freeze-and-dispatch-review-
+     partition-integrator`, `d-run-chain-coverage-gate`, `d-write-
+     review-trail`, `d-run-ubt-pending-check` (when emitted; the table
+     previously named this `d-check-ubt-pending`, a spelling the actual
+     builder — `build_ubt_pending_check_directive`, directives_review.py —
+     never emits; caught by this chunk's own table-vs-reality contract
+     test, `test_apply.py`
+     `test_idempotence_table_directive_ids_are_still_emitted_by_their_builders`),
+     `d-classify-
+     dispatch-shape` (when emitted) (directives_review.py). `d-run-wsc-
+     tail` is the highest-risk member of this set — it is the ceremony's
+     own commit — and is flagged, not silently left, for a follow-up
+     chunk: closing it needs either a real disk check (has this session's
+     commit already landed on this branch tip) or a verified re-
+     entrancy read of `wsc-tail.py` itself, neither of which is this
+     chunk's in-scope surface.
+  M4 structural non-emission — the builder returns `None`/`[]` when its
+     governing condition is false, so the directive never enters the
+     envelope at all; distinct from M3 because there is nothing to
+     re-fire. Applies to the SKIP branch of: `build_pinboard_directive`
+     (this module, below), `build_release_plan_claim_directive` (no
+     governing_plan_slug), `build_fold_execution_observations_directive`
+     (no plan_path), `build_plan_claim_and_stamp_directives` (no
+     governing plan — `governing_plan_predicate` False), `build_ubt_
+     pending_check_directive` (`applies=False`), `build_classify_
+     dispatch_shape_directive` (no plan_file). The EMIT branch of each of
+     these falls under M2 or M3 per the entries above/below — M4 only
+     covers the "never entered the envelope" case, not what happens once
+     it does.
+
+This module's own two directives, BEFORE this chunk, were both M3
+(dict-literal `"already_satisfied": False`, `:156`/`:178` below — cited
+by the plan's own residual-defect section). After this chunk:
+  - `d-append-orientation-pinboard` gains an M1 check, NOT YET WIRED to
+    fire in production (see the unwired-caveat two sentences below —
+    do not read this bullet's headline alone as "closed"): `build_pinboard_
+    directive` gained an optional `existing_pinboard_line` parameter
+    (the caller's already-read current `## Pinboard` line, matching this
+    module's existing no-disk-I/O convention — `compute_completeness_
+    checklist_gate`'s `consumed_handoff_text` param is the same shape)
+    and computes `already_satisfied` by comparing it to `pinboard_note`
+    AFTER applying the same first-line/400-char truncation
+    `patch_pinboard_only` applies at write time (`_written_pinboard_note`
+    — a raw comparison against the untruncated note would report
+    `already_satisfied=False` for a note the write path would in fact
+    land byte-identically; the reviewer's P3 finding on this asymmetry,
+    coordinator:code-reviewer, is fixed here).
+    VERIFIED against `coordinator_core/orientation/regenerate_cache.py::
+    patch_pinboard_only`: the write is a whole-section REGEX REPLACE
+    (`_PINBOARD_SECTION_RE.sub(..., count=1)`), never an append, so
+    re-firing with a note whose truncated form is unchanged would write
+    byte-identical Pinboard bytes — the real value of the M1 check here
+    is skipping the Housekeeping re-derive + `clear_failures_log` side
+    effect `patch_pinboard_only` performs on every non-check write, not
+    preventing a corruption `patch_pinboard_only` could not already
+    survive on its own. `__init__.py` (out of this chunk's scope; see
+    brief) does NOT YET thread `existing_pinboard_line` through its
+    `build_pinboard_directive` call site — the check is real and tested
+    (`test_apply.py`) but currently DEAD CODE on the shipped/dispatched
+    path, still M3 (`already_satisfied` always `False`) there until a
+    follow-up chunk wires it. That follow-up is tracked at
+    `state/bug-backlog/2026-08-08-the-pinboard-directive-s-new-satisfactio-84428eba910c.yaml`,
+    not left untracked for the next reader to rediscover.
+  - `d-check-machine-local-regeneratability` stays M3 in dict shape but
+    is now DELIBERATELY, PERMANENTLY False rather than an oversight: the
+    invoked CLI (`coordinator/bin/check-machine-local-
+    regeneratability.py`, confirmed by reading it) is READ-ONLY —
+    "reads the [regeneratability] TOML table... Findings go to stderr;
+    silent on a clean registry" and never opens a file for writing. There
+    is no disk artifact whose presence would mean "already done", so no
+    real `already_satisfied` check can exist for it; re-firing is
+    unconditionally safe because the directive performs no mutation at
+    all, which is a stronger property than idempotence, not a gap in it.
 """
 
 from __future__ import annotations
@@ -128,10 +265,28 @@ from coordinator_core.ops.parse_completeness_item import parse_completeness_item
 
 _PINBOARD_CLI = "regenerate-orientation-cache"
 
+#: Mirrors `coordinator_core.orientation.regenerate_cache.patch_pinboard_only`'s
+#: own write-time transform (`_first_line(pinboard)[:400]`) exactly, so the
+#: `already_satisfied` comparison below never compares a raw multi-line/
+#: >400-char `pinboard_note` against a first-line/400-char-truncated
+#: `existing_pinboard_line` — that mismatch would only make the check report
+#: `False` (unnecessary re-write) for a note the write path would actually
+#: land byte-identically, never the unsafe direction (Review: coordinator:
+#: code-reviewer flagged the untruncated comparison, P3).
+_PINBOARD_WRITE_TRUNCATE_CHARS = 400
+
+
+def _written_pinboard_note(pinboard_note: Optional[str]) -> str:
+    if not pinboard_note:
+        return ""
+    first_line = pinboard_note.splitlines()[0] if pinboard_note.splitlines() else ""
+    return first_line[:_PINBOARD_WRITE_TRUNCATE_CHARS]
+
 
 def build_pinboard_directive(
     orientation_cache_exists: bool,
     pinboard_note: Optional[str],
+    existing_pinboard_line: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Step 2.8's single mutation: append one pinboard line via
     `regenerate-orientation-cache --pinboard-only`.
@@ -142,19 +297,50 @@ def build_pinboard_directive(
     decides content. Returns `None` (skip silently, per the SKILL's own
     "If nothing pinboard-worthy, do nothing... If the cache file doesn't
     exist, skip" text) when there is no note to write or the cache file
-    the `--pinboard-only` fast path requires is absent.
+    the `--pinboard-only` fast path requires is absent — a structural
+    (M4) non-emission, not the `already_satisfied` mechanism below.
+
+    `existing_pinboard_line` (C3, AC5/AC6 — see module docstring's
+    idempotence-mechanism classification) is the caller's ALREADY-READ
+    current `## Pinboard` line (e.g.
+    `coordinator_core.orientation.regenerate_cache.read_existing_
+    pinboard`'s return) — this function stays disk-I/O-free per its own
+    module convention (mirrors `compute_completeness_checklist_gate`'s
+    `consumed_handoff_text` param shape) and never reads the cache file
+    itself. When supplied and equal to `pinboard_note` AFTER applying the
+    SAME first-line/400-char truncation `patch_pinboard_only` applies at
+    write time (`_written_pinboard_note` below — mirrors
+    `_first_line(pinboard)[:400]`, not a raw comparison), the directive is
+    `already_satisfied` (M1): `patch_pinboard_only` replaces the whole
+    Pinboard section on every write, so a re-fire whose truncated note
+    matches would write byte-identical bytes there — skipping instead
+    avoids the Housekeeping re-derive + failures-log clear side effect
+    that write also performs. `None` (the default, and every call site
+    until a caller threads this parameter through) means "not verified"
+    and `already_satisfied` stays `False` — never inferred as satisfied
+    from absence.
     """
     if not pinboard_note:
         return None
     if not orientation_cache_exists:
         return None
-    return {
+    already_satisfied = existing_pinboard_line is not None and existing_pinboard_line == _written_pinboard_note(pinboard_note)
+    directive: dict[str, Any] = {
         "id": "d-append-orientation-pinboard",
         "cli": _PINBOARD_CLI,
         "args": ["--invoker", "workstream-complete", "--pinboard-only", pinboard_note],
         "depends_on": None,
-        "already_satisfied": False,
+        "already_satisfied": already_satisfied,
     }
+    if already_satisfied:
+        directive["already_satisfied_reason"] = (
+            f"the cache's current ## Pinboard line already reads {existing_pinboard_line!r}, "
+            f"matching what patch_pinboard_only would write for this note ({_written_pinboard_note(pinboard_note)!r}) — "
+            "patch_pinboard_only replaces the whole section on every write, so re-firing "
+            "would write identical bytes; skipping avoids its Housekeeping re-derive + "
+            "failures-log clear side effect"
+        )
+    return directive
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +355,19 @@ def build_machine_local_regeneratability_directive() -> dict[str, Any]:
     peer slot alongside the open-ended cross-cutting question (which is a
     judgment_point, not this module's concern). `exit 0` always; the
     named CLI writes findings to stderr only and is silent on a clean
-    registry — this directive always fires, never gated."""
+    registry — this directive always fires, never gated.
+
+    `already_satisfied` stays hardcoded `False` PERMANENTLY, by design,
+    not oversight (C3, AC5 — see module docstring's idempotence-mechanism
+    classification): `check-machine-local-regeneratability.py` is
+    READ-ONLY (confirmed by reading it — it opens the machine-local
+    registry, prints findings to stderr, never opens anything for
+    writing). There is no disk artifact whose presence would mean
+    "already done", so no real satisfaction check can exist for this
+    directive — re-firing it every pass is unconditionally safe because
+    it performs no mutation at all, a stronger guarantee than idempotence
+    tracking would give it.
+    """
     return {
         "id": "d-check-machine-local-regeneratability",
         "cli": _MACHINE_LOCAL_REGEN_CLI,

@@ -128,6 +128,7 @@ from __future__ import annotations
 import asyncio
 import io
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -216,47 +217,93 @@ def _rollup_derive(deliverable_id: str) -> Tuple[str, List[str]]:
 # ---------------------------------------------------------------------------
 
 
-def _committer_timestamp(sha: str) -> Optional[int]:
-    """Return the committer-timestamp for ``sha``, or ``None`` if it cannot be
-    resolved (garbage/unparseable SHA, git failure, timeout). ``None`` is a
-    distinct sentinel from any real timestamp — including 0 — so a caller
-    selecting "best" can fall closed on an all-unresolvable input instead of
-    fail-open by treating a resolution failure as timestamp 0 (the exact
-    defect the old example-doctrine-repo bash's `|| echo 0` pattern reproduced; see backlog
-    2026-07-13-promote-shipped-in-flight-stubs-p4-sha-fails-open.yaml).
+def _batch_committer_timestamps(shas: List[str]) -> dict:
+    """Resolve committer-timestamp (``%ct``) for a batch of commit SHAs in
+    ONE ``git log`` call.
+
+    Mirrors ``emit/sections/handoffs._resolve_shipped_in_dates``'s
+    ``--no-walk --ignore-missing`` shape exactly (the in-tree reconciliation
+    reference this chunk was told to cite, not re-derive; the identical
+    shape already landed this wave at C13 (0df3818bc) and C20 (ca3390a40)).
+    This is an OBJECT question (commit metadata at caller-supplied SHAs),
+    not a RANGE question, so it batches unconditionally — ``git log
+    --no-walk`` resolves each argv SHA independently; it never merges them
+    into one ancestry/reachability set expression the way
+    ``git rev-list A..B C..D`` would (the forbidden shape for a DIFFERENT
+    git-spawn class entirely; see ``docs/wiki/coverage-gate-perf.md``).
+
+    ``--ignore-missing`` makes an unresolvable SHA silently ABSENT from
+    stdout (exit 0) rather than an error — that absence is never read as a
+    resolved timestamp. The prefix-match loop below only ever POPULATES the
+    returned dict for a SHA it can positively match against stdout; a
+    requested SHA absent from the return value is simply absent from the
+    map, and ``_select_best_sha`` below treats a candidate missing from this
+    map as unresolved and skips it — the same fail-closed contract the prior
+    per-sha ``returncode != 0: continue`` path had (see backlog
+    2026-07-13-promote-shipped-in-flight-stubs-p4-sha-fails-open.yaml for
+    why fail-open here is the defect class to avoid).
     """
+    if not shas:
+        return {}
+    ordered = sorted({sha for sha in shas if sha})
+    if not ordered:
+        return {}
     try:
-        r = subprocess.run(
-            ["git", "show", "-s", "--format=%ct", sha],
+        proc = subprocess.run(
+            [
+                "git", "log",
+                "--no-walk=unsorted", "--ignore-missing",
+                "--format=%H\x1f%ct",
+                *ordered,
+            ],
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError):
-        return None
-    if r.returncode != 0:
-        return None
-    out = r.stdout.strip()
-    try:
-        return int(out)
-    except ValueError:
-        return None
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+
+    sha_ct: dict = {}
+    matched: set = set()
+    for line in proc.stdout.replace("\r", "").splitlines():
+        if not line:
+            continue
+        full, sep, ct_str = line.partition("\x1f")
+        if not sep:
+            continue
+        try:
+            ct = int(ct_str)
+        except ValueError:
+            continue
+        for raw in ordered:
+            if raw not in matched and full[: len(raw)] == raw:
+                sha_ct[raw] = ct
+                matched.add(raw)
+                break
+    return sha_ct
 
 
 def _select_best_sha(shas: List[str]) -> str:
-    """Select the SHA with the MAX resolvable committer timestamp. Falls
+    """Select the SHA with the MAX resolvable committer timestamp, resolved
+    via ONE batched ``git log`` call (``_batch_committer_timestamps``)
+    across all candidates instead of one ``git show`` per candidate. Falls
     CLOSED (returns "") when every candidate is empty or unresolvable — a
-    resolution failure must never be treated as a winning (or any) timestamp
-    value, or a garbage SHA can be selected on an all-garbage input.
+    resolution failure (including one silently dropped by
+    ``--ignore-missing``) must never be treated as a winning (or any)
+    timestamp value, or a garbage/unresolvable SHA can be selected on an
+    all-garbage input.
     """
+    sha_ct = _batch_committer_timestamps(shas)
     best_sha = ""
     best_ct: Optional[int] = None
     for sha in shas:
         if not sha:
             continue
-        ct = _committer_timestamp(sha)
+        ct = sha_ct.get(sha)
         if ct is None:
             continue
         if best_ct is None or ct > best_ct:
@@ -521,7 +568,7 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
                 text=True,
                 timeout=_GIT_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             print(f"{_PROG}: cannot resolve repo root: {exc}", file=sys.stderr)

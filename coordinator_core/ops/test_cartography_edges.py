@@ -25,8 +25,6 @@ inventory.md § chunk C1f (count-module-cross-references).
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -53,10 +51,8 @@ def _write(root, rel_path, content):
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError, match="target_root"):
-        asyncio.run(
-            _cartography_count_references(
-                {"module_name": "os", "files": ["mod.py"]}
-            )
+        _cartography_count_references(
+            {"module_name": "os", "files": ["mod.py"]}
         )
 
 
@@ -64,10 +60,8 @@ def test_op_missing_module_name_raises_value_error(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     with pytest.raises(ValueError, match="module_name"):
-        asyncio.run(
-            _cartography_count_references(
-                {"target_root": str(root), "files": ["mod.py"]}
-            )
+        _cartography_count_references(
+            {"target_root": str(root), "files": ["mod.py"]}
         )
 
 
@@ -75,10 +69,8 @@ def test_op_missing_files_raises_value_error(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     with pytest.raises(ValueError, match="files"):
-        asyncio.run(
-            _cartography_count_references(
-                {"target_root": str(root), "module_name": "os"}
-            )
+        _cartography_count_references(
+            {"target_root": str(root), "module_name": "os"}
         )
 
 
@@ -87,14 +79,12 @@ def test_op_happy_path_single_reference(tmp_path):
     root.mkdir()
     _write(root, "a.py", "import target_mod\n")
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["a.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["a.py"],
+        }
     )
 
     assert result == {
@@ -108,14 +98,12 @@ def test_op_non_referencing_file_contributes_nothing(tmp_path):
     root.mkdir()
     _write(root, "a.py", "import os\n")
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["a.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["a.py"],
+        }
     )
 
     assert result == {"reference_count": 0, "referencing_files": []}
@@ -128,14 +116,12 @@ def test_op_multiple_files_dedup_and_sort_referencing_files(tmp_path):
     _write(root, "a.py", "import target_mod\n")
     _write(root, "b.py", "import os\n")
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["z.py", "a.py", "b.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["z.py", "a.py", "b.py"],
+        }
     )
 
     assert result["reference_count"] == 2
@@ -153,14 +139,12 @@ def test_op_repeated_import_in_one_file_sums_reference_count(tmp_path):
         "    import target_mod\n",
     )
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["a.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["a.py"],
+        }
     )
 
     assert result["reference_count"] == 2
@@ -172,14 +156,12 @@ def test_op_from_import_edge_counts_as_reference(tmp_path):
     root.mkdir()
     _write(root, "a.py", "from target_mod import thing\n")
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["a.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["a.py"],
+        }
     )
 
     assert result == {"reference_count": 1, "referencing_files": ["a.py"]}
@@ -198,14 +180,12 @@ def test_op_call_edge_is_not_counted_as_import_reference(tmp_path):
         "def caller():\n    return target_mod()\n",
     )
 
-    result = asyncio.run(
-        _cartography_count_references(
-            {
-                "target_root": str(root),
-                "module_name": "target_mod",
-                "files": ["a.py"],
-            }
-        )
+    result = _cartography_count_references(
+        {
+            "target_root": str(root),
+            "module_name": "target_mod",
+            "files": ["a.py"],
+        }
     )
 
     assert result == {"reference_count": 0, "referencing_files": []}
@@ -226,8 +206,8 @@ def test_op_double_invocation_is_a_safe_no_op(tmp_path):
         "files": ["a.py"],
     }
 
-    result_1 = asyncio.run(_cartography_count_references(dict(params)))
-    result_2 = asyncio.run(_cartography_count_references(dict(params)))
+    result_1 = _cartography_count_references(dict(params))
+    result_2 = _cartography_count_references(dict(params))
 
     assert result_1 == result_2 == {
         "reference_count": 1,

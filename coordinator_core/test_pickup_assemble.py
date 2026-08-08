@@ -741,7 +741,7 @@ class TestSuffixSlugFallback:
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
-        assert result.decision_object["artifact"]["path"] == str(archived.relative_to(repo))
+        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
         assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
 
     def test_mid_word_split_does_not_suffix_match(self, tmp_path):
@@ -1311,6 +1311,30 @@ class TestArtifactSinceDate:
         # in this file exercises.
         assert "widget: finish the widget refactor (new)" in subjects
         assert "widget: finish the widget refactor (old)" not in subjects
+
+
+class TestParseSinceDateEpochAndTimezone:
+    """`_parse_since_date` must never feed a date-only string through a
+    naive (local-time) `.timestamp()`: on Windows the CRT raises `OSError`
+    for a local-time date on or near 1970-01-01 — exactly the epoch
+    fallback `_artifact_since_date` returns for a dateless handoff
+    basename, which every other fixture in `TestArtifactSinceDate` exercises
+    without ever calling `_parse_since_date` on it directly. Before the
+    fix, `_run_git`'s broad `except OSError` swallowed that crash as a
+    generic read-model-miss, so `compute_closure_signals` silently returned
+    no candidates instead of raising or logging anything — the failure
+    mode this class pins against regressing."""
+
+    def test_epoch_date_does_not_raise_and_is_zero(self):
+        assert pa._parse_since_date("1970-01-01") == 0
+
+    def test_one_day_after_epoch(self):
+        assert pa._parse_since_date("1970-01-02") == 86400
+
+    def test_utc_interpretation_is_offset_independent(self):
+        """A naive `.timestamp()` call would shift this by the host's local
+        UTC offset; the UTC-aware form must not, on any host timezone."""
+        assert pa._parse_since_date("1980-01-01") == 315532800
 
 
 # ---------------------------------------------------------------------------
@@ -2136,6 +2160,117 @@ def _tool_use_record(tool_name: str, tool_input: dict) -> dict:
             ]
         },
     }
+
+
+class TestComputeBranchGate:
+    """`compute_branch_gate`'s `classification` keyword governs whether a
+    memo pickup gets an honest `in_place` verdict instead of the
+    handoff/spinoff `resume`/`create` vocabulary. No prior test in this
+    file exercised the function directly at all (grep confirms zero hits
+    before this class); the memo path was previously covered only
+    indirectly through `brief()`, which never asserted on
+    `gates["branch"]`."""
+
+    def test_memo_classification_reports_in_place_regardless_of_branch_name(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)  # lands on work/test/2026-01-01
+
+        result = pa.compute_branch_gate(repo, classification="memo")
+
+        assert result["action"] == "in_place"
+        assert result["current_branch"] == "work/test/2026-01-01"
+        assert "reason" in result
+
+    def test_handoff_classification_on_work_branch_resumes(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result == {"action": "resume", "current_branch": "work/test/2026-01-01"}
+
+    def test_handoff_classification_on_main_creates(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _git(repo, "checkout", "-b", "main")
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result == {"action": "create", "current_branch": "main"}
+
+    def test_omitted_classification_matches_legacy_behavior(self, tmp_path):
+        """Byte-identical to the pre-classification signature — the default
+        keeps every caller that doesn't pass `classification` unaffected."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        assert pa.compute_branch_gate(repo) == pa.compute_branch_gate(repo, classification=None)
+        assert pa.compute_branch_gate(repo) == {
+            "action": "resume",
+            "current_branch": "work/test/2026-01-01",
+        }
+
+    def test_branch_none_reports_unknown_and_ignores_classification(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(pa, "_current_branch", lambda _root: None)
+
+        result = pa.compute_branch_gate(repo, classification="memo")
+
+        assert result == {"action": "unknown", "current_branch": None}
+
+    def test_no_live_peers_on_main_still_creates(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _git(repo, "checkout", "-b", "main")
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result == {"action": "create", "current_branch": "main"}
+
+    def test_live_peer_on_main_downgrades_create_to_in_place(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _git(repo, "checkout", "-b", "main")
+        _write_holder_meta(
+            repo,
+            "peer-sid",
+            {"pid": "1", "last_activity": pa._session_core.now_iso(), "branch": "work/peer/x"},
+        )
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result["action"] == "in_place"
+        assert result["current_branch"] == "main"
+        assert "peer-sid" in result["reason"]
+        assert "work/peer/x" in result["reason"]
+
+    def test_unknown_live_set_downgrades_create_to_in_place(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _git(repo, "checkout", "-b", "main")
+        monkeypatch.setattr(
+            pa._worktree_safety._liveness,
+            "live_session_verdicts",
+            lambda cwd=None: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result["action"] == "in_place"
+        assert result["current_branch"] == "main"
+        assert "reason" in result
+
+    def test_work_branch_resume_unaffected_by_live_peers(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)  # lands on work/test/2026-01-01
+        _write_holder_meta(
+            repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()}
+        )
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result == {"action": "resume", "current_branch": "work/test/2026-01-01"}
 
 
 @pytest.mark.skipif(

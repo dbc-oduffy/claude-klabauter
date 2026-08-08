@@ -93,52 +93,209 @@ def test_phase_chain_preinstall_sets_flag_and_does_not_exit():
 # both env vars, leaving this branch entirely uncovered.
 # ---------------------------------------------------------------------------
 
-def test_self_resolve_walker_roots_success_real_checkout():
-    # This test file lives inside a real claude-klabauter checkout, so the canonical
-    # layout (<claude-klabauter-root>/coordinator, .../coordinator/scripts/lib) is
-    # actually present on disk — no fixture needed for the success path.
-    resolved = scw._self_resolve_walker_roots()
+def _add_coordinator_claude_source_evidence(tree: Path) -> None:
+    """Positive evidence `_looks_like_coordinator_claude_source` requires —
+    `.claude-plugin/plugin.json` PLUS a `commands/` dir."""
+    (tree / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (tree / ".claude-plugin" / "plugin.json").write_text("{}")
+    (tree / "commands").mkdir(parents=True, exist_ok=True)
+
+
+def test_self_resolve_walker_roots_success_via_flag(tmp_path):
+    # Defect B fix: the root comes from the override ladder
+    # (--coordinator-root / $COORDINATOR_CLAUDE_ROOT), never a guess
+    # derived from this module's own on-disk location, and (Defect fix
+    # 2026-08-07) never a registered publish mirror.
+    coordinator_tree = tmp_path / "coordinator-claude-checkout"
+    coordinator_tree.mkdir()
+    _add_coordinator_claude_source_evidence(coordinator_tree)
+    resolved = scw._self_resolve_walker_roots(["--coordinator-root", str(coordinator_tree)])
     assert resolved is not None
-    repo_root, lib_dir = resolved
-    assert repo_root.name == "coordinator"
+    repo_root, lib_dir, rung = resolved
+    assert repo_root == coordinator_tree
     assert lib_dir == repo_root / "scripts" / "lib"
-    assert lib_dir.is_dir()
+    assert rung == "--coordinator-root flag"
 
 
-def test_self_resolve_walker_roots_returns_none_when_canonical_layout_absent(tmp_path, monkeypatch):
-    # A module location whose grandparent-of-grandparent has no
-    # coordinator/scripts/lib on disk (e.g. a partial/corrupt checkout) must
-    # report None so the caller emits a real diagnostic rather than
-    # proceeding on a guessed root.
-    fake_module_path = tmp_path / "coordinator_core" / "ops" / "setup_chain_walker.py"
-    fake_module_path.parent.mkdir(parents=True)
-    fake_module_path.write_text("")
-    monkeypatch.setattr(scw, "__file__", str(fake_module_path))
-    assert scw._self_resolve_walker_roots() is None
+def test_self_resolve_walker_roots_success_via_env(tmp_path, monkeypatch):
+    coordinator_tree = tmp_path / "coordinator-claude-checkout"
+    coordinator_tree.mkdir()
+    _add_coordinator_claude_source_evidence(coordinator_tree)
+    monkeypatch.setenv("COORDINATOR_CLAUDE_ROOT", str(coordinator_tree))
+    resolved = scw._self_resolve_walker_roots([])
+    assert resolved is not None
+    assert resolved[0] == coordinator_tree
+    assert resolved[2] == "$COORDINATOR_CLAUDE_ROOT env"
 
 
-def test_main_self_resolves_roots_when_neither_env_var_set(monkeypatch, capsys):
-    # Success path through main(): neither env var set, real checkout on
-    # disk, so self-resolution succeeds and --check proceeds past the
-    # roots-resolution branch instead of hitting the "cannot resolve"
-    # diagnostic.
+def test_self_resolve_walker_roots_returns_none_when_ladder_unresolved(monkeypatch):
+    # No --coordinator-root, no env var: the registry rung was DROPPED
+    # (Defect fix 2026-08-07 — repos.coordinator_claude is retired and
+    # names the publish mirror), so there is nothing left to monkeypatch;
+    # an empty ladder must report None so the caller emits a real
+    # diagnostic rather than proceeding on a guessed root (Defect B's root
+    # cause).
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    assert scw._self_resolve_walker_roots([]) is None
+
+
+def test_self_resolve_walker_roots_returns_none_when_override_path_absent(tmp_path):
+    # An override that resolves to a syntactically valid but nonexistent
+    # path must also report None, not a stale/unverified root.
+    ghost = tmp_path / "does-not-exist"
+    assert scw._self_resolve_walker_roots(["--coordinator-root", str(ghost)]) is None
+
+
+def test_self_resolve_walker_roots_returns_none_when_no_source_evidence(tmp_path):
+    # Requirement 2: a bare directory (no .claude-plugin/plugin.json, no
+    # commands/ or hooks/) is not accepted even though it exists on disk.
+    bare = tmp_path / "just-a-directory"
+    bare.mkdir()
+    assert scw._self_resolve_walker_roots(["--coordinator-root", str(bare)]) is None
+
+
+def test_resolve_coordinator_root_ladder_rejects_registered_publish_mirror(tmp_path, monkeypatch):
+    # Requirement 1: a candidate that resolves to a registered
+    # publish.mirrors.*.path entry is rejected outright, even though it may
+    # otherwise look like a valid coordinator-claude source checkout (a
+    # publish mirror ships the same plugin-manifest shape as a real source
+    # clone — see scripts/setup.py's _looks_like_coordinator_claude_source
+    # docstring for why plugin.json alone can't tell them apart).
+    mirror = tmp_path / "coordinator-claude-mirror"
+    mirror.mkdir()
+    _add_coordinator_claude_source_evidence(mirror)
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
+        lambda target_root, env=None: str(Path(target_root).resolve()) == str(mirror.resolve()),
+    )
+    assert scw._resolve_coordinator_root_ladder(["--coordinator-root", str(mirror)]) is None
+
+
+def test_resolve_coordinator_root_ladder_noop_when_no_mirrors_registered(tmp_path):
+    # OSS case: no publish mirrors registered anywhere -- the mirror check
+    # must be a pure no-op, never a new failure mode, when the underlying
+    # registry lookup itself raises/is unavailable.
+    coordinator_tree = tmp_path / "coordinator-claude-checkout"
+    coordinator_tree.mkdir()
+    _add_coordinator_claude_source_evidence(coordinator_tree)
+    resolved = scw._resolve_coordinator_root_ladder(["--coordinator-root", str(coordinator_tree)])
+    assert resolved is not None
+    assert resolved[0] == coordinator_tree
+
+
+# ---------------------------------------------------------------------------
+# Rung 3 — engine.working_repos.example_doctrine_repo registry key (C1b).
+# ---------------------------------------------------------------------------
+
+def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, monkeypatch):
+    # The raw registered value is one directory ABOVE the plugin source
+    # (verified live) -- the derivation (C1a's
+    # _resolve_plugin_root_for_machine_local) is what makes it resolve to
+    # the actual `<value>/coordinator` checkout, which carries the
+    # positive-evidence shape.
+    doe_root = tmp_path / "example-doctrine-repo"
+    plugin_root = doe_root / "coordinator"
+    plugin_root.mkdir(parents=True)
+    _add_coordinator_claude_source_evidence(plugin_root)
+    (plugin_root / "templates" / "bin").mkdir(parents=True)
+    (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
+
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+
+    resolved = scw._resolve_coordinator_root_ladder([])
+    assert resolved is not None
+    assert resolved == (plugin_root, "engine.working_repos.example_doctrine_repo registry key")
+
+
+def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, monkeypatch):
+    doe_root = tmp_path / "example-doctrine-repo"
+    plugin_root = doe_root / "coordinator"
+    plugin_root.mkdir(parents=True)
+    _add_coordinator_claude_source_evidence(plugin_root)
+    (plugin_root / "templates" / "bin").mkdir(parents=True)
+    (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
+
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
+        lambda target_root, env=None: str(Path(target_root).resolve()) == str(plugin_root.resolve()),
+    )
+
+    assert scw._resolve_coordinator_root_ladder([]) is None
+
+
+def test_resolve_coordinator_root_ladder_rung3_rejects_missing_positive_evidence(tmp_path, monkeypatch):
+    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root.mkdir()
+    # No `.claude-plugin/plugin.json` anywhere under `doe_root` -- the
+    # derivation returns None (no templates/bin/_machine_local.py, no
+    # plugin.json at either candidate shape), so the rung is a miss.
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+
+    assert scw._resolve_coordinator_root_ladder([]) is None
+
+
+def test_resolve_coordinator_root_ladder_rung3_fail_open_when_key_absent(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(scw, "registry_get", lambda key: None)
+
+    assert scw._resolve_coordinator_root_ladder([]) is None
+
+
+def test_resolve_coordinator_root_ladder_flag_and_env_outrank_registry(tmp_path, monkeypatch):
+    doe_root = tmp_path / "example-doctrine-repo"
+    plugin_root = doe_root / "coordinator"
+    plugin_root.mkdir(parents=True)
+    _add_coordinator_claude_source_evidence(plugin_root)
+    (plugin_root / "templates" / "bin").mkdir(parents=True)
+    (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+
+    flag_tree = tmp_path / "flag-checkout"
+    flag_tree.mkdir()
+    _add_coordinator_claude_source_evidence(flag_tree)
+    resolved = scw._resolve_coordinator_root_ladder(["--coordinator-root", str(flag_tree)])
+    assert resolved == (flag_tree, "--coordinator-root flag")
+
+    env_tree = tmp_path / "env-checkout"
+    env_tree.mkdir()
+    _add_coordinator_claude_source_evidence(env_tree)
+    monkeypatch.setenv("COORDINATOR_CLAUDE_ROOT", str(env_tree))
+    resolved = scw._resolve_coordinator_root_ladder([])
+    assert resolved == (env_tree, "$COORDINATOR_CLAUDE_ROOT env")
+
+
+def test_main_self_resolves_roots_via_coordinator_root_flag(monkeypatch, capsys, tmp_path):
+    # Success path through main(): neither trampoline env var set, but
+    # --coordinator-root resolves a real (fixture) checkout, so self-
+    # resolution succeeds and --check proceeds past the roots-resolution
+    # branch instead of hitting the "cannot resolve" diagnostic.
     monkeypatch.delenv("COORDINATOR_SETUP_REPO_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_SETUP_LIB_DIR", raising=False)
     monkeypatch.setenv("NON_INTERACTIVE", "true")
-    code = scw.main(["--check"])
+    repo_root = _make_repo_root(tmp_path, direct_deps=[])
+    _add_coordinator_claude_source_evidence(repo_root)
+    code = scw.main(["--check", "--coordinator-root", str(repo_root)])
     out = capsys.readouterr().out
     assert "cannot resolve the chain-walker roots" not in out
-    assert code in (0, 90)  # dep-state-dependent; the roots resolved either way
+    assert "root rung:    --coordinator-root flag" in out
+    assert code == 0
 
 
 def test_main_reports_diagnostic_and_exits_1_when_self_resolve_fails(monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_SETUP_REPO_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_SETUP_LIB_DIR", raising=False)
-    monkeypatch.setattr(scw, "_self_resolve_walker_roots", lambda: None)
+    monkeypatch.setattr(scw, "_self_resolve_walker_roots", lambda argv=None, err=None: None)
     code = scw.main(["--check"])
     err = capsys.readouterr().err
     assert code == 1
     assert "cannot resolve the chain-walker roots" in err
+    assert "--coordinator-root" in err
+    assert "COORDINATOR_CLAUDE_ROOT" in err
+    assert "repos.coordinator_claude" in err
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +433,27 @@ def test_check_hard_dep_missing_exits_90(tmp_path):
     assert "hard dep [some-hard-dep] is missing" in res.stderr
 
 
+def test_check_hard_dep_present_but_broken_exits_nonzero(tmp_path):
+    # Defect A: a hard dep that IS present but fails its own functional
+    # probe must exit non-zero (exit 1 — "hard probe failure"), never fall
+    # through to "all deps satisfied" the way a bare status-branch with no
+    # severity handling used to.
+    sib = tmp_path / "broken-sib"
+    sib.mkdir()
+    dep = {
+        "id": "broken-hard-dep",
+        "severity": "hard",
+        "sibling_dir_name": "broken-sib",
+        "upstream_url": "https://example.invalid/repo.git",
+        "functional_probe": {"kind": "file_exists", "path": "README.md"},
+    }
+    repo_root = _make_repo_root(tmp_path, direct_deps=[dep])
+    res = _run_main(repo_root, ["--check"])
+    assert res.returncode == 1
+    assert "hard dep [broken-hard-dep] is present but its functional probe failed" in res.stderr
+    assert "all deps satisfied" not in res.stdout
+
+
 def test_check_soft_dep_missing_warns_and_continues(tmp_path):
     dep = {
         "id": "some-soft-dep",
@@ -288,7 +466,7 @@ def test_check_soft_dep_missing_warns_and_continues(tmp_path):
     res = _run_main(repo_root, ["--check"])
     assert res.returncode == 0
     assert "soft dep [some-soft-dep] is absent" in res.stderr
-    assert "soft dep(s) absent — proceeding" in res.stdout
+    assert "soft dep(s) absent or present-but-broken — proceeding" in res.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +653,86 @@ def test_dep_probe_nested_layout_bare_name_fallback(tmp_path):
     manifest_path.write_text(json.dumps({"direct_deps": [dep]}))
 
     assert scw.dep_probe("d5", manifest_path, repo_root) == "present"
+
+
+def test_sibling_fallback_rejects_name_match_that_fails_functional_probe(tmp_path):
+    # Defect B hardening: a "-claude"-strip name match that EXISTS on disk
+    # but fails the dep's own functional probe (e.g. an unrelated directory
+    # that coincidentally shares the stripped name) must be rejected, not
+    # silently accepted as a resolved sibling_path — the caller (dep_probe)
+    # must see "missing", never manufacture "present-but-broken" out of a
+    # coincidental name match.
+    coincidental = tmp_path / "coordinator"
+    coincidental.mkdir()  # exists, but has no README.md — fails file_exists
+    resolved = scw._sibling_fallback(
+        tmp_path,
+        "coordinator-claude",
+        "",
+        probe_kind="file_exists",
+        probe_args={"path": "README.md"},
+    )
+    assert resolved is None
+
+    (coincidental / "README.md").write_text("hi")
+    resolved = scw._sibling_fallback(
+        tmp_path,
+        "coordinator-claude",
+        "",
+        probe_kind="file_exists",
+        probe_args={"path": "README.md"},
+    )
+    assert resolved == coincidental
+
+
+def test_sibling_fallback_rejects_engine_tree_and_repo_root(tmp_path):
+    # A candidate that IS the claude-klabauter engine's own tree (or under it), or IS
+    # the walked repo's own repo_root (or under it), must never be accepted
+    # — this is the exact coincidental match that manufactured Defect A's
+    # "found but broken" contradiction out of "not found here".
+    engine_tree = scw._engine_tree_root()
+    resolved = scw._sibling_fallback(
+        engine_tree.parent,
+        "coordinator-claude",
+        "",
+        probe_kind="sibling_dir_exists",
+        probe_args={},
+    )
+    assert resolved is None
+
+    repo_root = tmp_path / "repo-root"
+    sibling_root = tmp_path
+    same_name_dir = sibling_root / "coordinator"
+    same_name_dir.mkdir()
+    resolved = scw._sibling_fallback(
+        sibling_root,
+        "coordinator-claude",
+        "",
+        probe_kind="sibling_dir_exists",
+        probe_args={},
+        repo_root=same_name_dir,
+    )
+    assert resolved is None
+
+
+def test_dep_probe_sibling_fallback_missing_when_candidate_fails_probe(tmp_path):
+    # End-to-end via dep_probe: a "-claude"-strip candidate exists on disk
+    # but fails the dep's declared functional probe -> overall status must
+    # be "missing", never "present"/"present-but-broken".
+    (tmp_path / "coordinator").mkdir()  # exists, but no README.md
+    dep = {
+        "id": "d6",
+        "severity": "soft",
+        "sibling_dir_name": "coordinator-claude",
+        "functional_probe": {"kind": "file_exists", "path": "README.md"},
+    }
+    repo_root = tmp_path / "some-other-root"
+    (repo_root / "scripts" / "lib").mkdir(parents=True)
+    manifest_dir = repo_root / "docs" / "install"
+    manifest_dir.mkdir(parents=True)
+    manifest_path = manifest_dir / "agent-install-manifest.json"
+    manifest_path.write_text(json.dumps({"direct_deps": [dep]}))
+
+    assert scw.dep_probe("d6", manifest_path, repo_root) == "missing"
 
 
 # ---------------------------------------------------------------------------

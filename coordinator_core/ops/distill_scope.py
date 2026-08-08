@@ -552,7 +552,7 @@ def render_summary(manifest: dict[str, Any], counts: dict[str, int]) -> str:
 
 
 @register_op("distill.scope")
-async def _handler(params: dict, repo_root: Path | None = None) -> dict:
+def _handler(params: dict, repo_root: Path | None = None) -> dict:
     """distill.scope handler.
 
     Params:

@@ -68,11 +68,31 @@ def test_grant_leg_states_the_session_scope_and_liveness_constraint():
 
 
 def test_grant_leg_names_the_ceremonies_that_do_carry_an_implicit_grant():
-    """The three ceremonies that DO write an implicit grant at ceremony
-    open must stay named, so the no-implicit-grant list above reads as a
-    contrast, not a standalone claim with no baseline."""
+    """The ceremonies that DO write an implicit grant at ceremony open must
+    stay named, so the no-implicit-grant list above reads as a contrast,
+    not a standalone claim with no baseline. Verified against example-doctrine-repo's tree:
+    `coordinator/commands/workday-complete.md` (example-doctrine-repo `8a3efb1d8`),
+    `coordinator/skills/merging-to-main/SKILL.md`, and
+    `coordinator/commands/workweek-complete.md` each invoke
+    `tier-u-grant-cli grant ceremony`."""
     text = _grant_leg_text()
     for ceremony in ("workday-complete", "workweek-complete", "merging-to-main"):
         assert ceremony in text, (
             "GRANT leg must keep naming /%s as an implicit-grant ceremony" % ceremony
         )
+
+
+def test_grant_leg_names_the_explicit_pm_grant_and_the_override_warning():
+    """Even with all three ceremony writers present, a session with no live
+    grant (e.g. outside any of the three ceremonies) still needs the
+    explicit-PM-grant path named, and the override warned against -- the
+    override remains the cheapest-looking wrong exit whenever a grant is
+    absent, regardless of ceremony coverage."""
+    text = _grant_leg_text()
+    assert "tier-u-grant-cli grant\n     pm" in text or "tier-u-grant-cli grant pm" in text, (
+        "GRANT leg must name the explicit PM grant as the honest path"
+    )
+    assert "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION" in text, (
+        "GRANT leg must name the override and say it is not a substitute "
+        "for the explicit grant"
+    )

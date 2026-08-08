@@ -242,6 +242,40 @@ def test_stale_walk_default_on(tmp_path):
     assert not any(ln.startswith("STALE ") for ln in lines_off), lines_off
 
 
+def test_stale_walk_missing_last_attested_emits_stale_not_skip(tmp_path):
+    """A page with no `last_attested:` frontmatter at all must not be a
+    silent skip — it is maximally unattested, and the walk must say so,
+    honestly distinguishable from the dated-and-aged case (no ISO date, no
+    numeric age)."""
+    repo, systems = _init_repo(tmp_path)
+
+    _write_atlas(systems, "kilo", last_mapped=None, last_attested=None)
+
+    lines, rc = run([], cwd=Path(repo))
+    assert rc == 0
+    lines = [ln for ln in lines if ln.strip()]
+    assert any(
+        ln == "STALE kilo last_attested=none age=unattested" for ln in lines
+    ), lines
+
+
+def test_stale_walk_unparseable_last_attested_groups_with_missing(tmp_path):
+    """A present-but-unparseable `last_attested:` value groups with the
+    absent case rather than getting a third line shape."""
+    repo, systems = _init_repo(tmp_path)
+
+    path = os.path.join(systems, "lima.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---\nlast_attested: not-a-date\n---\n# lima atlas\n")
+
+    lines, rc = run([], cwd=Path(repo))
+    assert rc == 0
+    lines = [ln for ln in lines if ln.strip()]
+    assert any(
+        ln == "STALE lima last_attested=none age=unattested" for ln in lines
+    ), lines
+
+
 def test_stale_walk_threshold_configurable(tmp_path):
     repo, systems = _init_repo(tmp_path)
 

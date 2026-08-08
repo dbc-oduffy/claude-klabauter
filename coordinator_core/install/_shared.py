@@ -35,9 +35,7 @@ from typing import Dict, Iterator, Optional, Tuple, Union
 
 from coordinator_core._settings_home import settings_home  # noqa: F401  (re-exported)
 from coordinator_core.machine_resolver import registry_get
-
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @contextlib.contextmanager
@@ -214,7 +212,7 @@ def _run_quiet(argv, env=None) -> str:
             env=env,
             timeout=10,
             stdin=subprocess.DEVNULL,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"_shared._run_quiet: {argv[0] if argv else '<empty argv>'} failed: {exc}", file=sys.stderr)
@@ -298,7 +296,7 @@ def ml_set(
             env=env,
             timeout=15,
             stdin=subprocess.DEVNULL,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"_uninstall_ml_set: {argv[0]} set {key} failed: {exc}", file=sys.stderr)

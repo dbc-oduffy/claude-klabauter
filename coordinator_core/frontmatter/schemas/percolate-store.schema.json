@@ -282,7 +282,9 @@
             "no-residual-pattern",
             "file-count-delta",
             "canary-survival",
-            "source-glob-present"
+            "source-glob-present",
+            "extensionless-shebang-absent",
+            "python-syntax-valid"
           ]
         },
         "params": {

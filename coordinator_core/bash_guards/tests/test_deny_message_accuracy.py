@@ -269,12 +269,22 @@ class TestMultiProbeBannerMessageAccuracy:
 
     _BANNER_CMD = 'echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref HEAD; pwd'
 
-    def test_deny_names_multiprobe_shape_and_evidence_banner(self):
-        deny = _deny_text(
+    def test_advisory_names_multiprobe_shape_and_evidence_banner(self):
+        # RETARGETED (DR-280, 2026-08-07): this guard's own deny branch was
+        # retired as structurally unreachable -- it gated on the same seam
+        # confirmation an earlier-registered `ADVISORY_REWRITE` chain entry
+        # already consumes and returns on first, so through the real
+        # dispatcher the deny gate could never open (see
+        # `test_guard_multiprobe_banner.py`'s identical retargeting). Was
+        # `test_deny_names_multiprobe_shape_and_evidence_banner`, reading
+        # `_deny_text`; the property under test -- the message names the
+        # multi-probe-banner shape and the evidence banner text -- is still
+        # live, now in the advisory envelope every call renders instead.
+        advisory = _advisory_text(
             _hso(guard_multiprobe_banner.check(_payload(self._BANNER_CMD), host_is_windows=True))
         )
-        assert "multi-probe-banner" in deny
-        assert "SESSION FACTS" in deny
+        assert "multi-probe-banner" in advisory
+        assert "SESSION FACTS" in advisory
 
     def test_outlet_example_is_the_real_seam_rewrite_not_a_static_illustration(self):
         """2026-07-29 duty-of-care promotion, supersedes the prior pinned
@@ -296,14 +306,18 @@ class TestMultiProbeBannerMessageAccuracy:
         static text a misdescription" question this test used to answer no
         longer has a live deny case to apply to.
         """
-        deny = _deny_text(
+        # RETARGETED (DR-280, 2026-08-07): was reading `_deny_text`; this
+        # guard's deny branch is retired, but the advisory template's own
+        # Example field carries the identical rewritten command, so the
+        # byte-identity claim this test pins is unaffected.
+        advisory = _advisory_text(
             _hso(guard_multiprobe_banner.check(_payload(self._BANNER_CMD), host_is_windows=True))
         )
         real_rewrite = dispatch_checks.check_multiprobe_banner_rewrite(
             self._BANNER_CMD, "sess-bx12"
         )
         real_cmd = _rewrite_command(_hso(real_rewrite))
-        assert real_cmd in deny  # the Example IS the real per-command rewrite now
+        assert real_cmd in advisory  # the Example IS the real per-command rewrite now
 
     def test_non_banner_command_returns_none(self):
         assert guard_multiprobe_banner.check(_payload("git status"), host_is_windows=True) is None
@@ -312,13 +326,20 @@ class TestMultiProbeBannerMessageAccuracy:
 class TestPlumbingAndLoopsMessageAccuracy:
     """guard_plumbing_and_loops.check -- BX-8 (head/tail-plumbing half)."""
 
-    def test_head_tail_plumbing_deny_names_that_shape_not_for_loop(self):
+    def test_head_tail_plumbing_advisory_names_that_shape_not_for_loop(self):
+        # RETARGETED (DR-280, 2026-08-07): mirrors the multi-probe-banner
+        # retargeting above -- this guard's own deny branch was retired as
+        # structurally unreachable. Was
+        # `test_head_tail_plumbing_deny_names_that_shape_not_for_loop`,
+        # reading `_deny_text`; the property under test -- the message
+        # names the head-tail-plumbing shape, not for-loop -- is still
+        # live, now in the advisory envelope every call renders instead.
         cmd = "find . -name '*.py' | head -n 5"
-        deny = _deny_text(
+        advisory = _advisory_text(
             _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
         )
-        assert "head-tail-plumbing" in deny
-        assert "for-loop" not in deny
+        assert "head-tail-plumbing" in advisory
+        assert "for-loop" not in advisory
 
     def test_unconfirmed_seam_outlet_degrades_to_generic_advisory_not_a_deny(self):
         """`docker ps | head` -- classifier matches HEAD_TAIL_PLUMBING, but
@@ -445,8 +466,9 @@ class TestShapeOverlapPrecedenceInMessages:
         # That branch is now silent. Neither guard speaks for this command, and
         # a message that does not exist cannot misname anything; the
         # names-banner-not-headtail contract is asserted where the guard DOES
-        # speak (the seam-confirmed deny at line ~276, and
-        # test_guard_multiprobe_banner.py's own outlet cases).
+        # speak (the seam-confirmed advisory in
+        # TestMultiProbeBannerMessageAccuracy.test_advisory_names_multiprobe_shape_and_evidence_banner,
+        # and test_guard_multiprobe_banner.py's own outlet cases).
         cmd = 'echo "=== probe ==="; pwd | head -n 1; whoami'
         classification = classify_command(cmd)
         assert classification.primary is not None

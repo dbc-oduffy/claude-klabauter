@@ -102,7 +102,15 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards import _dialect
+from coordinator_core.bash_guards._command_tokenizer import (
+    segments_from_tokens_with_pipe_flag as _segments_from_tokens_with_pipe_flag,
+    token_matches_binary as _token_matches_binary,
+)
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.git.git_dir import resolve_git_common_dir
 
 #: Review: review-integrator -- Finding 3/4 (nit, mirrors guard_grep_via_
@@ -117,7 +125,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 #: to sort ahead of `guard_grep_via_bash.py`'s `42` is coincidental, not
 #: enforced -- see `dispatch.py`'s `guard_chain` list for the actual order.
 CLASS = "advisory"
-MATCHERS = ["Bash"]
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 #: Disables answering alone, leaving every other grep-related verdict intact. Named
@@ -248,7 +256,7 @@ def _footer(cwd: str) -> str:
 
 def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
     """Return the CRLF-normalized `command` for a Bash PreToolUse payload, else None."""
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
     command = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
@@ -263,7 +271,51 @@ def check(
     `host_is_windows` is accepted for chain-signature compatibility and deliberately
     unused: answering is strictly better than spawning on every platform, so there is no
     platform split to make here.
+
+    C5 (row 21, `docs/reference/guard-dialect-coverage.md`) disposition: stays
+    bash-only for PowerShell, by design -- its parse delegates through
+    `coordinator_core.search.answer` down to `search.engine.parse_grep_segment`, a
+    hand-rolled GNU-grep flag grammar with ZERO `Select-String` vocabulary, and the two
+    flag surfaces do not map 1:1 even semantically (grep's `-C` is one symmetric count;
+    `Select-String -Context` takes two asymmetric ones). Converting would mean authoring
+    a second, parallel flag grammar for an entirely different cmdlet's option surface --
+    out of this chunk's scope (`coordinator_core/search/engine.py` is outside this
+    plan's declared scope list). Records SILENT for a recognized Select-String/sls
+    invocation this guard can SEE but cannot safely translate -- mirroring
+    `guard_grep_via_bash._check_powershell`'s shape-scoped SILENT (row 12) rather than
+    declaring every PowerShell command "declined to rule" -- an ordinary, non-search
+    PowerShell command genuinely clean-passes here, same as the Bash leg below returns
+    bare `None` for a non-search command.
     """
+    tool_name = payload.get("tool_name") or ""
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is Dialect.POWERSHELL:
+        tokens = _dialect.tokenize_command(
+            (
+                (payload.get("tool_input") or {}).get("command")
+                if isinstance(payload.get("tool_input"), dict)
+                else None
+            )
+            or "",
+            Dialect.POWERSHELL,
+            guard_name="guard_inprocess_search",
+        )
+        if tokens is not None:
+            for seg_tokens, _pipe_before in _segments_from_tokens_with_pipe_flag(tokens):
+                if seg_tokens and any(
+                    _token_matches_binary(seg_tokens[0], b)
+                    for b in ("Select-String", "sls")
+                ):
+                    record_silent(
+                        "guard_inprocess_search",
+                        "PowerShell dialect: Select-String/sls invocation "
+                        "recognized, but search.answer's grep-flag grammar "
+                        "(search.engine.parse_grep_segment) has zero "
+                        "Select-String vocabulary and the two flag surfaces "
+                        "do not map 1:1",
+                    )
+                    break
+        return None
     command = _extract_command(payload)
     if not command:
         return None

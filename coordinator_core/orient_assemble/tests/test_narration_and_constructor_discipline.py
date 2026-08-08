@@ -69,9 +69,9 @@ def test_all_directives_conform_to_the_schemas_required_directive_keys(monkeypat
 
 
 def test_clean_ops_em_environment_judgment_points_are_built_via_the_shipped_constructor(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("HOME", "/tmp/does-not-exist-for-this-test")
+    monkeypatch.setenv("HOME", str(tmp_path / "does-not-exist"))
     monkeypatch.delenv("USERPROFILE", raising=False)
     monkeypatch.setattr(rco, "_resolve_effort", lambda proj, uc: ("high", "project"))
     monkeypatch.setattr(rco, "_resolve_transcript", lambda a, b, c: "")
@@ -83,17 +83,22 @@ def test_clean_ops_em_environment_judgment_points_are_built_via_the_shipped_cons
         assert set(jp.keys()) == _JUDGMENT_POINT_CONSTRUCTOR_KEYS
 
 
-def test_worktree_sweep_dirty_judgment_points_are_built_via_the_shipped_constructor(monkeypatch):
+def test_worktree_sweep_dirty_judgment_points_are_built_via_the_shipped_constructor(
+    monkeypatch, tmp_path
+):
     import coordinator_core.orient_assemble.readers_clean_ops as rco_mod
 
+    fake_worktree_path = str(tmp_path / "fake-worktree")
+    fake_repo_root = str(tmp_path / "fake-repo")
+
     class _FakeWorktree:
-        path = "/tmp/fake-worktree"
+        path = fake_worktree_path
 
     class _FakeClassification:
         state = "dirty-nonbenign"
         dirty_count = 3
 
-    monkeypatch.setattr(rco_mod, "_wt_repo_root", lambda: "/tmp/fake-repo")
+    monkeypatch.setattr(rco_mod, "_wt_repo_root", lambda: fake_repo_root)
     monkeypatch.setattr(rco_mod, "_wt_active_branch", lambda root: "main")
     monkeypatch.setattr(rco_mod, "_is_agent_worktree", lambda path: True)
     monkeypatch.setattr(rco_mod, "_list_worktrees", lambda root: [_FakeWorktree()])

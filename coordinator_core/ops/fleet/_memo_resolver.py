@@ -505,21 +505,55 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
     """Shared TOML-merge internals for `read_publish_mirror_owners()`/`read_publish_mirrors()`.
 
     Reads `registry.toml` (baseline) then `registry.local.toml` (local overrides
-    win), extracting the `[publish.mirrors.<key>]` nested-table namespace and
-    merging per-mirror sub-dicts (not whole-table-overwriting) across the two
-    files — a mirror's `owner` typically lives in the tracked baseline and its
+    win), extracting the `publish.mirrors.<key>.*` namespace and merging
+    per-mirror sub-dicts (not whole-table-overwriting) across the two files —
+    a mirror's `owner` typically lives in the tracked baseline and its
     per-machine `path` in the local override, both contributing to the SAME
     mirror table. Returns `{mirror_key: {raw TOML sub-dict}}`, `{}` on any
     read/parse failure or when `tomllib` is unavailable (graceful degradation,
     never raises — see the two public readers' docstrings for why this layer
     is advisory rather than fail-loud). Internal — public callers use
     `read_publish_mirror_owners()` or `read_publish_mirrors()`.
+
+    2026-08-07 incident fix: this previously read ONLY the genuine nested-TOML
+    shape (`[publish.mirrors.<key>]` header, `tomllib` yielding
+    `data["publish"]["mirrors"][<key>]`). But the sanctioned per-machine
+    writer, `machine-local set <key> <value>` (`_machine_local.py:cmd_set` —
+    the SAME tool `repos.*` entries are written with, and the tool this
+    repo's own `registry.local.toml` header tells operators to use instead of
+    hand-editing), writes a FLAT quoted-dotted key —
+    `"publish.mirrors.<key>.<field>" = "<value>"` — never a nested table.
+    `tomllib` parses that as a top-level string key, not nested structure, so
+    `data.get("publish", {})` found nothing for every mirror entry an
+    operator actually added via `machine-local set` (verified: this
+    machine's real `registry.local.toml` has `publish.mirrors.coordinator_
+    claude.path` and `publish.mirrors.claude_klabauter.{path,owner}` in
+    exactly this flat form) — `read_publish_mirrors()`/
+    `read_publish_mirror_owners()` silently returned `{}` for every
+    machine-local mirror declaration ever made the sanctioned way, which is
+    why `block_oss_mirror_memo_delivery`'s `_guarded_roots()` (built on
+    `read_publish_mirrors()`) never had a root to guard, independent of the
+    owner-vs-path gap fixed alongside this. Both shapes are now merged: the
+    nested-table walk stays (covers direct hand-edits and every existing
+    test fixture), plus a flat-key scan splitting on `publish.mirrors.` and
+    the trailing `.<field>` segment.
+
+    Intra-file precedence: within a SINGLE file, if the same field for the
+    same mirror key is declared via BOTH shapes, the flat-key scan runs
+    AFTER the nested-table walk (see code order below) and its `.update()`/
+    assignment silently wins — the flat quoted-dotted value overrides the
+    nested-table value for that field. (Cross-file precedence is separate
+    and documented on the two public readers: `registry.local.toml` wins
+    over `registry.toml`.)
     """
     try:
         import tomllib  # stdlib Python 3.11+
     except ImportError:
         print(f"skip: _read_merged_publish_mirrors: import tomllib  # stdlib Python 3.11+ failed: {sys.exc_info()[1]}", file=sys.stderr)
         return {}
+
+    _FLAT_FIELDS = ("owner", "path", "aliases")
+    _FLAT_PREFIX = "publish.mirrors."
 
     reg_dir = registry_home()
     merged_mirrors: dict[str, dict] = {}
@@ -536,14 +570,37 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
                 path, exc,
             )
             continue
+
+        # Shape 1: genuine nested TOML table (`[publish.mirrors.<key>]`).
         mirrors = data.get("publish", {})
         mirrors = mirrors.get("mirrors", {}) if isinstance(mirrors, dict) else {}
-        if not isinstance(mirrors, dict):
-            continue
-        for mirror_key, entry in mirrors.items():
-            if not isinstance(entry, dict):
+        if isinstance(mirrors, dict):
+            for mirror_key, entry in mirrors.items():
+                if not isinstance(entry, dict):
+                    continue
+                merged_mirrors.setdefault(mirror_key, {}).update(entry)
+
+        # Shape 2: flat quoted-dotted key, the `machine-local set` output
+        # format — `"publish.mirrors.<key>.<field>" = "<value>"`. Only the
+        # three known per-mirror fields are recognised (matches the example-doctrine-repo
+        # CLI's own `.owner`/`.path`/`.aliases` sentinel set); `aliases` is
+        # newline-joined text here (mirrors `_machine_local_get(...)
+        # .splitlines()` on the example-doctrine-repo CLI side), split into a list to match
+        # the nested-table shape's list-of-strings contract.
+        for raw_key, val in data.items():
+            if not isinstance(raw_key, str) or not raw_key.startswith(_FLAT_PREFIX):
                 continue
-            merged_mirrors.setdefault(mirror_key, {}).update(entry)
+            remainder = raw_key[len(_FLAT_PREFIX):]
+            for field in _FLAT_FIELDS:
+                suffix = f".{field}"
+                if remainder.endswith(suffix):
+                    mirror_key = remainder[: -len(suffix)]
+                    if not mirror_key or "." in mirror_key:
+                        continue  # not a one-segment mirror key — skip
+                    if field == "aliases" and isinstance(val, str):
+                        val = [a.strip() for a in val.splitlines() if a.strip()]
+                    merged_mirrors.setdefault(mirror_key, {})[field] = val
+                    break
     return merged_mirrors
 
 
@@ -579,8 +636,20 @@ def read_publish_mirror_owners() -> dict[str, str]:
     owners: dict[str, str] = {}
     for mirror_key, entry in merged_mirrors.items():
         owner = entry.get("owner")
-        if not owner or not isinstance(owner, str):
+        path = entry.get("path")
+        if (not owner or not isinstance(owner, str)) and not (
+            path and isinstance(path, str)
+        ):
             continue
+        if not owner or not isinstance(owner, str):
+            # 2026-08-07 incident fix: a mirror declared via `.path` alone
+            # (no `.owner` set — the exact claude_klabauter registration
+            # gap) must still classify as a publish target, mirroring the
+            # example-doctrine-repo CLI's `_get_publish_target_owners` placeholder-owner fix.
+            owner = (
+                f"<owner unset — run: machine-local set "
+                f"publish.mirrors.{mirror_key}.owner <em-id>>"
+            )
         hyphenated = mirror_key.replace("_", "-").lower()
         aliases = {hyphenated, f"{hyphenated}-em"}
         extra_aliases = entry.get("aliases")
@@ -591,6 +660,105 @@ def read_publish_mirror_owners() -> dict[str, str]:
         for alias in aliases:
             owners[alias] = owner
     return owners
+
+
+def _path_is_within(candidate: Path, root: Path) -> bool:
+    """True if ``candidate`` resolves to ``root`` itself or a path NESTED inside it.
+
+    2026-08-07 nested-subdirectory hardening: `publish_mirror_path_match()`
+    previously used `same_repo_path()` alone, which is exact-path-equality
+    only — a `repos.<key>` receiver registered at a path INSIDE a declared
+    mirror root (rather than equal to it) compared unequal to the mirror
+    root and the cross-check silently passed, the original incident shape
+    one path segment removed. This adds containment as a second layer.
+
+    Compares RESOLVED path parts (`Path.resolve().parts`), never raw
+    strings — a bare `str.startswith`/`in` check would wrongly match a
+    sibling directory whose name merely shares a prefix (e.g.
+    `/dev/claude-klabauter-notes` vs `/dev/claude-klabauter`, where the
+    former is NOT inside the latter). Comparing tuples of path parts avoids
+    that false positive because `("dev", "claude-klabauter-notes")` is not
+    a superset-prefix of `("dev", "claude-klabauter")`. `.resolve()` is
+    used unconditionally (not `same_repo_path`'s samefile-first strategy)
+    because containment is a structural relationship between two paths,
+    not an existence-sensitive identity check — both paths may be
+    not-yet-cloned registry entries, and resolution still normalizes
+    separators/case/`..`/symlinks consistently for a pure parts comparison.
+    Never raises — any resolution failure returns False (fail-safe: no
+    false containment claim on a malformed path).
+    """
+    try:
+        candidate_parts = os.path.normcase(str(candidate.resolve())).split(os.sep)
+        root_parts = os.path.normcase(str(root.resolve())).split(os.sep)
+    except Exception:
+        return False
+    # Strip trailing empty segments from a trailing separator, if any.
+    candidate_parts = [p for p in candidate_parts if p != ""] or candidate_parts
+    root_parts = [p for p in root_parts if p != ""] or root_parts
+    if len(root_parts) > len(candidate_parts):
+        return False
+    return candidate_parts[: len(root_parts)] == root_parts
+
+
+def publish_mirror_path_match(candidate: Path) -> Optional[str]:
+    """Return the mirror key whose declared ``.path`` matches ``candidate``, or None.
+
+    2026-08-07 incident fix: a repo can be double-registered — as an ordinary
+    ``repos.<key>`` receiver AND (separately, sometimes incompletely) as a
+    ``publish.mirrors.<key>`` entry. `read_publish_mirror_owners()` only
+    recognises a mirror once its `.owner` sentinel is set, so a mirror
+    declared with `.path` alone (or a `repos.*` entry that happens to point
+    at a path some `publish.mirrors.*` table also names) was invisible to
+    every owner-gated publish-target check — `resolve_receiver_inbox()`
+    happily resolved the receiver via `repos.*` and a memo landed in a
+    published OSS mirror's `cross-repo/inbox/` uncaught
+    (`claude-klabauter`, 2026-08-07: `repos.claude_klabauter` was registered
+    as an ordinary receiver while `publish.mirrors.claude_klabauter.owner`
+    was never set — only `.path` was).
+
+    This check is deliberately PATH-based and OWNER-INDEPENDENT — it fires
+    on `.path` alone, the one field a mirror declaration cannot omit and
+    still be useful (an ownerless mirror is still a publish destination; a
+    pathless one guards nothing). Callers needing the owner-attribution
+    for a rejection message should follow up with
+    `read_publish_mirrors()[key]["owner"]` (may be `None`).
+
+    Uses `same_repo_path()` (samefile, else normcase+realpath fallback) —
+    the one path-equality helper this module already standardises on, so a
+    ``repos.*`` value and a ``publish.mirrors.*.path`` value written with
+    different casing/separators/trailing-slash still compare equal.
+
+    Second layer (2026-08-07 nested-subdirectory hardening): when a
+    mirror's declared `.path` does not exact-match `candidate`, also checks
+    `_path_is_within(candidate, mirror_root)` — a receiver registered at a
+    path NESTED inside a declared mirror clone (not the mirror root itself)
+    still resolves to this mirror key. See `_path_is_within()` for why this
+    is a parts-comparison, not a string-prefix check (avoids the
+    `claude-klabauter` vs `claude-klabauter-notes` sibling-prefix false
+    positive).
+
+    Returns the FIRST matching mirror key (deterministic: `dict` insertion
+    order from `_read_merged_publish_mirrors()`, itself deterministic per
+    TOML-file read order), or `None` if no mirror declares this path, or on
+    any read/parse failure (graceful degradation — never raises).
+    """
+    try:
+        mirrors = read_publish_mirrors()
+    except Exception:
+        return None
+    for mirror_key, entry in mirrors.items():
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not path or not isinstance(path, str):
+            continue
+        try:
+            mirror_root = Path(path)
+            if same_repo_path(candidate, mirror_root) or _path_is_within(
+                candidate, mirror_root
+            ):
+                return mirror_key
+        except Exception:
+            continue
+    return None
 
 
 def read_publish_mirrors() -> dict[str, dict]:

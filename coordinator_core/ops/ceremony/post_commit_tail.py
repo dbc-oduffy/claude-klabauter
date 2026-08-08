@@ -16,14 +16,18 @@ sites, on both the fresh pass and the AC18-resumed pass, exactly as it did
 before this extraction — this chunk changes WHERE the sequencing logic lives,
 never WHEN it runs or under what lock.
 
-HARD CONSTRAINT (DEC-3, PM-ratified 2026-07-22): this op MUST NOT acquire
-`ceremony_lock`. Neither composed step has ever held one — see
-`consumed_handoff_stamp.py`'s own negative-spec ("Does NOT acquire
-`ceremony_lock` itself, and its caller no longer holds one either as of
-DEC-3") and `wsc_tail.py`'s "Does NOT hold an outer `ceremony_lock` around
-steps 5c/5d (DEC-3, PM-jettisoned 2026-07-22)" negative-spec entry — both
-remain true after this extraction. This is a deliberate feature removal
-ratified by the PM, not an omission; do NOT add a lock back here.
+HARD CONSTRAINT: this op MUST NOT acquire any ceremony-wide serialization
+lock. Neither composed step has ever held one — see
+`consumed_handoff_stamp.py`'s own negative-spec ("Does NOT acquire a
+ceremony-wide lock itself, and its caller does not hold one either") and
+`wsc_tail.py`'s "Does NOT hold an outer lock around steps 5c/5d" negative-spec
+entry — both remain true after this extraction. This was a deliberate
+feature removal, first ratified by the PM as DEC-3 (2026-07-22, jettisoning
+the outer hold around this op specifically) and made repo-wide by the
+2026-08-07 PM ruling that removed the `ceremony_lock` mutex entirely (see
+`docs/plans/2026-08-07-excise-the-ceremony-lock.md`). Do NOT add a lock back
+here, or anywhere in the commit path — restoration is separately sized and
+not planned.
 
 Origin-stub-close handler injection (test-patchability, not DI for its own
 sake): `run()` takes `close_origin_stub_handler` as an explicit parameter
@@ -91,8 +95,10 @@ This step runs UNTIMED (see "Timing-span preservation" below) — it does not
 widen `wsc_tail.py`'s own pinned `_TailTiming` step-name contract.
 
 Negative-spec (hard-won):
-  - Does NOT acquire `ceremony_lock` — see HARD CONSTRAINT above. Do not add
-    one back; DEC-3 removed it deliberately, not by omission.
+  - Does NOT acquire any ceremony-wide serialization lock — see HARD
+    CONSTRAINT above. Do not add one back; DEC-3 removed the hold around this
+    op deliberately, and the 2026-08-07 PM ruling removed the underlying
+    `ceremony_lock` mechanism entirely.
   - Does NOT move the `wsc_tail` call site — that is C3b, a separate chunk
     with its own PM-recorded fallback (moving invocation across the repo
     boundary into a example-doctrine-repo skill occasion needs a durable pending-work
@@ -267,8 +273,9 @@ async def _run_origin_stub_close(
     (step 5d), composing the standalone `handoff.close_origin_stub` op via
     the CALLER-SUPPLIED ``close_origin_stub_handler`` (see module docstring
     "Origin-stub-close handler injection" for why this is injected rather
-    than imported here). Runs UNLOCKED (DEC-3 -- no `ceremony_lock` is held
-    by this step or its caller), after `committed_sha` is known (mirrors
+    than imported here). Runs UNLOCKED (DEC-3, and repo-wide since the
+    2026-08-07 removal -- no ceremony-wide lock is held by this step or its
+    caller), after `committed_sha` is known (mirrors
     `consumed_handoff_stamp.post_commit_stamp_and_ship`'s own precondition)
     -- never raises. ``push_mode`` gates the follow-up commit's push exactly
     as `consumed_handoff_stamp`'s own follow-up (DEC-1).
@@ -519,8 +526,9 @@ async def run(
 ) -> PostCommitTailOutcome:
     """Compose steps 5c (post-commit consumed-handoff stamp+ship), 5d
     (origin-stub close), and C6b's second trigger (deliverable cascade) into
-    ONE in-process call. Runs UNLOCKED (DEC-3) -- see module docstring HARD
-    CONSTRAINT; the caller must not wrap this in `ceremony_lock`.
+    ONE in-process call. Runs UNLOCKED (DEC-3, and repo-wide since the
+    2026-08-07 removal) -- see module docstring HARD CONSTRAINT; the caller
+    must not wrap this in a ceremony-wide lock.
 
     `close_origin_stub_handler` is caller-injected (see module docstring
     "Origin-stub-close handler injection"). `cascade_handler` is OPTIONAL --

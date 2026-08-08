@@ -377,6 +377,13 @@ from coordinator_core.bash_guards._command_tokenizer import (
     segments_from_tokens_with_pipe_flag as _segments_from_tokens,
     tokenize_full_command as _tokenize_full_command,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    _strip_ps_quotes,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+)
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
     _read_backpointer_subagent_type,
@@ -397,7 +404,16 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import (
 # the ALREADY-CORRECT canonical resolver (write_guards.block_subagent_plan_body_write._resolve_subagent_identity)
 # instead, per the same workaround that guard already uses -- see its own docstring.
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+# Held Bash-only deliberately, not an oversight: this guard is one of the
+# four-file cohort docs/reference/guard-tool-name-membership.md section 3 names as
+# held on its `_evaluate_legacy` free-text fallback (`if tokens is None:
+# return _evaluate_legacy(cmd)`) failing closed only for the shapes that
+# fallback was written against -- widening MATCHERS to admit PowerShell
+# payloads here, ahead of that fallback being re-verified against
+# PowerShell's here-string/backtick-escape shapes (which defeat the shlex
+# tokenizer feeding it), risks a spurious-deny path. See that doc's section 3 for
+# the ruling of record.
+MATCHERS = ("Bash",)
 PRIORITY = 40
 
 # ---------------------------------------------------------------------------
@@ -2852,10 +2868,297 @@ def _sanitize_command(cmd: str) -> str:
     return cmd_safe
 
 
+# ---------------------------------------------------------------------------
+# POWERSHELL-DIALECT DESTRUCTIVE-VERB CLASSIFIER (2026-08-07, this change --
+# C4d of docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
+# silent.md; see docs/reference/guard-dialect-coverage.md row 16, "the
+# expensive one"). A SEPARATE classifier from the Bash Layer 1/2 machinery
+# above -- not a widening of it -- because the ~25 raw-text regexes above are
+# anchored on literal Bash-shaped punctuation/quoting and, per the spike
+# verdict record (docs/research/spike-verdicts/2026-08-07-powershell-guard-
+# detection-and-tokenizer-mechanism.md, "shlex(posix=True) on PowerShell is
+# actively wrong"), feeding PowerShell text through this module's `shlex`-
+# based tokenizer (`_evaluate_tokenized`/`_tokenize_full_command`) mangles
+# Windows paths and can raise outright. This classifier instead tokenizes via
+# `_dialect.resolve_segments_for_dialect` (tree-sitter-pwsh), which already
+# records SILENT on any parse failure/grammar gap (see `_dialect.py`'s own
+# `_powershell_tokens` docstring) -- this module adds no second SILENT path
+# for that case, it only adds verb/flag recognition on top of a tokenizer
+# that already declines to rule when it cannot.
+#
+# `rm` IS included in `_PS_REMOVE_VERBS` below, despite C3 finding 1
+# (guard-dialect-coverage.md "Scope and method") naming it as an
+# already-covered alias collision: that finding's "already covered" claim
+# rests on the Bash-leg raw-text `_RM_SURFACE_RE`/`_RM_DENY_RE` pair running
+# unconditionally -- true when `tool_name == "Bash"`, but this classifier is
+# reached ONLY for `Dialect.POWERSHELL` (a SEPARATE branch off `check()`,
+# never falling through to the Bash-leg regexes at all -- see module comment
+# above `check()`), so a real `tool_name == "PowerShell"` dispatch carrying
+# `rm -Recurse -Force <path>` would otherwise see NEITHER classifier. Adding
+# `rm` here is therefore genuinely new coverage for the PowerShell leg, not
+# a duplicate of the Bash leg's (unreached, for this dialect) coverage --
+# confirmed live via `test_powershell_rm_alias_denies_via_existing_dialect_
+# neutral_probe`'s own name update / test comment. `mv`/`cp` are NOT added:
+# neither Move-Item nor Copy-Item is in this guard's v1 destructive-surface
+# scope (git/rm/chmod-chown-R only, per the module docstring's own Anti-scope
+# note), so their PowerShell aliases carry no more coverage obligation here
+# than the bare `mv`/`cp` binaries do on the Bash leg. This classifier covers
+# the verbs the spike measured returning bare `None`: `Remove-Item`/`ri`/
+# `rd`/`del`/`rm` (recursive-or-force delete), `icacls` (permission
+# modification, always dangerous), and `Stop-Process` (process termination,
+# always dangerous) -- see the dispatching brief's "Required work" list.
+#
+# FLAG-SHAPE: PowerShell has no clustered short flags (`rm -rf` cannot
+# execute there at all -- confirmed live, "A parameter cannot be found that
+# matches parameter name 'rf'") and parameter names PREFIX-MATCH, so a
+# literal `-rf`/`-Recurse`/`-Force` matcher has zero recall. `_ps_has_flag`
+# below matches a PREFIX SET (`-r*`, `-fo*`) case-insensitively, plus the
+# legacy cmd.exe-alias slash flags (`/s`, `/f`) `rd`/`del` accept when
+# PowerShell resolves them via its own cmd-compatibility shims.
+_PS_REMOVE_VERBS = frozenset({"remove-item", "ri", "rd", "del", "erase", "rm"})
+_PS_ICACLS_VERBS = frozenset({"icacls"})
+_PS_STOP_PROCESS_VERBS = frozenset({"stop-process"})
+
+
+def _ps_has_flag_prefix(tokens: List[str], dash_prefixes: tuple, slash_exact: frozenset) -> bool:
+    """True if any of ``tokens`` is a `-`-prefixed flag whose lowercased text
+    starts with one of ``dash_prefixes`` (PowerShell prefix-matching, e.g.
+    `-r` matches `-Recurse`/`-r`; `-fo` matches `-Force`/`-fo`), OR an exact
+    lowercased match in ``slash_exact`` (the legacy cmd.exe-alias slash-flag
+    spelling `rd`/`del` accept, e.g. `/s`, `/f`).
+    """
+    for tok in tokens:
+        low = tok.lower()
+        if low.startswith("-") and any(low.startswith(p) for p in dash_prefixes):
+            return True
+        if low in slash_exact:
+            return True
+    return False
+
+
+def _ps_has_positional_target(tokens: List[str]) -> bool:
+    """True if ``tokens`` (the argv slice after a destructive verb) contains
+    at least one token that is not itself a flag (`-`/`/`-prefixed) -- i.e. a
+    genuine path/target operand appears in the token stream at all.
+
+    Used to distinguish an ordinary direct invocation (`Remove-Item -Force
+    <path>`, target present) from the OBJECT-PIPELINE BLIND SPOT (see
+    `_evaluate_powershell_destructive`'s own docstring): `Get-ChildItem
+    <path> | Remove-Item -Force` carries NO target token in this segment at
+    all -- the target lives entirely in PowerShell's object pipeline, which
+    no tokenizer can see.
+    """
+    return any(not (tok.startswith("-") or tok.startswith("/")) for tok in tokens)
+
+
+def _ps_normalize_verb_token(tok: str) -> str:
+    """Normalize a single PowerShell head-position token to the plain verb
+    spelling it resolves to at runtime, so `_PS_REMOVE_VERBS`/
+    `_PS_ICACLS_VERBS`/`_PS_STOP_PROCESS_VERBS` membership checks aren't
+    defeated by quoting (`'Remove-Item'`) or a no-op backtick escape of an
+    ordinary character (`` Rem`ove-Item `` -- PowerShell's own escape rule
+    only affects the following character, so a backtick before a plain
+    letter is simply removed, never a real transformation). Order matters:
+    quotes are stripped first (matching `_dialect._strip_ps_quotes`'s own
+    "verbatim quoted span" contract), THEN backticks are removed from the
+    unquoted result.
+    """
+    return _strip_ps_quotes(tok).replace("`", "")
+
+
+def _ps_resolve_head_verb(tokens: List[str]) -> tuple:
+    """Resolve the destructive-verb candidate and the remaining argument
+    tokens from a PowerShell segment's token stream, unwinding the two
+    call-operator forms this classifier must see through in addition to a
+    direct invocation:
+
+      - `&('Remove-Item') ...` / `&("Remove-Item") ...` -- the call
+        operator applied to a parenthesized, quoted verb literal. Segmented
+        as `['(', "'Remove-Item'", ')', ...]` (the leading `&` is already
+        consumed as a statement-boundary token by segmentation).
+      - `&(Get-Command Remove-Item) ...` -- the call operator applied to a
+        `Get-Command` lookup. Segmented as
+        `['(', 'Get-Command', 'Remove-Item', ')', ...]`.
+
+    Returns `(verb_lower, rest_tokens)`; `verb_lower` is `""` if no verb
+    candidate could be resolved (caller's membership checks then simply
+    miss, same as today's behavior for an unrecognized head).
+    """
+    if not tokens:
+        return "", []
+
+    if tokens[0] == "(":
+        try:
+            close = tokens.index(")")
+        except ValueError:
+            return "", []
+        inner = tokens[1:close]
+        rest = tokens[close + 1 :]
+        if not inner:
+            return "", rest
+        if inner[0].lower() == "get-command" and len(inner) >= 2:
+            verb_tok = inner[1]
+        else:
+            verb_tok = inner[0]
+        return _ps_normalize_verb_token(verb_tok).lower(), rest
+
+    verb_tok = tokens[0]
+    return _ps_normalize_verb_token(verb_tok).lower(), tokens[1:]
+
+
+def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
+    """Return a deny_kind label for the first PowerShell-dialect destructive
+    verb found in ``cmd_norm``, or ``None`` if none is found (either
+    genuinely clean, or the tokenizer itself declined to rule -- SILENT
+    already recorded by `_dialect.resolve_segments_for_dialect` in that
+    case, nothing further to do here).
+
+    OBJECT-PIPELINE BLIND SPOT (negative spec, required by the dispatching
+    brief): `Get-ChildItem <path> | Remove-Item -Force` (or any `... |
+    Remove-Item`/`Stop-Process`/... segment whose target arrives entirely via
+    a preceding pipeline stage) carries no path/target token in THIS
+    segment's own token stream -- there is nothing here to match, by
+    construction, not by a gap in this classifier's flag/verb tables. This is
+    NOT fixable by tokenization, verb recognition, or flag-shape matching
+    (docs/reference/guard-dialect-coverage.md, "Object-pipeline defeats").
+    Rather than return a bare clean (indistinguishable from "inspected and
+    cleared") for that shape, this function records SILENT via
+    `_verdict.record_silent` and continues scanning -- the command's overall
+    verdict may still be a genuine allow (if no other segment denies), but
+    the pipeline-fed segment itself is recorded as "declined to rule", never
+    "cleared". A test pins this behavior via `_verdict.collecting()`.
+    """
+    segments = resolve_segments_for_dialect(
+        cmd_norm, Dialect.POWERSHELL, guard_name="block_subagent_destructive_action"
+    )
+    if segments is None:
+        return None
+
+    for tokens, pipe_before in segments:
+        if not tokens:
+            continue
+        head, rest = _ps_resolve_head_verb(tokens)
+        if not head:
+            continue
+
+        if head in _PS_REMOVE_VERBS:
+            if not _ps_has_flag_prefix(rest, ("-r", "-fo"), frozenset({"/s", "/f"})):
+                continue
+            if pipe_before and not _ps_has_positional_target(rest):
+                record_silent(
+                    "block_subagent_destructive_action",
+                    "PowerShell object-pipeline target for %r -- no path token "
+                    "in this segment's stream, declined to rule (see "
+                    "_evaluate_powershell_destructive docstring, OBJECT-"
+                    "PIPELINE BLIND SPOT)" % head,
+                )
+                continue
+            return f"PowerShell {head} (recursive or force delete)"
+
+        if head in _PS_ICACLS_VERBS:
+            return f"PowerShell {head} (permission modification)"
+
+        if head in _PS_STOP_PROCESS_VERBS:
+            return f"PowerShell {head} (process termination)"
+
+    return None
+
+
+def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg of `check()` -- identity resolution mirrors the
+    Bash leg's DUAL OR-resolver (module docstring "IDENTITY AXIS") exactly,
+    reusing the same helpers; only the SURFACE classification
+    (`_evaluate_powershell_destructive`) differs from the Bash leg's ~25
+    raw-text regexes. Kept as a fully separate function (not interleaved
+    into the Bash body) so the Bash leg's own AC4 behavior-preservation
+    requirement carries zero risk from this addition.
+    """
+    cmd = _extract_command(payload)
+    if not cmd:
+        return None
+    cmd_norm = cmd.replace("\r", "")
+
+    deny_kind = _evaluate_powershell_destructive(cmd_norm)
+    if deny_kind is None:
+        return None
+
+    if "agent_id" not in payload:
+        _log_fail_open(
+            "no-agent-id-key",
+            payload,
+            cmd,
+            agent_type_present="agent_type" in payload,
+            agent_type=payload.get("agent_type") or "",
+        )
+        return None
+
+    git_root = resolve_git_root(payload.get("cwd"))
+    raw_agent_id = payload.get("agent_id") or ""
+    session_id = payload.get("session_id") or ""
+    agent_id = _resolve_subagent_identity(raw_agent_id, session_id) if raw_agent_id else ""
+    agent_type = payload.get("agent_type") or ""
+    subagent_type = ""
+    subagent_type_computed = False
+    if agent_id and git_root:
+        subagent_type = _read_backpointer_subagent_type(git_root, agent_id)
+        subagent_type_computed = True
+
+    effective_type = agent_type or subagent_type or ""
+    if subagent_type == "AMBIGUOUS":
+        effective_type = "AMBIGUOUS"
+
+    kind_unresolved = not effective_type
+    if kind_unresolved:
+        branch = (
+            "kind-unresolved-unparseable-agent-id"
+            if not agent_id
+            else "kind-unresolved-empty-effective-type"
+        )
+        _log_fail_open(
+            branch,
+            payload,
+            cmd,
+            raw_agent_id=raw_agent_id,
+            agent_id=agent_id,
+            git_root=git_root,
+            agent_type_present="agent_type" in payload,
+            agent_type=agent_type,
+            subagent_type_present=subagent_type_computed,
+            subagent_type=subagent_type,
+        )
+        # No resolved kind at all -- same posture as the Bash leg: this is a
+        # known subagent (raw_agent_id present) whose KIND could not be
+        # determined. The PowerShell leg's verb table has no allow-forward
+        # path (every recognized verb is always-dangerous or flag-gated
+        # already), so an unresolved kind still denies below -- there is no
+        # equivalent of the Bash leg's Layer-2 allowlist to fall through to.
+
+    if effective_type == "AMBIGUOUS":
+        deny_kind = "ambiguous-identity"
+
+    cmd_safe = _sanitize_command(cmd)
+    reason = _build_reason(deny_kind, agent_id or raw_agent_id, effective_type, cmd_safe, cmd)
+    final_verdict = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+    if kind_unresolved:
+        emit_kind_resolution_failure_signal(
+            "block_subagent_destructive_action", agent_id, git_root, final_verdict
+        )
+    return final_verdict
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tool_name = payload.get("tool_name") or ""
-    if tool_name != "Bash":
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is None:
         return None
+    if dialect is Dialect.POWERSHELL:
+        return _check_powershell(payload)
 
     cmd = _extract_command(payload)
     if not cmd:

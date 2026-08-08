@@ -285,7 +285,7 @@ def _resolve_git_root() -> str:
 
 
 @register_op("hooks.nudge_foreground_agent_dispatch")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse REROUTE gate: enforce background-by-default on Agent dispatches.
 
     Pinned input fields (mcp_tool forwards only declared fields; ""=absent):

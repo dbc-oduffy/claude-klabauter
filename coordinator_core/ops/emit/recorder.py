@@ -123,7 +123,7 @@ def record(ctx: Optional[EmitContext] = None) -> dict:
 
 
 @register_op("backlog.record")
-async def _backlog_record(params: dict, repo_root=None) -> dict:
+def _backlog_record(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'backlog.record' handler — snapshot this repo's backlog depth to the machine shard.
 
     MUTATING (writes the per-machine JSONL shard under R/state). Derives the main worktree

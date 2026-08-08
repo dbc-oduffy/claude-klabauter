@@ -80,8 +80,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _DEFAULT_CONFIG = "auto"
 _STDERR_LOG_TAIL = 2000
 
@@ -111,7 +114,7 @@ def _diff_scoped_files(repo_root: Path, diff_base: str) -> List[str]:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_GIT_TIMEOUT_SECONDS,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(
@@ -180,7 +183,7 @@ def _run_semgrep(repo_root: Path, config: str, files: List[str]) -> List[dict]:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_SEMGREP_TIMEOUT_SECONDS,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(

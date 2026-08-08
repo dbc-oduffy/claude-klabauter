@@ -26,8 +26,13 @@ Session-id resolution (strict precedence — mirrors oracle § Session-id resolu
     1. ``session_id`` parameter when non-empty (explicit caller override).
     2. ``CLAUDE_SESSION_ID`` env var.
     3. ``CLAUDE_CODE_SESSION_ID`` env var.
-    4. Sentinel file: ``{caller_worktree}/.git/coordinator-sessions/.current-session-id``.
-    5. Raises ``ValueError`` if not resolved (parity with oracle exit 3).
+    4. Raises ``ValueError`` if not resolved (parity with oracle exit 3).
+
+    (KS-2, 2026-08-07: the former tier-4 sentinel file read —
+    ``{caller_worktree}/.git/coordinator-sessions/.current-session-id`` — was removed.
+    It was documented last-writer-wins under this fleet's ~18 concurrent sessions on
+    one shared worktree, and its sole writer, ``session-init.py``, was deleted
+    2026-07-15. Do not restore it; see ``session_context.py`` for the full rationale.)
 
 Workstream resolution (tolerant/nullable — D9 present-as-null discipline):
     1. ``workstream`` parameter when non-empty (explicit caller override).
@@ -89,7 +94,8 @@ Negative-spec:
     - NO write to any path outside ``state/review-trail/`` (D2(iv)).
     - NO cwd-based repo resolution; worktree derived from caller's ``repo_root`` param.
     - NO concurrent-session sentinel ambiguity detection (cs_resolve_session_id tier-4
-      logic) — simplified sentinel read; daemon context always supplies session_id via env.
+      logic) — daemon context always supplies session_id via env. (The sentinel-file
+      tier itself was removed KS-2 2026-08-07 — see module docstring.)
     - NO persistence of the write-time zero-chain-terminal-credit diagnostic
       (``chain_terminal_zero_credit_warning``) into the on-disk JSON record —
       advisory-only, returned in the op result, never a ninth/tenth record key
@@ -111,16 +117,18 @@ import os
 import platform
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import time
 from pathlib import Path
 from typing import FrozenSet, List, Optional
 
-from coordinator_core import chain_ancestry_waivers, session_attribution
+from coordinator_core import chain_ancestry_waivers, chain_attribution, session_attribution
+from coordinator_core.session_attribution import GitLogFailed
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.session import review_trail_vouch
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +235,7 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
             # CREATE_NO_WINDOW, matching coverage.py._run's pairing; CREATE_NO_WINDOW
             # alone hangs on Windows when stdin is inherited/invalid.
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError(
@@ -368,7 +376,7 @@ def _git_runner(args: list[str], cwd: Optional[str]) -> tuple[int, str, str]:
             # inherited/invalid; this is the LIVE path _guard_foreign_session_range
             # runs through, so it must not be left half-fixed.
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 2, "", str(exc)
@@ -434,99 +442,6 @@ def _own_session_touched_paths_and_untrailered_flag(
     return frozenset(paths), saw_untrailered
 
 
-#: state/review-trail/ subdirectory holding permanent, idempotent per-SHA
-#: PM-vouch waivers — see `_record_pm_vouch_waivers` and
-#: `coordinator_core.coverage._narrow_foreign_session_scope` (the read-side
-#: consumer that subtracts this set from the commits it strips for
-#: foreign-session attribution).
-_PM_VOUCH_WAIVER_DIRNAME = "pm-vouches"
-
-
-def _record_pm_vouch_waivers(
-    caller_worktree: Path,
-    shas: FrozenSet[str],
-    writing_session_id: str,
-    vouch_record: Optional[dict],
-) -> None:
-    """Persist an idempotent, PERMANENT per-SHA waiver under
-    ``state/review-trail/pm-vouches/<sha>.json`` for each sha in ``shas`` —
-    the durable, read-side-effective half of the Case-1 PM-vouch relaxation
-    (see ``_guard_foreign_session_range``'s docstring for the write-time
-    half).
-
-    Why a SEPARATE, non-liveness-gated file rather than re-consulting
-    ``review_trail_vouch.check_review_trail_vouch`` at read time: the
-    coverage gate that reads a review-trail record back
-    (``coordinator_core.coverage._narrow_foreign_session_scope``) commonly
-    runs in a LATER session — often the very NEXT thing a chain-terminal
-    ``/workstream-complete`` does after this write, by which point the
-    writing session may already be closing. A liveness-gated re-check at
-    read time would make the relaxation evaporate exactly when it is needed
-    most. This file is instead a durable historical fact: the write-time
-    liveness check already ran (in ``_guard_foreign_session_range`` via
-    ``review_trail_vouch.check_review_trail_vouch``) and gated CREATING
-    this waiver — once created, it is never re-validated, exactly as the
-    review-trail record itself is never re-validated against the session
-    that wrote it.
-
-    Idempotent-create only (``O_CREAT | O_EXCL``): a waiver, once written
-    for a given sha, is never overwritten or re-derived by a later call —
-    first grant to name a SHA wins, and the file's content is purely
-    informational/audit (the read side only checks FILE PRESENCE, not
-    content — see coverage.py). Still within ``state/review-trail/`` (D2(iv)
-    noun confinement — this module's negative-spec: "NO write to any path
-    outside state/review-trail/").
-
-    Best-effort: an ``OSError`` creating the directory or a waiver file is
-    logged and swallowed, never raised — a waiver-persistence failure must
-    not turn an otherwise-successful, PM-authorized write into a hard
-    failure; it degrades to "the read side will strip this commit's credit
-    after all," which is the safe (fail-closed on crediting) direction, not
-    a silent authorization bypass.
-
-    Spec backlink: archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C7 (amended)
-    """
-    waiver_dir = caller_worktree / "state" / "review-trail" / _PM_VOUCH_WAIVER_DIRNAME
-    try:
-        waiver_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        logger.warning(
-            "review_trail.write: could not create pm-vouches waiver dir %s (%s) — "
-            "this write proceeds, but the coverage read side will NOT credit the "
-            "vouched-for commit(s) without a waiver file",
-            waiver_dir, exc,
-        )
-        return
-    written_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    for sha in sorted(shas):
-        target = waiver_dir / f"{sha}.json"
-        if target.exists():
-            continue
-        waiver_record = {
-            "schema_version": 1,
-            "sha": sha,
-            "vouched_by_session": writing_session_id,
-            "granted_by": (vouch_record or {}).get("granted_by"),
-            "granted_at": (vouch_record or {}).get("granted_at"),
-            "note": (vouch_record or {}).get("note"),
-            "waiver_written_at": written_at,
-        }
-        try:
-            fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(waiver_record, fh, indent=2)
-                fh.write("\n")
-        except FileExistsError:
-            continue
-        except OSError as exc:
-            logger.warning(
-                "review_trail.write: could not write pm-vouches waiver %s (%s) — "
-                "this write proceeds, but the coverage read side will NOT credit "
-                "this commit without a waiver file",
-                target, exc,
-            )
-
-
 def _guard_foreign_session_range(
     sha_range: str,
     own_session_id: str,
@@ -535,55 +450,43 @@ def _guard_foreign_session_range(
     """Refuse, or force affirmative disambiguation of, a diff-shaped sha_range
     that spans commits not attributable to the writing session.
 
-    Three-way disposition (docs/plans/2026-07-27-review-trail-scope-guard.md § C2),
-    AMENDED 2026-07-28 for Case 1's narrow PM-vouch relaxation (see below —
-    archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C7 amendment,
-    coordinator_core/session/review_trail_vouch.py):
+    Three-way disposition (docs/plans/2026-07-27-review-trail-scope-guard.md § C2).
+    2026-08-08 (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2):
+    the PM-vouch relaxation this docstring formerly described (grant CLI +
+    liveness-gated per-session check, `coordinator_core/session/
+    review_trail_vouch.py`) is deleted outright — it never discharged the case
+    it was built for (see that plan's ## Problem). Refusal STRENGTH is
+    UNCHANGED: only the vouch-shaped escape disappears.
 
     Case 1 — any commit whose OWN Session-Id trailer names a DIFFERENT
     session: hard refusal (``ForeignSessionRangeRefused``), UNLESS the
-    offending SHA is covered by one of TWO evidence sources — the writing
-    session holds a LIVE, per-session PM-vouch grant
-    (``coordinator_core.session.review_trail_vouch.check_review_trail_vouch``)
-    naming it, OR it carries a chain-ancestry waiver minted for THIS chain
+    offending SHA carries a chain-ancestry waiver minted for THIS chain
     (``chain_ancestry_waivers.chain_ancestry_waived_shas`` — see below).
     Refusal strength is otherwise UNCHANGED: still refuse unless every
-    offending SHA is covered by one of the two. OLD semantics (through
-    2026-07-27): genuinely no override existed at all — see the module this
-    function's docstring superseded, archive/specs/2026-07/2026-07-27-review-
-    trail-scope-guard.md § AC3 ("No `--force`, no env override, no
-    warn-and-write fallback for case 1"). NEW semantics (2026-07-28,
-    amended 2026-07-31): that "no override" claim is narrowed, not
-    withdrawn — there is still no `--force` flag, no env var, and no
-    blanket per-session exemption. The FIRST relaxation is a PM-vouch grant
-    that (a) requires a recorded PM utterance to create (never
-    self-grantable — an agent cannot write its own grant file any more than
-    it can forge a Tier-U grant, see review_trail_vouch.py's negative-spec),
-    (b) is liveness-gated at WRITE time (a grant from a dead or different
-    session authorizes nothing), and (c) names the SPECIFIC offending
-    SHA(s) — a grant naming SHA X never authorizes a range containing a
-    DIFFERENT foreign SHA Y. The SECOND relaxation
-    (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md § C3),
-    added 2026-07-31, is a per-SHA, per-chain waiver minted by the coverage
-    GATE at HALT (``coordinator_core.ops.coverage_gate``, C2) — NOT
+    offending SHA is covered by that one remaining evidence source. The
+    waiver (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
+    § C3), added 2026-07-31, is a per-SHA, per-chain waiver minted by the
+    coverage GATE at HALT (``coordinator_core.ops.coverage_gate``, C2) — NOT
     granted by a human, and NOT this guard's own doing; this guard only
     OBSERVES it via ``chain_ancestry_waivers.chain_ancestry_waived_shas``,
     scoped to ``own_session_id`` (the writing session's own id, which IS
     the closing chain's identity when this session is that chain's
     terminal ``/workstream-complete`` — see that module's own docstring for
-    why no new derivation is needed to resolve it here). Both sources are a
-    per-SHA set; a range whose foreign-attributed SHAs are only PARTIALLY
-    covered by the UNION of the two still refuses, naming only the
-    uncovered remainder. This closes the chain-terminal
-    ``/workstream-complete`` deadlock (coverage gate HALTs on an uncovered
-    predecessor commit; the writer forbade recording a review of it) without
-    reopening the hazard C7 closed — see this function's own body and
-    ``_record_pm_vouch_waivers`` for how the PM-vouch relaxation is made
-    effective on the READ side without re-checking liveness after the
-    session that used it has closed; the chain-ancestry waiver needs no
-    equivalent write-side persistence step here — it was already minted,
-    permanently, by the gate at HALT (C2/C1). Trailerlessness alone is
-    never Case 1 (SC-DR-008 sanctions trailerless commits by design).
+    why no new derivation is needed to resolve it here). A range whose
+    foreign-attributed SHAs are only PARTIALLY covered by the waiver set
+    still refuses, naming only the uncovered remainder — this closes the
+    chain-terminal ``/workstream-complete`` deadlock only for the commits a
+    waiver actually names; the waiver needs no write-side persistence step
+    here — it was already minted, permanently, by the gate at HALT (C2/C1).
+    Trailerlessness alone is never Case 1 (SC-DR-008 sanctions trailerless
+    commits by design).
+
+    A range this session cannot record at all — a foreign, unwaived commit
+    named here — has NO remedy this session can perform: narrowing sha_range
+    to exclude it (case-(ii) below), or writing a per-slice record over this
+    session's own commits instead, are the only sanctioned paths; there is no
+    grant, vouch, or override this session can invoke to make the named range
+    recordable as-is.
 
     Case 2 — no foreign-trailer commit, AND every untrailered commit in
     range touches at least one path this session's own trailer-attributed
@@ -664,68 +567,35 @@ def _guard_foreign_session_range(
         sha_range, own_session_id, str(caller_worktree), trailer_cache, _git_runner,
     )
     if foreign_trailer_shas:
-        # Per-session, PM-granted relaxation (2026-07-28) — see this
-        # function's docstring and coordinator_core/session/
-        # review_trail_vouch.py. `check_review_trail_vouch` returns ONLY the
-        # subset of `foreign_trailer_shas` that a LIVE grant for THIS
-        # session (own_session_id) explicitly names; a grant naming SHA X
-        # never covers a different foreign SHA Y (AC3), and a dead/foreign
-        # session's grant covers nothing (AC4).
-        #
-        # Review: code-reviewer — Finding 5 (nit): every foreign-trailer hit
-        # now also resolves this session's grant file (a `meta.json` read
-        # via `core.session_dir` + `liveness.session_live`) before refusing
-        # — extra I/O on what is already the fail path, not the success
-        # path, so genuinely low-stakes; noted for completeness only.
-        pm_vouched, vouch_record = review_trail_vouch.check_review_trail_vouch(
-            foreign_trailer_shas, cwd=str(caller_worktree), session_id=own_session_id,
-        )
-        # Second evidence source (2026-07-31, C3,
+        # Evidence source (2026-07-31, C3,
         # docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md):
         # a per-SHA waiver the coverage gate already minted for THIS chain at
         # HALT (C2/C1). `own_session_id` IS the closing chain's identity at
         # this call site (see this function's own docstring) — no signature
         # change, no new parameter, no new derivation. This guard only
-        # OBSERVES the waiver; it never mints one.
+        # OBSERVES the waiver; it never mints one. The PM-vouch evidence
+        # source formerly consulted here is gone
+        # (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2) —
+        # this is the ONLY remaining evidence source.
         chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
             str(caller_worktree), own_session_id,
         ) & foreign_trailer_shas
-        waived = pm_vouched | chain_waived
+        waived = chain_waived
         unvouched = foreign_trailer_shas - waived
         if not unvouched:
-            # Fully covered: proceed. Persist a PERMANENT, idempotent
-            # per-SHA PM-vouch waiver (state/review-trail/pm-vouches/<sha>.json)
-            # for the PM-vouched subset only — this, not review_trail_vouch's
-            # liveness-gated grant, is what the coverage READ side
-            # (coordinator_core.coverage._narrow_foreign_session_scope)
-            # consults, so the relaxation stays effective after the
-            # writing/granting session closes (AC5 — see
-            # _record_pm_vouch_waivers' own docstring for why). A
-            # chain-ancestry waiver needs no equivalent step here: it was
-            # already minted, permanently, by the gate at HALT (C2/C1), and
-            # this guard never re-derives or re-mints it.
-            if pm_vouched:
-                _record_pm_vouch_waivers(caller_worktree, pm_vouched, own_session_id, vouch_record)
-                logger.warning(
-                    "review_trail.write: sha_range %r contains foreign-attributed "
-                    "commit(s) %s written under a live, per-session PM-vouch grant "
-                    "(note: %r) — persisted a permanent waiver under "
-                    "state/review-trail/pm-vouches/ so the coverage read side "
-                    "credits it after this session ends",
-                    sha_range,
-                    ", ".join(sorted(pm_vouched)),
-                    (vouch_record or {}).get("note"),
-                )
-            if chain_waived:
-                logger.info(
-                    "review_trail.write: sha_range %r contains foreign-attributed "
-                    "commit(s) %s covered by a gate-minted chain-ancestry waiver "
-                    "for chain %s — no new waiver written here; the gate already "
-                    "minted it permanently at HALT",
-                    sha_range,
-                    ", ".join(sorted(chain_waived)),
-                    own_session_id,
-                )
+            # Fully covered: proceed. No write-side persistence step is
+            # needed for a chain-ancestry waiver — it was already minted,
+            # permanently, by the gate at HALT (C2/C1), and this guard never
+            # re-derives or re-mints it.
+            logger.info(
+                "review_trail.write: sha_range %r contains foreign-attributed "
+                "commit(s) %s covered by a gate-minted chain-ancestry waiver "
+                "for chain %s — no new waiver written here; the gate already "
+                "minted it permanently at HALT",
+                sha_range,
+                ", ".join(sorted(chain_waived)),
+                own_session_id,
+            )
             return waived
         offending = sorted(unvouched)
         shown = offending[:_FOREIGN_SHA_DISPLAY_CAP]
@@ -733,10 +603,8 @@ def _guard_foreign_session_range(
         remainder_note = f" (+{remainder} more)" if remainder else ""
         vouched_note = (
             f" ({len(waived)} of {len(foreign_trailer_shas)} offending SHA(s) ARE "
-            "covered by a live PM-vouch grant or a gate-minted chain-ancestry "
-            "waiver for this session, but not all — "
-            "see `python3 coordinator/bin/review-trail-vouch-cli` to name "
-            "the remainder explicitly)"
+            "covered by a gate-minted chain-ancestry waiver for this session, "
+            "but not all)"
             if waived
             else ""
         )
@@ -746,11 +614,12 @@ def _guard_foreign_session_range(
             f"trailer names a different session: {', '.join(shown)}"
             f"{remainder_note}{vouched_note} — refusing to write a record "
             f"for them on that basis alone. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
-            "Write per-slice records over this session's own commits instead, "
-            "narrow sha_range to exclude the foreign commit(s) named above, "
-            "or obtain a PM-vouch grant naming them explicitly "
-            "(python3 coordinator/bin/review-trail-vouch-cli grant pm "
-            "\"<verbatim PM utterance>\" --sha <sha> ...)."
+            "This session cannot record a range naming another session's "
+            "commits. Write per-slice records over this session's own "
+            "commits instead, or narrow sha_range to exclude the foreign "
+            "commit(s) named above — there is no vouch, grant, or override "
+            "this session can invoke to make the named range recordable "
+            "as-is."
         )
 
     known_scope_paths, saw_untrailered = _own_session_touched_paths_and_untrailered_flag(
@@ -820,31 +689,30 @@ def _guard_foreign_session_range(
 # yet when an earlier session in the chain writes its own record):
 #
 #   (a) every commit named by a `scope_kind` "diff" or "plan" sha_range is
-#       foreign to the writing session AND not covered by a live PM-vouch
-#       grant or a gate-minted chain-ancestry waiver — the read side's
-#       narrowing then empties this record's raw set to `set()` regardless
-#       of what chain_dag/chain_code/chain_planning turn out to be later
+#       foreign to the writing session AND not covered by a gate-minted
+#       chain-ancestry waiver — the read side's narrowing then empties this
+#       record's raw set to `set()` regardless of what
+#       chain_dag/chain_code/chain_planning turn out to be later
 #       (intersecting the empty set with anything is still empty). This
-#       function resolves the same two evidence sources
+#       function resolves the same evidence source
 #       `_guard_foreign_session_range` consults for its own Case-1
-#       relaxation (`review_trail_vouch.check_review_trail_vouch`,
-#       `chain_ancestry_waivers.chain_ancestry_waived_shas`) INDEPENDENTLY,
-#       rather than trusting that guard to have already run: for
-#       `scope_kind="diff"` the guard already refuses an unvouched foreign
-#       range outright (this shape is therefore live-unreachable there
-#       today — verified directly against `_guard_foreign_session_range`,
-#       not merely inferred), but for `scope_kind="plan"` NO write-time
-#       guard runs at all (see `write_review_trail_entry`'s call site,
-#       `if scope_kind == "diff" and caller_worktree is not None:`) — a
-#       plan record over a fully-foreign, unvouched range is accepted with
-#       zero write-time check today, and IS narrowed by
-#       `_record_membership_shas`'s `narrow_foreign_shas` leg exactly like
-#       a diff record (only `scope_kind in _NON_CODE_SCOPE_KINDS`, i.e.
-#       "integration", skips that leg entirely — see shape (b)). This is
-#       the live, reachable gap this diagnostic exists to close; the
-#       `scope_kind="diff"` leg is retained because a future change to the
-#       guard's strictness must not silently regress this diagnostic's own
-#       coverage of that shape.
+#       relaxation (`chain_ancestry_waivers.chain_ancestry_waived_shas`)
+#       INDEPENDENTLY,
+#       rather than trusting that guard to have already run: for both
+#       `scope_kind="diff"` and `scope_kind="plan"` the guard already
+#       refuses an unvouched foreign range outright (2026-08-07 fix — see
+#       `write_review_trail_entry`'s call site,
+#       `if scope_kind in ("diff", "plan") and caller_worktree is not None:`
+#       — both shapes are therefore live-unreachable here today, verified
+#       directly against `_guard_foreign_session_range`, not merely
+#       inferred). This diagnostic's independent re-resolution is retained
+#       for both scope_kinds anyway, as a standing check that is not
+#       coupled to the guard's own gating — a future change to the guard's
+#       call-site condition must not silently regress this diagnostic's own
+#       coverage of either shape. `_record_membership_shas`'s
+#       `narrow_foreign_shas` leg narrows both `diff` and `plan` records the
+#       same way (only `scope_kind in _NON_CODE_SCOPE_KINDS`, i.e.
+#       "integration", skips that leg entirely — see shape (b)).
 #   (b) `scope_kind == "integration"` — rejected OUTRIGHT by the discharge
 #       path's `_NON_CODE_SCOPE_KINDS` filter before any range resolution
 #       runs, credits zero unconditionally, regardless of sha_range or
@@ -889,62 +757,106 @@ _ZERO_CREDIT_REASON_NON_CODE_SCOPE_KIND = "non_code_scope_kind"
 
 
 def _walk_range_commit_session_trailers(
-    sha_range: str, caller_worktree: Path,
-) -> Optional[dict[str, Optional[str]]]:
-    """Return ``{sha: trailer_or_None}`` for every commit git resolves in
+    sha_range: str, own_session_id: str, caller_worktree: Path,
+) -> Optional[dict[str, bool]]:
+    """Return ``{sha: is_foreign}`` for every commit git resolves in
     ``sha_range``, or ``None`` if the range fails to resolve (unparseable,
     no matching repo, git failure) — the caller treats ``None`` as "cannot
     predict, stay silent" rather than guessing.
 
-    Mirrors `wsc-coverage-gate-runner.py`'s `_resolve_foreign_session_shas`
-    walk (git log WITH merges, same trailer atom) so a write-time
-    "every commit is foreign" verdict here is never contradicted later by
-    the read side resolving a different commit set for the same range.
+    Adopts P2 (`coordinator_core.chain_attribution`, A1) — the whole-window
+    trailer walk (`bulk_commit_attribution_map`, WITH merges) PLUS the grep
+    leg this function never had (`bulk_grep_attributed_shas`), combined via
+    `foreign_shas_from_window`'s three-way merge/ambiguous/trailer/grep
+    logic — instead of this module's own single-`git log`-with-trailers-only
+    walk, which (a) parsed line-by-line, silently dropping continuation
+    lines of a multi-valued Session-Id trailer, and (b) had no grep leg, so
+    every untrailered commit was unconditionally treated as foreign even
+    when it was this session's own trailerless work (SC-DR-008).
+
+    This is now DEMONSTRATED, not theoretical (docs/plans/2026-08-07-n-plus-
+    one-git-spawn-class-and-amplification-gate.md, task A4):
+    fork-adjudication.md § 11.1 replayed all on-disk review-trail records
+    (1,566 parsed, 1,562 qualifying) against history pinned at
+    0515db0626bc542752f0c3302a2a4bf7fcc07cf3 and found 5 real records — all
+    from one session (4524bf7d), one workstream (handoff-write-cas),
+    2026-07-28 — that the OLD walk here would have flagged as a false
+    POSITIVE zero-credit prediction it never actually reached (this
+    diagnostic shipped 2026-08-07, ten days after those records).
+
+    Do NOT collapse this onto `session_attribution.bulk_trailer_session_map`
+    (P1) "for consistency" — P1 is `--no-merges` and drops untrailered
+    commits, the LOOSER semantics. At this write-side diagnostic, adopting
+    P1 instead of P2 would convert today's harmless false positive into a
+    false NEGATIVE — silence on a genuinely zero-credit write, the direction
+    that actually matters (see the governing plan's § Anti-scope 5). Use P2
+    (`chain_attribution`) exclusively.
+
+    Mirrors `wsc-coverage-gate-runner.py`'s `_resolve_foreign_session_shas` /
+    A1's `chain_attribution.unattributed_foreign_shas` walk (git log WITH
+    merges, same trailer atom, plus the grep leg) so a write-time "every
+    commit is foreign" verdict here is never contradicted later by the read
+    side resolving a different commit set for the same range.
+
+    ``caller_worktree`` is the EXPLICITLY-PASSED root threaded down from
+    `write_review_trail_entry`'s own `caller_worktree` parameter (itself
+    derived once via `main_worktree_root(repo_root)` in the JSON-RPC
+    handler) — this function never independently rediscovers a repo root.
+    fork-adjudication.md § 11.2 found this diagnostic resolves its root
+    against `caller_worktree` while the read side resolves via
+    `_resolve_repo_root()`, and confirmed that divergence is REACHABLE
+    (Claude Code 2.1.x auto-creates per-dispatch worktrees under
+    `.claude/worktrees/` that bypass the hard `block_worktree_creation`
+    guard). Resolving strictly against the caller-supplied root here (never
+    re-deriving one) is this chunk's fix for that half of the gap; the
+    separate `state/`-resolution question § 11.2 left open is NOT addressed
+    here — out of this chunk's scope.
+
+    `GitLogFailed` from the P2 bulk primitives is caught here (not
+    propagated further) so this whole diagnostic keeps its documented
+    "never raises" contract (see the module-level "Write-time
+    zero-chain-terminal-credit diagnostic" comment above) — this is a
+    boundary decision at THIS advisory diagnostic's own edge, not the
+    primitives themselves swallowing the error (`bulk_commit_attribution_map`
+    and `bulk_grep_attributed_shas` still raise/never-fail-open internally;
+    see their own docstrings and § Anti-scope 13 of the governing plan).
     """
-    rc, out, _err = _git_runner(
-        ["git", "log", "--format=%H%x1f%(trailers:key=Session-Id,valueonly)", sha_range],
-        str(caller_worktree),
-    )
-    if rc != 0:
+    try:
+        window = chain_attribution.bulk_commit_attribution_map(
+            sha_range, str(caller_worktree), _git_runner,
+        )
+    except GitLogFailed:
         return None
-    result: dict[str, Optional[str]] = {}
-    for line in out.splitlines():
-        if "\x1f" not in line:
-            continue
-        sha, _sep, trailer = line.partition("\x1f")
-        sha = sha.strip()
-        trailer = trailer.strip()
-        if not sha:
-            continue
-        result[sha] = trailer or None
-    return result or None
+    if not window:
+        return None
+    grep_attributed = chain_attribution.bulk_grep_attributed_shas(
+        sha_range, own_session_id, str(caller_worktree), _git_runner,
+    )
+    foreign = chain_attribution.foreign_shas_from_window(
+        window.keys(), own_session_id, window, grep_attributed,
+    )
+    return {sha: (sha in foreign) for sha in window}
 
 
 def _resolve_write_time_vouched_shas(
     candidate_shas: FrozenSet[str], own_session_id: str, caller_worktree: Path,
 ) -> FrozenSet[str]:
-    """The same two evidence sources `_guard_foreign_session_range`'s
-    Case-1 relaxation consults (module docstring above), resolved
-    independently against an arbitrary ``candidate_shas`` set — used here
-    so this diagnostic stays accurate for ``scope_kind="plan"``, which
-    never runs through that guard at all. Fail-safe toward "not vouched":
-    either lookup raising is treated as an empty result, matching
+    """The same evidence source `_guard_foreign_session_range`'s Case-1
+    relaxation consults (module docstring above), resolved independently
+    against an arbitrary ``candidate_shas`` set — used here so this
+    diagnostic stays accurate for ``scope_kind="plan"``, which never runs
+    through that guard at all. Fail-safe toward "not vouched": a raising
+    lookup is treated as an empty result, matching
     ``_guard_foreign_session_range``'s own fail-safe posture for the same
-    two calls.
+    call.
     """
-    try:
-        pm_vouched, _record = review_trail_vouch.check_review_trail_vouch(
-            candidate_shas, cwd=str(caller_worktree), session_id=own_session_id,
-        )
-    except Exception:  # noqa: BLE001 - a broken vouch lookup must narrow, never crash
-        pm_vouched = frozenset()
     try:
         chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
             str(caller_worktree), own_session_id,
         ) & candidate_shas
     except Exception:  # noqa: BLE001 - a broken waiver lookup must narrow, never crash
         chain_waived = frozenset()
-    return frozenset(pm_vouched) | frozenset(chain_waived)
+    return frozenset(chain_waived)
 
 
 def _diagnose_zero_chain_terminal_credit(
@@ -985,16 +897,16 @@ def _diagnose_zero_chain_terminal_credit(
         return None
     if caller_worktree is None:
         return None
-    trailers = _walk_range_commit_session_trailers(sha_range, caller_worktree)
-    if not trailers:
+    foreign_map = _walk_range_commit_session_trailers(sha_range, own_session_id, caller_worktree)
+    if not foreign_map:
         return None
-    foreign = frozenset(sha for sha, trailer in trailers.items() if trailer != own_session_id)
-    if not foreign or len(foreign) != len(trailers):
+    foreign = frozenset(sha for sha, is_foreign in foreign_map.items() if is_foreign)
+    if not foreign or len(foreign) != len(foreign_map):
         return None  # at least one commit is this session's own — not provably zero.
     vouched = _resolve_write_time_vouched_shas(foreign, own_session_id, caller_worktree)
     if vouched >= foreign:
         return None  # every foreign commit is vouched/waived — will still credit.
-    shas = sorted(trailers)
+    shas = sorted(foreign_map)
     shown = shas[:_FOREIGN_SHA_DISPLAY_CAP]
     remainder = len(shas) - len(shown)
     remainder_note = f" (+{remainder} more)" if remainder else ""
@@ -1005,7 +917,7 @@ def _diagnose_zero_chain_terminal_credit(
             f"every commit named by sha_range {sha_range!r} carries a "
             f"Session-Id trailer other than this writing session's own "
             f"({own_session_id!r}), or none at all, and none is covered by "
-            "a live PM-vouch grant or chain-ancestry waiver — the "
+            "a gate-minted chain-ancestry waiver — the "
             "chain-terminal discharge path's foreign-session narrowing "
             f"subtracts all of them, emptying this record's contribution "
             f"to the empty set: {', '.join(shown)}{remainder_note}."
@@ -1015,12 +927,14 @@ def _diagnose_zero_chain_terminal_credit(
             "action is required if that is its only purpose.",
             "If this record was meant to discharge a chain-terminal "
             "coverage obligation over a predecessor session's commit(s), "
-            "the sanctioned remedies are a PM-vouch grant "
-            "(python3 coordinator/bin/review-trail-vouch-cli grant pm "
-            "\"<verbatim PM utterance>\" --sha <sha> ...) or a gate-minted "
-            "chain-ancestry waiver — narrowing sha_range further does not "
-            "help here, since it is already narrowed to a range containing "
-            "none of this session's own commits.",
+            "this session cannot record a range naming another session's "
+            "commits — the sanctioned remedy is a gate-minted "
+            "chain-ancestry waiver (minted automatically by the coverage "
+            "gate at HALT, not something this session can request) or "
+            "writing per-slice records over this session's own commits. "
+            "Narrowing sha_range further does not help here, since it is "
+            "already narrowed to a range containing none of this "
+            "session's own commits.",
         ],
     }
 
@@ -1065,15 +979,16 @@ def _compute_timestamp(_now_ns: Optional[int] = None) -> str:
 
 
 def _resolve_session_id(caller_worktree: Optional[Path] = None) -> Optional[str]:
-    """Resolve session_id from env vars or sentinel file.
+    """Resolve session_id from env vars.
 
     Thin compatibility shim — delegates to
     ``coordinator_core.ops.session_context.resolve_current_session_id``.
 
-    The three-tier chain (CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID → .current-session-id
-    sentinel) is defined in ``session_context.py`` (C3 extraction) so it is shared with
-    ``handoff.author_fork`` and any future op that needs session identity at call time.
-    Callers of this module-local function continue to receive identical behavior.
+    The two-tier chain (CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID) is defined in
+    ``session_context.py`` (C3 extraction, sentinel tier removed KS-2 2026-08-07) so it
+    is shared with ``handoff.author_fork`` and any future op that needs session identity
+    at call time. Callers of this module-local function continue to receive identical
+    behavior.
 
     Extraction rationale: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
     """
@@ -1085,7 +1000,11 @@ def _resolve_session_id(caller_worktree: Optional[Path] = None) -> Optional[str]
 # ---------------------------------------------------------------------------
 
 
-def _scan_workstream(handoffs_dir: Path, own_session_id: Optional[str]) -> Optional[str]:
+def _scan_workstream(
+    handoffs_dir: Path,
+    own_session_id: Optional[str],
+    caller_worktree: Optional[Path] = None,
+) -> Optional[str]:
     """Scan state/handoffs/*.md for a handoff attributable to THIS writing session
     and return its workstream field.
 
@@ -1099,6 +1018,17 @@ def _scan_workstream(handoffs_dir: Path, own_session_id: Optional[str]) -> Optio
     id. Without an ``own_session_id`` to compare against, no handoff can be
     attributed, so this returns None immediately — an honest null beats a
     confident wrong slug.
+
+    2026-08-07 fix (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+    § C6a): attribution now resolves each candidate handoff's claim
+    ledger-first via ``claim_state.resolve_claim_state`` rather than reading
+    the frontmatter mirror's ``claimed_by`` directly. On a desynced baton
+    (mirror reverted to ``status: open`` by a branch switch while the
+    branch-independent ledger still holds the claim) the mirror-only read
+    misattributes the handoff — this record would then be written
+    unpartitioned, which lands but in the wrong place. The ledger-first
+    accessor's resolved ``holder`` is compared against ``own_session_id``
+    instead.
 
     Rejects slugs containing chars outside [A-Za-z0-9_-] → null (D9 reject-to-null).
     """
@@ -1126,12 +1056,20 @@ def _scan_workstream(handoffs_dir: Path, own_session_id: Optional[str]) -> Optio
     md_files = sorted(p for p in entries if p.suffix == ".md" and p.is_file())
     for hfile in md_files:
         try:
+            claim_state = resolve_claim_state(hfile, repo_root=caller_worktree)
+        except Exception as exc:
+            logger.warning(
+                "review_trail.write: claim_state resolution failed for %s — %s; skipping",
+                hfile,
+                exc,
+            )
+            continue
+        if claim_state.holder != own_session_id:
+            continue
+        try:
             text = hfile.read_text(encoding="utf-8", errors="replace")
         except OSError:
             print(f"skip: _scan_workstream: text = hfile.read_text(encoding=\"utf-8\", errors=\"replace\") failed: {sys.exc_info()[1]}", file=sys.stderr)
-            continue
-        claimed_by = extract_frontmatter_scalar(text, "claimed_by")
-        if claimed_by != own_session_id:
             continue
         ws = extract_frontmatter_scalar(text, "workstream")
         if ws:
@@ -1190,7 +1128,7 @@ def _resolve_workstream(
         return env_ws
     if caller_worktree is not None:
         handoffs_dir = caller_worktree / "state" / "handoffs"
-        return _scan_workstream(handoffs_dir, own_session_id)
+        return _scan_workstream(handoffs_dir, own_session_id, caller_worktree)
     return None
 
 
@@ -1460,7 +1398,7 @@ def write_review_trail_entry(
         verdict     — one of: ok, warn, blocked, waived, pending.
         diff_loc    — non-negative integer LOC count.
         scope_kind  — one of: diff, plan, integration (default: diff).
-        session_id  — explicit session_id override; falls back to env/sentinel when empty/None.
+        session_id  — explicit session_id override; falls back to env when empty/None.
         workstream  — explicit workstream slug; falls back to env/scan/null when None.
                       Pass empty string to suppress scanning and emit null explicitly.
         reviewed_paths — optional list of paths this record's review actually covered (e.g.
@@ -1533,11 +1471,21 @@ def write_review_trail_entry(
     # land (see _resolve_symbolic_range docstring).
     sha_range = _resolve_symbolic_range(sha_range, caller_worktree)
 
-    # Foreign-session scope guard (only meaningful for a diff-shaped git
-    # range, and only when a real repo exists to check against — no
+    # Foreign-session scope guard — runs for scope_kind "diff" AND "plan"
+    # (2026-08-07 fix): the guard body (_guard_foreign_session_range) has no
+    # diff-specific logic — it walks sha_range via `git log` and reasons
+    # about trailer attribution regardless of shape. Gating this call to
+    # "diff" alone meant a scope_kind="plan" record with a foreign-session
+    # range was accepted (no guard ran) even though the read side
+    # (workstream_complete.directives_review._record_membership_shas)
+    # narrows plan records for foreign sessions exactly as it does diff
+    # records — an asymmetric guard/credit pair. "integration" is
+    # deliberately excluded — _NON_CODE_SCOPE_KINDS rejects it outright
+    # downstream as non-code, so no guard machinery should ever engage for
+    # it. Only meaningful when a real repo exists to check against — no
     # caller_worktree is the same test-isolation no-op contract
-    # _resolve_symbolic_range documents above).
-    if scope_kind == "diff" and caller_worktree is not None:
+    # _resolve_symbolic_range documents above.
+    if scope_kind in ("diff", "plan") and caller_worktree is not None:
         _guard_foreign_session_range(sha_range, resolved_session_id, caller_worktree)
 
     # Resolve workstream.

@@ -118,7 +118,7 @@ def _reply(*, ok: bool, mismatches: List[Dict[str, object]], error: Optional[str
 
 
 @register_op("doctrine.assert_cross_reference_counts")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """doctrine.assert_cross_reference_counts — assert doctrine cross-reference counts.
 
     For each ``"<path>::<pattern>"`` key in ``params["expected"]``, reads

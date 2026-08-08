@@ -381,12 +381,15 @@ def _py_ident(py_bin: str, py_args: List[str]) -> str:
     for the recorded verdict."""
     py_path = shutil.which(py_bin) or py_bin
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [py_bin, *py_args, "--version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             timeout=15,
+            **no_console_creationflags(),
         )
         lines = (proc.stdout or "").splitlines()
         version_line = lines[0] if lines else ""
@@ -404,10 +407,13 @@ def _whoami_importable(py_bin: str, py_args: List[str]) -> bool:
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
     for the recorded verdict."""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [py_bin, *py_args, "-c", "import coordinator_whoami"],
             capture_output=True,
             timeout=30,
+            **no_console_creationflags(),
         )
         return proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -528,12 +534,15 @@ def probe_p2(registry_path: Path, ml_dir: Path, py_bin: str, py_args: List[str])
         env = dict(os.environ)
         env["DOCTOR_REG"] = str(registry_path)
         try:
+            from coordinator_core.win_portability import no_console_creationflags
+
             proc = subprocess.run(
                 [py_bin, *py_args, "-c", script],
                 env=env,
                 capture_output=True,
                 text=True,
                 timeout=30,
+                **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             # Could not run the validator at all — that says nothing about
@@ -559,7 +568,12 @@ def probe_p3(ml_cmd: Optional[str]) -> List[ProbeNote]:
     if not ml_cmd:
         return []
     try:
-        proc = subprocess.run([ml_cmd, "keys"], capture_output=True, text=True, timeout=30)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        proc = subprocess.run(
+            [ml_cmd, "keys"], capture_output=True, text=True, timeout=30,
+            **no_console_creationflags(),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _inconclusive(
             "P-3", f"could not run {ml_cmd} keys — {_exec_detail(exc)}"
@@ -581,7 +595,12 @@ def probe_p3(ml_cmd: Optional[str]) -> List[ProbeNote]:
 def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
     if ml_cmd:
         try:
-            proc = subprocess.run([ml_cmd, "keys"], capture_output=True, timeout=30)
+            from coordinator_core.win_portability import no_console_creationflags
+
+            proc = subprocess.run(
+                [ml_cmd, "keys"], capture_output=True, timeout=30,
+                **no_console_creationflags(),
+            )
         except (OSError, subprocess.TimeoutExpired) as exc:
             # Previously this claimed "registry.toml unparseable" — a cause the
             # probe never observed. An exec failure means the probe could not
@@ -644,11 +663,14 @@ def probe_p6(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) ->
             )
         ]
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [py_bin, *py_args, "-m", "coordinator_whoami.example_retrieval_repo"],
             capture_output=True,
             text=True,
             timeout=30,
+            **no_console_creationflags(),
         )
         out = proc.stdout or ""
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -697,11 +719,14 @@ def probe_p6s(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) -
             )
         ]
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [py_bin, *py_args, "-m", "coordinator_whoami.session"],
             capture_output=True,
             text=True,
             timeout=30,
+            **no_console_creationflags(),
         )
         out = proc.stdout or ""
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -867,7 +892,12 @@ def probe_p9(sh_bin: Path) -> List[ProbeNote]:
 def probe_p10(ch_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
     if ch_cmd:
         try:
-            proc = subprocess.run([ch_cmd, "plugins"], capture_output=True, text=True, timeout=30)
+            from coordinator_core.win_portability import no_console_creationflags
+
+            proc = subprocess.run(
+                [ch_cmd, "plugins"], capture_output=True, text=True, timeout=30,
+                **no_console_creationflags(),
+            )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return _inconclusive(
                 "P-10", f"could not run {ch_cmd} plugins — {_exec_detail(exc)}"
@@ -1233,7 +1263,7 @@ def probe_p19(lib_dir: Optional[Path], coordinator_root: Optional[Path]) -> List
         return _absent
 
     root = str(coordinator_root) if coordinator_root else ""
-    plugin, repo = "coordinator", "dbc-example-operator/coordinator-claude"
+    plugin, repo = "coordinator", "dbc-oduffy/coordinator-claude"
     try:
         # Deferred import: an ImportError here (e.g. a corrupted/partial install)
         # maps to the existing _absent ProbeNote — the native "logic unavailable"
@@ -1296,11 +1326,14 @@ def _fetch_machine_json(whoami_ok: bool, py_bin: str, py_args: List[str]) -> dic
     if not whoami_ok:
         return {}
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         proc = subprocess.run(
             [py_bin, *py_args, "-m", "coordinator_whoami.machine"],
             capture_output=True,
             text=True,
             timeout=30,
+            **no_console_creationflags(),
         )
         out = (proc.stdout or "").strip()
     except (OSError, subprocess.TimeoutExpired) as exc:

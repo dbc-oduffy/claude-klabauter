@@ -24,7 +24,6 @@ Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-stra
 from __future__ import annotations
 
 import subprocess
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -165,20 +164,19 @@ def test_build_file_index_zero_unmapped_over_this_repo():
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_file_index({}))
+        _cartography_file_index({})
 
 
 def test_op_happy_path(git_repo):
-    result = asyncio.run(_cartography_file_index({"target_root": str(git_repo)}))
+    result = _cartography_file_index({"target_root": str(git_repo)})
     assert result["file_count"] == 5
     assert result["unmapped_count"] == 0
 
 
 def test_op_scope_narrows_result(git_repo):
-    result = asyncio.run(
-        _cartography_file_index(
-            {"target_root": str(git_repo), "scope": ["coordinator_core"]}
-        )
+    result = _cartography_file_index(
+        {"target_root": str(git_repo), "scope": ["coordinator_core"]}
     )
+
     assert result["file_count"] == 2
     assert result["systems"] == {"coordinator_core": 2}

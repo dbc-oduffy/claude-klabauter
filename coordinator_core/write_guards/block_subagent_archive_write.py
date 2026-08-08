@@ -161,6 +161,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
@@ -252,25 +253,27 @@ def _sanitize_file_path_for_reason(file_path: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel``; best-effort."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    """``git rev-parse --show-toplevel``; best-effort.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn — same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``, so no verdict changes (a ``None`` here still both
+    skips the deny-log and falls through the review-integrator
+    allow-condition, exactly as before). The prior inline spawn also logged
+    a forensic diagnostic on ``OSError`` ("skipping deny-log"); the shared
+    resolver swallows all failures silently (never raises), so that
+    diagnostic is restored here explicitly rather than lost.
+    """
+    result = resolve_repo_root(cwd)
+    if result is None:
+        print(
+            f"block-subagent-archive-write: no git root resolved for cwd="
+            f"{cwd!r}, skipping deny-log (decision unaffected)",
+            file=sys.stderr,
         )
-    except OSError as exc:
-        print(f"block_subagent_archive_write: git rev-parse spawn failed, "
-              f"skipping deny-log (decision unaffected): {exc}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return result
 
 
 def _write_block_log(

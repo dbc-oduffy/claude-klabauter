@@ -130,6 +130,29 @@ from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
+from coordinator_core.bash_guards._dialect import Dialect, resolve_segments_for_dialect
+from coordinator_core.bash_guards._verdict import record_silent
+
+#: Registered guard identity threaded into `_verdict.record_silent` calls
+#: below -- matches `block_dev_repo_sentinel_removal.py`'s own dispatch
+#: registration name (`block-dev-repo-sentinel-removal-advisory`), not this
+#: engine module's filename, so a SILENT declaration reads the same as any
+#: other declaration a test/caller collects for this guard.
+_GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
+
+#: PowerShell-only verb spellings this guard's Rule 1 (`_remove_arg_denies`)
+#: must ALSO recognize under `Dialect.POWERSHELL`, per
+#: `docs/reference/guard-dialect-coverage.md` row 26: `rm` already fires
+#: unaided because it is a real PowerShell alias (C3's alias-collision
+#: finding) -- `_REMOVE_ARG_COMMANDS` below is unchanged and still matches
+#: it once the tokens themselves are dialect-correct. `unlink` has NO
+#: PowerShell equivalent at all, so this set names the cmdlet/alias
+#: spellings that actually remove a file by positional argument in
+#: PowerShell -- `Remove-Item` (full cmdlet name), `ri`/`rd`/`del` (its
+#: built-in aliases). Compared case-insensitively, same as
+#: `_REMOVE_ARG_COMMANDS`, via `_normalize_executable_basename`'s own
+#: lower-casing.
+_REMOVE_ARG_COMMANDS_POWERSHELL = frozenset({"remove-item", "ri", "rd", "del"})
 
 #: Reason-kind for the one `_tokenize_full_command` failure this module treats
 #: as DENY rather than ADVISORY: the command is past the shared tokenizer's
@@ -247,10 +270,32 @@ class SentinelRemovalDetector:
             break
         return i
 
-    def _remove_arg_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 1 -- `rm`/`unlink` with the sentinel as ANY argument."""
+    def _remove_arg_denies(
+        self, seg_tokens: List[str], argv0_idx: int, dialect: Optional[Dialect] = None
+    ) -> bool:
+        """Rule 1 -- `rm`/`unlink` with the sentinel as ANY argument.
+
+        Under `Dialect.POWERSHELL`, ALSO recognizes
+        `_REMOVE_ARG_COMMANDS_POWERSHELL` (`Remove-Item`/`ri`/`rd`/`del`) --
+        `unlink` has no PowerShell equivalent at all, so without this widened
+        set a PowerShell-typed `Remove-Item .coordinator-dev-repo` would
+        tokenize correctly (once the caller supplies a PowerShell-aware
+        token stream) and still fall through this rule unmatched. `rm`
+        itself needs no widening here -- it is a real PowerShell alias, so
+        `_REMOVE_ARG_COMMANDS` already matches it once the tokens are
+        dialect-correct (guard-dialect-coverage.md row 26)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
-        if base not in _REMOVE_ARG_COMMANDS:
+        if dialect is Dialect.POWERSHELL:
+            # `unlink` is a bash-only spelling with no PowerShell alias --
+            # it does not resolve to any real command in PowerShell, so
+            # `_REMOVE_ARG_COMMANDS` (bash's `{"rm", "unlink"}`) must NOT be
+            # used verbatim here. `rm` carries over unaided (real alias
+            # collision); `_REMOVE_ARG_COMMANDS_POWERSHELL` names the
+            # PowerShell-only spellings (guard-dialect-coverage.md row 26).
+            allowed = {"rm"} | _REMOVE_ARG_COMMANDS_POWERSHELL
+        else:
+            allowed = _REMOVE_ARG_COMMANDS
+        if base not in allowed:
             return False
         return any(self._is_target(tok) for tok in seg_tokens[argv0_idx + 1 :])
 
@@ -347,13 +392,13 @@ class SentinelRemovalDetector:
                 return True
         return False
 
-    def _segment_denies(self, seg_tokens: List[str]) -> bool:
+    def _segment_denies(self, seg_tokens: List[str], dialect: Optional[Dialect] = None) -> bool:
         if not seg_tokens:
             return False
         argv0_idx = self._env_skip_index(seg_tokens)
         if argv0_idx >= len(seg_tokens):
             return False
-        if self._remove_arg_denies(seg_tokens, argv0_idx):
+        if self._remove_arg_denies(seg_tokens, argv0_idx, dialect):
             return True
         if self._mv_source_denies(seg_tokens, argv0_idx):
             return True
@@ -503,13 +548,115 @@ class SentinelRemovalDetector:
 
         return None
 
-    def evaluate(self, cmd: str) -> Tuple[str, str, str]:
+    def _segment_is_unresolved_indirection(self, seg_tokens: List[str]) -> bool:
+        """`True` iff `seg_tokens`' head (after the same env/wrapper skip
+        used everywhere else in this class) is one of the indirection-
+        wrapper shapes the bash-leg walk (`_evaluate_segment_indirection`)
+        knows how to recurse into -- `xargs`, or a `-c`-flag / bare-file
+        interpreter call (`_C_FLAG_INTERPRETERS` / `_SHELL_FILE_
+        INTERPRETERS`). Deliberately does NOT attempt to recurse into the
+        wrapped payload itself (see `evaluate`'s POWERSHELL branch
+        docstring for why that recursion stays bash-only, out of this
+        cohort's scope) -- this is a SHAPE CHECK only, used solely to
+        decide whether the PowerShell branch below has enough information
+        to know it is looking at an indirection wrapper it cannot resolve,
+        as opposed to a wholly ordinary command it has already correctly
+        ruled ALLOW on.
+
+        Deliberately narrow -- a leading `VAR=value`/`env`/passthrough-
+        wrapper prefix is NOT by itself an unresolved shape: `_env_skip_
+        index` (used by `_segment_denies`/`_remove_arg_denies` too) already
+        walks past that prefix to the real argv0, so e.g. `env FOO=bar rm
+        <sentinel>` is fully examinable and correctly denies DIRECTLY,
+        never reaching this method's caller at all. Only a head this
+        module cannot see PAST -- `xargs` (command assembled from stdin),
+        or a shell-file/`-c`-flag interpreter, whose payload the bash walk
+        would recurse into but this dialect branch does not -- counts."""
+        if not seg_tokens:
+            return False
+        argv0_idx = self._env_skip_index(seg_tokens)
+        if argv0_idx >= len(seg_tokens):
+            return False
+        working = seg_tokens[argv0_idx:]
+        if working[0] == "env":
+            working = _strip_env_prefix(working)
+            if not working:
+                return False
+        head_base = _normalize_executable_basename(working[0])
+        norm_head = _normalize_interpreter_basename(head_base)
+        if norm_head == "xargs":
+            return True
+        if norm_head in _SHELL_FILE_INTERPRETERS or norm_head in _C_FLAG_INTERPRETERS:
+            return True
+        return False
+
+    def evaluate(self, cmd: str, dialect: Optional[Dialect] = None) -> Tuple[str, str, str]:
         """Return `(verdict, reason_kind, reason_class)` for a raw command
         string. `verdict` is one of `VERDICT_DENY` / `VERDICT_ADVISORY` /
         `VERDICT_ALLOW`. `reason_class` is one of `REASON_DIRECT` /
-        `REASON_INDIRECTION` / `""` (allow) -- see module docstring."""
+        `REASON_INDIRECTION` / `""` (allow) -- see module docstring.
+
+        `dialect` is the C2/C4 dialect-carry parameter (plan
+        `2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md`).
+        `None` and `Dialect.BASH` are BOTH treated as the bash leg below --
+        `None` preserves this method's pre-C4 call shape exactly (every
+        existing caller/test that calls `evaluate(cmd)` with no second
+        argument gets byte-identical behavior), while `Dialect.BASH` is the
+        explicit spelling the guard module now passes once it carries a
+        real dialect from `payload["tool_name"]`. `Dialect.POWERSHELL`
+        tokenizes via `_dialect.resolve_segments_for_dialect` instead of
+        this module's own `_tokenize_full_command` call -- the shlex-based
+        tokenizer mangles PowerShell syntax outright (see `_dialect.py`
+        module docstring). A `None` segment result on the PowerShell branch
+        means `_dialect` already recorded SILENT for this call (parse
+        failure, grammar gap, or absent `tree-sitter-pwsh`) -- this method
+        does not re-derive an advisory guess on top of that (dispatch
+        brief: "prefer SILENT to a guess"), it simply reports ALLOW (no
+        content), consistent with declining to rule rather than guessing.
+
+        NEGATIVE SPEC -- the indirection-wrapper walk
+        (`_evaluate_segment_indirection`/`_classify_payload`, used on the
+        bash leg below to recurse into `xargs`/piped-interpreter/`-c`-flag/
+        `env`-wrapped payloads) stays BASH-ONLY by design on the
+        PowerShell branch -- converting it to also parse the WRAPPED
+        payload as PowerShell is out of C4f's triaged scope (`docs/
+        reference/guard-dialect-coverage.md` row 26 names only Rule 1
+        verb recognition and the top-level tokenizer swap). Silently
+        skipping such a shape on the PowerShell branch would reproduce the
+        exact false-clean this plan exists to close, though -- an
+        indirection wrapper this guard cannot examine must not read as
+        "cleared," so `_segment_is_unresolved_indirection` below is a
+        SHAPE CHECK (not a resolution attempt): if a PowerShell segment's
+        head is a wrapper shape the bash walk would have recursed into,
+        this method records SILENT and reports ALLOW instead of a silent,
+        contentless clean -- the "prefer SILENT to a guess" instruction in
+        this cohort's own dispatch brief, applied to the one leg C4f does
+        not convert."""
         cmd_norm = _strip_heredoc_bodies(cmd)
         mentions_anywhere = bool(self._mention_re.search(cmd_norm))
+
+        if dialect is Dialect.POWERSHELL:
+            segments = resolve_segments_for_dialect(cmd_norm, dialect, guard_name=_GUARD_NAME)
+            if segments is None:
+                return VERDICT_ALLOW, "", ""
+            saw_unresolved_indirection = False
+            for seg_tokens, _pipe_before in segments:
+                if self._segment_denies(seg_tokens, dialect):
+                    return (
+                        VERDICT_DENY,
+                        "command shape that would remove or relocate %s" % self.target_basename,
+                        REASON_DIRECT,
+                    )
+                if self._segment_is_unresolved_indirection(seg_tokens):
+                    saw_unresolved_indirection = True
+            if saw_unresolved_indirection:
+                record_silent(
+                    _GUARD_NAME,
+                    "PowerShell indirection wrapper (xargs/piped/-c-flag/env-wrapped "
+                    "invocation) -- bash-only walk not converted for this dialect, "
+                    "declined to rule rather than guess",
+                )
+            return VERDICT_ALLOW, "", ""
 
         tokens = _tokenize_full_command(cmd_norm)
         if tokens is None:

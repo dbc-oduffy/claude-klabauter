@@ -214,6 +214,8 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
 )
+from coordinator_core.bash_guards import _dialect
+from coordinator_core.bash_guards._verdict import record_silent
 
 #: A shell redirection operator, optionally fd-prefixed (`2>`) and/or
 #: duplicated (`>&1`), matched as a PREFIX of a token -- covers both the
@@ -224,6 +226,27 @@ _REDIR_PREFIX_RE = re.compile(r"^\d*>{1,2}(?:&\d*)?")
 #: Commands that can create or overwrite a NAMED file via a plain argument
 #: (as opposed to shell redirection, which is handled separately above).
 _FILE_ARG_COMMANDS = frozenset({"touch", "cp", "mv", "install", "ln", "tee"})
+
+#: PowerShell cmdlet equivalents for the same "creates/overwrites a NAMED
+#: file via a plain argument" semantics (C4e, 2026-08-07 -- guard-dialect-
+#: coverage.md rows 22-24, "Shared sentinel-creation engine"). `cp`/`mv`
+#: already fire via real PowerShell alias collisions (the POSIX set above
+#: matches them unchanged -- see `_normalize_executable_basename`, which
+#: lower-cases every token regardless of dialect), so they are NOT
+#: duplicated here; `touch`, `install`, `ln`, `tee` have no PowerShell
+#: alias, so their cmdlet equivalents are added directly:
+#: `New-Item` (touch/mkdir-shaped creation), `Copy-Item` (cp, listed for
+#: completeness though the `cp` alias already covers the common case),
+#: `Move-Item` (mv, same note), `Set-Content`/`Add-Content` (tee/redirect-
+#: shaped writes). Compared against the SAME `_normalize_executable_
+#: basename`-lower-cased token as the POSIX set -- a PowerShell cmdlet name
+#: never collides with a POSIX binary name, so this widening is safe to
+#: check unconditionally, on BOTH dialects, with no dialect branch needed
+#: for this rule specifically (AC4: adding entries to a set that can never
+#: match real bash argv0 text changes zero bash-leg behavior).
+_FILE_ARG_COMMANDS_POWERSHELL = frozenset(
+    {"new-item", "copy-item", "move-item", "set-content", "add-content"}
+)
 
 #: `sed`'s in-place-edit flag, in any of its common spellings: bare `-i`,
 #: GNU `-i.bak`/`-iSUFFIX` (attached), BSD `-i ''` (separate empty-string
@@ -391,7 +414,7 @@ class SentinelCreationDetector:
         sentinel as ANY argument (source or destination; default-deny
         posture, see module docstring)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
-        if base not in _FILE_ARG_COMMANDS:
+        if base not in _FILE_ARG_COMMANDS and base not in _FILE_ARG_COMMANDS_POWERSHELL:
             return False
         return any(self._is_target(tok) for tok in seg_tokens[argv0_idx + 1 :])
 
@@ -612,4 +635,65 @@ class SentinelCreationDetector:
             verdict = self._evaluate_segment_indirection(seg_tokens, pipe_before, 0)
             if verdict is not None:
                 return True, verdict, REASON_INDIRECTION
+        return False, "", ""
+
+    def evaluate_for_dialect(
+        self, cmd: str, dialect: Optional["_dialect.Dialect"], guard_name: str
+    ) -> Tuple[bool, str, str]:
+        """Dialect-aware entry point (C4e, 2026-08-07). `Dialect.BASH`
+        delegates UNCHANGED to `evaluate()` above -- byte-identical bash-leg
+        behavior, AC4. `Dialect.POWERSHELL` tokenizes/segments via
+        `_dialect.resolve_segments_for_dialect` (the C2 seam) instead of the
+        bash-only `_tokenize_full_command`/`_segments_from_tokens` pair, and
+        runs each segment through `_segment_denies` (polymorphic -- a
+        subclass override such as `block_approval_sentinel_creation
+        ._ApprovalSentinelDetector`'s default-deny posture still applies).
+
+        Deliberately NARROWER than `evaluate()` on the PowerShell leg: no
+        indirection-wrapper pass (`_evaluate_segment_indirection` /
+        `_classify_payload`) and no `_evaluate_legacy` free-text fallback --
+        neither has been verified against PowerShell shapes (`Invoke-
+        Expression`, `&`-call of a variable holding a script block, etc.),
+        and this module's own posture (see plan body) is "prefer SILENT to a
+        guess wherever PowerShell semantics are unclear." A PowerShell
+        indirection-wrapper bypass is a documented gap, not silently
+        claimed as covered.
+
+        A tainted-variable-carrying subclass (`_ApprovalSentinelDetector`)
+        computes its taint set from BASH-shaped tokenization inside its own
+        `evaluate()` override, which this method bypasses entirely on the
+        PowerShell leg -- so `_tainted_vars` is reset to empty here rather
+        than left holding stale state from a PRIOR bash-dialect call on the
+        same long-lived detector instance (module-level singletons are
+        reused across calls, see e.g. `block_approval_sentinel_creation
+        ._detector`).
+        """
+        if hasattr(self, "_tainted_vars"):
+            self._tainted_vars = set()  # type: ignore[attr-defined]
+
+        if dialect is _dialect.Dialect.BASH:
+            return self.evaluate(cmd)
+
+        if dialect is not _dialect.Dialect.POWERSHELL:
+            # Absent/unrecognized dialect -- SILENT, never a bash default
+            # (plan Anti-scope; mirrors `_dialect.tokenize_command`'s own
+            # "no recognized dialect" branch).
+            record_silent(guard_name, "no recognized dialect (dialect=%r)" % (dialect,))
+            return False, "", ""
+
+        segments = _dialect.resolve_segments_for_dialect(cmd, dialect, guard_name=guard_name)
+        if segments is None:
+            # SILENT already recorded by `resolve_segments_for_dialect`
+            # (ImportError, `has_error` parse residue, etc.) -- see
+            # `_dialect.py`'s own docstring for the three SILENT-routing
+            # cases this delegates to.
+            return False, "", ""
+
+        for seg_tokens, _pipe_before in segments:
+            if self._segment_denies(seg_tokens):
+                return (
+                    True,
+                    "command shape that would create or overwrite %s" % self.target_basename,
+                    REASON_DIRECT,
+                )
         return False, "", ""

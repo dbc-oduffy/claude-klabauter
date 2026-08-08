@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,7 +131,7 @@ def _resolve_root(explicit_root: str | None) -> str | None:
             capture_output=True,
             text=True,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _resolve_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

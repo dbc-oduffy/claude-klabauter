@@ -366,12 +366,12 @@ def test_write_scope_manifest_write_confined_to_own_run_id(fixture_repo):
 
 def test_handler_raises_on_repo_root_none():
     with pytest.raises(ValueError, match="_origin_worktree"):
-        _run(_handler({"run_id": "2026-07-23-01h00"}, repo_root=None))
+        _handler({"run_id": "2026-07-23-01h00"}, repo_root=None)
 
 
 def test_handler_raises_on_missing_run_id(fixture_repo):
     with pytest.raises(ValueError, match="run_id"):
-        _run(_handler({}, repo_root=fixture_repo / ".git"))
+        _handler({}, repo_root=fixture_repo / ".git")
 
 
 def test_dispatch_message_smoke(fixture_repo, monkeypatch):
@@ -438,22 +438,18 @@ def test_render_summary_reflects_custom_cohort_specs_names(fixture_repo):
 
 def test_handler_cohort_specs_malformed_row_raises_value_error_not_type_error(fixture_repo):
     with pytest.raises(ValueError, match="cohort_specs"):
-        _run(
-            _handler(
-                {
-                    "run_id": "2026-07-23-01h00",
-                    "cohort_specs": [{"name": "bad", "glob": "x/*.md", "typo_field": "oops"}],
-                },
-                repo_root=fixture_repo / ".git",
-            )
+        _handler(
+            {
+                "run_id": "2026-07-23-01h00",
+                "cohort_specs": [{"name": "bad", "glob": "x/*.md", "typo_field": "oops"}],
+            },
+            repo_root=fixture_repo / ".git",
         )
 
 
 def test_handler_cohort_specs_non_dict_row_raises_value_error(fixture_repo):
     with pytest.raises(ValueError, match="cohort_specs"):
-        _run(
-            _handler(
-                {"run_id": "2026-07-23-01h00", "cohort_specs": ["not-a-dict"]},
-                repo_root=fixture_repo / ".git",
-            )
+        _handler(
+            {"run_id": "2026-07-23-01h00", "cohort_specs": ["not-a-dict"]},
+            repo_root=fixture_repo / ".git",
         )

@@ -84,6 +84,8 @@ import subprocess
 import sys
 from typing import List, Optional, Set
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 def _diff_probe_failed_message(probe: str) -> str:
     """Shared wording for the three fail-loud abort sites (`git diff` x2, `git ls-files
@@ -111,6 +113,7 @@ def _git_rev_parse_git_dir(cwd: Optional[str] = None) -> Optional[str]:
             text=True,
             cwd=cwd,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         return None
@@ -131,6 +134,7 @@ def _git_diff_name_only(cwd: Optional[str] = None) -> Optional[Set[str]]:
             capture_output=True,
             cwd=cwd,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         return None
@@ -147,6 +151,7 @@ def _git_ls_files_modified(cwd: Optional[str] = None) -> Optional[List[str]]:
             capture_output=True,
             cwd=cwd,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         return None
@@ -180,6 +185,7 @@ def _git_add_pathspec_from_stdin(paths: List[str], cwd: Optional[str] = None) ->
             capture_output=True,
             cwd=cwd,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         return False

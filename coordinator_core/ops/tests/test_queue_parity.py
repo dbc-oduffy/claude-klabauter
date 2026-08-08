@@ -1152,21 +1152,19 @@ class TestClaudeKlabauterUnresolvable:
             "MACHINE_LOCAL_IMPL", str(tmp_path / "nonexistent_machine_local.py")
         )
 
-        result = asyncio.run(
-            _queue_append_handler(
-                {
-                    "schema": "improvement-queue",
-                    "title": "Unresolvable handler graceful-degrade test",
-                    "body": "Test body.",
-                    "surface": "some/path.py",
-                    "proposed_action": "Fix it.",
-                    "from_repo": _TEST_FROM_REPO,
-                    "change_kind": "script-edit",
-                    "status": "open",
-                    "queue_scope": "central",
-                },
-                repo_root=None,
-            )
+        result = _queue_append_handler(
+            {
+                "schema": "improvement-queue",
+                "title": "Unresolvable handler graceful-degrade test",
+                "body": "Test body.",
+                "surface": "some/path.py",
+                "proposed_action": "Fix it.",
+                "from_repo": _TEST_FROM_REPO,
+                "change_kind": "script-edit",
+                "status": "open",
+                "queue_scope": "central",
+            },
+            repo_root=None,
         )
         assert result.get("skipped") is True, (
             f"expected result['skipped'] = True on unresolvable CLAUDE_KLABAUTER_ROOT, got: {result}"
@@ -1269,21 +1267,19 @@ class TestHandlerSessionIdParam:
         # AC-2: deliberately set env to a different value — the param must win.
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "env-session-should-not-appear")
 
-        result = asyncio.run(
-            _queue_append_handler(
-                {
-                    "schema": "improvement-queue",
-                    "title": "Handler session_id param precedence test",
-                    "body": "Body for handler session_id param precedence test.",
-                    "surface": "coordinator_core/ops/queue_append.py",
-                    "proposed_action": "No action required.",
-                    "from_repo": _TEST_FROM_REPO,
-                    "status": "open",
-                    "change_kind": "script-edit",
-                    "session_id": "param-session-wins-xyz456",
-                },
-                repo_root=None,
-            )
+        result = _queue_append_handler(
+            {
+                "schema": "improvement-queue",
+                "title": "Handler session_id param precedence test",
+                "body": "Body for handler session_id param precedence test.",
+                "surface": "coordinator_core/ops/queue_append.py",
+                "proposed_action": "No action required.",
+                "from_repo": _TEST_FROM_REPO,
+                "status": "open",
+                "change_kind": "script-edit",
+                "session_id": "param-session-wins-xyz456",
+            },
+            repo_root=None,
         )
 
         assert not result.get("skipped"), (

@@ -57,6 +57,54 @@ from coordinator_core.testing.doe_root import resolve_doe_root
 # host's settings.json).
 _DRIVE_LETTER_RE = re.compile(r"[A-Za-z]:[\\/]")
 
+
+class _OSNameProxy:
+    """Delegates every attribute to the real ``os`` module except ``name``.
+
+    `generate()` derives its POSIX-vs-Windows command shape from
+    `os.name` at generation time (see the module-level comment above
+    ``test_cross_surface_pin_detect_foreign_platform_paths_clean_for_posix_shape``),
+    with no override parameter -- so a test that needs the POSIX shape
+    specifically (the golden fixture below is POSIX-shaped, committed, and
+    host-independent by design) cannot get it on a native-Windows test
+    runner without forcing `os.name`. Proxying only `gen_settings_hooks.py`'s
+    own `os` reference (rather than flipping the real global) avoids
+    breaking `pathlib`'s own `os.name`-driven `WindowsPath`/`PosixPath`
+    selection for the rest of the process -- see the identical proxy in
+    `test_shell_rc_guard.py` for the full rationale.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+class _PosixPathModuleProxy:
+    """Delegates every attribute to the real ``os.path`` except ``isdir``,
+    which always reports ``True`` -- lets a synthetic, non-drive-lettered
+    POSIX path (e.g. ``/fake/posix/coordinator``) stand in for
+    ``coordinator_root_override`` on a real-Windows filesystem, where every
+    genuine ``tmp_path`` fixture is unavoidably drive-lettered and so can
+    never itself produce a clean POSIX-shaped env value (see
+    `test_cross_surface_pin_detect_foreign_platform_paths_clean_for_posix_shape`).
+    """
+
+    def isdir(self, _path):
+        return True
+
+    def __getattr__(self, attr):
+        return getattr(os.path, attr)
+
+
+class _OSPosixPathOverrideProxy(_OSNameProxy):
+    """`_OSNameProxy`, plus a `.path` swapped for `_PosixPathModuleProxy`."""
+
+    def __init__(self) -> None:
+        super().__init__("posix")
+        self.path = _PosixPathModuleProxy()
+
 # The env-var expression `generate()` bakes into hook commands ON THIS
 # TEST-RUNNING MACHINE — matches `_rewrite_cpr`'s own `os.name == "nt"`
 # check, so tests assert against whatever the generator under test actually
@@ -325,7 +373,7 @@ def test_type_filter_against_oracle_fixture(coordinator_root: Path):
     # (The value legitimately DOES appear once, in `settings["env"]` — that
     # is the one-place-not-37-places design, checked separately below.)
     assert str(coordinator_root) not in commands_dumped
-    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(coordinator_root)
+    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == coordinator_root.as_posix()
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +381,12 @@ def test_type_filter_against_oracle_fixture(coordinator_root: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_golden_output_matches_oracle_fixture(coordinator_root: Path):
+def test_golden_output_matches_oracle_fixture(coordinator_root: Path, monkeypatch: pytest.MonkeyPatch):
+    # The committed oracle fixture (`expected-generated.json`) is POSIX-
+    # shaped and host-independent by design -- force POSIX generation so
+    # this pin holds on a native-Windows test runner too (see
+    # `_OSNameProxy`).
+    monkeypatch.setattr(_gsh_module, "os", _OSNameProxy("posix"))
     out_path = coordinator_root.parent / "settings-b.json"
     generate(
         out_path=str(out_path),
@@ -355,7 +408,7 @@ def test_golden_output_matches_oracle_fixture(coordinator_root: Path):
     # can only ever be correct up to that one token — never re-capture
     # `expected-generated.json` to chase it.
     assert _normalize_interpreter_tokens(actual["hooks"]) == _normalize_interpreter_tokens(expected["hooks"])
-    assert actual["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(coordinator_root)
+    assert actual["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == coordinator_root.as_posix()
 
 
 def test_generated_hook_commands_are_machine_independent_in_resolved_case(coordinator_root: Path):
@@ -741,7 +794,7 @@ def test_migration_auto_creates_marker_from_local_generation_evidence(tmp_path: 
     assert status == "seeded"
     assert (migrate_dir / ".coordinator-hooks-enabled").is_file()
     settings = json.loads(out_path.read_text())
-    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(coordinator_root)
+    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == coordinator_root.as_posix()
 
 
 def test_migration_never_fires_from_a_bare_hooks_block_alone(tmp_path: Path, coordinator_root: Path):
@@ -1035,8 +1088,8 @@ def test_generated_hook_commands_are_byte_identical_across_simulated_repo_roots(
 
     # The one place that's SUPPOSED to differ — and it must actually reflect
     # each run's own root, not silently share one value or go missing.
-    assert settings_a["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(root_a)
-    assert settings_b["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(root_b)
+    assert settings_a["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == root_a.as_posix()
+    assert settings_b["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == root_b.as_posix()
     assert settings_a["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] != settings_b["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY]
 
     # No command anywhere carries either root's path text or a drive letter.
@@ -1117,7 +1170,7 @@ def test_env_block_carries_coordinator_content_root(coordinator_root: Path):
         coordinator_root_override=str(coordinator_root),
     )
     settings = json.loads(out_path.read_text())
-    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(coordinator_root)
+    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == coordinator_root.as_posix()
 
 
 def test_env_block_preserves_other_keys_and_overwrites_only_its_own(coordinator_root: Path):
@@ -1144,7 +1197,7 @@ def test_env_block_preserves_other_keys_and_overwrites_only_its_own(coordinator_
     # Operator-set key untouched.
     assert settings["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
     # Generator-owned key overwritten to THIS run's value, not left stale.
-    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == str(coordinator_root)
+    assert settings["env"][COORDINATOR_CONTENT_ROOT_ENV_KEY] == coordinator_root.as_posix()
 
 
 def test_hook_root_env_expr_uses_env_prefix_on_windows_and_bare_var_on_posix():
@@ -1555,12 +1608,24 @@ def test_cross_surface_pin_detect_foreign_platform_paths_clean_for_posix_shape(
     # referenced) POSIX guard shape, not just whatever the pre-existing
     # three-era path happens to be on this box.
     monkeypatch.setattr(_gsh_module, "resolve_hook_python_bin", lambda: "/fake/venv/bin/python3")
+    # Force POSIX generation regardless of the test runner's real host --
+    # see `_OSNameProxy` and this test's own "checked against ITS OWN
+    # platform ... via a real generate() call" contract above. A real
+    # `tmp_path`-derived `coordinator_root` is unavoidably drive-lettered on
+    # a real-Windows filesystem, so the env value it produces would trip
+    # `detect_foreign_platform_paths`'s drive-letter check regardless of
+    # command shape -- swap in a synthetic POSIX root instead (via
+    # `_OSPosixPathOverrideProxy`'s faked `isdir`) so this test isolates the
+    # thing it actually pins: command-shape cleanliness, not this runner's
+    # filesystem drive letter.
+    monkeypatch.setattr(_gsh_module, "os", _OSPosixPathOverrideProxy())
+    posix_root = "/fake/posix/coordinator"
 
     out_path = coordinator_root.parent / "settings-ac-crosssurface-posix.json"
     generate(
         out_path=str(out_path),
         hooks_json_override=str(_ORACLE_HOOKS_JSON),
-        coordinator_root_override=str(coordinator_root),
+        coordinator_root_override=posix_root,
     )
     settings = json.loads(out_path.read_text())
     assert COORDINATOR_PYTHON_BIN_ENV_KEY in settings["env"]  # sanity: fourth-era shape actually emitted

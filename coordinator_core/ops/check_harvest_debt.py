@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from shutil import which
@@ -96,7 +97,7 @@ def _resolve_root(explicit_root: str | None) -> str | None:
             # Review: code-reviewer — suppress Windows console-window flash,
             # matching every other subprocess.run call in this port batch
             # (Finding 2).
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _resolve_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

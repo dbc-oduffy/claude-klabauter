@@ -384,15 +384,18 @@ def _normalize_and_gate(cand, git_root):
 '''
 
 # The post-fix shape of the same function (both sides routed through
-# casefold_path, per the actual `d9617436521c` diff).
+# casefold_path, per the actual `d9617436521c` diff). `rstrip("/\\")`, not
+# `rstrip("/")` -- matches the current on-disk guards after the drive-root
+# trailing-backslash fix; a bare `rstrip("/")` here would bless the OLD,
+# still-vulnerable-on-a-drive-root spelling as the canonical "post-fix" form.
 _POST_FIX_SNIPPET = '''
 from pathlib import Path
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
 def _normalize_and_gate(cand, git_root):
-    abs_cn = git_root.rstrip("/") + "/" + cand
+    abs_cn = git_root.rstrip("/\\\\") + "/" + cand
     abs_cn_canon = casefold_path(str(Path(abs_cn).resolve(strict=False)))
-    expected_prefix = casefold_path(git_root.rstrip("/") + "/state/handoffs/")
+    expected_prefix = casefold_path(git_root.rstrip("/\\\\") + "/state/handoffs/")
     if not abs_cn_canon.startswith(expected_prefix):
         return None
     return abs_cn_canon

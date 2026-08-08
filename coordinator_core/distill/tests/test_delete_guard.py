@@ -337,6 +337,73 @@ def test_realized_by_absent_field_blocks(tmp_path: Path):
     assert "absent" in result.detail
 
 
+# ---------------------------------------------------------------------------
+# _git_objects_exist (batched sibling of _git_object_exists)
+# ---------------------------------------------------------------------------
+
+def test_git_objects_exist_empty_list_returns_empty_dict_no_spawn(tmp_path: Path, monkeypatch):
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("must not spawn git for an empty sha list")
+
+    monkeypatch.setattr(delete_guard.subprocess, "run", _fail_if_called)
+    assert delete_guard._git_objects_exist([], tmp_path) == {}
+
+
+def test_git_objects_exist_mixed_real_and_fake_full_shas(git_repo: Path):
+    real = _commit_sha(git_repo)
+    fake = "f" * 40
+    result = delete_guard._git_objects_exist([real, fake], git_repo)
+    assert result == {real: True, fake: False}
+
+
+def test_git_objects_exist_mixed_real_and_fake_short_shas(git_repo: Path):
+    real_short = _commit_sha(git_repo)[:7]
+    fake_short = "b812d89"
+    result = delete_guard._git_objects_exist([real_short, fake_short], git_repo)
+    assert result == {real_short: True, fake_short: False}
+
+
+def test_git_objects_exist_one_spawn_for_n_shas(git_repo: Path, monkeypatch):
+    real = _commit_sha(git_repo)
+    shas = [real, "f" * 40, "a" * 40, "b812d89"]
+    calls = []
+    orig_run = delete_guard.subprocess.run
+
+    def _counting_run(*args, **kwargs):
+        calls.append(args)
+        return orig_run(*args, **kwargs)
+
+    monkeypatch.setattr(delete_guard.subprocess, "run", _counting_run)
+    result = delete_guard._git_objects_exist(shas, git_repo)
+    assert len(calls) == 1
+    assert result[real] is True
+    assert result["f" * 40] is False
+    assert result["a" * 40] is False
+    assert result["b812d89"] is False
+
+
+def test_git_objects_exist_duplicate_shas_collapse_to_one_entry(git_repo: Path):
+    real = _commit_sha(git_repo)
+    result = delete_guard._git_objects_exist([real, real], git_repo)
+    assert result == {real: True}
+
+
+def test_git_objects_exist_missing_reconciles_false_never_true(git_repo: Path):
+    # Reconciliation regression: a `<sha> missing` batch-check record must
+    # never be misread as "exists" — the delete-guard's failure direction is
+    # asymmetric (a false "exists" permits a deletion it should have blocked).
+    fake = "0" * 40
+    result = delete_guard._git_objects_exist([fake], git_repo)
+    assert result[fake] is False
+
+
+def test_git_objects_exist_no_git_repo_fails_closed(tmp_path: Path):
+    # tmp_path is not a git repo at all — cat-file itself fails; every
+    # requested sha must resolve to False, never crash, never True.
+    result = delete_guard._git_objects_exist(["f" * 40], tmp_path)
+    assert result == {"f" * 40: False}
+
+
 def test_check_realized_by_path_shaped_integration(tmp_path: Path):
     target = tmp_path / "docs" / "plans" / "some-plan.md"
     target.parent.mkdir(parents=True)

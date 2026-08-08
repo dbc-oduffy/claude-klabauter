@@ -39,9 +39,11 @@ _NON_CONFINED_TYPE = "coordinator:enricher"
 _CLAUDE_KLABAUTER_ABS_PATH = "/x/claude-klabauter/coordinator/bin/coordinator-doc-new"
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(
+    command, agent_id="deadbeef0123", agent_type=None, session_id="sess1", tool_name="Bash"
+):
     p = {
-        "tool_name": "Bash",
+        "tool_name": tool_name,
         "tool_input": {"command": command},
         "session_id": session_id,
         "cwd": None,
@@ -1362,3 +1364,156 @@ def test_confined_python3_script_path_still_denies(monkeypatch):
     # executor, per test_python3_script_path_allows in
     # test_executor_bash_confinement.py).
     _deny("python3 myscript.py", monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# C6 (docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
+# silent.md): PowerShell Tier A allowlist -- the total-lockout fix.
+#
+# The eight probe commands below are copied VERBATIM from the verdict record
+# this chunk cites (docs/research/spike-verdicts/2026-08-07-powershell-
+# guard-detection-and-tokenizer-mechanism.md, CLAIM 2 table), run under BOTH
+# dialects (AC8): tool_name="Bash" (AC4 -- POSIX behaviour must be provably
+# unchanged, so every PowerShell-shaped command here still denies under the
+# Bash dialect exactly as it did before this chunk) and
+# tool_name="PowerShell" (the fix under test -- the read-only cmdlets now
+# allow, the genuinely non-allowlisted ones still deny).
+#
+# Every payload here uses a valid bare-hex agent_id (_confine's
+# "deadbeef0123", 12 chars) and agent_type "coordinator:code-reviewer" (the
+# sole _CONFINED_FINDINGS_AGENTS member) via the existing _confine/_payload
+# helpers -- the exact trap this chunk's dispatch brief warns about
+# (_resolve_subagent_identity fail-closes to "" on any OTHER agent_id shape,
+# exiting check() before detection ever runs, so a test built on an invalid
+# identity would pass vacuously regardless of whether the fix is present).
+# ---------------------------------------------------------------------------
+
+
+def _allow_dialect(cmd: str, tool_name: str, monkeypatch) -> None:
+    _confine(monkeypatch)
+    payload = _payload(cmd, agent_type=_CONFINED_TYPE, tool_name=tool_name)
+    assert guard.check(payload) is None, f"expected allow for [{tool_name}]: {cmd!r}"
+
+
+def _deny_dialect(cmd: str, tool_name: str, monkeypatch) -> Dict[str, Any]:
+    _confine(monkeypatch)
+    payload = _payload(cmd, agent_type=_CONFINED_TYPE, tool_name=tool_name)
+    result = guard.check(payload)
+    assert result is not None, f"expected deny for [{tool_name}]: {cmd!r}"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    return result
+
+
+# --- Probe 1: git status --porcelain -- dialect-neutral Tier A, unaffected.
+
+def test_probe_git_status_porcelain_allows_bash(monkeypatch):
+    _allow_dialect("git status --porcelain", "Bash", monkeypatch)
+
+
+def test_probe_git_status_porcelain_allows_powershell(monkeypatch):
+    _allow_dialect("git status --porcelain", "PowerShell", monkeypatch)
+
+
+# --- Probe 2: rg -n 'pattern' . -- not on either dialect's allowlist, denies both.
+
+def test_probe_rg_denies_bash(monkeypatch):
+    _deny_dialect("rg -n 'pattern' .", "Bash", monkeypatch)
+
+
+def test_probe_rg_denies_powershell(monkeypatch):
+    _deny_dialect("rg -n 'pattern' .", "PowerShell", monkeypatch)
+
+
+# --- Probe 3: curl https://example.com -- not on either dialect's allowlist.
+
+def test_probe_curl_denies_bash(monkeypatch):
+    _deny_dialect("curl https://example.com", "Bash", monkeypatch)
+
+
+def test_probe_curl_denies_powershell(monkeypatch):
+    _deny_dialect("curl https://example.com", "PowerShell", monkeypatch)
+
+
+# --- Probe 4: Get-ChildItem -Recurse -- the total-lockout fix under test.
+# Under Bash dialect this is just an unrecognised first token (dialect-
+# neutral denial, AC4 -- Get-ChildItem was never, and is not now, a Bash
+# Tier A/B allowlist member) -- NOT a regression, a pre-existing correct
+# deny for an unrecognised POSIX binary name.
+
+def test_probe_get_childitem_denies_bash(monkeypatch):
+    _deny_dialect("Get-ChildItem -Recurse", "Bash", monkeypatch)
+
+
+def test_probe_get_childitem_allows_powershell(monkeypatch):
+    _allow_dialect("Get-ChildItem -Recurse", "PowerShell", monkeypatch)
+
+
+# --- Probe 5: Select-String -Pattern 'foo' -Path *.py
+
+def test_probe_select_string_denies_bash(monkeypatch):
+    _deny_dialect("Select-String -Pattern 'foo' -Path *.py", "Bash", monkeypatch)
+
+
+def test_probe_select_string_allows_powershell(monkeypatch):
+    _allow_dialect("Select-String -Pattern 'foo' -Path *.py", "PowerShell", monkeypatch)
+
+
+# --- Probe 6: Get-Content README.md
+
+def test_probe_get_content_denies_bash(monkeypatch):
+    _deny_dialect("Get-Content README.md", "Bash", monkeypatch)
+
+
+def test_probe_get_content_allows_powershell(monkeypatch):
+    _allow_dialect("Get-Content README.md", "PowerShell", monkeypatch)
+
+
+# --- Probe 7: gci -Recurse (alias)
+
+def test_probe_gci_alias_denies_bash(monkeypatch):
+    _deny_dialect("gci -Recurse", "Bash", monkeypatch)
+
+
+def test_probe_gci_alias_allows_powershell(monkeypatch):
+    _allow_dialect("gci -Recurse", "PowerShell", monkeypatch)
+
+
+# --- Probe 8: Get-ChildItem | Where-Object { $_.Length -gt 100 } -- pipeline.
+
+def test_probe_pipeline_where_object_denies_bash(monkeypatch):
+    _deny_dialect(
+        "Get-ChildItem | Where-Object { $_.Length -gt 100 }", "Bash", monkeypatch
+    )
+
+
+def test_probe_pipeline_where_object_allows_powershell(monkeypatch):
+    _allow_dialect(
+        "Get-ChildItem | Where-Object { $_.Length -gt 100 }", "PowerShell", monkeypatch
+    )
+
+
+# --- Negative controls: a bare Where-Object with no upstream data source
+# must still deny under PowerShell -- the filter-cmdlet carve-out is only
+# valid as a NON-FIRST pipeline segment (see
+# _segment_is_powershell_tier_a_allowlisted's own docstring).
+
+def test_bare_where_object_denies_powershell(monkeypatch):
+    _deny_dialect("Where-Object { $_.Length -gt 100 }", "PowerShell", monkeypatch)
+
+
+# --- Negative control: a still-unrecognised cmdlet stays denied under
+# PowerShell too -- the fix is a narrow allowlist, not a fail-open flip.
+
+def test_remove_item_still_denies_powershell(monkeypatch):
+    _deny_dialect("Remove-Item -Recurse -Force /tmp/x", "PowerShell", monkeypatch)
+
+
+# --- Dialect-gap SILENT leg (AC1/AC2): an unrecognised tool_name is not
+# this guard's business at all and allows, exactly as every other
+# non-Bash/PowerShell tool_name already did before this chunk (defense-in-
+# depth pre-filter, not a fail-open drift -- see check()'s own comment).
+
+def test_unrecognised_tool_name_allows(monkeypatch):
+    _confine(monkeypatch)
+    payload = _payload("Get-ChildItem -Recurse", agent_type=_CONFINED_TYPE, tool_name="Zsh")
+    assert guard.check(payload) is None

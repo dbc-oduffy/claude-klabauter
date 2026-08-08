@@ -51,9 +51,12 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.draft_plan_aging import AGING_THRESHOLD_DAYS, list_orphaned
 from coordinator_core.orient_assemble.reader_result import (
     ReaderResult,
@@ -152,11 +155,88 @@ def _read_stale_plans() -> ReaderResult:
     )
 
 
+#: Extracts the markdown link's `(path)` target off one `_display_handoff`
+#: rendered line — `- [title](link_path) — state` (query_record_display.py's
+#: `_display_handoff`). `link_path` is repo-root-relative (`rel_id`'s own
+#: convention), never a `file://` URI or absolute path.
+_LINK_PATH_RE = re.compile(r"\]\(([^)]+)\)")
+
+
+def _suppress_live_ledger_claims(text: str, *, common_dir: Optional[Path]) -> str:
+    """Drop lines whose handoff currently holds a LIVE ledger claim.
+
+    AC11: `_read_ready`'s query (`deployment_state=ready_to_fire AND
+    status=open`) has no ledger check — the exact surface that advertised
+    the already-worked baton for pickup (this plan's own incident). A
+    handoff whose branch-independent claim ledger holds a live claim is
+    still-worked, even when the tracked-frontmatter mirror has reverted to
+    `open` (the branch-switch-revert desync `resolve_claim_state` exists to
+    catch) — so it must be suppressed from this listing regardless of what
+    the mirror says.
+
+    A ledger claim held by a DEAD holder degrades to "no ledger claim" inside
+    `resolve_claim_state` itself (its own negative-spec) — `source` comes
+    back "mirror" or "none" for that case, so the line is kept: a
+    dead-holder's baton is genuinely available and must still be advertised.
+
+    Post-hoc line filtering (not a query-time predicate) — the ported
+    `_cmd_ready`'s query/format logic is invoked as-is per this module's own
+    negative-spec; only the already-rendered markdown-list output is
+    filtered here, by parsing each line's own `(link_path)` back out.
+    """
+    lines = text.split("\n")
+    kept: list[str] = []
+    for line in lines:
+        # Take the RIGHTMOST `](...)` match, not the first (Review:
+        # code-reviewer — Finding 0): `_display_handoff`'s rendered shape is
+        # `- [title](link_path) — state`, and `title` is free text that can
+        # itself contain the literal sequence `](` (e.g. a title reading
+        # `Fix ](broken) link`). A leftmost `re.search` would then extract
+        # garbage from inside the title as `link_path`, causing
+        # `resolve_claim_state` to look up a bogus path, find no ledger
+        # claim, and fail to suppress a genuinely live-claimed baton — the
+        # exact false-negative this suppression exists to prevent. The real
+        # link is always the LAST `](...)` occurrence on the line, since
+        # nothing follows it but the fixed ` — {state}` suffix (state is
+        # drawn from a closed vocabulary that never contains `](`).
+        matches = list(_LINK_PATH_RE.finditer(line))
+        if matches:
+            link_path = matches[-1].group(1)
+            handoff_path = _REPO_ROOT / link_path
+            claim_state = resolve_claim_state(
+                handoff_path, common_dir=common_dir, repo_root=_REPO_ROOT
+            )
+            if claim_state.source == "ledger":
+                # Live ledger claim (resolve_claim_state only resolves
+                # source="ledger" for a LIVE holder — a dead holder degrades
+                # to "mirror"/"none" per its own negative-spec) — suppress.
+                continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _ready_common_dir() -> Optional[Path]:
+    """Resolve `common_dir` once per `collect()` call (hot-path note: this
+    reader runs across the whole handoff corpus on every orientation
+    assembly) rather than re-resolving per handoff inside the filter loop —
+    `git_common_dir` is itself `lru_cache`d, so this is a cached-dict-lookup
+    saving, not a subprocess-avoidance one, matching `resolve_claim_state`'s
+    own `common_dir` parameter docstring."""
+    try:
+        return git_common_dir(_REPO_ROOT)
+    except Exception:
+        return None
+
+
 def _read_ready() -> ReaderResult:
     """Actionable-now handoffs (`deployment_state=ready_to_fire AND
     status=open`) — a directive naming the query subcommand that produced
-    the listing, carrying the captured markdown-list as-is."""
+    the listing, carrying the captured markdown-list with any live-ledger-
+    claimed handoff suppressed (AC11 — see `_suppress_live_ledger_claims`)."""
     text, _exit_code = _capture_stdout(_cmd_ready, argparse.Namespace())
+    if not text.strip():
+        return ReaderResult()
+    text = _suppress_live_ledger_claims(text, common_dir=_ready_common_dir())
     if not text.strip():
         return ReaderResult()
     return ReaderResult(

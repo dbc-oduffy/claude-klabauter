@@ -57,6 +57,8 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _PROG = "query-session-hierarchy.sh"
 
 _USAGE = """\
@@ -108,6 +110,7 @@ def _engine_worktree_root() -> Optional[Path]:
             capture_output=True,
             text=True,
             timeout=5,
+            **no_console_creationflags(),
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         print(f"skip: _engine_worktree_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

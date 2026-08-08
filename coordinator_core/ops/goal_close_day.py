@@ -410,7 +410,7 @@ def close_day_goals(
 
 
 @register_op("goal.close_day")
-async def _goal_close_day(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _goal_close_day(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'goal.close_day' handler — read-only open-day-goal enumeration.
 
     COMPUTE_ONLY (reads the collapsed goals-log wire, returns a computed
@@ -454,7 +454,7 @@ async def _goal_close_day(params: dict, repo_root: Optional[Path] = None) -> dic
 
 
 @register_op("goal.close_day_apply")
-async def _goal_close_day_apply(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _goal_close_day_apply(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'goal.close_day_apply' handler — close-out write leg.
 
     MUTATING (re-appends one row per decision at its SAME goal_id via

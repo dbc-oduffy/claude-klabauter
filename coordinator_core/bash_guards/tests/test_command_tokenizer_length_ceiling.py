@@ -32,7 +32,10 @@ signal to shrink the command, not the bound.
 
 from __future__ import annotations
 
+import importlib.util
 import time
+
+import pytest
 
 from coordinator_core.bash_guards import _command_tokenizer
 from coordinator_core.bash_guards._command_tokenizer import (
@@ -492,3 +495,425 @@ class TestSentinelRemovalOverCeilingDenies:
             "over-ceiling alone must not deny -- this guard is not a "
             "command-length policy"
         )
+
+
+_GRAMMAR_PRESENT = all(
+    importlib.util.find_spec(name) is not None
+    for name in ("tree_sitter", "tree_sitter_pwsh")
+)
+
+#: The PowerShell parse cases below need the grammar package actually
+#: importable. C8 of this plan DECLARES it in ``[project].dependencies``
+#: (`tree-sitter>=0.21,<1`, `tree-sitter-pwsh>=0.38,<1`) so
+#: ``scripts/setup.py`` derives it into the provisioning list -- but
+#: declaring a dep in pyproject.toml does NOT retroactively install it into
+#: the ~20 live peer sessions' existing environments on this shared branch.
+#: An ungated hard-require here would turn their whole run red for a
+#: dependency their environment has not yet been reprovisioned for -- the
+#: same 2026-07-28 unpinned-pytest incident shape (4800 collection errors on
+#: a clean Windows install) this repo pins specifically to avoid.
+#:
+#: RETARGETED 2026-08-07 (C8, PM ruling): this is no longer "waiting on C8"
+#: -- C8 has landed and the declaration above is the discharged contract.
+#: This marker now bridges the SEPARATE, later event of every live peer
+#: environment actually re-running `scripts/setup.py` (or an equivalent
+#: reinstall) to pick up the newly-declared dependency. Retire it once a
+#: full-suite run on a machine that has NOT been hand-patched confirms
+#: `_GRAMMAR_PRESENT` is true by default (i.e. once `scripts/setup.py`
+#: provisioning is verified to already cover it repo-wide, not merely
+#: declared) -- at that point an absent grammar is a real install defect
+#: that should fail loudly, and these cases should hard-require it. The
+#: cases that must run EVERYWHERE regardless (the absent-dialect SILENT
+#: case, the ImportError->SILENT fallback, the no-collection-open no-op,
+#: and the bash-leg behaviour-preservation case) are deliberately NOT
+#: marked: they are precisely the ones that prove the degradation is
+#: correct when the grammar is missing.
+requires_powershell_grammar = pytest.mark.skipif(
+    not _GRAMMAR_PRESENT,
+    reason=(
+        "PowerShell grammar package not installed on this environment. "
+        "Declared in pyproject.toml (C8); not yet provisioned into every "
+        "live peer session on this shared branch. Degradation-on-absence "
+        "is covered by the unmarked ImportError->SILENT case in this class."
+    ),
+)
+
+
+class TestDialectAwareTokenizer:
+    """C2 of
+    `docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
+    silent.md`: `_dialect.py` wires a dialect-aware tokenizer behind this
+    module's EXISTING `tokenize_full_command` /
+    `segments_from_tokens_with_pipe_flag` contract. Every case here is named
+    explicitly in that chunk's body because it was MEASURED returning
+    `None` in the spike verdict record (Table 1) -- none may be left to
+    inference.
+    """
+
+    def test_dialect_is_never_inferred_from_the_command_string(self) -> None:
+        """AC2: an absent/unrecognized dialect is SILENT, never a bash
+        default -- even for a command that is byte-identical bash syntax."""
+        from coordinator_core.bash_guards import _dialect
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = _dialect.tokenize_command(
+                "echo hi", None, guard_name="test-guard"
+            )
+        assert result is None
+        assert was_silent("test-guard", silences)
+
+    def test_unrecognized_tool_name_is_silent(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        assert _dialect.dialect_from_tool_name("Read") is None
+        assert _dialect.dialect_from_tool_name(None) is None
+        assert _dialect.dialect_from_tool_name("") is None
+
+    def test_bash_tool_name_carries_bash_dialect(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        assert _dialect.dialect_from_tool_name("Bash") is _dialect.Dialect.BASH
+
+    def test_powershell_tool_name_carries_powershell_dialect(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        assert (
+            _dialect.dialect_from_tool_name("PowerShell")
+            is _dialect.Dialect.POWERSHELL
+        )
+
+    def test_bash_dialect_is_behaviour_preserving(self) -> None:
+        """AC4: the BASH branch delegates unchanged to
+        `tokenize_full_command` -- same tokens, same object identity path."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "git commit -m 'subject line'"
+        assert _dialect.tokenize_command(
+            cmd, _dialect.Dialect.BASH, guard_name="test-guard"
+        ) == tokenize_full_command(cmd)
+
+    @requires_powershell_grammar
+    def test_backtick_line_continuation_segments_as_one_statement(self) -> None:
+        """REQUIRED case (measured returning None in Table 1): a
+        PowerShell backtick line-continuation must not fragment the
+        `Remove-Item -Recurse -Force` invocation across two segments."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Remove-Item `\n  -Recurse -Force C:\\scratch-target"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert segments is not None
+        assert len(segments) == 1
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["Remove-Item", "-Recurse", "-Force", "C:\\scratch-target"]
+
+    @requires_powershell_grammar
+    def test_semicolon_chain_segments_into_two_statements(self) -> None:
+        """REQUIRED case (measured returning None in Table 1)."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Set-Location C:\\; Remove-Item -Recurse -Force C:\\scratch-target"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert segments is not None
+        assert len(segments) == 2
+        first_tokens, _ = segments[0]
+        second_tokens, _ = segments[1]
+        assert first_tokens == ["Set-Location", "C:\\"]
+        assert second_tokens == [
+            "Remove-Item", "-Recurse", "-Force", "C:\\scratch-target",
+        ]
+
+    @requires_powershell_grammar
+    def test_call_operator_prefix_still_resolves_the_command(self) -> None:
+        """REQUIRED case (measured returning None in Table 1): the `&`
+        call-operator prefix must not be mistaken for a bash background
+        operator that starts a second, empty segment."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "& Remove-Item -Recurse -Force C:\\scratch-target"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert segments is not None
+        assert len(segments) == 1
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["Remove-Item", "-Recurse", "-Force", "C:\\scratch-target"]
+
+    @requires_powershell_grammar
+    def test_env_path_argument_resolves_as_one_token(self) -> None:
+        """C4's own `$env:` case, tokenized here so C4 inherits one whole
+        argument token rather than a split env-var-prefix/path pair."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Remove-Item -Recurse -Force $env:TEMP\\scratch-target"
+        tokens = _dialect.tokenize_command(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert tokens == [
+            "Remove-Item", "-Recurse", "-Force", "$env:TEMP\\scratch-target",
+        ]
+
+    @requires_powershell_grammar
+    def test_backtick_escaped_paren_is_the_named_grammar_gap_now_closed(self) -> None:
+        """The plan's own first named grammar gap. wharflab (the package
+        this module uses -- see `_dialect.py`'s head-to-head) parses this
+        cleanly; this pins that it stays a real verdict, not SILENT."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Write-Output `(hello`)"
+        tokens = _dialect.tokenize_command(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert tokens is not None
+
+    @requires_powershell_grammar
+    def test_amp_redirect_is_the_second_named_grammar_gap_and_stays_silent(
+        self,
+    ) -> None:
+        """The plan's own second named grammar gap: `cmd &> out.txt` must
+        route to SILENT, never to a clean/guessed verdict -- see Anti-scope's
+        `dangerous &> /dev/null` backgrounding example."""
+        from coordinator_core.bash_guards import _dialect
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        cmd = "Remove-Item -Recurse -Force &> out.txt"
+        with collecting() as silences:
+            tokens = _dialect.tokenize_command(
+                cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+            )
+        assert tokens is None
+        assert was_silent("test-guard", silences)
+
+    def test_import_error_falls_back_to_silent(self, monkeypatch) -> None:
+        """C8's mandated fallback, exercised ahead of C8 landing the
+        dependency declaration: an unimportable grammar package must
+        degrade to SILENT, never crash and never return a clean verdict."""
+        from coordinator_core.bash_guards import _dialect
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        def _boom():
+            raise ImportError("planted fixture: tree_sitter_pwsh absent")
+
+        monkeypatch.setattr(_dialect, "_parser", _boom)
+        monkeypatch.setattr(_dialect, "_parser_cache", None)
+        with collecting() as silences:
+            tokens = _dialect.tokenize_command(
+                "Remove-Item -Recurse -Force C:\\x",
+                _dialect.Dialect.POWERSHELL,
+                guard_name="test-guard",
+            )
+        assert tokens is None
+        assert was_silent("test-guard", silences)
+
+    def test_no_collection_open_is_a_no_op_not_a_crash(self) -> None:
+        """`record_silent` is a no-op when no collection is open (production
+        shape, per `_verdict.py`'s own contract) -- this must not raise."""
+        from coordinator_core.bash_guards import _dialect
+
+        assert _dialect.tokenize_command("echo hi", None, guard_name="g") is None
+
+    def test_bash_dialect_dispatch_never_imports_tree_sitter(self) -> None:
+        """C8's lazy-import mandate: `tree_sitter`/`tree_sitter_pwsh` must be
+        imported ONLY inside the PowerShell-dialect code path
+        (`_dialect._parser`), never at module load time or on a BASH-dialect
+        call, so the ~99% of Bash-tool dispatches that never touch
+        PowerShell pay zero import cost. Run in a clean subprocess so a
+        prior test in this same process (which may have already imported
+        the grammar package via a `@requires_powershell_grammar` case) can't
+        mask a real regression."""
+        import subprocess
+        import sys
+
+        probe = (
+            "import sys\n"
+            "from coordinator_core.bash_guards import _dialect\n"
+            "_dialect.tokenize_command('git commit -m x', _dialect.Dialect.BASH, guard_name='g')\n"
+            "assert 'tree_sitter' not in sys.modules, "
+            "'BASH-dialect dispatch imported tree_sitter'\n"
+            "assert 'tree_sitter_pwsh' not in sys.modules, "
+            "'BASH-dialect dispatch imported tree_sitter_pwsh'\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+
+class TestStartProcessArgvReconstruction:
+    """2026-08-07 -- `Start-Process ... -ArgumentList ...` guard-bypass fix.
+    Measured live via `dispatch.evaluate_payload_json`: `Start-Process
+    python -ArgumentList '-m','pytest'` ALLOWED for a resolved subagent
+    while the byte-identical un-wrapped `python -m pytest` correctly
+    DENIED, because the runner name is hidden inside a quoted,
+    comma-separated `-ArgumentList` array a plain token-position scan never
+    inspects. `expand_start_process_invocations` reconstructs the launched
+    command's own argv into command position so every token-consuming
+    guard sees it. `@requires_powershell_grammar`-gated: this exercises the
+    live `tree-sitter-pwsh` tokenizer, not a hand-fed token list, so a
+    genuine grammar regression (not just this function's own walk) would
+    also be caught here.
+
+    Spec backlink: cross-repo/inbox/2026-08-07-example-doctrine-repo-em-powershell-
+    suite-guard-converted-and-wave2-findings.md § Finding 1
+    """
+
+    @requires_powershell_grammar
+    def test_single_quoted_comma_array_reconstructs_argv(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process python -ArgumentList '-m','pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        assert segments is not None
+        assert len(segments) == 1
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_double_quoted_comma_array_reconstructs_argv(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = 'Start-Process python -ArgumentList "-m","pytest"'
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_explicit_filepath_flag_before_argumentlist(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process -FilePath python -ArgumentList '-m','pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_argumentlist_before_filepath_order_variation(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process -ArgumentList '-m','pytest' -FilePath python"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_single_unsplit_argumentlist_string_splits_on_whitespace(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process python -ArgumentList '-m pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_saps_alias_reconstructs_argv(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "saps python -ArgumentList '-m','pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_start_alias_reconstructs_argv(self) -> None:
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "start python -ArgumentList '-m','pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["python", "-m", "pytest"]
+
+    @requires_powershell_grammar
+    def test_innocuous_start_process_stays_a_single_bare_token(self) -> None:
+        """Widening the tokenizer's own output must never invent a token
+        that was not already present as a literal in the input -- a
+        `Start-Process` call with no `-ArgumentList` reconstructs to just
+        its own target, same as if it had been typed directly."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process notepad"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["notepad"]
+
+    @requires_powershell_grammar
+    def test_variable_target_carries_through_as_its_literal_source_text(self) -> None:
+        """A `-FilePath`/positional target or `-ArgumentList` element that
+        is a variable reference cannot be evaluated statically, so its
+        LITERAL source text is carried through as the reconstructed argv
+        element verbatim (never the value it would expand to) -- this only
+        widens what a downstream guard sees, it never invents or hides a
+        token."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process $target -ArgumentList $args"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens == ["$target", "$args"]
+
+    @requires_powershell_grammar
+    def test_argumentlist_with_no_resolvable_target_leaves_call_untouched(self) -> None:
+        """When neither `-FilePath` nor a bare positional target is present
+        at all, there is no launched-command head to reconstruct -- the
+        call is left as its original tokens rather than emitting a rewrite
+        with no head."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "Start-Process -ArgumentList '-m','pytest'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+        )
+        tokens, _pipe_before = segments[0]
+        assert tokens[0] == "Start-Process"
+
+    def test_bash_dialect_never_reaches_the_expansion(self) -> None:
+        """AC4 restated for this specific expansion: a BASH-dialect
+        command containing the literal substring `Start-Process` (e.g. a
+        quoted commit-message reference to it) must not be touched --
+        `expand_start_process_invocations` is called ONLY on the
+        POWERSHELL branch of `resolve_segments_for_dialect`."""
+        from coordinator_core.bash_guards import _dialect
+
+        cmd = "git commit -m 'mentions Start-Process -ArgumentList in prose'"
+        segments = _dialect.resolve_segments_for_dialect(
+            cmd, _dialect.Dialect.BASH, guard_name="test-guard"
+        )
+        assert segments == _command_tokenizer.segments_from_tokens_with_pipe_flag(
+            tokenize_full_command(cmd)
+        )
+
+    def test_expand_function_is_a_pure_widening_no_op_on_plain_tokens(self) -> None:
+        """A token stream with no `Start-Process`/alias anywhere is
+        returned byte-identical."""
+        from coordinator_core.bash_guards import _dialect
+
+        # abs-path-ok: synthetic PowerShell fixture text, never resolved.
+        tokens = ["Remove-Item", "-Recurse", "-Force", "C:\\scratch"]
+        assert _dialect.expand_start_process_invocations(tokens) == tokens

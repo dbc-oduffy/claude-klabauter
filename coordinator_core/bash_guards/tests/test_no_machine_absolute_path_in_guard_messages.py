@@ -170,6 +170,22 @@ builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
      literals are named here instead of diffed structurally. Kept to
      exactly the two strings the corpus already documents as synthetic,
      not widened into a pattern.
+  6. ``resolved-interpreter-invocation`` -- the BX-16 auto-rewrite rows
+     (`check_find_exec_rewrite`/`check_grep_via_bash_rewrite`/
+     `check_multiprobe_banner_rewrite`/`check_head_tail_plumbing_rewrite`)
+     all prefix their emitted ``updatedInput.command`` with
+     ``_bt_python3_invocation()``'s resolved interpreter path -- on a
+     python.org Windows install with no ``python3`` on PATH, that is an
+     absolute, machine-resolved ``python.exe`` path. Same rationale class
+     as exemption 1/2 (a value "meant to be pasted into a shell has to be
+     real" -- here, a value the HARNESS re-executes verbatim, which is an
+     even harder requirement than an operator pasting it by hand): this
+     is not the doc-pointer leak class the ratchet targets, it is the
+     necessarily-real command the auto-rewrite exists to produce. Matched
+     structurally by calling ``_bt_python3_invocation()`` fresh and
+     stripping its exact literal output, same discipline as exemption 2,
+     so a change to what it resolves is measured against its own current
+     behavior, never a hand-copied path fragment.
 
 Spec backlink: PM dispatch, 2026-08-05, "the 'why didn't our tests catch
 it' half" (companion to the peer executor's per-site `_helpers.py` fix).
@@ -208,6 +224,7 @@ from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
 from coordinator_core.ops.check_posix_exec_assumptions import (
     _CROSS_PATH_PATTERNS as _TIER_D_CROSS_PATH_PATTERNS,
 )
+from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
 
 # ---------------------------------------------------------------------------
 # The predicate -- platform-independent, regex-only (see module docstring).
@@ -300,7 +317,9 @@ def _contains_normalized(haystack: str, needle: str) -> bool:
     return _canon_backslashes(needle) in _canon_backslashes(haystack)
 
 
-def _is_exempt(span: str, *, row_input: str, grant_cli_text: str) -> bool:
+def _is_exempt(
+    span: str, *, row_input: str, grant_cli_text: str, interpreter_text: str = ""
+) -> bool:
     """True if `span` (one `_find_absolute_paths` match) is a named,
     individually-justified legitimate absolute path rather than a leak."""
     # 1. Operator-unlock sentinel -- structural match on its own prefix,
@@ -310,6 +329,11 @@ def _is_exempt(span: str, *, row_input: str, grant_cli_text: str) -> bool:
     # 2. grant-CLI-invocation -- exact literal produced by the function
     #    itself, called fresh per assertion (see caller).
     if grant_cli_text and _contains_normalized(grant_cli_text, span):
+        return True
+    # 6. Resolved-interpreter-invocation -- exact literal produced by
+    #    `_bt_python3_invocation()` itself, called fresh per assertion
+    #    (see module docstring item 6 and caller).
+    if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
     # 3. Corpus-fixture echo -- either literally present in the fired
     #    input text, or rooted under this process's own temp directory
@@ -339,6 +363,7 @@ def _collect_violations(
     *,
     row_input: str = "",
     grant_cli_text: str = "",
+    interpreter_text: str = "",
 ) -> List[str]:
     """Recursively walk `envelope` (the exact hookSpecificOutput-shaped
     dict/list/str tree a guard/hook renders), returning one formatted
@@ -348,7 +373,12 @@ def _collect_violations(
     def walk(node: Any) -> None:
         if isinstance(node, str):
             for span in _find_absolute_paths(node):
-                if not _is_exempt(span, row_input=row_input, grant_cli_text=grant_cli_text):
+                if not _is_exempt(
+                    span,
+                    row_input=row_input,
+                    grant_cli_text=grant_cli_text,
+                    interpreter_text=interpreter_text,
+                ):
                     violations.append(
                         "%s/%s: leaked %r in message text" % (guard_name, row_id, span)
                     )
@@ -374,6 +404,7 @@ def _collect_violations(
 
 def test_no_machine_absolute_path_in_any_corpus_guard_message():
     grant_cli_text = _grant_cli_invocation()
+    interpreter_text = _bt_python3_invocation()
     violations: List[str] = []
 
     for row in CONFINEMENT_ROWS + ADVISORY_REWRITE_ROWS + PLATFORM_CONDITIONED_ROWS:
@@ -387,6 +418,7 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 capture.envelope,
                 row_input=row.input,
                 grant_cli_text=grant_cli_text,
+                interpreter_text=interpreter_text,
             )
         )
 
@@ -402,6 +434,7 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 row.row_id,
                 capture.envelope,
                 grant_cli_text=grant_cli_text,
+                interpreter_text=interpreter_text,
             )
         )
 
@@ -415,6 +448,7 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 row.row_id,
                 capture.envelope,
                 grant_cli_text=grant_cli_text,
+                interpreter_text=interpreter_text,
             )
         )
 

@@ -27,7 +27,10 @@ Behavior summary (always returns rc 0 — informational):
   3. STALE walk (default-on, suppressible via `--no-stale-walk`):
      For each atlas page, parse frontmatter `last_attested:` date. If age in
      days exceeds `--stale-days N` (default 30), emit
-     `STALE <name> last_attested=<date> age=<N>d`.
+     `STALE <name> last_attested=<date> age=<N>d`. If the field is absent or
+     unparseable, emit `STALE <name> last_attested=none age=unattested`
+     instead (never attested is not the same as fresh, and is never silently
+     skipped).
 
 CLI: --stale-days N              (default 30; alias --last-attested-stale-days;
                                    accepts legacy --last-mapped-stale-days)
@@ -46,6 +49,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import date
 from pathlib import Path
@@ -105,7 +109,7 @@ def _watch_line(repo_root: Path, systems_dir: Path, base: str) -> str:
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         # Review: code-reviewer — module docstring's "never block a caller
@@ -147,9 +151,26 @@ def _watch_line(repo_root: Path, systems_dir: Path, base: str) -> str:
 
 
 def _stale_line(atlas_path: Path, base: str, stale_days: int, today: date) -> Optional[str]:
-    """Return a `STALE ...` line if the atlas page's last_attested is aged past
-    the threshold, else None (missing/unparseable date is a silent skip,
-    mirroring the bash oracle).
+    """Return a `STALE ...` line if the atlas page's `last_attested` is aged
+    past the threshold, OR if the field is absent/unparseable, else None.
+
+    A page that has never been attested is not "fresh" merely because it has
+    no date to age — it is maximally unattested, and the whole point of this
+    walk is to flag exactly that population. So the missing/unparseable case
+    is no longer a silent skip; it emits its own `STALE` line, honestly
+    distinguishable from the dated-and-aged case: `last_attested=none
+    age=unattested` never looks like an ISO date or a `<N>d` age, so nothing
+    parsing `last_attested=<date>` / `age=<N>d` out of this output can
+    mistake it for a real attestation that aged past the threshold (checked:
+    no in-repo consumer parses this op's stdout — see module docstring;
+    `.watch.py` siblings are a separate FRESH/DRIFT/MISSING contract line,
+    untouched by this change).
+
+    An unparseable-but-present date (e.g. malformed value, non-ISO format)
+    groups with "absent" rather than getting a third line shape: from the
+    reader's perspective both mean "there is no usable attestation date to
+    judge freshness by," and a third format would be one more shape for a
+    downstream parser to not-anticipate for no discriminating benefit.
 
     Mirrors the bash `grep -m1 '^last_attested:' "$atlas"` + sed-YYYY-MM-DD
     extraction EXACTLY — including scanning the WHOLE FILE (not frontmatter-
@@ -162,7 +183,7 @@ def _stale_line(atlas_path: Path, base: str, stale_days: int, today: date) -> Op
         text = atlas_path.read_text(encoding="utf-8")
     except OSError:
         print(f"skip: _stale_line: text = atlas_path.read_text(encoding=\"utf-8\") failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
+        return f"STALE {base} last_attested=none age=unattested"
 
     line = None
     for candidate in text.splitlines():
@@ -170,17 +191,17 @@ def _stale_line(atlas_path: Path, base: str, stale_days: int, today: date) -> Op
             line = candidate
             break
     if line is None:
-        return None
+        return f"STALE {base} last_attested=none age=unattested"
 
     m = re.match(r"^last_attested:\s*(\d{4}-\d{2}-\d{2})", line)
     if not m:
-        return None
+        return f"STALE {base} last_attested=none age=unattested"
     last_date_str = m.group(1)
     try:
         last_dt = date.fromisoformat(last_date_str)
     except ValueError:
         print(f"skip: _stale_line: last_dt = date.fromisoformat(last_date_str) failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
+        return f"STALE {base} last_attested=none age=unattested"
 
     age_days = (today - last_dt).days
     if age_days < 0:

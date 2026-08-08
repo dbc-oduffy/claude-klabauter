@@ -1185,90 +1185,6 @@ def test_build_reviewed_set_session_scope_excludes_concurrent_peer_commit(tmp_pa
     assert reviewed == set()
 
 
-def test_build_reviewed_set_session_scope_credits_pm_vouched_foreign_commit(
-    tmp_path: Path,
-) -> None:
-    """AC5 (end-to-end effectiveness of the PM-vouch relaxation, archive/specs/
-    2026-07/2026-07-27-review-trail-scope-guard.md § C7 amendment,
-    2026-07-28): a foreign-attributed commit that carries a permanent
-    ``state/review-trail/pm-vouches/<sha>.json`` waiver IS credited despite
-    its own Session-Id trailer naming a different session — the same fixture
-    shape as the sibling exclusion test above
-    (``test_build_reviewed_set_session_scope_excludes_concurrent_peer_commit``),
-    with ONE difference: a1 carries a waiver file.
-
-    This is the direct regression test for AC5: a write-side relaxation the
-    read side silently strips back out would be theatre (the record would be
-    written and still not count) — this test proves the read side
-    (``_narrow_foreign_session_scope`` via ``_pm_vouched_waiver_shas``)
-    actually honors it, end to end, through ``build_reviewed_set``.
-    """
-    from coordinator_core.coverage import build_reviewed_set
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "base")
-
-    session_a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    session_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-
-    b1 = _commit_for_session(repo, "B1: session B starts its own segment", session_b)
-    a1 = _commit_for_session(repo, "A1: session A's commit, PM-vouched by session B", session_a)
-    b2 = _commit_for_session(repo, "B2: session B's review-integration commit", session_b)
-
-    chain_set = {a1}
-
-    record_path = tmp_path / "session_b_record.json"
-    record_path.write_text(
-        json.dumps(
-            {
-                "sha_range": f"{b1}..{b2}",
-                "reviewer": "code-reviewer",
-                "scope": "session",
-                "scope_kind": "diff",
-                "verdict": "ok",
-                "diff_loc": 10,
-                "session_id": session_b,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    # Simulate the write-side relaxation having already run: a permanent
-    # per-SHA waiver was persisted by review_trail_write._record_pm_vouch_waivers
-    # after a live PM grant for session_b named a1 explicitly.
-    waiver_dir = repo / "state" / "review-trail" / "pm-vouches"
-    waiver_dir.mkdir(parents=True)
-    (waiver_dir / f"{a1}.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "sha": a1,
-                "vouched_by_session": session_b,
-                "granted_by": "pm",
-                "note": "reviewed live, found two P1 security bypasses",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    reviewed = build_reviewed_set(
-        [str(record_path)],
-        on_record_error="skip",
-        intersect_shas=chain_set,
-        repo_root=str(repo),
-        graph_range=None,
-    )
-
-    assert a1 in reviewed, (
-        "a PM-vouched foreign commit (waiver present under "
-        "state/review-trail/pm-vouches/) must be credited — the write-side "
-        "relaxation is not effective end-to-end if the read side still "
-        "strips it"
-    )
-
-
 def test_chain_ancestry_waiver_scope_mismatch_does_not_relax_credit(
     tmp_path: Path,
 ) -> None:
@@ -1279,8 +1195,8 @@ def test_chain_ancestry_waiver_scope_mismatch_does_not_relax_credit(
     like DR-243's pm-vouches), the read-side scope check was not actually
     implemented.
 
-    Same fixture shape as
-    ``test_build_reviewed_set_session_scope_credits_pm_vouched_foreign_commit``,
+    Same fixture shape as the sibling exclusion test above
+    (``test_build_reviewed_set_session_scope_excludes_concurrent_peer_commit``),
     but the waiver here is minted for ``chain_a`` while the reading record's
     own ``session_id`` (its chain identity, scope="chain") is ``chain_b``.
     """
@@ -1797,11 +1713,10 @@ def test_chain_ancestry_waiver_alone_without_any_trail_record_credits_nothing(
 
     Traced structurally, not just behaviourally: `build_reviewed_set`
     returns `set()` immediately on an empty `trail_paths` list (Phase 1's
-    `if not valid_ranges: return set()`), and `_pm_vouched_waiver_shas`/
-    `_chain_ancestry_waived_shas` have exactly one call site each
-    (`_narrow_foreign_session_scope`), reached only per-record inside
-    Phase 2 — a waiver with no accompanying record is simply never
-    consulted at all.
+    `if not valid_ranges: return set()`), and `_chain_ancestry_waived_shas`
+    has exactly one call site (`_narrow_foreign_session_scope`), reached
+    only per-record inside Phase 2 — a waiver with no accompanying record
+    is simply never consulted at all.
     """
     from coordinator_core import chain_ancestry_waivers
     from coordinator_core.coverage import build_reviewed_set

@@ -90,7 +90,35 @@ from __future__ import annotations
 # empty list is the correct terminal state for a shrinking-debt ledger, NOT an
 # invitation to refill it: a new X_OK site now fails `test_no_x_ok_access_check`
 # outright, which is the whole point.
-X_OK_BASELINE: list[tuple[str, int, str]] = []
+#
+# 2026-08-08 (C8 re-seed, discovery widened per C1): ONE genuine false positive
+# newly surfaced. `coordinator/bin/machine-local:96` -- `if
+# os.path.isfile(base) and os.access(base, os.X_OK):` sits directly below an
+# `if os.name == "nt":` block that ALREADY returns when `os.path.isfile(base)`
+# is True (two return paths: the suffix loop, and the bare
+# `if os.path.isfile(base): return base`). So on Windows, control only
+# reaches line 96 when `os.path.isfile(base)` is already known False --
+# `and` short-circuits and `os.access` never executes with a truthy first
+# operand on native Windows. On POSIX (no `os.name == "nt"` branch taken at
+# all) this is the real, intended X_OK check. Not the same shape as the
+# `elif`-exemption the engine already understands (this is two sequential
+# `if`s, not `if`/`elif`), so the engine's static pattern-match cannot see
+# the mutual exclusivity -- verified by hand-tracing both branches, not by
+# widening the engine.
+#
+# A second finding at this same run, `coordinator/bin/claude-doe:283`
+# (`if ml_argv == [ml_bin] and not (os.path.isfile(ml_bin) and
+# os.access(ml_bin, os.X_OK)):`), is a REAL defect -- no `os.name` guard
+# anywhere nearby, unconditional on every platform. `coordinator/bin/**` is
+# outside this chunk's write scope; deferred to a named successor rather
+# than baselined (see this chunk's own run-report for the full reasoning).
+X_OK_BASELINE: list[tuple[str, int, str]] = [
+    (
+        "coordinator/bin/machine-local",
+        96,
+        "if os.path.isfile(base) and os.access(base, os.X_OK):",
+    ),
+]
 
 COLON_JOIN_BASELINE: list[tuple[str, int, str]] = []
 
@@ -212,5 +240,69 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         "coordinator_core/write_guards/block_dev_side_mirror_wiki.py",
         80,
         'return os.environ.get("CLAUDE_HOME") or _home()',
+    ),
+    # 2026-08-08 (C8 re-seed, discovery widened per C1/C4): 8 genuine false
+    # positives newly surfaced, two shapes:
+    #
+    # Shape A -- an OPTIONAL EXTRA root, not a resolution chain: a lone
+    # `os.environ.get("CLAUDE_HOME", "")` / `os.environ.get("HOME", "")`
+    # whose result, if non-empty, is APPENDED to a list already populated
+    # from a separate (already Windows-safe) source, or used only as a
+    # literal string for a containment/suffix check. No fallback path is
+    # ever constructed from it -- an unset var means "skip", not "silently
+    # resolve to a broken relative path" (the actual defect class this gate
+    # exists to catch). Same class as the already-baselined
+    # check_install_singularity.py:550 entry above.
+    (
+        "coordinator_core/ops/check_auto_memory_drained.py",
+        180,
+        'claude_home = os.environ.get("CLAUDE_HOME", "")',
+    ),
+    (
+        "coordinator_core/write_guards/block_derived_global_doctrine_write.py",
+        194,
+        'claude_home = os.environ.get("CLAUDE_HOME", "")',
+    ),
+    (
+        "coordinator_core/write_guards/block_home_dir_memo_delivery.py",
+        128,
+        'claude_home = os.environ.get("CLAUDE_HOME", "")',
+    ),
+    (
+        "coordinator_core/write_guards/guard_memory_store_cap.py",
+        167,
+        'claude_home = os.environ.get("CLAUDE_HOME", "")',
+    ),
+    (
+        "coordinator_core/ops/probe_onboarding_currency.py",
+        175,
+        'claude_home = os.environ.get("CLAUDE_HOME", "")',
+    ),
+    (
+        "coordinator_core/install/sandbox_check.py",
+        837,
+        'home_literal = os.environ.get("HOME", "")',
+    ),
+    #
+    # Shape B -- delegates to a value already resolved Windows-safely one
+    # line above (a local var, or a sibling test asserting the same
+    # already-correct production shape). The rule's own docstring says a
+    # nearby mention no longer exempts anything -- correctly, since a
+    # comment can lie -- but these two delegate to an actual VALUE, not a
+    # comment: `uninstall_legs.py:817`'s `home` is computed at line 816
+    # (`os.environ.get("HOME") or os.environ.get("USERPROFILE") or
+    # resolved_home`, an explicit USERPROFILE rung one line up);
+    # `test_envelope_resolve_context.py:91` asserts against
+    # `envelope.py`'s own `resolve_context()`, whose real chain (line 1573,
+    # baselined in RUNG_ORDER_BASELINE) already defaults to `Path.home()`.
+    (
+        "coordinator_core/install/uninstall_legs.py",
+        817,
+        'claude_home = os.environ.get("CLAUDE_HOME") or home',
+    ),
+    (
+        "coordinator_core/ops/emit/tests/test_envelope_resolve_context.py",
+        91,
+        'claude_home = _P(os.environ.get("CLAUDE_HOME", str(_P.home()))) / ".claude"',
     ),
 ]

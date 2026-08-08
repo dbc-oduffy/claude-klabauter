@@ -40,6 +40,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _SUBPROCESS_TIMEOUT = 15
 
 # Bounded recent window when falling back to week-changelog files or raw git log.
@@ -131,6 +133,7 @@ def _run_git(repo_root: Path, args: list[str]) -> str | None:
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _run_git: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

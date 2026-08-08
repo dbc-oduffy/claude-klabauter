@@ -254,7 +254,7 @@ def format_addressee_message(
 
 
 @register_op("memo.check_addressee")
-async def _memo_check_addressee(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _memo_check_addressee(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'memo.check_addressee' COMPUTE_ONLY UDS op handler.
 
     Resolve whether a memo's `to:` value is addressed to the CALLING repo —
@@ -278,9 +278,10 @@ async def _memo_check_addressee(params: dict, repo_root: Optional[Path] = None) 
         maps MATCH/MISMATCH/UNRESOLVED to distinct process exit codes at cutover).
 
     This handler carries no `await` in its body — `compute_check_addressee_
-    candidate` is pure sync compute — but stays `async def` because
-    `@register_op` dispatches every handler uniformly; an in-process caller
-    that wants the verdict without an event loop calls
+    candidate` is pure sync compute — and is a plain `def` (2026-08-07
+    zero-await fix; `dispatch_message`'s sync branch offloads it via
+    `asyncio.to_thread`, restoring `wait_for`'s ability to actually bound it).
+    An in-process caller that wants the verdict without an event loop calls
     `compute_check_addressee_candidate` + `format_addressee_message` directly
     (see `coordinator_core.pickup_assemble.compute_addressee_gate`).
     """

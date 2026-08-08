@@ -50,7 +50,12 @@ _SITE_LABEL = "coordinator/bin/check-rag-state.sh"
 
 def _claude_home() -> str:
     """Mirror the bash oracle's `${CLAUDE_HOME:-$HOME}/.claude`."""
-    base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    base = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(base, ".claude")
 
 

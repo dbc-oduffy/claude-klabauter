@@ -127,7 +127,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 PRIORITY = 41
 
 #: Cheap pre-filter (mirrors the sibling module's Layer-1 posture): a
@@ -351,7 +351,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # fail_closed=True entries route an uncaught exception through its
     # crash-deny wrapper); catching and swallowing an unexpected error into
     # a silent allow here would defeat that contract.
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}

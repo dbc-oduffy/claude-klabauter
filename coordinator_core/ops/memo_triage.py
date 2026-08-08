@@ -627,7 +627,7 @@ def triage_memos(
 
 
 @register_op("memo.triage")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "memo.triage" handler.
 
     Params:

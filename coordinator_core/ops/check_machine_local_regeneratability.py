@@ -28,10 +28,40 @@ Negative-spec (do NOT "fix" while porting):
       includes ``repos.example_league_data_repo`` / ``repos.example_cockpit_repo`` / ``repos.example-os-repo``).
       Do NOT "helpfully" resync this against the live registry.toml — any drift is a
       separate reconciliation change, not something this port should silently absorb.
-    - The ``plugin.mirrors`` namespace-prefix match (Check 1) is intentionally the ONLY
-      prefix-match case; every other coordinator-owned key requires an exact match. Do not
-      generalize this into a glob for other keys — that was reviewed and rejected upstream
-      (bash oracle code-review F2 removed a tautological ``repos.*`` prefix branch).
+      EXCEPTION (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md AC8, chunk C6b):
+      ``repos.claude_klabauter`` was added deliberately — claude-klabauter's own installer writes
+      this key (``register_claude_klabauter_root()``, DR-261 gives claude-klabauter klabauter publishing), so
+      it is claude-klabauter-owned and belongs on the canonical list. This is the one reviewed,
+      authorized reconciliation edit; it does not reopen the list to further drift-sync.
+    - Check 1's key match is exact-string, plus two named family-prefix arms (see
+      ``_key_matches_regen_entry`` below) — NOT a general glob. The ``plugin.mirrors``
+      namespace-prefix match was the original, sole exception (bash oracle code-review F2
+      removed a tautological ``repos.*`` prefix branch; do not resurrect that shape). AC8
+      of the plan above (DR-132 conformance) added a second, equally bounded arm: a dotted
+      key matches a family entry that is a strict dotted-prefix of it — e.g.
+      ``engine.working_repos.example_doctrine_repo`` is satisfied by a bare ``"engine.working_repos"``
+      entry. Example-doctrine-repo has declared that exact family entry on their plane (delivery memo
+      cross-repo/inbox/2026-08-07-example-doctrine-repo-em-dr132-conformance-fixture-delivered.md:
+      "The prefix-family match arm on the consumer side remains yours."). Do NOT widen this
+      into an open glob for other keys, and do NOT add ``engine.working_repos.*`` (or any
+      spelling of it) to ``COORDINATOR_OWNED_KEYS`` here — that namespace is example-doctrine-repo-authored
+      and example-doctrine-repo owns its regeneratability answer; this module only supplies the arm that can
+      match a family entry, not the key or the classification.
+      Reachability note (review-flagged 2026-08-07): the ``engine.working_repos`` arm has
+      NO production call-site in claude-klabauter today. Check 1 in ``main()`` only iterates
+      ``COORDINATOR_OWNED_KEYS``, and ``engine.working_repos``/``engine.working_repos.*``
+      is deliberately absent from that list (see above) — so no ``canon_key`` the
+      production loop produces can ever reach the ``regen_key == family`` branch for
+      this family. The arm currently fires only in this module's own unit tests
+      (direct calls to ``_key_matches_regen_entry``). It exists anyway because example-doctrine-repo
+      declared the bare family entry ``"engine.working_repos" = "idempotent-regeneratable"``
+      on their plane and stated the consumer-side match arm is ours to supply
+      (cross-repo/inbox/2026-08-07-example-doctrine-repo-em-dr132-conformance-fixture-delivered.md)
+      — deliberate forward-looking infrastructure for whichever module (presumably
+      example-doctrine-repo's own regeneratability checker) owns a ``canon_key`` list containing
+      ``engine.working_repos.*``, not dead code. Do NOT assume Check 1 exercises this
+      arm today, and do NOT "helpfully" add the example-doctrine-repo key to ``COORDINATOR_OWNED_KEYS``
+      to make it reachable — that would violate the negative-spec above.
     - Bash read the ``[regeneratability]`` table and the flat top-level tables via a
       subprocess'd Python helper (mktemp'd heredoc) because bash cannot parse TOML
       natively. This port has no subprocess boundary for TOML parsing at all — it calls
@@ -51,6 +81,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -60,8 +91,10 @@ from coordinator_core import _settings_home
 _PROG = "check-machine-local-regeneratability"
 
 # Coordinator-owned keys: the canonical set of keys expected classified in the
-# [regeneratability] table. plugin.mirrors.* is a namespace (per-plugin, set via
-# `machine-local set`); every other key requires an exact match.
+# [regeneratability] table. Matched via _key_matches_regen_entry(): exact-string,
+# plus the two named family-prefix arms in FAMILY_PREFIX_ENTRIES below (plugin.mirrors
+# is a per-plugin namespace set via `machine-local set`); every other key requires an
+# exact match.
 COORDINATOR_OWNED_KEYS: List[str] = [
     "coordinator.python",
     "plugin.mirrors",
@@ -76,7 +109,47 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "repos.experiments",
     "repos.example_cockpit_repo",
     "repos.example-os-repo",
+    "repos.claude_klabauter",
 ]
+
+# Family-prefix match arms (AC8, docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md
+# chunk C6b): a bare family entry in [regeneratability] satisfies any dotted key that has
+# it as a strict dotted-prefix. Named and bounded — not a general glob (see module
+# docstring negative-spec). "engine.working_repos" is example-doctrine-repo-declared on their plane; claude-klabauter
+# only supplies the arm that can match it, not the key itself (COORDINATOR_OWNED_KEYS is
+# deliberately NOT extended with any engine.working_repos.* spelling).
+FAMILY_PREFIX_ENTRIES: List[str] = [
+    "plugin.mirrors",
+    "engine.working_repos",
+]
+
+
+def _key_matches_regen_entry(canon_key: str, regen_key: str) -> bool:
+    """True if a [regeneratability] table entry satisfies a coordinator-owned key.
+
+    Exact string match, or — for the named family-prefix entries — a strict
+    dotted-segment prefix match. The loop tries BOTH directions for EVERY family
+    in ``FAMILY_PREFIX_ENTRIES`` (either side may be the bare family entry and the
+    other the dotted specific key, ``family`` + ``"."`` + more path) — it does not
+    enforce a single per-family direction. In practice only one direction is ever
+    satisfiable per family given the current key list: ``plugin.mirrors`` is only
+    ever the bare *canonical* key satisfied by a dotted regen sub-entry
+    (``plugin.mirrors.coordinator-claude``), while ``engine.working_repos`` is only
+    ever the bare *regen* entry satisfying a dotted specific key
+    (``engine.working_repos.example_doctrine_repo``) — but that's a property of today's data,
+    not something this function enforces; the stray opposite-direction branches are
+    simply always False given the current key list. A plain ``str.startswith`` would
+    also match a key that merely shares a leading substring without a dotted-segment
+    boundary (e.g. ``plugin.mirrorsx``); the explicit ``.`` join guards against that.
+    """
+    if canon_key == regen_key:
+        return True
+    for family in FAMILY_PREFIX_ENTRIES:
+        if canon_key == family and regen_key.startswith(family + "."):
+            return True
+        if regen_key == family and canon_key.startswith(family + "."):
+            return True
+    return False
 
 USAGE = f"""\
 usage: {_PROG} [--claude-dir PATH]
@@ -207,7 +280,7 @@ def _ladder_resolves(machine_local_bin: Path, key: str) -> bool:
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -256,9 +329,7 @@ def main(argv: List[str]) -> int:
     for canon_key in COORDINATOR_OWNED_KEYS:
         found = False
         for regen_key in regen_table:
-            if regen_key == canon_key or (
-                canon_key == "plugin.mirrors" and regen_key.startswith("plugin.mirrors.")
-            ):
+            if _key_matches_regen_entry(canon_key, regen_key):
                 found = True
                 break
         if not found:

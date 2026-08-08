@@ -189,62 +189,54 @@ def test_write_stamped_manifest_atomic_in_place(tmp_path: Path):
 
 def test_handler_raises_on_repo_root_none():
     with pytest.raises(ValueError, match="_origin_worktree"):
-        _run(
-            _handler(
-                {"run_id": "2026-07-23-01h00", "by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
-                repo_root=None,
-            )
+        _handler(
+            {"run_id": "2026-07-23-01h00", "by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
+            repo_root=None,
         )
 
 
 def test_handler_raises_on_missing_run_id(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="run_id"):
-        _run(
-            _handler(
-                {"by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
-                repo_root=tmp_path / ".git",
-            )
+        _handler(
+            {"by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
+            repo_root=tmp_path / ".git",
         )
 
 
 def test_handler_raises_on_missing_by_at_note(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match=r"by.*at.*note|non-empty params"):
-        _run(_handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git"))
+        _handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git")
 
 
 def test_handler_refuses_injected_sha_param(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="refuses caller-supplied"):
-        _run(
-            _handler(
-                {
-                    "run_id": "2026-07-23-01h00",
-                    "by": "pm",
-                    "at": "2026-07-23T10:00:00Z",
-                    "note": "ok",
-                    "sha": "deadbeef",
-                },
-                repo_root=tmp_path / ".git",
-            )
+        _handler(
+            {
+                "run_id": "2026-07-23-01h00",
+                "by": "pm",
+                "at": "2026-07-23T10:00:00Z",
+                "note": "ok",
+                "sha": "deadbeef",
+            },
+            repo_root=tmp_path / ".git",
         )
 
 
 def test_handler_refuses_injected_disposal_authorized_sha_param(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="refuses caller-supplied"):
-        _run(
-            _handler(
-                {
-                    "run_id": "2026-07-23-01h00",
-                    "by": "pm",
-                    "at": "2026-07-23T10:00:00Z",
-                    "note": "ok",
-                    "disposal_authorized_sha": "deadbeef",
-                },
-                repo_root=tmp_path / ".git",
-            )
+        _handler(
+            {
+                "run_id": "2026-07-23-01h00",
+                "by": "pm",
+                "at": "2026-07-23T10:00:00Z",
+                "note": "ok",
+                "disposal_authorized_sha": "deadbeef",
+            },
+            repo_root=tmp_path / ".git",
         )
 
 

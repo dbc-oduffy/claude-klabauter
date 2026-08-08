@@ -8,24 +8,12 @@ coverage of the same topologies.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.git.git_dir import resolve_git_common_dir  # noqa: E402
-
-
-def _norm(path: Path) -> str:
-    """`resolve_git_common_dir` deliberately does not call `.resolve()` (see
-    its docstring: no symlink deref, no extra stat storm on Windows), so a
-    result built from a `..`-bearing `commondir`/`gitdir` pointer keeps those
-    `..` segments literally. `os.path.normpath` collapses them for
-    comparison purposes only -- a test-side convenience, not a claim about
-    production behavior -- without resolving symlinks the way `.resolve()`
-    would."""
-    return os.path.normpath(str(path))
 
 
 def test_plain_clone_dot_git_dir_returned_as_is(tmp_path):
@@ -46,7 +34,42 @@ def test_linked_worktree_absolute_gitdir_with_commondir_resolves_to_common(tmp_p
     repo_root.mkdir()
     (repo_root / ".git").write_text(f"gitdir: {private_gitdir}\n", encoding="utf-8")
 
-    assert _norm(resolve_git_common_dir(repo_root)) == _norm(common_dir)
+    # Review: code-reviewer -- bare `==`, no `_norm()` on either side. The
+    # `_norm()` wrapper this test used to carry would make an uncollapsed
+    # (buggy) LHS `..` path compare equal to this clean RHS, masking exactly
+    # the regression the sibling test below pins.
+    assert resolve_git_common_dir(repo_root) == common_dir
+
+
+def test_linked_worktree_relative_commondir_returns_lexically_clean_path(tmp_path):
+    """Regression pin: `resolve_git_common_dir` now runs its relative-
+    `commondir` join through `os.path.normpath` (added alongside this
+    test), so the returned `Path` carries no unresolved `..` segments — a
+    bare `==` against `common_dir` must hold with NO normalization wrapper
+    on either side. Explicit `".." not in result.parts` check below, on top
+    of the sibling test above (now tightened to the same bare `==`), pins
+    the collapse itself rather than relying on equality alone.
+
+    This gap let a real defect ship: `lifecycle.main_worktree_root` derives
+    the main worktree root via a bare `common_dir.parent` (its own
+    negative-spec forbids `.resolve()`, assuming a lexically clean
+    absolute path), so an unresolved `<main>/.git/worktrees/<name>/../..`
+    silently mis-resolved the main worktree root by one directory level for
+    every linked-worktree caller — including `compute_addressee_gate`'s
+    own-repo self-identity check, which read MISMATCH for a legitimate
+    own-repo memo pickup run from a worktree."""
+    common_dir = tmp_path / "main" / ".git"
+    private_gitdir = common_dir / "worktrees" / "wt"
+    private_gitdir.mkdir(parents=True)
+    (private_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+
+    repo_root = tmp_path / "wt"
+    repo_root.mkdir()
+    (repo_root / ".git").write_text(f"gitdir: {private_gitdir}\n", encoding="utf-8")
+
+    result = resolve_git_common_dir(repo_root)
+    assert result == common_dir
+    assert ".." not in result.parts
 
 
 def test_linked_worktree_commondir_absolute_form(tmp_path):
@@ -88,8 +111,10 @@ def test_submodule_relative_gitdir_resolves_against_repo_root(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
+    # Review: code-reviewer -- bare `==`, no `_norm()` on either side; see
+    # the linked-worktree test above for why the masking shape matters.
     resolved = resolve_git_common_dir(repo_root)
-    assert _norm(resolved) == _norm(modules_dir)
+    assert resolved == modules_dir
     assert resolved.is_absolute()
 
 
@@ -106,7 +131,9 @@ def test_submodule_relative_gitdir_no_commondir_private_is_common(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
-    assert _norm(resolve_git_common_dir(repo_root)) == _norm(modules_dir)
+    # Review: code-reviewer -- bare `==`, no `_norm()` on either side; see
+    # the linked-worktree test above for why the masking shape matters.
+    assert resolve_git_common_dir(repo_root) == modules_dir
 
 
 def test_gitdir_pointer_tolerates_trailing_whitespace_and_newline(tmp_path):

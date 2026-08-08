@@ -78,7 +78,7 @@ from coordinator_core.install.write_surface import (
 )
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +100,6 @@ from coordinator_core.win_portability import is_executable
 EXIT_OK = 0
 EXIT_FAIL = 1
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
 _SHORT_TIMEOUT = 20
 _INSTALL_TIMEOUT = 900  # brew installs of large formulae (node) can be slow.
 
@@ -114,7 +112,7 @@ def _run(cmd: List[str], timeout: int = _SHORT_TIMEOUT, **kwargs) -> subprocess.
         cmd,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        **_NO_CONSOLE,
+        **no_console_creationflags(),
         **kwargs,
     )
 

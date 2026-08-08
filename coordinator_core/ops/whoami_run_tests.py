@@ -51,6 +51,7 @@ import sys
 from pathlib import Path
 
 from coordinator_core.ops._pytest_child_env import pytest_child_env
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def main(argv: list[str], base_dir: str | None = None) -> int:
@@ -77,21 +78,25 @@ def main(argv: list[str], base_dir: str | None = None) -> int:
                     ["python3", "-m", "venv", str(venv)],
                     check=True,
                     cwd=str(root),
+                    **no_console_creationflags(),
                 )
             subprocess.run(
                 [str(py), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
                 check=True,
                 cwd=str(root),
+                **no_console_creationflags(),
             )
             subprocess.run(
                 [str(py), "-m", "pip", "install", "--quiet", "-e", "."],
                 check=True,
                 cwd=str(root),
+                **no_console_creationflags(),
             )
             subprocess.run(
                 [str(py), "-m", "pip", "install", "--quiet", "pytest"],
                 check=True,
                 cwd=str(root),
+                **no_console_creationflags(),
             )
         except (subprocess.CalledProcessError, OSError) as exc:
             shutil.rmtree(venv, ignore_errors=True)
@@ -109,5 +114,6 @@ def main(argv: list[str], base_dir: str | None = None) -> int:
         [str(py), "-m", "pytest", *argv],
         cwd=str(root),
         env=pytest_child_env(),
+        **no_console_creationflags(),
     )
     return result.returncode

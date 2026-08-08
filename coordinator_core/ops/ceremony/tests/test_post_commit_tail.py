@@ -37,8 +37,13 @@ Coverage:
   (i) handler_errors_when_close_origin_stub_unregistered.
   (j) handler_happy_path_dispatches_through_run  — the JSON-RPC entry composes
       `run()` correctly and reports exit_code 0/2 per outcome.
-  (k) module_does_not_import_ceremony_lock       — DEC-3 HARD CONSTRAINT: this
-      op must never acquire `ceremony_lock`.
+  (k) module_does_not_import_ceremony_lock       — repo-wide AC9
+      reintroduction guard (docs/plans/2026-08-07-excise-the-ceremony-lock.md
+      § C7), re-pointed here by C7 from the retired DEC-3 per-module scope:
+      no module under `coordinator_core/` or `coordinator/bin/` may import,
+      dynamically import, or define/call anything named exactly
+      `ceremony_lock` (see `_ceremony_lock_guard.py` for exactly what is and
+      is not covered). Not scoped to `post_commit_tail` specifically.
 
 Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a.
 """
@@ -55,6 +60,7 @@ from coordinator_core import ipc
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
 from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE
+from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
 
@@ -461,17 +467,23 @@ def test_handler_reports_exit_code_2_on_stamp_error(monkeypatch, tmp_path):
 
 
 def test_module_does_not_import_ceremony_lock():
-    """DEC-3 (PM-ratified 2026-07-22): this op must never acquire
-    `ceremony_lock`. Checks the actual import surface — not the docstring
-    prose, which legitimately discusses DEC-3 by name."""
+    """Repo-wide AC9 reintroduction guard (re-pointed by C7,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md).
+
+    `ceremony_lock.py` was deleted outright by C7 -- the mutex it implemented
+    was killed by PM ruling (repeated shared-worktree wedges) and its
+    restoration is separately sized, explicitly out of scope for this plan.
+    This is the only executable enforcement of the plan's Anti-scope "do NOT
+    reimplement a mutex" -- but it enforces exactly one identifier
+    (`ceremony_lock`), not the Anti-scope's full "any file, any name" text; a
+    mutex reintroduced under a different name is NOT caught here and needs
+    plan review to catch. See `_ceremony_lock_guard.py`'s module docstring
+    for exactly what is and is not covered, and why."""
     assert not hasattr(m, "CeremonyLockTimeout")
     assert not hasattr(m, "DEFAULT_LOCK_TIMEOUT_SECS")
-    import_lines = [
-        line
-        for line in Path(m.__file__).read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith(("import ", "from ")) and "ceremony_lock" in line
-    ]
-    assert import_lines == [], f"unexpected ceremony_lock import(s): {import_lines}"
+
+    repo_root = Path(__file__).resolve().parents[4]
+    assert_no_ceremony_lock_reintroduction(repo_root)
 
 
 # ---------------------------------------------------------------------------

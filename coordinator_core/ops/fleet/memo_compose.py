@@ -52,13 +52,20 @@ Negative-spec:
   - Does NOT silently truncate an EXPLICITLY authored `summary` over
     `_SUMMARY_MAX_CHARS` (2026-07-22 fix, root-caused via cross-repo/inbox/
     2026-07-22-claude-central-em-snippet-sync-adoption-and-body-drop-
-    verdict.md) — `_validate_compose_params` fails loud (exit_code:1) before
-    `_memo_compose` ever rewrites the draft. A DERIVED summary (the `summary`
-    param omitted) is untouched — `derive_prose_summary` already self-caps.
-    Deliberate divergence from any clamp/truncate behavior in example-doctrine-repo's mirror
+    verdict.md). A DERIVED summary (the `summary` param omitted) is
+    untouched — `derive_prose_summary` already self-caps. Deliberate
+    divergence from any clamp/truncate behavior in example-doctrine-repo's mirror
     (`cross-repo-memo:1810-1830`'s parity note) — the former silent
     `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is exactly the defect the routed
     memo root-caused.
+    2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-memo-
+    summary-cap-warn-at-draft.md § C4): `_validate_compose_params` no
+    longer fails loud on an over-cap explicit summary — it WARNS and
+    SUBSTITUTES the body-derived summary in its place, echoing the author's
+    original text back verbatim on the result envelope
+    (`summary_cap_advisory` / `summary_over_cap_original`). Substitution is
+    never truncation — the invariant above survives unchanged, it is just
+    enforced by substitution now rather than refusal.
   - Does NOT let a draft compose to completion with a resolved-empty summary
     (DEC-1, 2026-07-24 memo-ownership-and-redesign plan) — summary (explicit
     or derived) is UNCONDITIONALLY required (present + non-empty) by the
@@ -93,8 +100,9 @@ from coordinator_core.ops.fleet.memo_draft import (
 )
 from coordinator_core.ops.fleet.memo_send import _TOPIC_SLUG_RE, _yaml_quote
 from coordinator_core.ops.fleet._memo_summary import (
-    _SUMMARY_MAX_CHARS,
     derive_prose_summary,
+    is_placeholder_summary,
+    validate_explicit_summary,
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import parse_yaml
@@ -199,22 +207,33 @@ def _validate_compose_params(params: dict):
         )
 
     summary: Optional[str] = params.get("summary") or None
-    if summary is not None and len(summary) > _SUMMARY_MAX_CHARS:
-        # Fail loud on an over-cap EXPLICITLY authored summary rather than
-        # silently truncating it mid-sentence — same defect class, same fix
-        # shape as memo_send.py's _validate_send_params (2026-07-22 body-drop
-        # verdict memo, cross-repo/inbox/2026-07-22-claude-central-em-
-        # snippet-sync-adoption-and-body-drop-verdict.md). A DERIVED summary
-        # (summary param omitted) is untouched — derive_prose_summary already
-        # self-caps. Diverges deliberately from any example-doctrine-repo mirror clamp behavior.
-        return build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.compose: summary is {len(summary)} chars, cap is "
-            f"{_SUMMARY_MAX_CHARS} — shorten it or omit summary to derive "
-            f"one from the body instead",
-        )
+    summary_cap_advisory: Optional[str] = None
+    summary_over_cap_original: Optional[str] = None
+    # A placeholder-valued summary (memo.draft's self-measuring ruler) is
+    # ABSENT, not an explicit value — fall through to derivation rather than
+    # length-checking or emitting the ruler into a delivered memo (AC5,
+    # docs/plans/2026-08-07-memo-summary-cap-warn-at-draft.md § C3).
+    if is_placeholder_summary(summary):
+        summary = None
+    else:
+        # 2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-
+        # memo-summary-cap-warn-at-draft.md § C4): an over-cap EXPLICITLY
+        # authored summary no longer refuses the compose — it WARNS and
+        # SUBSTITUTES the body-derived summary in its place, echoing the
+        # author's original text back verbatim (never truncated — Anti-
+        # scope: substitution is not truncation). Setting `summary` to None
+        # here routes the handler's own resolution below onto
+        # `derive_prose_summary(body)`, exactly as if the caller had omitted
+        # summary entirely — the underivable-body case is handled by the
+        # handler's existing DEC-1 gate (message updated to name both
+        # conditions when this advisory is present).
+        error = validate_explicit_summary("compose", summary)
+        if error:
+            summary_cap_advisory = error
+            summary_over_cap_original = summary
+            summary = None
 
-    return (dry_run, topic, body, summary)
+    return (dry_run, topic, body, summary, summary_cap_advisory, summary_over_cap_original)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +241,7 @@ def _validate_compose_params(params: dict):
 # ---------------------------------------------------------------------------
 
 @register_op("memo.compose")
-async def _memo_compose(params: dict, repo_root=None) -> dict:
+def _memo_compose(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.compose' UDS op handler.
 
     Fill in (or refine) the body of an EXISTING draft at the CALLING repo's
@@ -266,7 +285,8 @@ async def _memo_compose(params: dict, repo_root=None) -> dict:
     if isinstance(validated, dict):
         return validated  # exit_code:1 setup-error envelope
 
-    dry_run, topic, body, explicit_summary = validated
+    (dry_run, topic, body, explicit_summary, summary_cap_advisory,
+     summary_over_cap_original) = validated
 
     if repo_root is None:
         return build_setup_error_result(
@@ -336,11 +356,11 @@ async def _memo_compose(params: dict, repo_root=None) -> dict:
 
     if explicit_summary is not None:
         # No clamp here (2026-07-22 body-drop verdict memo fix) — an
-        # over-cap EXPLICIT summary already failed loud in
-        # _validate_compose_params, above every other step in this handler,
-        # so an over-cap value can never reach this line. Silently
-        # truncating it here (the former `[:_SUMMARY_MAX_CHARS - 1] + "…"`
-        # clamp) is the exact defect this fix removes.
+        # over-cap EXPLICIT summary is substituted (never truncated) in
+        # _validate_compose_params, above, so an over-cap value can never
+        # reach this line. Silently truncating it here (the former
+        # `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp) is the exact defect this
+        # fix removes.
         resolved_summary = explicit_summary
     else:
         resolved_summary = derive_prose_summary(body)
@@ -351,6 +371,20 @@ async def _memo_compose(params: dict, repo_root=None) -> dict:
     # written as an empty summary field — it fails loud, matching the
     # UNCONDITIONAL send-time requirement this front-loads.
     if not resolved_summary:
+        if summary_cap_advisory is not None:
+            # 2026-08-07 PM ruling (C4): the explicit summary was over cap
+            # AND the body has no derivable prose to substitute in its
+            # place — substitution has nothing to substitute. Name BOTH
+            # conditions, not just "resolved empty" (never deliver an empty
+            # summary).
+            return build_setup_error_result(
+                _MODE, dry_run,
+                f"memo.compose: summary resolved empty — the explicit "
+                f"summary was over cap ({summary_cap_advisory}) and the "
+                f"body has no derivable prose sentence to substitute in its "
+                f"place (DEC-1 requires a non-empty summary before a draft "
+                f"can be sent).",
+            )
         return build_setup_error_result(
             _MODE, dry_run,
             "memo.compose: summary resolved empty — supply an explicit "
@@ -366,6 +400,11 @@ async def _memo_compose(params: dict, repo_root=None) -> dict:
             "summary": resolved_summary,
             "collision": False,
             "note": None,
+            # Additive, non-fatal notice (2026-08-07 warn-and-substitute PM
+            # ruling, AC9) — present iff the explicit `summary` param was
+            # over cap; None on a clean/absent/placeholder summary.
+            "summary_cap_advisory": summary_cap_advisory,
+            "summary_over_cap_original": summary_over_cap_original,
         }])
 
     # ── act path — rewrite frontmatter + body, keep status: draft ───────────
@@ -403,7 +442,15 @@ async def _memo_compose(params: dict, repo_root=None) -> dict:
 
     result = build_act_result(
         _MODE,
-        [{"id": str(target_path), "written": True, "topic": topic, "summary": resolved_summary}],
+        [{
+            "id": str(target_path), "written": True, "topic": topic,
+            "summary": resolved_summary,
+            # Additive, non-fatal notice (2026-08-07 warn-and-substitute PM
+            # ruling, AC9) — mirrors the dry_run candidate's own pair of
+            # fields above.
+            "summary_cap_advisory": summary_cap_advisory,
+            "summary_over_cap_original": summary_over_cap_original,
+        }],
         [],
         [],
     )

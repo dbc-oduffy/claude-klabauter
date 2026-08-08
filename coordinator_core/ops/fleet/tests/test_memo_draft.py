@@ -45,11 +45,13 @@ from coordinator_core.ops.fleet.memo_draft import (
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS as _SEND_SUMMARY_MAX_CHARS
 from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox, unique_nearest_receiver
-from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -161,28 +163,31 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, kind="ask", summary="hi"))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", "hi", "ask", None, False,
-            None, None, None,
+            None, None, None, None,
         )
 
     def test_bad_classify_receiver_type(self):
         result = _validate_draft_params(_base_params(classify_receiver="yes"))
         assert result["exit_code"] == 1
 
-    def test_explicit_summary_over_cap_fails_loud(self, capsys):
-        """2026-07-26 draft-time-discoverability fix (cross-repo/inbox/
-        2026-07-26-example-doctrine-repo-em-memo-send-summary-cap-discoverable-at-
-        draft-time.md): an EXPLICITLY authored over-cap summary must fail
-        loud at draft-param-validation time — same defect class/fix shape as
-        memo_compose.py's _validate_compose_params (2026-07-22 body-drop
-        verdict memo) — never silently truncated."""
+    def test_explicit_summary_over_cap_warns_but_still_returns_summary(self):
+        """2026-08-07 warn-at-draft split (docs/plans/2026-08-07-memo-summary-
+        cap-warn-at-draft.md § C2): an EXPLICITLY authored over-cap summary no
+        longer fails draft-param-validation loud (memo.compose/memo.send
+        still hard-refuse, unchanged) — it validates, the original text is
+        returned unchanged (the handler decides how to keep it out of
+        `summary:`), and the last tuple element carries a non-None advisory
+        naming the actual length and the cap."""
         long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
-        result = _validate_draft_params(_base_params(summary=long_summary))
-        assert result["exit_code"] == 1
-        stderr = capsys.readouterr().err
-        assert str(_SUMMARY_MAX_CHARS) in stderr
-        assert long_summary not in stderr, (
-            "error must not echo the full over-cap summary back"
+        result = _validate_draft_params(_base_params(dry_run=False, summary=long_summary))
+        assert result == (
+            False, "some-topic", "example-retrieval-repo-em", "A draft memo", long_summary,
+            None, None, False, None, None, None, result[11],
         )
+        advisory = result[11]
+        assert advisory is not None
+        assert str(len(long_summary)) in advisory
+        assert str(_SUMMARY_MAX_CHARS) in advisory
 
     def test_explicit_summary_at_cap_passes(self):
         """A summary exactly AT the cap is valid — the gate is strictly-greater-than."""
@@ -190,7 +195,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, summary=at_cap_summary))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", at_cap_summary,
-            None, None, False, None, None, None,
+            None, None, False, None, None, None, None,
         )
 
     def test_draft_and_send_agree_on_the_summary_cap(self):
@@ -270,7 +275,7 @@ class TestScopedToValidation:
         result = _validate_draft_params(_base_params(scoped_to=scoped_to))
         assert result == (
             True, "some-topic", "example-retrieval-repo-em", "A draft memo", None, None, scoped_to, False,
-            None, None, None,
+            None, None, None, None,
         )
 
 
@@ -401,11 +406,12 @@ class TestActWritesDraft:
         content = target.read_text(encoding="utf-8")
         assert str(_SUMMARY_MAX_CHARS) in content
 
-        # And critically: the summary: frontmatter field itself must still
-        # read back as a clean empty string, not corrupted by the notice.
+        # And critically: the summary: frontmatter field itself must round-
+        # trip as the placeholder ruler (AC3/AC4, 2026-08-07 — was '""'),
+        # not corrupted by the body notice, brackets/double-space intact.
         split = split_frontmatter(content)
         assert split is not None
-        assert read_fm_field(split.fm_text, "summary") == '""'
+        assert read_fm_field_unquoted(split.fm_text, "summary") == SUMMARY_PLACEHOLDER
 
     def test_no_receiver_validation_at_draft_time(self, tmp_path):
         """An unresolved/unregistered 'to' still drafts (C2/C4 own receiver validation)."""
@@ -416,6 +422,66 @@ class TestActWritesDraft:
         ))
         assert result["exit_code"] == 0
         assert (sender / "state" / "memo-outbox" / "some-topic.md").exists()
+
+    def test_over_cap_summary_warns_writes_and_keeps_text_out_of_summary_field(
+        self, tmp_path,
+    ):
+        """2026-08-07 warn-at-draft split (AC1, AC2): an over-cap explicit
+        summary no longer blocks the draft. The draft is written, the acted
+        item carries a non-None `summary_cap_advisory` naming the actual
+        length and the cap, the original text is recoverable (preserved
+        verbatim in the body), and — critically — it never lands in the
+        `summary:` frontmatter field (that would be the silent truncation
+        this whole surface exists to prevent)."""
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        over_cap_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
+
+        result = _run(_memo_draft(
+            _base_params(dry_run=False, summary=over_cap_summary), repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        assert len(result["acted"]) == 1
+        advisory = result["acted"][0]["summary_cap_advisory"]
+        assert advisory is not None
+        assert str(len(over_cap_summary)) in advisory
+        assert str(_SUMMARY_MAX_CHARS) in advisory
+
+        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        content = target.read_text(encoding="utf-8")
+        split = split_frontmatter(content)
+        assert split is not None
+
+        # NOT silently written/truncated into summary: — placeholder instead.
+        assert read_fm_field_unquoted(split.fm_text, "summary") == SUMMARY_PLACEHOLDER
+        assert over_cap_summary not in split.fm_text
+
+        # Recoverable: the original over-cap text survives in the body.
+        assert over_cap_summary in content
+
+    def test_clean_summary_advisory_is_none(self, tmp_path):
+        """The advisory field is additive and None on an ordinary in-cap draft."""
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        result = _run(_memo_draft(
+            _base_params(dry_run=False, summary="A short summary."), repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        assert result["acted"][0]["summary_cap_advisory"] is None
+
+    def test_dry_run_over_cap_summary_advisory_present_no_write(self, tmp_path):
+        """dry_run preview surfaces the same advisory without writing anything."""
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        over_cap_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
+
+        result = _run(_memo_draft(
+            _base_params(dry_run=True, summary=over_cap_summary), repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        advisory = result["candidates"][0]["summary_cap_advisory"]
+        assert advisory is not None
+        assert not (sender / "state" / "memo-outbox" / "some-topic.md").exists()
 
 
 # ===========================================================================
@@ -858,13 +924,14 @@ class TestComposeDraftFrontmatter:
         split = split_frontmatter(fm + "\n\nbody\n")
         assert read_fm_field(split.fm_text, "status") == "draft"
 
-    def test_summary_key_present_but_empty_when_none(self):
+    def test_summary_key_present_but_placeholder_when_none(self):
+        """2026-08-07 AC3: no usable summary writes SUMMARY_PLACEHOLDER, not ''."""
         fm = compose_draft_frontmatter(
             from_id="claude-klabauter-engine", to="example-retrieval-repo-em", title="T",
             today="2026-07-21", summary=None, kind=None,
         )
         split = split_frontmatter(fm + "\n\nbody\n")
-        assert read_fm_field(split.fm_text, "summary") == '""'
+        assert read_fm_field_unquoted(split.fm_text, "summary") == SUMMARY_PLACEHOLDER
 
     def test_kind_omitted_when_none(self):
         fm = compose_draft_frontmatter(
@@ -898,7 +965,7 @@ class TestComposeDraftFrontmatter:
             today="2026-07-21", summary=None, kind=None,
         )
         split = split_frontmatter(fm + "\n\nbody\n")
-        assert read_fm_field(split.fm_text, "summary") == '""'
+        assert read_fm_field_unquoted(split.fm_text, "summary") == SUMMARY_PLACEHOLDER
 
     def test_summary_at_cap_passes_through_unchanged(self):
         at_cap = "x" * _SUMMARY_MAX_CHARS
@@ -1055,7 +1122,7 @@ class TestSpaceParam:
         result = _validate_draft_params(_base_params(dry_run=False))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", None, None, None, False,
-            None, None, None,
+            None, None, None, None,
         )
 
     def test_space_is_stripped(self):

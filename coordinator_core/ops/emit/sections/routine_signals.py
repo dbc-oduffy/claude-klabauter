@@ -24,6 +24,7 @@ import io
 import logging
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -82,10 +83,10 @@ def _resolve_coordinator_state_root(coordinator_root: Path) -> Optional[str]:
     if git_root is None:
         return None
     if _cws_same_path(git_root, _cws_claude_home()):
-        claude-klabauter = _cws_claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _cws_claude_klabauter_root()
+        if claude_klabauter_root is None:
             return None
-        return str(Path(claude-klabauter) / "state")
+        return str(Path(claude_klabauter_root) / "state")
     return str(Path(git_root) / "state")
 
 
@@ -168,7 +169,7 @@ def _resolve_distill_root(coordinator_root: Path) -> Path:
     """Resolve the archive/wiki scan root (bash:19-27 script-location + env-fallback).
 
     Prefers the script-location-inferred root (``bin/../../../..``, the pre-W4.2
-    ``.claude/plugins/coordinator/bin`` nesting) when it has an
+    ``.claude/plugins/coordinator-claude/coordinator/bin`` nesting) when it has an
     ``archive/completed`` dir; else falls back to ``CLAUDE_HOME (or ~) /.claude`` —
     mirroring the bash oracle's own two-rung resolution verbatim (its "mandatory
     env-fallback form (verbatim per spec)" comment).
@@ -346,7 +347,7 @@ def _commits_since_last(repo_root: Path, grep: str) -> int:
             stdin=subprocess.DEVNULL,
             cwd=str(repo_root),
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
             # AC-5 no-implicit-cwd: explicit cwd= is redundant with `git -C <repo_root>`
             # (which already overrides git's working directory) but required by the
             # AST-level no-implicit-cwd gate (test_no_implicit_cwd.py), which flags any
@@ -369,7 +370,7 @@ def _commits_since_last(repo_root: Path, grep: str) -> int:
             stdin=subprocess.DEVNULL,
             cwd=str(repo_root),
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if proc.returncode != 0:
             return 0

@@ -167,6 +167,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.archival import _is_terminal_or_archived_child
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.hooks.auto_push import drain_pending_push
@@ -411,18 +412,63 @@ def _is_consumed_at_too_recent(handoff_path: Path) -> bool:
     field name — see coordinator_core/ops/emit/sections/handoffs.py module
     docstring for the exit condition.
 
+    Ledger-first (C5a, this plan chunk): `claimed_at` is resolved via
+    `coordinator_core.claim_state.resolve_claim_state` — the branch-independent
+    claim ledger wins over the tracked-frontmatter mirror whenever it holds a
+    live claim (see that module's docstring for the branch-switch-revert
+    incident this generalizes a fix for). Without this, a baton claimed on
+    another branch (mirror reverted to no claimed_at on this branch) would
+    read as having no claimed_at at all and this floor would return False,
+    silently bypassing the anti-false-abandon protection it exists to
+    provide. `consumed_at` (legacy field name) is still consulted as a
+    frontmatter-only fallback when neither ledger nor mirror carries
+    `claimed_at`, matching the pre-existing dual-field-name tolerance.
+
     Returns False (proceed with archival) when:
     - both claimed_at and consumed_at fields are absent or unreadable
     - the resolved epoch fails to parse (treat as "old" — per shell L379 comment)
     - the resolved timestamp is older than 30 minutes
-    """
-    meta = _read_meta(str(handoff_path))
-    if not meta:
-        return False
 
-    raw = meta.get("claimed_at") or meta.get("consumed_at")
+    Returns True (block archival) when a *live ledger* claim holder is
+    resolved but the ledger record carries no usable claimed_at timestamp —
+    the conservative direction; see C5a P2 review note inline below.
+    """
+    claim_state = resolve_claim_state(handoff_path)
+    raw = claim_state.claimed_at
     if not raw:
-        return False
+        if claim_state.source == "ledger" and claim_state.holder is not None:
+            # Review: coordinator:code-reviewer C5a P2 — a live LEDGER holder
+            # resolved (the atomic-write-ordered source: session/claims.py
+            # writes session_id then claimed_at immediately after, so this
+            # narrow "holder present, timestamp missing" shape is a crash
+            # window, not steady state) but carries no usable claimed_at
+            # timestamp. Do NOT fall through to a raw frontmatter mirror
+            # read here: that mirror field is independent of the resolved
+            # ledger holder and can be stale/unrelated (e.g. a pre-revert
+            # claim), which could push this floor's decision either way on a
+            # baton a live ledger holder currently owns — exactly the
+            # false-abandon bug this floor exists to prevent. Conservative
+            # direction: treat a live-ledger-holder-but-no-timestamp claim as
+            # too-recent so boot sweep does not archive it.
+            #
+            # Scoped to source == "ledger" only — a mirror-resolved holder
+            # (claimed_by set with no claimed_at at all, e.g. a handoff that
+            # was never stamped with a timestamp) is the normal frontmatter
+            # shape this function has always fallen through on; narrowing to
+            # ledger-only avoids treating that steady-state shape as a false
+            # 30-minute floor block.
+            return True
+        # resolve_claim_state only surfaces claimed_at alongside a resolved
+        # holder (ledger or mirror claimed_by/consumed_by) — a mirror that
+        # carries claimed_at with no holder field (or the legacy consumed_at
+        # field name) falls through here, matching the original meta-only
+        # read this function had before the ledger-first migration.
+        meta = _read_meta(str(handoff_path))
+        if not meta:
+            return False
+        raw = meta.get("claimed_at") or meta.get("consumed_at")
+        if not raw:
+            return False
 
     raw_str = str(raw).strip()
 
@@ -1212,6 +1258,28 @@ async def _drain_stranded_predecessors(
             })
             return [], warnings
 
+    # `successor_path` is what keeps this loop off the scope-derived stamp
+    # path. Without it, `params` carries no `sha` and no `kind`, so
+    # `_handler` resolves `stamp_kind` to "scope-derived" unconditionally and
+    # takes `archive_stamp.stamp_shipped_in` through `_resolve_scope_sha`,
+    # `_scope_paths_have_uncommitted_changes` and `_commit_session_id` —
+    # three unmemoised git spawns per stranded pair, with no input this loop
+    # can present that takes a no-spawn branch.
+    #
+    # Passed as `successor_path` rather than as a caller-resolved
+    # `sha`/`kind` pair: `_handler` already owns that resolution (its
+    # `successor_path` branch reuses `archive_stamp._resolve_scope_sha`
+    # against the successor's own path, then sets `kind="successor"`
+    # itself per DR-096), and it derives the worktree the resolution runs
+    # against. Resolving here instead would fork that derivation across two
+    # modules for no gain — same one spawn either way — and would put a
+    # private cross-module symbol on boot's import path. The two are
+    # mutually exclusive by contract, so this is the entrypoint, not a
+    # shortcut past one.
+    #
+    # Iteration bound is the stranded pair set — residue of crashed or
+    # interrupted sessions, normally zero — so one spawn per pair is the
+    # accepted floor here, not a batching failure; see the plan's C26 body.
     extra_state_paths: List[str] = []
     for predecessor_abs, successor_abs in candidates:
         predecessor_rel = rel_id(predecessor_abs, state_worktree)
@@ -1221,6 +1289,7 @@ async def _drain_stranded_predecessors(
             "mode": "supersede",
             "continued_into": successor_rel,
             "exclude": [str(successor_abs)],
+            "successor_path": successor_rel,
         }
         try:
             result = await _archive_transition_handler(params, state_repo_root)

@@ -98,10 +98,13 @@ Negative-spec (hard-won — do NOT reintroduce):
 from __future__ import annotations
 
 import importlib
+import logging as _logging
 import os as _os
 import sys as _sys
 import traceback as _traceback
 from typing import Dict, List, Tuple
+
+_logger = _logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Eager-import table: (dotted module path, human-readable "registers ..." note)
@@ -137,6 +140,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
     ("coordinator_core.ops.fleet.archive_handoffs", 'registers "fleet.archive_completed_handoffs"'),
     ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
+    ("coordinator_core.ops.reap_chain_ancestry_waivers", 'registers "chain_ancestry_waivers.reap"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
@@ -401,6 +405,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.write_surface_manifest",
         'registers "write_surface.emit_manifest"',
     ),
+    (
+        "coordinator_core.ops.diagnostics_probes",
+        'registers "diagnostics.always_succeeds", "diagnostics.always_refuses", '
+        '"diagnostics.always_structural_pin" (write-free transport-failure probes)',
+    ),
 ]
 
 # module dotted-path -> the exception raised the last time we tried to import
@@ -446,6 +455,24 @@ def _eager_import_all() -> None:
             importlib.import_module(module_path)
         except Exception as exc:  # noqa: BLE001 — intentional broad catch, see docstring
             _POISONED_MODULES[module_path] = exc
+            # ERROR-severity logging call (§ FUNCTION gate C4C brief "make the
+            # silent swallow observable") ALONGSIDE the pre-existing stderr
+            # print below — control flow is UNCHANGED (still resilient: no
+            # raise, every other module still gets its own import attempt).
+            # This is purely about making a per-module import failure land
+            # in anything that watches Python's logging machinery (e.g. a
+            # log-aggregation handler attached to the root logger), which a
+            # bare stderr print to an unread hermetic subprocess (§
+            # `coordinator_core/percolate/engine.py` `run_function_gate`,
+            # which only inspects stdout for "GATE_OK"/stderr for a
+            # "GATE_FAIL:" marker it never emits here) does not reach.
+            _logger.error(
+                "coordinator_core.ops: FAILED to import %r (%s: %s) — its "
+                "op(s) will NOT be registered",
+                module_path,
+                type(exc).__name__,
+                exc,
+            )
             print(
                 f"coordinator_core.ops: FAILED to import {module_path!r} "
                 f"({type(exc).__name__}: {exc}) — its op(s) will NOT be "

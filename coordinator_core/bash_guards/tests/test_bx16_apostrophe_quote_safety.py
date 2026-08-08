@@ -29,10 +29,26 @@ round-trip.
 """
 from __future__ import annotations
 
+import platform
+import shutil
 import subprocess
+
+import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
+
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized (see bb48ce7's identical
+    fixture-realism finding on the write-bump test suite). Accepts a
+    ``Path`` or a plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
 def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
@@ -41,7 +57,20 @@ def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.Compl
     dispatch's own Windows-readiness verification -- Git Bash on a
     Windows-with-Git-Bash host) rather than compiling the embedded script
     in-process. This is the only way to prove the OUTER shell quoting
-    survives, not just that the inner Python is syntactically valid."""
+    survives, not just that the inner Python is syntactically valid.
+
+    Explicitly routed through Git Bash on Windows: plain
+    `subprocess.run(shell=True)` there launches cmd.exe, a wholly
+    different tokenizer that cannot parse the `shlex.quote`-produced
+    (POSIX) outer quoting this suite exists to verify, and silently
+    reports "the filename... is incorrect" instead of running anything."""
+    if platform.system() == "Windows":
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("git-bash not found on PATH")
+        return subprocess.run(
+            [bash, "-c", command], capture_output=True, text=True, timeout=timeout
+        )
     return subprocess.run(
         command, shell=True, capture_output=True, text=True, timeout=timeout
     )
@@ -52,7 +81,7 @@ class TestFindExecRewriteApostropheSafety:
         target_dir = tmp_path / "don't-panic"
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")
-        cmd = 'find "%s" -name "*.tmp" -exec rm {} \\;' % target_dir
+        cmd = 'find "%s" -name "*.tmp" -exec rm {} \\;' % _posix(target_dir)
         out = dc.check_find_exec_rewrite(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -64,7 +93,7 @@ class TestFindExecRewriteApostropheSafety:
 class TestGrepViaBashRewriteApostropheSafety:
     def test_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
-        cmd = "grep -rn \"don't\" %s" % tmp_path
+        cmd = "grep -rn \"don't\" %s" % _posix(tmp_path)
         out = dc.check_grep_via_bash_rewrite(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -87,7 +116,7 @@ class TestMultiprobeBannerRewriteApostropheSafety:
 class TestHeadTailPlumbingRewriteApostropheSafety:
     def test_grep_upstream_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
-        cmd = "grep -rn \"don't\" %s | head -n 1" % tmp_path
+        cmd = "grep -rn \"don't\" %s | head -n 1" % _posix(tmp_path)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -99,7 +128,7 @@ class TestHeadTailPlumbingRewriteApostropheSafety:
         target_dir = tmp_path / "don't-panic"
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")
-        cmd = 'find "%s" -name "*.tmp" | head -n 5' % target_dir
+        cmd = 'find "%s" -name "*.tmp" | head -n 5' % _posix(target_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]

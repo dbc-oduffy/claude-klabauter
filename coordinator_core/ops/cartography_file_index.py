@@ -87,7 +87,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("cartography.file_index")
-async def _cartography_file_index(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _cartography_file_index(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "cartography.file_index" handler.
 
     Required params: target_root. Optional: scope (see module docstring

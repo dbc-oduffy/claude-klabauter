@@ -122,9 +122,14 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_INDIRECTION,
     SentinelCreationDetector,
 )
+from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: Widened 2026-08-07 (C4e) from `["Bash"]` -- see `block_approval_sentinel_
+#: creation.py`'s identical note. A direct reference to the shared universe
+#: (C2 declaration-form conversion) -- never a copy or re-wrap.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 #: The exact basename this guard protects -- imported from `_blanket_
@@ -143,8 +148,14 @@ _TARGET_BASENAME = MARKER_BASENAME
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 
 
-def _evaluate(cmd: str):
-    return _detector.evaluate(cmd)
+def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
+    """See `block_approval_sentinel_creation._evaluate`'s identical note --
+    `dialect=None`/`Dialect.BASH` preserves the exact pre-C4e call shape."""
+    if dialect is None or dialect is Dialect.BASH:
+        return _detector.evaluate(cmd)
+    return _detector.evaluate_for_dialect(
+        cmd, dialect, guard_name="block_disarm_marker_sentinel_creation"
+    )
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
@@ -206,8 +217,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Deliberately no try/except here -- fail-CLOSED-on-exception is the
     # dispatcher's job for hard-deny guards; catching and swallowing an
     # unexpected error into a silent allow here would defeat that contract.
-    if (payload.get("tool_name") or "") != "Bash":
+    tool_name = payload.get("tool_name") or ""
+    if tool_name not in MATCHERS:
         return None
+    dialect = dialect_from_tool_name(tool_name)
 
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
@@ -215,7 +228,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
-    deny, reason_kind, reason_class = _evaluate(cmd)
+    deny, reason_kind, reason_class = _evaluate(cmd, dialect)
     if not deny:
         return None
 

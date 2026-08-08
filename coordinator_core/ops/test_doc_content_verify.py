@@ -20,6 +20,7 @@ Three required groups (docs/plans/2026-07-28-human-facing-doc-staleness-detector
 
 from __future__ import annotations
 
+import functools
 import subprocess
 from pathlib import Path
 
@@ -139,10 +140,10 @@ class TestNegativeSurface:
         assert is_excluded("/coordinator:install") is True
 
     def test_exclusion_url_with_scheme(self):
-        assert is_excluded("https://github.com/dbc-example-operator/example-doctrine-repo") is True
+        assert is_excluded("https://github.com/dbc-oduffy/example-doctrine-repo") is True
 
     def test_exclusion_bare_domain(self):
-        assert is_excluded("github.com/dbc-example-operator/example-doctrine-repo") is True
+        assert is_excluded("github.com/dbc-oduffy/example-doctrine-repo") is True
 
     def test_exclusion_glob_metacharacter(self):
         assert is_excluded("coordinator/skills/*/SKILL.md") is True
@@ -318,7 +319,12 @@ def _git_ls_tree_exists(repo_root: str, sha: str, path: str) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+@functools.lru_cache()
 def _doe_repo_available() -> bool:
+    """Cached lazily (not evaluated at class-decoration time) — the `git
+    cat-file` subprocess this performs would otherwise fire on every pytest
+    collection, including --collect-only and -k-filtered runs that never
+    execute a test in this class."""
     root = _doe_root()
     if not root or not Path(root).is_dir():
         return False
@@ -330,16 +336,23 @@ def _doe_repo_available() -> bool:
     return result.returncode == 0
 
 
-@pytest.mark.skipif(
-    not _doe_repo_available(),
-    reason="example-doctrine-repo repo not resolvable/cloned on this machine, or commit b644d5a9 missing",
-)
 class TestAC13HistoricalReplay:
     """Read-only replay via git plumbing (git show / git ls-tree) — never
     checks out, resets, or otherwise mutates the live example-doctrine-repo working
     tree, which other sessions may be using concurrently."""
 
     pytestmark = pytest.mark.real_home
+
+    @pytest.fixture(autouse=True)
+    def _require_doe_repo(self):
+        """Runtime (not collection-time) gate — mirrors the former
+        class-level skipif but defers the git-plumbing probe to first test
+        setup so collection never spawns a process (see
+        _doe_repo_available's docstring)."""
+        if not _doe_repo_available():
+            pytest.skip(
+                "example-doctrine-repo repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
+            )
 
     @staticmethod
     def _repo_exists_at_commit(doe_root: str, sha: str) -> "callable":

@@ -129,6 +129,19 @@ _NON_SUBPROCESS_HELPERS = {
 #: directly by its own real-git tests instead (`test_check_ignore_*` below).
 _STDIN_INPUT_WRAPPERS = {"check_ignore"}
 
+#: `cat_file_batch()` is a public wrapper (promoted from
+#: `ac27_differential_oracle._git_cat_file_batch`, C36) that -- like the
+#: private `_hash_object_stdin_bytes()` above -- deliberately bypasses
+#: `_git()`: it needs raw-bytes stdin/stdout (record boundaries are computed
+#: from byte-length `size` fields in the `cat-file --batch` stream, not text
+#: lines), so `_git()`'s `text=True` leg would mis-decode it. The (a) harness
+#: above asserts `text=True`/`stdin=subprocess.DEVNULL` on every covered
+#: wrapper, neither of which holds here -- covered directly instead by
+#: `test_cat_file_batch_carries_the_windows_safe_creationflag` below, the
+#: same pattern `test_hash_object_stdin_bytes_carries_the_windows_safe_
+#: creationflag` already establishes for the other bytes-mode bypass.
+_BYTES_MODE_WRAPPERS = {"cat_file_batch"}
+
 
 def test_all_public_wrappers_are_covered():
     """Guard: every public function in git_native.py (besides `_git` itself,
@@ -146,6 +159,7 @@ def test_all_public_wrappers_are_covered():
         - _COMPOSITE_ENTRYPOINTS
         - _NON_SUBPROCESS_HELPERS
         - _STDIN_INPUT_WRAPPERS
+        - _BYTES_MODE_WRAPPERS
     )
     covered_funcs = {fn.__name__ for fn, _, _ in _WRAPPER_INVOCATIONS}
     assert public_funcs == covered_funcs, (
@@ -214,6 +228,69 @@ def test_flags_present_on_every_wrapper(fn, args, kwargs):
     # argv[0] is always "git" -- no wrapper shells out to anything else.
     argv = mock_run.call_args.args[0]
     assert argv[0] == "git"
+
+
+#: `--no-optional-locks` is PRE-SUBCOMMAND ONLY (`git status --no-optional-
+#: locks` exits 129, "unknown option") -- see the cross-repo lock-retry
+#: handoff spec this pins. `status_porcelain` is a bare (non-`--cached`) read
+#: invocation measured taking `.git/index.lock` on this shared worktree; the
+#: `diff_cached_*` siblings never took it and are deliberately NOT in this
+#: list.
+_NO_OPTIONAL_LOCKS_WRAPPERS = [
+    (git_native.status_porcelain, ("/tmp/repo",), {}, "status"),
+]
+
+#: `diff_quiet` is the deliberate EXCLUSION, pinned here so a future
+#: consistency-minded sweep does not "finish the job" and silently break the
+#: EOL-phantom filter. It IS a bare worktree diff that takes the lock, but
+#: suppressing that lock also suppresses the stat-cache write-back that lets a
+#: phantom-dirty entry self-heal -- and `commit_gates`' phantom filter is this
+#: wrapper's only production caller. See `git_native.diff_quiet`'s own comment.
+_NO_OPTIONAL_LOCKS_EXCLUDED = [
+    (git_native.diff_quiet, ("/tmp/repo",), {}, "diff"),
+]
+
+
+@pytest.mark.parametrize(
+    "fn, args, kwargs, subcommand",
+    _NO_OPTIONAL_LOCKS_WRAPPERS,
+    ids=[fn.__name__ for fn, _, _, _ in _NO_OPTIONAL_LOCKS_WRAPPERS],
+)
+def test_no_optional_locks_precedes_subcommand(fn, args, kwargs, subcommand):
+    with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
+        fn(*args, **kwargs)
+
+    argv = mock_run.call_args.args[0]
+    assert argv[0] == "git"
+    assert argv[1] == "--no-optional-locks", (
+        f"--no-optional-locks must sit immediately after 'git' and before "
+        f"'{subcommand}' -- placed after the subcommand it fails with exit "
+        f"129 ('unknown option'). Got argv={argv!r}"
+    )
+    assert argv[2] == subcommand
+
+
+@pytest.mark.parametrize(
+    "fn, args, kwargs, subcommand",
+    _NO_OPTIONAL_LOCKS_EXCLUDED,
+    ids=[fn.__name__ for fn, _, _, _ in _NO_OPTIONAL_LOCKS_EXCLUDED],
+)
+def test_phantom_clearing_readers_keep_the_optional_lock(fn, args, kwargs, subcommand):
+    """The exclusion is load-bearing, not an oversight the next sweep should
+    tidy up: these wrappers depend on git's stat-cache WRITE-BACK, which
+    `--no-optional-locks` suppresses, to let a phantom-dirty entry self-heal.
+    Adding the flag here leaves every phantom permanently dirty and re-filtered
+    on each ceremony rather than converging."""
+    with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
+        fn(*args, **kwargs)
+
+    argv = mock_run.call_args.args[0]
+    assert argv[0] == "git"
+    assert "--no-optional-locks" not in argv, (
+        f"{fn.__name__} must NOT carry --no-optional-locks — it relies on the "
+        f"stat-cache write-back the flag suppresses. Got argv={argv!r}"
+    )
+    assert argv[1] == subcommand
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +800,59 @@ def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path)
     assert kwargs["input"] == b"hashed content\n"
     assert "text" not in kwargs
     assert "encoding" not in kwargs
+
+
+def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
+    """`cat_file_batch()` deliberately bypasses `_git()` (raw-bytes stdin/
+    stdout, not `_git()`'s `text=True` leg -- see its own docstring), so it
+    re-implements the `creationflags=CREATE_NO_WINDOW` Windows-safe flag
+    independently rather than inheriting it -- mirrors
+    `test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag`
+    above for the other bytes-mode bypass in this module."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    real_run = subprocess.run
+    captured_kwargs = []
+
+    def _spy(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return real_run(*args, **kwargs)
+
+    with patch("subprocess.run", side_effect=_spy):
+        result = git_native.cat_file_batch(repo, "HEAD", ["file.txt"])
+
+    assert result == {"file.txt": "original\n"}
+    assert len(captured_kwargs) == 1
+    kwargs = captured_kwargs[0]
+    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs["input"] == b"HEAD:file.txt\n"
+    assert "text" not in kwargs
+
+
+def test_cat_file_batch_empty_paths_returns_empty_dict_no_spawn(tmp_path):
+    """Empty `rel_paths` short-circuits to `{}` without spawning a subprocess
+    -- mirrors every other empty-input guard in this module."""
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run") as mock_run:
+        result = git_native.cat_file_batch(repo, "HEAD", [])
+    assert result == {}
+    mock_run.assert_not_called()
+
+
+def test_cat_file_batch_missing_path_resolves_to_none(tmp_path):
+    """A `rel_path` absent at `ref` resolves to `None`, never a raised
+    error or a silently-dropped key -- the "missing" case in
+    `git cat-file --batch`'s own header line."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    result = git_native.cat_file_batch(repo, "HEAD", ["file.txt", "does-not-exist.txt"])
+    assert result == {"file.txt": "original\n", "does-not-exist.txt": None}
 
 
 def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resolved(tmp_path):

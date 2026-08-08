@@ -155,7 +155,7 @@ def _resolve_start_path(
 
 
 @register_op("handoff.lineage_ancestry")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.lineage_ancestry" handler.
 
     Walks the starting handoff's ``origin_handoff`` provenance edge, transitively,

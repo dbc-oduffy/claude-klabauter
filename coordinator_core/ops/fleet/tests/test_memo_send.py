@@ -70,8 +70,8 @@ from coordinator_core.ops.fleet.memo_send import (
     _write_memo_file,
     resolve_sender_id,
 )
-from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.ops.fleet._common import _make_git_env, main_worktree_root
+from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +602,190 @@ class TestScopedToPresenceTriggeredCompleteness:
         )
         assert result["exit_code"] == 1
 
+
+# ===========================================================================
+# 1d. scoped_to.sha resolvability gate (F14 fix, 2026-08-07)
+#
+# state/audits/2026-08-07-claude-klabauter-install-dogfood-friction.md § F14: a
+# supplied-but-unresolvable scoped_to.sha was previously detected only AFTER
+# the memo had already been written and committed into the receiver's tree
+# (the CLI's post-send advisory, _run_scoped_premise_checks). This class
+# covers the engine-side pre-write refusal that closes that gap.
+#
+# Standing PM ruling this MUST NOT widen (2026-08-03, see
+# `_validate_scoped_to`/`_scoped_to_errors` docstrings): scoped_to.sha
+# ABSENT stays unconditionally non-blocking, at every stage. Only a
+# SUPPLIED-but-unresolvable sha refuses. `test_absent_sha_never_blocks_send`
+# below pins that ruling explicitly.
+# ===========================================================================
+
+class TestScopedToShaResolvabilityGate:
+    """Four cases: sha absent (sends); sha resolvable (sends); sha
+    unresolvable (refuses, nothing written); receiver clone unreachable
+    (degrades to advisory — sends, per the unreachable-vs-unresolvable split
+    documented on `_verify_scoped_to_sha_resolvable`)."""
+
+    def test_absent_sha_never_blocks_send(self, tmp_path, monkeypatch):
+        """Pins the 2026-08-03 ruling: scoped_to WITHOUT sha (a directional
+        ask/proposal, or a scoped_to pinned via `version` instead) is
+        UNCHANGED by the F14 gate — it must never block, at any stage. A
+        future edit that widens the F14 refusal to the absent case would
+        quietly re-broaden this into the pre-flight gate that ruling forbids
+        (see `_scoped_to_errors`/`_validate_scoped_to` docstrings, and
+        `_print_premise_check_advisory`'s own 2026-08-03 lifecycle-rule
+        docstring in coordinator/bin/cross-repo-memo)."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core", "version": "1.2.3", "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="f14-sha-absent-test"),
+            "scoped_to": scoped_to,
+        }
+        result = _run(_memo_send(params))
+
+        assert result["exit_code"] == 0, (
+            f"scoped_to with no sha (version-pinned) must never block: {result}"
+        )
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        written = [f for f in inbox.iterdir() if f.name != ".gitkeep"]
+        assert len(written) == 1, "the memo must have been written"
+
+    def test_resolvable_sha_sends(self, tmp_path, monkeypatch):
+        """scoped_to.sha naming a real commit in the receiver's clone sends
+        normally (the gate's pass case)."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        head_sha = _git(
+            receiver_repo, "rev-parse", "HEAD",
+        ).stdout.decode().strip()
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core", "sha": head_sha, "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="f14-sha-resolvable-test"),
+            "scoped_to": scoped_to,
+        }
+        result = _run(_memo_send(params))
+
+        assert result["exit_code"] == 0, (
+            f"a resolvable commit sha must send normally: {result}"
+        )
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        written = [f for f in inbox.iterdir() if f.name != ".gitkeep"]
+        assert len(written) == 1, "the memo must have been written"
+
+    def test_unresolvable_sha_refuses_before_any_write(self, tmp_path, monkeypatch):
+        """scoped_to.sha that does not resolve as a commit in the receiver's
+        clone refuses the send BEFORE anything is written into the receiver's
+        tree (the F14 fix itself)."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core",
+            "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="f14-sha-unresolvable-test"),
+            "scoped_to": scoped_to,
+        }
+        result = _run(_memo_send(params))
+
+        assert result["exit_code"] != 0, (
+            f"an unresolvable sha must refuse the send: {result}"
+        )
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        written = [f for f in inbox.iterdir() if f.name != ".gitkeep"]
+        assert written == [], (
+            "an unresolvable sha must write NOTHING into the receiver's tree"
+        )
+
+    def test_unresolvable_blob_sha_names_the_operator_error(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """A blob SHA supplied where a commit SHA was wanted (the observed
+        operator error named in the F14 dispatch brief) refuses AND the
+        refusal message names it specifically, not just 'does not resolve'.
+
+        The setup-error `reason` is logged, not echoed on the frozen wire
+        envelope (see `build_setup_error_result`'s own docstring) — asserted
+        via caplog, mirroring `test_own_inbox_refusal`'s established pattern
+        for this same envelope shape.
+        """
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        proc = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=str(receiver_repo),
+            input=b"F14 blob-sha test content\n",
+            capture_output=True,
+            check=True,
+        )
+        blob_sha = proc.stdout.decode().strip()
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core", "sha": blob_sha, "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="f14-sha-blob-test"),
+            "scoped_to": scoped_to,
+        }
+        with caplog.at_level("ERROR"):
+            result = _run(_memo_send(params))
+
+        assert result["exit_code"] != 0, f"a blob sha must refuse the send: {result}"
+        assert "blob" in caplog.text.lower(), (
+            f"the logged refusal must name the blob-vs-commit mismatch "
+            f"specifically: {caplog.text}"
+        )
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        written = [f for f in inbox.iterdir() if f.name != ".gitkeep"]
+        assert written == [], "a blob sha must write NOTHING into the receiver's tree"
+
+    def test_unreachable_receiver_clone_degrades_to_advisory(self, tmp_path, monkeypatch):
+        """A receiver clone this process cannot even query (no git repo at the
+        registered path) is an ENVIRONMENT problem, not evidence the pin is
+        wrong — degrades to advisory and the send still proceeds, rather than
+        refusing a possibly-good memo over a local git failure. See
+        `_verify_scoped_to_sha_resolvable`'s module-comment block for the
+        unreachable-vs-unresolvable rationale."""
+        # A plain directory registered as the receiver, deliberately NOT
+        # git-init'd — cross-repo/inbox/ still exists (memo.send's other
+        # machinery needs it), but `git -C <path> rev-parse` has nothing to
+        # resolve against, so the sha probe can never return a clean 0/1.
+        receiver_repo = tmp_path / "unreachable-receiver"
+        (receiver_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core",
+            "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="f14-sha-unreachable-test"),
+            "scoped_to": scoped_to,
+        }
+        result = _run(_memo_send(params))
+
+        assert result["exit_code"] == 0, (
+            f"an unreachable (non-git) receiver clone must degrade to "
+            f"advisory and still send, not refuse: {result}"
+        )
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        written = [f for f in inbox.iterdir()]
+        assert len(written) == 1, "the memo must have been written"
+
     def test_canonical_nine_fields_unchanged_when_no_extras(self, tmp_path, monkeypatch):
         """Regression guard (DR-026 / schema lockstep + strang-03 round-trip fixture):
         with no extras passed, the composed frontmatter keeps byte-identical field
@@ -664,24 +848,41 @@ class TestScopedToPresenceTriggeredCompleteness:
         assert "# Some Heading" not in summary_line
         assert not summary_line.strip().startswith('summary: "#')
 
-    def test_explicit_summary_over_cap_fails_loud_not_truncated(self, capsys):
-        """2026-07-22 body-drop verdict memo (cross-repo/inbox/2026-07-22-
-        claude-central-em-snippet-sync-adoption-and-body-drop-verdict.md):
-        an EXPLICITLY authored summary over _SUMMARY_MAX_CHARS must fail
-        loud (exit_code:1 setup-error) at _validate_send_params — BEFORE
-        _compose_memo ever runs — never silently truncated mid-sentence."""
+    def test_explicit_summary_over_cap_warns_and_substitutes(self):
+        """2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-
+        memo-summary-cap-warn-at-draft.md § C4): an EXPLICITLY authored
+        summary over _SUMMARY_MAX_CHARS no longer fails loud at
+        _validate_send_params — it is sentineled to None (never truncated)
+        so _compose_memo derives from body, with an advisory naming the
+        actual length/cap and the original text echoed back verbatim."""
         long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
         result = _validate_send_params({
             "dry_run": True, "topic": "t", "to": "x-em", "title": "T",
             "body": "Body.", "kind": "fyi", "summary": long_summary,
         })
-        assert isinstance(result, dict), "over-cap explicit summary must fail loud"
+        assert isinstance(result, SendParams)
+        assert result.summary is None
+        assert result.summary_cap_advisory is not None
+        assert str(_SUMMARY_MAX_CHARS) in result.summary_cap_advisory
+        assert result.summary_over_cap_original == long_summary
+
+    def test_explicit_summary_over_cap_and_underivable_body_refuses(self, capsys):
+        """C4: over-cap explicit summary + a body with no derivable prose has
+        nothing to substitute — refuse (DEC-1), never deliver an empty
+        summary (closes the send-side empty-summary hole:
+        `_self_validate_frontmatter_fields` checks `summary is None`, not
+        `summary == ""`, so a naive substitution would have sailed an empty
+        summary onto a delivered memo)."""
+        long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
+        result = _validate_send_params({
+            "dry_run": True, "topic": "t", "to": "x-em", "title": "T",
+            "body": "## Heading\n<!-- comment -->\n\n", "kind": "fyi",
+            "summary": long_summary,
+        })
+        assert isinstance(result, dict), "over-cap + underivable body must refuse"
         assert result["exit_code"] == 1
         stderr = capsys.readouterr().err
-        assert str(_SUMMARY_MAX_CHARS) in stderr
-        assert long_summary not in stderr, (
-            "error must not echo the full over-cap summary back"
-        )
+        assert "no derivable prose" in stderr
 
     def test_explicit_summary_at_cap_passes(self):
         """A summary exactly AT the cap is valid — the gate is strictly-greater-than."""
@@ -715,6 +916,42 @@ class TestScopedToPresenceTriggeredCompleteness:
         })
         assert isinstance(result, dict), "an empty-string summary must fail loud (DEC-1)"
         assert result["exit_code"] == 1
+
+    def test_placeholder_summary_is_treated_as_absent(self):
+        """AC5: a placeholder-valued summary (memo.draft's ruler) sentinels to
+        None so it reaches _compose_memo's derivation branch, not the send-time
+        required/cap gates — the ruler can never reach a delivered memo."""
+        result = _validate_send_params({
+            "dry_run": True, "topic": "t", "to": "x-em", "title": "T",
+            "body": "Body.", "kind": "fyi", "summary": SUMMARY_PLACEHOLDER,
+        })
+        assert isinstance(result, SendParams)
+        assert result.summary is None
+
+    def test_compose_memo_derives_when_summary_is_placeholder(self):
+        """AC5: _compose_memo itself sentinels a placeholder-valued summary to
+        None (defense-in-depth for direct callers bypassing
+        _validate_send_params) and derives from body instead of emitting the
+        ruler verbatim into the delivered memo."""
+        content = _compose_memo(
+            from_id="sender-repo-alpha",
+            to="example-retrieval-repo-em",
+            topic="placeholder-summary",
+            title="Placeholder Summary",
+            body="Actual prose sentence here.",
+            kind="fyi",
+            summary=SUMMARY_PLACEHOLDER,
+            supersedes=None,
+            today="2026-07-21",
+        )
+        split = split_frontmatter(content)
+        assert split is not None
+        summary_line = next(
+            line for line in split.fm_text.splitlines()
+            if line.strip().startswith("summary:")
+        )
+        assert summary_line == 'summary: "Actual prose sentence here."'
+        assert SUMMARY_PLACEHOLDER not in content
 
     def test_compose_memo_raises_on_over_cap_explicit_summary(self):
         """Defense-in-depth: a direct _compose_memo caller that bypasses
@@ -860,6 +1097,40 @@ class TestEnvelopeShape:
             f"got {target.name!r}"
         )
         assert _sender_slug(_ENGINE_ACTOR_ID) in target.name
+
+    def test_act_over_cap_summary_substitutes_and_warns_end_to_end(self, tmp_path, monkeypatch):
+        """2026-08-07 PM ruling (AC9/AC10, C4): a full memo.send delivery with
+        an over-cap explicit summary SUCCEEDS — the delivered memo's
+        `summary:` is the body-derived one, the acted entry carries the
+        advisory + the author's original text verbatim, and no prefix of the
+        163-char original ever reaches the delivered file (substitution, not
+        truncation)."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        long_summary = "S" * 163
+        params = {
+            **_base_params(dry_run=False, topic="over-cap-substitute-test"),
+            "body": "Derived from body sentence here. More body.",
+            "summary": long_summary,
+        }
+        result = _run(_memo_send(params))
+
+        assert result["exit_code"] == 0
+        acted = result["acted"][0]
+        assert acted["summary_cap_advisory"] is not None
+        assert str(_SUMMARY_MAX_CHARS) in acted["summary_cap_advisory"]
+        assert acted["summary_over_cap_original"] == long_summary
+
+        target = Path(acted["id"])
+        split = split_frontmatter(target.read_text(encoding="utf-8"))
+        summary_line = next(
+            line for line in split.fm_text.splitlines()
+            if line.strip().startswith("summary:")
+        )
+        assert summary_line == 'summary: "Derived from body sentence here."'
+        assert long_summary[:20] not in target.read_text(encoding="utf-8")
 
     def test_act_written_memo_has_schema_valid_frontmatter(self, tmp_path, monkeypatch):
         """Written memo has required frontmatter: to/from/status:open/delivery_mode."""
@@ -1815,6 +2086,26 @@ class TestInternalHelpers:
         repo = _make_receiver_git_repo(tmp_path)
         result = _run(_git_check_ignore(repo, "cross-repo/inbox/2026-07-05-test.md"))
         assert result is False  # path not gitignored → safe to deliver
+
+    def test_make_git_env_forwards_coordinator_session_id(self, monkeypatch):
+        """_make_git_env forwards COORDINATOR_SESSION_ID (highest tier of
+        resolve_session_id's precedence), not just CLAUDE_SESSION_ID /
+        CLAUDE_CODE_SESSION_ID.
+
+        Regression for a bug where a caller relying on COORDINATOR_SESSION_ID
+        to resolve the caller's session id silently fell through to
+        CLAUDE_SESSION_ID inside a fleet git subprocess, so the downstream
+        prepare-commit-msg hook stamped the wrong Session-Id: trailer.
+        """
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "PROBE-COORD-SID")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "PROBE-CLAUDE-SID")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "PROBE-CLAUDE-CODE-SID")
+
+        env = _make_git_env()
+
+        assert env.get("COORDINATOR_SESSION_ID") == "PROBE-COORD-SID"
+        assert env.get("CLAUDE_SESSION_ID") == "PROBE-CLAUDE-SID"
+        assert env.get("CLAUDE_CODE_SESSION_ID") == "PROBE-CLAUDE-CODE-SID"
 
     def test_read_registry_repos_skips_empty_string_values(self, tmp_path, monkeypatch):
         """_read_registry_repos excludes declared-but-unset (empty string) keys."""
@@ -3157,6 +3448,130 @@ class TestResolveSenderIdDegradation:
         assert str(exc) in caplog.text, (
             f"warning must name the underlying error: {caplog.text}"
         )
+
+
+class TestPublishMirrorPathCrossCheck:
+    """2026-08-07 incident regression: `resolve_receiver_inbox()` resolves
+    purely through `repos.*` and never consulted `publish.mirrors.*`, so a
+    repo registered as an ordinary `repos.<key>` receiver that is ALSO a
+    declared `publish.mirrors.<key>` OSS mirror delivered uncaught — even
+    when `publish.mirrors.<key>.owner` was never set (only `.path` was, the
+    exact `claude_klabauter` registration gap). This must now fail loud
+    BEFORE any write, regardless of whether `.owner` is set.
+    """
+
+    def _make_home_with_mirror(self, tmp_path: Path, mirror_repo: Path, *, owner: str | None):
+        """`_make_claude_home` only writes `repos.*` — this test additionally
+        needs a `[publish.mirrors.<key>]` table in the SAME registry.local.toml,
+        so the registry is hand-assembled here rather than reusing that helper.
+        """
+        claude_home = tmp_path / "claude-home"
+        machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+        machine_local.mkdir(parents=True)
+        (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
+        toml_val = str(mirror_repo).replace("\\", "\\\\").replace('"', '\\"')
+        lines = [f'"repos.claude_klabauter" = "{toml_val}"']
+        lines.append(f'"publish.mirrors.claude_klabauter.path" = "{toml_val}"')
+        if owner is not None:
+            lines.append(f'"publish.mirrors.claude_klabauter.owner" = "{owner}"')
+        (machine_local / "registry.local.toml").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+        return claude_home
+
+    def test_mirror_with_owner_set_rejected_before_write(self, tmp_path, monkeypatch):
+        mirror_repo = tmp_path / "claude-klabauter"
+        (mirror_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = self._make_home_with_mirror(tmp_path, mirror_repo, owner="claude-klabauter-em-owner")
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(_base_params(to="claude-klabauter-em", dry_run=True)))
+
+        assert result["exit_code"] == 1
+        assert not list((mirror_repo / "cross-repo" / "inbox").glob("*.md"))
+
+    def test_mirror_with_no_owner_set_still_rejected(self, tmp_path, monkeypatch):
+        """The exact claude_klabauter gap: `.path` declared, `.owner` NEVER
+        set. Must still reject — owner-independence is the whole fix."""
+        mirror_repo = tmp_path / "claude-klabauter"
+        (mirror_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = self._make_home_with_mirror(tmp_path, mirror_repo, owner=None)
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(_base_params(to="claude-klabauter-em", dry_run=True)))
+
+        assert result["exit_code"] == 1
+        assert not list((mirror_repo / "cross-repo" / "inbox").glob("*.md"))
+
+    def test_ordinary_non_mirror_receiver_unaffected(self, tmp_path, monkeypatch):
+        """Control: a receiver with no publish.mirrors.* entry at all must
+        resolve and deliver normally — this fix must not over-block."""
+        receiver_repo = tmp_path / "some-sibling-repo"
+        (receiver_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = _make_claude_home(tmp_path, {"some_sibling_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(_base_params(to="some-sibling-repo-em", dry_run=True)))
+
+        assert result["exit_code"] == 0
+
+    def _make_home_with_nested_mirror(
+        self, tmp_path: Path, mirror_root: Path, receiver_repo: Path
+    ):
+        """Registers `repos.claude_klabauter` at `receiver_repo` (a path NESTED
+        inside `mirror_root`, not equal to it) and `publish.mirrors.claude_klabauter.path`
+        at `mirror_root` — the review-brief containment case, one path segment
+        removed from the exact-equality incident shape."""
+        claude_home = tmp_path / "claude-home"
+        machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+        machine_local.mkdir(parents=True)
+        (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
+
+        def _toml_escape(p: Path) -> str:
+            return str(p).replace("\\", "\\\\").replace('"', '\\"')
+
+        lines = [
+            f'"repos.claude_klabauter" = "{_toml_escape(receiver_repo)}"',
+            f'"publish.mirrors.claude_klabauter.path" = "{_toml_escape(mirror_root)}"',
+            '"publish.mirrors.claude_klabauter.owner" = "claude-klabauter-em-owner"',
+        ]
+        (machine_local / "registry.local.toml").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+        return claude_home
+
+    def test_nested_subdirectory_of_mirror_rejected(self, tmp_path, monkeypatch):
+        """Finding P2: a receiver registered at a path NESTED inside a declared
+        mirror clone (not the mirror root itself) must still be caught by the
+        publish-mirror cross-check — exact-path-equality alone missed this."""
+        mirror_root = tmp_path / "claude-klabauter"
+        receiver_repo = mirror_root / "subdir" / "nested-receiver"
+        (receiver_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = self._make_home_with_nested_mirror(tmp_path, mirror_root, receiver_repo)
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(_base_params(to="claude-klabauter-em", dry_run=True)))
+
+        assert result["exit_code"] == 1
+        assert not list((receiver_repo / "cross-repo" / "inbox").glob("*.md"))
+
+    def test_sibling_prefix_sharing_directory_not_treated_as_inside_mirror(
+        self, tmp_path, monkeypatch
+    ):
+        """Control: a directory whose NAME merely shares a string prefix with
+        the mirror root (e.g. `claude-klabauter-notes` vs `claude-klabauter`)
+        must NOT be treated as nested inside the mirror — a bare
+        `str.startswith` containment check would wrongly match this."""
+        mirror_root = tmp_path / "claude-klabauter"
+        sibling_repo = tmp_path / "claude-klabauter-notes"
+        (mirror_root).mkdir(parents=True)
+        (sibling_repo / "cross-repo" / "inbox").mkdir(parents=True)
+        claude_home = self._make_home_with_nested_mirror(tmp_path, mirror_root, sibling_repo)
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(_base_params(to="claude-klabauter-em", dry_run=True)))
+
+        assert result["exit_code"] == 0
 
 
 # ===========================================================================

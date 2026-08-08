@@ -1098,7 +1098,7 @@ def test_resolve_coordinator_live_path_tier1_success(monkeypatch):
     assert maximalist._resolve_coordinator_live_path() == "/tier1/live"
 
 
-def test_resolve_coordinator_live_path_falls_back_to_tier2_on_tier1_error(monkeypatch):
+def test_resolve_coordinator_live_path_falls_back_to_tier2_on_tier1_error(monkeypatch, tmp_path):
     """Tier 1 raising `ResolveCoordinatorCloneError` (native peer's
     unresolvable-failure contract) falls through to the `claude-home
     plugins` Tier 2 fallback."""
@@ -1108,6 +1108,19 @@ def test_resolve_coordinator_live_path_falls_back_to_tier2_on_tier1_error(monkey
         raise rcc.ResolveCoordinatorCloneError("no readable coordinator content root found")
 
     monkeypatch.setattr(rcc, "resolve_content_root", raise_unresolvable)
+
+    # `_claude_home_cli_argv` (called by the Tier-2 fallback under test)
+    # probes real machine locations for a delivered `claude-home.cmd`
+    # (settings-home first, then the retired compat mirror, then PATH)
+    # before falling back to the bare `"claude-home"` name -- a real
+    # provisioned dev box (this one included, post-installer-run) has one
+    # at `~/.coordinator-claude-settings/bin/claude-home.CMD`, so the bare-
+    # name assumption below only held on a machine with no such install.
+    # Point every probed env var at an empty tmp_path so this test doesn't
+    # depend on the host's real install state.
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.setattr(maximalist.shutil, "which", lambda _name: None)
 
     def fake_run(argv, **kwargs):
         assert argv == ["claude-home", "plugins"]

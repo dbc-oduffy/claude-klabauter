@@ -150,6 +150,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -199,15 +200,22 @@ def _iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _claimant(fm: dict) -> Optional[str]:
-    """Dual-vocab (DR-084) read of the handoff's current claim holder, if any."""
-    value = fm.get("claimed_by")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    value = fm.get("consumed_by")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
+    """Ledger-first (DR-ledger-authoritative) read of the handoff's current claim
+    holder, if any.
+
+    Routes through `coordinator_core.claim_state.resolve_claim_state` rather than
+    reading the tracked-frontmatter mirror directly — a desynced mirror (branch
+    switch reverted `claimed_by`/`consumed_by` while the branch-independent claim
+    ledger still holds a live claim) must never read as "unclaimed" here: this
+    leg's write TERMINALIZES the candidate, so a false "no claimant" is the
+    highest-severity failure mode of the seven C6a sites.
+
+    `repo_root` here is the git COMMON dir (see `_handler`'s own precondition
+    docstring) — passed straight through as `resolve_claim_state`'s `common_dir`
+    to skip a redundant `git_common_dir` resolution on this hot predicate path.
+    """
+    return resolve_claim_state(candidate_path, common_dir=repo_root).holder
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +298,9 @@ async def _predicate_refusal(
             "with terminal — live-but-blocked-on-something-else, not simply idle"
         )
 
-    # Leg (a) — claimed by a live session.
-    claimant = _claimant(fm)
+    # Leg (a) — claimed by a live session. Ledger-first (see _claimant) — a
+    # desynced mirror never reads as "unclaimed" here.
+    claimant = _claimant(candidate_path, repo_root)
     if claimant is not None:
         live_sids = resolve_live_session_ids()
         if claimant in live_sids:

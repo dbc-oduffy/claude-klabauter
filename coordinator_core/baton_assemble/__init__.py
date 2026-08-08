@@ -198,6 +198,7 @@ from coordinator_core.ops.render_project_tracker import tracker_is_hand_curated
 from coordinator_core.resolution.facade import resolve_operator_config
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session.scope import project_self_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 
@@ -212,7 +213,7 @@ EXIT_TRANSPORT_FAIL = 3
 
 KINDS = ("handoff", "spinoff")
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 
 class BriefResult(NamedTuple):
@@ -314,6 +315,29 @@ def _fm_field(fm: str, key: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _repo_rel_handoff_path(basename: str) -> str:
+    """`state/handoffs/<basename>` as a POSIX-separated repo-relative path --
+    the ONE constructor for every such path this module computes.
+
+    2026-08-07 break-class fix (Windows-first-class). These paths do not stay
+    internal: `lineage["output_path"]` becomes d1's `--out`, d2's lint target,
+    d6's `exclude`, and -- durably -- the PREDECESSOR's `continued_into:`
+    frontmatter, the succession edge d6 exists to write. `str(Path("state") /
+    "handoffs" / x)` renders `state\\handoffs\\x.md` on Windows, so a baton
+    minted here authored a backslash-separated edge into a tracked file that
+    every consumer (and every peer platform in a fleet whose `~/.claude` is
+    synced with a Mac) resolves as posix. Every OTHER path this module hands
+    back is already `.as_posix()`-normalized (`_resolve_qualified_path_or_raise`,
+    the predecessor/additional-predecessor resolution, `_fm_path_value`) -- this
+    was the sole native-separator holdout, and it was the one that reached
+    frontmatter.
+
+    Negative-spec: takes a BASENAME, never a path fragment -- a caller with a
+    directory component of its own does not belong here.
+    """
+    return (Path("state") / "handoffs" / basename).as_posix()
+
+
 def _normalize_artifact_path(artifact_path: str) -> str:
     """Normalizes a bare slug -- no path separator, no `.md` extension --
     into `state/handoffs/<YYYY-MM-DD>-<slug>.md`. Anything that already
@@ -348,7 +372,7 @@ def _normalize_artifact_path(artifact_path: str) -> str:
     if "/" in artifact_path or "\\" in artifact_path or artifact_path.endswith(".md"):
         return artifact_path
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    return str(Path("state") / "handoffs" / f"{date_str}-{artifact_path}.md")
+    return _repo_rel_handoff_path(f"{date_str}-{artifact_path}.md")
 
 
 def _compute_fresh_output_path(
@@ -467,7 +491,7 @@ def _compute_fresh_output_path(
     else:
         slug = "untitled"
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    candidate = str(Path("state") / "handoffs" / f"{date_str}-{slug}.md")
+    candidate = _repo_rel_handoff_path(f"{date_str}-{slug}.md")
     if root is None:
         return candidate
 
@@ -549,15 +573,13 @@ def _compute_fresh_output_path(
         return candidate
 
     time_str = datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S")
-    candidate = str(Path("state") / "handoffs" / f"{date_str}_{time_str}_{slug}.md")
+    candidate = _repo_rel_handoff_path(f"{date_str}_{time_str}_{slug}.md")
     if not _exists(candidate):
         return candidate
 
     counter = 2
     while True:
-        candidate = str(
-            Path("state") / "handoffs" / f"{date_str}_{time_str}_{slug}-{counter}.md"
-        )
+        candidate = _repo_rel_handoff_path(f"{date_str}_{time_str}_{slug}-{counter}.md")
         if not _exists(candidate):
             return candidate
         counter += 1
@@ -789,10 +811,18 @@ def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
         # `state/handoffs/<x>.md`) invisible to the `mine`/`touched.txt`
         # intersection below.
         result = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "--no-optional-locks",
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
             capture_output=True,
             text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError as exc:
         return {
@@ -1050,7 +1080,7 @@ def _adopt_prior_attempt_scaffold_path(
 
     if len(candidates) != 1:
         return None
-    return str(Path("state") / "handoffs" / candidates[0])
+    return _repo_rel_handoff_path(candidates[0])
 
 
 def _assert_no_directive_writes_over_input(

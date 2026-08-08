@@ -28,7 +28,6 @@ Spec backlink: cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 from pathlib import Path
 
@@ -793,9 +792,7 @@ class TestHandler:
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-x.md", sender="a-em")
-        result = asyncio.run(
-            _memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)})
-        )
+        result = _memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)})
         assert result["exit_code"] == 0
         assert result["dry_run"] is True
         assert result["mode"] == _MODE
@@ -806,7 +803,7 @@ class TestHandler:
     def test_handler_without_repo_root_or_inbox_dir_fails_loud(self):
         # The frozen fleet envelope carries no reason field — the exit_code:1
         # setup-error shape IS the signal (the reason is logged daemon-side).
-        result = asyncio.run(_memo_blitz_buckets({"dry_run": True}))
+        result = _memo_blitz_buckets({"dry_run": True})
         assert result["exit_code"] == 1
         assert result["mode"] == _MODE
         assert result["candidates"] == []
@@ -828,9 +825,7 @@ class TestHandler:
             supersedes="2026-07-20-a-em-old.md",
             body="See 2026-07-20-a-em-old.md. Superseding it, and see foo.py too.\n",
         )
-        result = asyncio.run(
-            _memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)})
-        )
+        result = _memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)})
         assert result["dry_run"] is True
         assert result["acted"] == []
         for candidate in result["candidates"]:
@@ -843,6 +838,6 @@ class TestHandler:
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-x.md", sender="a-em")
         before = {p: p.read_bytes() for p in sorted(tmp_path.rglob("*")) if p.is_file()}
-        asyncio.run(_memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)}))
+        _memo_blitz_buckets({"dry_run": True, "inbox_dir": str(inbox)})
         after = {p: p.read_bytes() for p in sorted(tmp_path.rglob("*")) if p.is_file()}
         assert before == after

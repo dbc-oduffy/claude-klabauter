@@ -743,7 +743,7 @@ class TestSelfResolutionFromClaimLedger:
 
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
-        assert lineage["predecessor"] == str(single.relative_to(tmp_path))
+        assert lineage["predecessor"] == single.relative_to(tmp_path).as_posix()
         assert lineage["standalone_no_predecessor_reason"] is None
 
     def test_two_held_claims_produce_primary_and_additional_predecessor(self, tmp_path, monkeypatch):
@@ -774,8 +774,8 @@ class TestSelfResolutionFromClaimLedger:
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
 
-        assert lineage["predecessor"] == str(first_claimed.relative_to(tmp_path))
-        assert lineage["additional_predecessors"] == [str(second_claimed.relative_to(tmp_path))]
+        assert lineage["predecessor"] == first_claimed.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [second_claimed.relative_to(tmp_path).as_posix()]
 
         d6s = [
             d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
@@ -812,8 +812,8 @@ class TestSelfResolutionFromClaimLedger:
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
 
-        assert lineage["predecessor"] == str(primary.relative_to(tmp_path))
-        assert lineage["additional_predecessors"] == [str(archived_extra.relative_to(tmp_path))]
+        assert lineage["predecessor"] == primary.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [archived_extra.relative_to(tmp_path).as_posix()]
 
         d6s = [
             d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
@@ -840,8 +840,8 @@ class TestSelfResolutionFromClaimLedger:
 
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
-        assert lineage["predecessor"] == str(earlier_by_name.relative_to(tmp_path))
-        assert lineage["additional_predecessors"] == [str(later_by_name.relative_to(tmp_path))]
+        assert lineage["predecessor"] == earlier_by_name.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [later_by_name.relative_to(tmp_path).as_posix()]
 
     def test_no_resolvable_session_id_raises(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)
@@ -1224,7 +1224,13 @@ class TestNoDirectiveWritesOverInputBackstop:
         directives = [
             {"id": "dX", "cli": "some-cli", "args": [f"--out={real}"], "depends_on": None},
         ]
-        with pytest.raises(ValueError, match=re.escape(str(real))):
+        # The guard formats the offending path with `!r`, which DOUBLES every
+        # backslash on Windows -- matching `re.escape(str(real))` therefore
+        # compared the raw path against a repr-escaped message and failed for a
+        # reason that had nothing to do with the guard (which fires correctly).
+        # `repr(...)` here mirrors the message's own rendering on both
+        # platforms rather than hard-coding either one's separator.
+        with pytest.raises(ValueError, match=re.escape(repr(str(real)))):
             ba._assert_no_directive_writes_over_input(directives, str(real), tmp_path)
 
     def test_no_raise_when_input_path_does_not_exist_on_disk(self, tmp_path):
@@ -1386,9 +1392,9 @@ class TestStandaloneHandoffSlugFromTitle:
         out_value = ba._compute_fresh_output_path(
             "", tmp_path, title="Some Standalone Title!"
         )
-        assert out_value == str(
+        assert out_value == (
             Path("state") / "handoffs" / f"{today}-some-standalone-title.md"
-        )
+        ).as_posix()
 
     def test_empty_artifact_path_and_no_title_falls_back_to_untitled(self, tmp_path):
         """Defect B's 'also handle' case: no title AND no artifact path must
@@ -1398,7 +1404,7 @@ class TestStandaloneHandoffSlugFromTitle:
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         out_value = ba._compute_fresh_output_path("", tmp_path)
-        assert out_value == str(Path("state") / "handoffs" / f"{today}-untitled.md")
+        assert out_value == (Path("state") / "handoffs" / f"{today}-untitled.md").as_posix()
         assert not out_value.endswith("-.md")
 
     def test_nonempty_artifact_path_ignores_title(self, tmp_path):
@@ -1415,7 +1421,7 @@ class TestStandaloneHandoffSlugFromTitle:
         out_value = ba._compute_fresh_output_path(
             str(artifact), tmp_path, title="Totally Different Title"
         )
-        assert out_value == str(Path("state") / "handoffs" / f"{today}-some-plan.md")
+        assert out_value == (Path("state") / "handoffs" / f"{today}-some-plan.md").as_posix()
 
     def test_brief_end_to_end_standalone_handoff_succeeds_with_slugified_title(
         self, tmp_path, monkeypatch
@@ -3654,6 +3660,208 @@ class TestDispatchHandoffSupersedePredecessor:
         assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
 
 
+#: A predecessor whose FRONTMATTER carries no claim at all -- the exact
+#: on-disk shape of the 2026-08-07 incident predecessor, which was claimed on
+#: one branch (commit 11fe08d51 stamped `status: claimed`) while the tree sat
+#: on another that never received that commit. Deliberately the SAME field set
+#: `_PREDECESSOR_FM` carries minus the two claim fields, so a test pairing the
+#: two isolates the claim and nothing else.
+_UNCLAIMED_PREDECESSOR_FM = [
+    "handoff_id: hnd-pred-1a2b4c",
+    "status: open",
+    "deployment_state: ready_to_fire",
+    "title: Predecessor handoff",
+    "created: 2026-07-27",
+    "branch: work/test/2026-01-01",
+    'predecessor: "none"',
+    "category: infra",
+    "summary: predecessor whose claim lives only in the durable ledger",
+    "pickup_ready: true",
+]
+
+
+def _seed_ledger_handoff_claim(
+    repo_root: Path,
+    basename: str,
+    session_id: str = "test-session",
+    claimed_at: str = "2026-08-07T10:46:34Z",
+) -> Path:
+    """Seed the DURABLE handoff-claims ledger entry via the same
+    `handoff_claim_dir` convention production writes and reads
+    (`ops/fleet/_common`), never a hand-rolled path."""
+    from coordinator_core.ops.fleet._common import handoff_claim_dir
+
+    claim_dir = handoff_claim_dir(repo_root / ".git", Path(basename))
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+    return claim_dir
+
+
+class TestSupersedeReconcilesClaimFromDurableLedger:
+    """2026-08-07 break-class fix -- the ledger/frontmatter split brain.
+
+    LIVE INCIDENT. The claim ledger lives under `.git/` (branch-independent,
+    shared by every worktree); its frontmatter mirror is a TRACKED file, and
+    therefore branch-dependent. A session claimed a baton on branch
+    `two-tier-engine-root` (commit 11fe08d51); the tree was later on `main`,
+    which never carried that commit. `brief()` resolved the predecessor FROM
+    the ledger and armed d6; d6's DR-242 gate read the frontmatter half, found
+    no claim, and degraded `predecessor-not-claimed-or-shipped`. The
+    fully-worked baton was left advertising `pickup_ready: true`, and the
+    manual `handoff-archive-transition supersede` route refused identically,
+    leaving hand-editing frontmatter as the only remedy.
+
+    The fix consults the ledger -- a durable, PREDECESSOR-SIDE claim record,
+    emphatically not the successor-named-child evidence DR-242 § 2 forbids --
+    and re-stamps the claim through the existing single writer before
+    superseding. These tests pin BOTH halves: it reconciles when the ledger
+    holds a claim, and it refuses exactly as before when it does not."""
+
+    @staticmethod
+    def _seed_repo(repo: Path, fm: list) -> Path:
+        _init_repo(repo)
+        predecessor = _write_artifact(repo / _PRED_REL, list(fm))
+        _git(repo, "add", _PRED_REL)
+        _git(repo, "commit", "-m", "add predecessor")
+        return predecessor
+
+    def test_ledger_claim_reconciles_frontmatter_and_the_op_is_composed(
+        self, tmp_path, monkeypatch
+    ):
+        """The load-bearing assertion: an unclaimed-on-disk predecessor whose
+        claim lives in the durable ledger reaches `handoff.archive_transition`
+        (the op is composed, not skipped) AND its frontmatter is re-stamped
+        from the ledger record -- session id and instant both, so the restored
+        claim carries the real holder's provenance rather than a synthesised
+        one."""
+        repo = tmp_path / "repo"
+        predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
+        _seed_ledger_handoff_claim(
+            repo, "predecessor.md", session_id="sid-real-holder", claimed_at="2026-08-07T10:46:34Z"
+        )
+
+        # Only the ARCHIVE transition is faked -- the claim re-stamp routes to
+        # the real `handoff.transition` op, because "was the frontmatter
+        # genuinely reconciled?" is precisely what this test asserts.
+        calls: list = []
+        real_invoke = ba_apply._invoke_op_in_process
+
+        def _routed(op_name, params, repo_root):
+            if op_name == "handoff.archive_transition":
+                calls.append(params)
+                return {"exit_code": 0, "superseded": True, "moved": True}
+            return real_invoke(op_name, params, repo_root)
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _routed)
+
+        result = ba_apply._dispatch_handoff_supersede_predecessor(
+            [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
+        )
+
+        assert result.get("degraded") is None
+        assert len(calls) == 1, "the supersede op must actually be composed"
+        text = predecessor.read_text(encoding="utf-8")
+        assert "status: claimed" in text
+        assert "claimed_by: sid-real-holder" in text
+        assert "2026-08-07T10:46:34Z" in text
+
+    def test_no_ledger_record_leaves_the_dr242_refusal_verbatim(self, tmp_path, monkeypatch):
+        """DR-242 is NOT weakened: with no ledger entry there is no independent
+        evidence, so the op is never composed, the predecessor is left
+        byte-identical, and the degrade reason is unchanged."""
+        repo = tmp_path / "repo"
+        predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
+        before = predecessor.read_text(encoding="utf-8")
+
+        calls: list = []
+        monkeypatch.setattr(
+            ba_apply,
+            "_invoke_op_in_process",
+            lambda op_name, params, repo_root: calls.append(op_name),
+        )
+
+        result = ba_apply._dispatch_handoff_supersede_predecessor(
+            [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
+        )
+
+        assert calls == []
+        assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
+        assert predecessor.read_text(encoding="utf-8") == before
+
+    def test_legacy_pid_only_claim_dir_is_not_evidence(self, tmp_path, monkeypatch):
+        """A claim dir carrying no `session_id` (the legacy pid-only residual)
+        names no holder, and `handoff.transition` verb="claim" fails loud on an
+        empty session id rather than stamping `claimed_by:` empty. Treated as
+        no evidence -- the refusal stands, and nothing is written."""
+        repo = tmp_path / "repo"
+        predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
+        claim_dir = _seed_ledger_handoff_claim(repo, "predecessor.md")
+        (claim_dir / "session_id").unlink()
+        before = predecessor.read_text(encoding="utf-8")
+
+        calls: list = []
+        monkeypatch.setattr(
+            ba_apply,
+            "_invoke_op_in_process",
+            lambda op_name, params, repo_root: calls.append(op_name),
+        )
+
+        result = ba_apply._dispatch_handoff_supersede_predecessor(
+            [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
+        )
+
+        assert calls == []
+        assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
+        assert predecessor.read_text(encoding="utf-8") == before
+
+    def test_apply_end_to_end_leaves_no_pickup_ready_predecessor_behind(
+        self, tmp_path, monkeypatch
+    ):
+        """THE INVARIANT, through the whole `apply()` transaction against the
+        REAL `handoff.archive_transition` op: after a successful execution
+        handoff over a genuinely-claimed predecessor, that predecessor is
+        `continued` + `continued_into: <successor>` and d6 does NOT degrade --
+        never left re-advertising itself for a peer session to claim and redo."""
+        harness = _ReplayHarness(
+            tmp_path, monkeypatch, predecessor_fm=_UNCLAIMED_PREDECESSOR_FM
+        )
+        _seed_ledger_handoff_claim(harness.repo, "predecessor.md", session_id="sid-real-holder")
+
+        exit_code, report = harness.run()
+
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        assert report["degraded"] == [], report["degraded"]
+        assert "d6" in report["landed"]
+        text = harness.predecessor_text()
+        assert "deployment_state: continued" in text
+        assert harness.continued_into()
+        assert harness.archived_predecessor() is not None
+
+    def test_succession_edge_is_posix_separated_on_every_platform(
+        self, tmp_path, monkeypatch
+    ):
+        """2026-08-07 Windows-first-class fix, found alongside the incident:
+        `continued_into` is TRACKED FRONTMATTER read by consumers (and by peer
+        platforms in a fleet whose settings home is synced with a Mac) as a
+        posix path. `str(Path("state") / "handoffs" / ...)` rendered
+        `state\\handoffs\\...` on Windows, authoring a succession edge nothing
+        downstream resolves -- a stranded predecessor wearing a different
+        disguise. Asserts the whole computed path family, not just the edge."""
+        harness = _ReplayHarness(tmp_path, monkeypatch)
+        decision = ba.brief("handoff", _PRED_REL, repo_root=harness.repo).decision_object
+        output_path = decision["artifact"]["lineage"]["output_path"]
+        assert "\\" not in output_path, output_path
+        for directive in decision["directives"]:
+            for arg in directive["args"]:
+                assert "\\" not in arg, (directive["id"], arg)
+
+        exit_code, report = harness.run()
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        edge = harness.continued_into()
+        assert edge and "\\" not in edge, edge
+
+
 class TestHandoffSupersedePredecessorEndToEnd:
     """(a) + (b), end to end against the REAL `handoff.archive_transition`
     op (registered via apply.py's own top-of-module import) and a real git
@@ -5054,7 +5262,7 @@ class TestAdoptPriorAttemptScaffoldPathUnit:
         )
         assert ba._adopt_prior_attempt_scaffold_path(
             _PRED_REL, "hnd-pred-1a2b4c", tmp_path
-        ) == str(Path("state") / "handoffs" / "2026-07-29-succ.md")
+        ) == (Path("state") / "handoffs" / "2026-07-29-succ.md").as_posix()
 
     def test_a_child_naming_a_different_predecessor_is_not_adopted(self, tmp_path):
         """AC-4. The whole corpus of live handoffs is in scan range; only a
@@ -5207,7 +5415,7 @@ class TestAdoptPriorAttemptScaffoldPathAuthorship:
         )
         assert ba._adopt_prior_attempt_scaffold_path(
             _PRED_REL, "hnd-pred-1a2b4c", tmp_path
-        ) == str(Path("state") / "handoffs" / "2026-07-29-succ.md")
+        ) == (Path("state") / "handoffs" / "2026-07-29-succ.md").as_posix()
 
     def test_mismatched_session_declines(self, tmp_path):
         self._pred(tmp_path)
@@ -5283,9 +5491,9 @@ class TestAdoptionIsNotASuccessionConclusion:
             if p.is_file()
         } == before
         lineage = decision["artifact"]["lineage"]
-        assert lineage["adopted_scaffold"] == str(
+        assert lineage["adopted_scaffold"] == (
             Path("state") / "handoffs" / "2026-07-29-succ.md"
-        )
+        ).as_posix()
         # The carve-out grants no succession conclusion: predecessor-side
         # evidence is still absent, and the field that records it stays None.
         assert lineage["resumed_successor"] is None
@@ -5815,7 +6023,7 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         decision = ba.brief("handoff", str(plan), repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
 
-        assert lineage["predecessor"] == str(claimed_predecessor.relative_to(tmp_path)), (
+        assert lineage["predecessor"] == claimed_predecessor.relative_to(tmp_path).as_posix(), (
             "C4/AC5: a plan input's supersession target must come from the "
             "durable handoff-claims ledger, not predecessor_handoff/predecessor "
             f"fm fields -- got predecessor={lineage['predecessor']!r}"

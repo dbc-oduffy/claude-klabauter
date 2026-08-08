@@ -262,6 +262,39 @@ def test_git_spaced_path_no_exe_suffix_commit_denies(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# C4b (docs/reference/guard-dialect-coverage.md row 7) -- this guard's
+# matcher is dialect-neutral by construction (external `git`/`coordinator-
+# safe-commit` argv0 identity via `token_matches_binary`/
+# `normalize_executable_basename`, module docstring lines 75-298). This
+# does NOT require a real PowerShell parse (`_dialect.py`) -- it proves the
+# EXISTING bash-tokenizer-based matcher already reaches the same verdict on
+# a PowerShell-spelled invocation, since a PowerShell author's `&`
+# call-operator prefix is already recognized separator punctuation by this
+# package's own tokenizer (see `_dialect.py`'s module docstring, "Output
+# shape").
+# ---------------------------------------------------------------------------
+
+
+def test_powershell_call_operator_prefixed_git_exe_commit_denies_same_as_bash(monkeypatch):
+    """`& git.exe commit -m "msg"` -- the PowerShell call-operator prefix
+    (used to invoke a command whose name is a quoted/variable string) must
+    reach the SAME deny as the bare bash spelling; the leading `&` is
+    already separator punctuation to this guard's tokenizer, so it is
+    consumed as an empty leading segment rather than defeating detection.
+    """
+    _denies(monkeypatch, '& git.exe commit -m "msg"')
+    _denies(monkeypatch, 'git.exe commit -m "msg"')
+
+
+def test_powershell_semicolon_chained_git_commit_denies_same_as_bash(monkeypatch):
+    """`Set-Location C:\\repo; git commit -m "msg"` -- a PowerShell
+    statement-separator `;` chain ahead of the commit must not shield it;
+    `;` is recognized separator punctuation on both dialects.
+    """
+    _denies(monkeypatch, 'Set-Location C:\\repo; git commit -m "msg"')
+
+
+# ---------------------------------------------------------------------------
 # 2026-07-29 part 4 -- ``coordinator-safe-commit`` quote-blindness
 # (integrator report during the part-3 port above): the part-3 comment used
 # to say a ``coordinator-safe-commit`` spaced-path counterpart was
@@ -2401,10 +2434,29 @@ class TestRealOwnershipScopeWiring:
 
         F7 fix (staff-eng review, 2026-08-04): asserts on the reason text,
         not merely the verdict -- the real helper is confirmed (live, this
-        session) to emit `claimed by live session` for this scenario and
+        session) to emit the peer-claim classification for this scenario and
         for it to survive `_ownership_leg_summary`'s cap. A bare verdict-
         only assertion keeps passing under an unrelated regression that
         still happens to deny for the wrong reason; this closes that gap.
+
+        Liveness-honesty amendment (2026-08-07, cross-repo memo
+        `2026-08-07-example-doctrine-repo-em-scoped-commit-refusal-asserts-live-without-
+        checking.md`): `_classify_denied_path` no longer asserts the word
+        "live" from an ownership-only reason -- it resolves the liveness
+        oracle and names the real verdict. Negative spec: do NOT relax this
+        back to a bare `"claimed by"` substring to make it
+        liveness-agnostic -- naming the branch AND the owner is the whole
+        point of F7, and a liveness-agnostic assertion would pass again
+        under exactly the regression this amendment exists to prevent.
+
+        CORRECTED 2026-08-07 pass 2 (memo `...-calls-a-live-peer-dead-and-
+        reapable`): this asserted DEAD, and passed -- while pinning a defect.
+        The `other` session this fixture mints via `_session_core.init` IS
+        live: it has a fresh `last_activity` in THIS tmp repo. It read DEAD
+        only because the classification's oracle was zero-arg and resolved
+        its session registry from the PROCESS cwd (the real claude-klabauter
+        checkout), where `other` does not exist at all. With the oracle
+        cwd-scoped, the fixture's own peer is correctly named live.
         """
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
@@ -2422,7 +2474,7 @@ class TestRealOwnershipScopeWiring:
         assert result is not None, "expected DENY: shared.py is peer-claimed"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "claimed by live session" in reason
+        assert "claimed by live session other" in reason
 
     def test_unresolvable_session_id_denies(self, tmp_path):
         repo = _make_real_repo(tmp_path)

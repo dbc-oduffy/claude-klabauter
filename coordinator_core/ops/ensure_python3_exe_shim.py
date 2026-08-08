@@ -105,10 +105,12 @@ Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-invento
 
 from __future__ import annotations
 
+import asyncio
 import filecmp
 import os
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -316,7 +318,7 @@ def _classify_python3() -> dict:
             stdin=subprocess.DEVNULL,
             # Review: code-reviewer (F2) — `resolved` is an unverified PATH hit
             # (could be an AppX stub or worse); guard against stdin-block hangs.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {"classification": "stub", "path": str(path)}
@@ -340,7 +342,7 @@ async def _detect_python3_appx_stub(params: dict, repo_root: Optional[Path] = No
     — see `_classify_python3()`.
     """
     del params, repo_root
-    return _classify_python3()
+    return await asyncio.to_thread(_classify_python3)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

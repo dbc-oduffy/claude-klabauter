@@ -488,7 +488,7 @@ def _make_planned_check(
 
 
 @register_op("deferral.detect_partial_strangle")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """JSON-RPC "deferral.detect_partial_strangle" handler.
 
     Params: none consumed (this detector is date-independent — no aging window).

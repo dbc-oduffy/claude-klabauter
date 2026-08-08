@@ -39,9 +39,12 @@ from coordinator_core.ops.fleet.memo_send import (
 )
 
 
-def _run(coro):
-    """Run async coroutine synchronously — no pytest-asyncio dependency."""
-    return asyncio.run(coro)
+def _run(result):
+    """Run async coroutine synchronously, or pass a plain result through
+    unchanged (some handlers this file exercises are now plain `def`)."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _make_claude_home(
@@ -529,6 +532,139 @@ class TestRedirectPrecedenceOverPublishMirror:
 
         aliases = [c for c in result["candidates"] if c["kind"] == "canonical_home_alias"]
         assert aliases == []
+
+
+# ===========================================================================
+# 2e. Enumeration mode — repos.* / publish.mirrors.* PATH collision
+#     (defect fix: an id could appear both as a valid `--to` receiver AND
+#     as a publish_mirror, with memo.send refusing the receiver form —
+#     memo_list must agree with memo_send's send-path authority)
+# ===========================================================================
+
+class TestReceiverMirrorPathCollision:
+    def test_repo_shadowed_by_mirror_path_excluded_from_receivers(
+        self, tmp_path, monkeypatch
+    ):
+        """A repos.* entry whose path matches a publish.mirrors.*.path is
+        excluded from the receiver block and surfaces only as a
+        publish_mirror — mirrors memo.send's own refusal of that `to`."""
+        shared_repo = tmp_path / "claude-klabauter"
+        shared_repo.mkdir()
+        claude_home = _make_claude_home(
+            tmp_path,
+            {"claude_klabauter": str(shared_repo)},
+            mirror_tables={
+                "claude_klabauter": {
+                    "owner": "claude-central-em",
+                    "path": str(shared_repo),
+                },
+            },
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_list({"dry_run": True}))
+
+        assert result["exit_code"] == 0
+        candidates = result["candidates"]
+
+        receivers = _receivers(candidates)
+        assert receivers == [], (
+            "repos.claude_klabauter resolves to the same path as "
+            "publish.mirrors.claude_klabauter -> memo.send refuses it, so "
+            "it must not appear as a receiver."
+        )
+
+        mirrors = [c for c in candidates if c["kind"] == "publish_mirror"]
+        assert len(mirrors) == 1
+        assert mirrors[0]["mirror_key"] == "claude_klabauter"
+        assert mirrors[0]["path"] == str(shared_repo)
+
+        # Regression assertion for the invariant: no id's path is ever
+        # addressable as both a receiver and a publish_mirror.
+        receiver_paths = {c["repo_path"] for c in receivers}
+        assert str(shared_repo) not in receiver_paths
+
+    def test_normal_sibling_with_no_mirror_collision_unaffected(
+        self, tmp_path, monkeypatch
+    ):
+        """A repos.* entry with no path collision against any mirror is
+        entirely unaffected by the new exclusion check."""
+        rag_repo = tmp_path / "example-retrieval-repo"
+        mirror_repo = tmp_path / "unrelated-mirror"
+        rag_repo.mkdir()
+        mirror_repo.mkdir()
+        claude_home = _make_claude_home(
+            tmp_path,
+            {"example_retrieval_repo": str(rag_repo)},
+            mirror_tables={
+                "deep_research_claude": {
+                    "owner": "deep-research-em",
+                    "path": str(mirror_repo),
+                },
+            },
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_list({"dry_run": True}))
+
+        assert result["exit_code"] == 0
+        receivers = _receivers(result["candidates"])
+        assert {c["repo_key"] for c in receivers} == {"repos.example_retrieval_repo"}
+
+        mirrors = [c for c in result["candidates"] if c["kind"] == "publish_mirror"]
+        assert len(mirrors) == 1
+        assert mirrors[0]["mirror_key"] == "deep_research_claude"
+
+    def test_redirect_alias_subtraction_still_behaves_alongside_path_collision(
+        self, tmp_path, monkeypatch
+    ):
+        """The pre-existing per-id redirect-alias subtraction (drop-if-empty)
+        is unaffected by the new path-collision exclusion — both mechanisms
+        coexist without interfering with each other."""
+        shared_repo = tmp_path / "claude-klabauter"
+        shared_repo.mkdir()
+        claude_home = _make_claude_home(
+            tmp_path,
+            {"claude_klabauter": str(shared_repo)},
+            mirror_tables={
+                "claude_klabauter": {
+                    "owner": "claude-central-em",
+                    "path": str(shared_repo),
+                },
+                "deep_research_claude": {
+                    "owner": "deep-research-em",
+                    "path": str(tmp_path / "unrelated-mirror-2"),
+                },
+            },
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_doe_manifest(
+            claude_home,
+            tmp_path,
+            {"identity": {"redirectAliases": ["deep-research-claude-em"]}},
+        )
+
+        result = _run(_memo_list({"dry_run": True}))
+
+        assert result["exit_code"] == 0
+        candidates = result["candidates"]
+
+        # Path-collision exclusion still applies to claude_klabauter.
+        receivers = _receivers(candidates)
+        assert receivers == []
+
+        # Redirect-alias subtraction still applies to deep_research_claude,
+        # unrelated to the path-collision mechanism.
+        mirrors = [c for c in candidates if c["kind"] == "publish_mirror"]
+        mirror_keys = {m["mirror_key"] for m in mirrors}
+        assert "claude_klabauter" in mirror_keys
+        assert "deep_research_claude" in mirror_keys
+        drc = next(m for m in mirrors if m["mirror_key"] == "deep_research_claude")
+        assert drc["aliases"] == ["deep-research-claude"]
+        assert drc["em_id"] is None
+
+        aliases = [c for c in candidates if c["kind"] == "canonical_home_alias"]
+        assert {a["id"] for a in aliases} == {"deep-research-claude-em"}
 
 
 # ===========================================================================

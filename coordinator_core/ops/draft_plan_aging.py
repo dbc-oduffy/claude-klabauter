@@ -123,6 +123,10 @@ from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 AGING_THRESHOLD_DAYS = 14
 
@@ -145,7 +149,6 @@ _MECHANICAL_SUBSTRING = "frontmatter mutation"
 
 _PROG = "draft-plan-aging.sh"  # literal program-name prefix — mirrors bash oracle stderr text
 _GIT_LOG_TIMEOUT_SECS = 15
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _is_sidecar_file(path: str) -> bool:
@@ -274,7 +277,7 @@ def _has_recent_real_work_commit(file: str) -> Tuple[Optional[bool], Optional[st
             text=True,
             timeout=_GIT_LOG_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"skip: _has_recent_real_work_commit: result = subprocess.run( failed: {exc}", file=sys.stderr)
@@ -582,6 +585,10 @@ def _git_commit_epoch(repo_root: Path, rel_path: str) -> Optional[int]:
 
     Read-only git query only — mirrors orphan_branch_sweep._git's `git log -1
     --format=%ct` idiom (portable, no `date +%s` bash dependency).
+
+    Single-path form, retained for direct callers/tests. `list_stale_executing`
+    below does NOT call this per plan — see `_batch_git_commit_epochs` for the
+    corpus-wide N+1 fix (C14).
     """
     try:
         result = subprocess.run(
@@ -591,7 +598,7 @@ def _git_commit_epoch(repo_root: Path, rel_path: str) -> Optional[int]:
             cwd=repo_root,
             timeout=_GIT_LOG_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -604,6 +611,90 @@ def _git_commit_epoch(repo_root: Path, rel_path: str) -> Optional[int]:
         return int(raw)
     except ValueError:
         return None
+
+
+# Header-line marker for `_batch_git_commit_epochs`' `--format=` string —
+# printable ASCII (a NUL byte in argv raises ValueError on Windows'
+# subprocess/CreateProcess), chosen to be a string no real docs/plans/*.md
+# repo-relative path line could plausibly equal. Distinguishes a commit-
+# header line from the `--name-only` file-path lines that follow it in the
+# same stdout stream.
+_BATCH_EPOCH_HEADER_PREFIX = "\x01GIT-COMMIT-EPOCH\x01"
+
+
+def _batch_git_commit_epochs(repo_root: Path, rel_paths: List[str]) -> Dict[str, int]:
+    """One `git log --name-only` walk over *rel_paths* as pathspecs, returning
+    `{rel_path: most-recent-commit-epoch}` for every path this walk actually
+    finds a touching commit for.
+
+    Shape: multi-pathspec / object-membership, NOT range batching. `git log
+    --format=... -- pathA pathB ...` asks "every commit that touches ANY of
+    these paths" (union/OR semantics) and walks history newest-first; it is
+    not `git rev-list A..B C..D`, which merges N independent ranges into a
+    single `reachable(positives) \\ reachable(negatives)` set expression and
+    silently drops all-but-the-tip on a linear chain (the forbidden shape —
+    see `coverage.py`'s hard correctness constraints and the closed backlog
+    entry this module's own C14 chunk cites). No reachability/ancestry
+    arithmetic happens here at all: each commit header is read once, and the
+    first (= most recent, since the walk is newest-first) commit touching a
+    given path wins that path's slot — a plain membership scan, structurally
+    the same shape as `emit/sections/handoffs.py`'s `_resolve_shipped_in_dates`
+    (prefix-match + a `matched` set), adapted from SHA-prefix matching to
+    path membership.
+
+    A *rel_paths* entry ABSENT from the returned dict means the walk found NO
+    commit touching that path (untracked, brand-new, or unreadable-by-git) —
+    callers MUST treat absence as "no resolved timestamp", never silently
+    defaulting it to "now" or epoch zero (§ Anti-scope 25). On any subprocess
+    failure/timeout or non-zero exit, returns `{}` (every requested path
+    reads as absent) — same fail-open posture as the single-path
+    `_git_commit_epoch` above.
+    """
+    if not rel_paths:
+        return {}
+    try:
+        result = subprocess.run(
+            [
+                "git", "log",
+                f"--format={_BATCH_EPOCH_HEADER_PREFIX}%ct",
+                "--name-only",
+                "--",
+                *rel_paths,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            timeout=_GIT_LOG_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            **_CREATIONFLAGS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+
+    wanted = {p.replace("\\", "/") for p in rel_paths}
+    resolved: Dict[str, int] = {}
+    current_epoch: Optional[int] = None
+    for line in result.stdout.splitlines():
+        if line.startswith(_BATCH_EPOCH_HEADER_PREFIX):
+            raw = line[len(_BATCH_EPOCH_HEADER_PREFIX):].strip()
+            try:
+                current_epoch = int(raw)
+            except ValueError:
+                current_epoch = None
+            continue
+        path = line.strip()
+        if not path or current_epoch is None:
+            continue
+        # git's --name-only paths are POSIX-forward-slash regardless of
+        # platform; rel_paths built via os.path.join above may carry
+        # os.sep on Windows, so normalize both sides for the membership test.
+        normalized = path.replace("\\", "/")
+        if normalized in wanted and normalized not in resolved:
+            resolved[normalized] = current_epoch
+
+    return resolved
 
 
 def list_stale_executing(
@@ -636,7 +727,10 @@ def list_stale_executing(
     if not plans_dir.is_dir():
         return []
 
-    entries: List[Dict[str, Any]] = []
+    # First pass: collect every `status: executing` candidate's repo-relative
+    # path (forward-slash, matching `_batch_git_commit_epochs`'/`list_orphaned`'s
+    # convention) — no git call here at all.
+    candidate_paths: List[str] = []
     for name in sorted(os.listdir(plans_dir)):
         if not name.endswith(".md"):
             continue
@@ -653,9 +747,22 @@ def list_stale_executing(
         if status != EXECUTING_STATUS:
             continue
 
-        rel_path = os.path.join("docs", "plans", name)
-        epoch = _git_commit_epoch(repo_root, rel_path)
+        candidate_paths.append(os.path.join("docs", "plans", name).replace(os.sep, "/"))
+
+    # Second pass: ONE git-log walk resolves every candidate's most-recent-
+    # commit epoch (C14 — was one `_git_commit_epoch` spawn per candidate).
+    # A candidate absent from the returned map has no commit touching it at
+    # all — reconciled explicitly below as "not stale" (same posture the
+    # per-path form used: no git history -> not stale, never a fail-loud).
+    epochs = _batch_git_commit_epochs(repo_root, candidate_paths)
+
+    entries: List[Dict[str, Any]] = []
+    for rel_path in candidate_paths:
+        epoch = epochs.get(rel_path)
         if epoch is None:
+            # Absence reconciled explicitly: no touching commit found for
+            # this candidate (untracked / brand-new / unreadable-by-git) —
+            # never defaulted to "now" or epoch zero (§ Anti-scope 25).
             continue
 
         commit_date = datetime.fromtimestamp(epoch, tz=timezone.utc).date()
@@ -667,7 +774,7 @@ def list_stale_executing(
 
 
 @register_op("plan.list_stale_executing")
-async def _plan_list_stale_executing(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _plan_list_stale_executing(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'plan.list_stale_executing' handler.
 
     See module docstring "Sibling op" section for the full wire contract.
@@ -1117,7 +1224,7 @@ def list_orphaned(
 
 
 @register_op("plan.list_orphaned")
-async def _plan_list_orphaned(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _plan_list_orphaned(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'plan.list_orphaned' handler.
 
     See module "Sibling op: plan.list_orphaned" docstring section for the

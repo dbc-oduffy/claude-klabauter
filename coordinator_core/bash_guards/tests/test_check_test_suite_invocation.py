@@ -147,6 +147,140 @@ def test_subagent_scoped_allowed(repo, free_mutex, command):
     assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is None
 
 
+# ---------------------------------------------------------------------------
+# C4b (docs/reference/guard-dialect-coverage.md row 8) -- keyed on the
+# `pytest` invocation (a Python console-script entry point, same binary
+# name under both dialects, no cmdlet equivalent to collide with). No real
+# PowerShell parse is exercised (this guard has no `_dialect.py` seam) --
+# these are PowerShell-spelled command STRINGS proving the existing
+# bash-tokenizer-based classifier reaches the same verdict either way.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "& pytest",
+        "Set-Location C:\\repo; python3 -m pytest",
+    ],
+)
+def test_subagent_powershell_spelled_suite_shaped_denied_same_as_bash(repo, free_mutex, command):
+    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    reason = _reason(out)
+    assert reason.startswith("Run the tests you actually touched:")
+
+
+def test_subagent_powershell_tool_unscoped_suite_denied(repo, free_mutex):
+    """The regression that matters: the harness's `PowerShell` tool must be
+    inspected exactly like `Bash` — before the MATCHERS/`tool_name` widening
+    this pinned, `payload["tool_name"] == "PowerShell"` sailed straight
+    through every leg (identity, grant, mutex) unclassified."""
+    payload = _payload("pytest", repo, agent_id=_AGENT_ID)
+    payload["tool_name"] = "PowerShell"
+    reason = _reason(guard.check(payload))
+    assert reason.startswith("Run the tests you actually touched:")
+
+
+def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_repo, free_mutex):
+    """Same regression for the no-agent_id (top-level EM) grant leg: an
+    unscoped suite command through the `PowerShell` tool must be denied
+    exactly as the `Bash` tool is when the session holds no live Tier-U
+    grant."""
+    payload = _payload("pytest", grant_repo)
+    payload["tool_name"] = "PowerShell"
+    out = guard.check(payload)
+    assert out is not None
+
+
+# ---------------------------------------------------------------------------
+# Start-Process -ArgumentList argv-reconstruction fix (2026-08-07 -- guard
+# bypass measured live via `dispatch.evaluate_payload_json`, see
+# `cross-repo/inbox/2026-08-07-example-doctrine-repo-em-powershell-suite-guard-
+# converted-and-wave2-findings.md` Finding 1). Unlike the plain-string
+# PowerShell class above, this shape genuinely needed the `_dialect.py`
+# argv-reconstruction seam: a bare bash-`shlex` pass fuses `-ArgumentList
+# '-m','pytest'` into ONE opaque token (`-m,pytest`), so `pytest` never
+# surfaced as its own argv token to this classifier at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Start-Process python -ArgumentList '-m','pytest'",
+        'Start-Process python -ArgumentList "-m","pytest"',
+        "Start-Process -FilePath python -ArgumentList '-m','pytest'",
+        "Start-Process python -ArgumentList '-m pytest'",
+        "saps python -ArgumentList '-m','pytest'",
+        "start python -ArgumentList '-m','pytest'",
+        "Start-Process pytest",
+        "Start-Process -FilePath pytest -ArgumentList 'coordinator_core/'",
+    ],
+)
+def test_subagent_start_process_argumentlist_suite_shaped_denied(repo, free_mutex, command):
+    """The measured bypass: `Start-Process ... -ArgumentList ...` must deny
+    exactly as its un-wrapped equivalent (`python -m pytest`) already does,
+    for both the cmdlet's full name and its `saps`/`start` aliases, single-
+    and double-quoted array elements, a single unsplit `-ArgumentList`
+    string, and `-FilePath` named explicitly vs. the bare positional form."""
+    payload = _payload(command, repo, agent_id=_AGENT_ID)
+    payload["tool_name"] = "PowerShell"
+    reason = _reason(guard.check(payload))
+    assert reason.startswith("Run the tests you actually touched:")
+
+
+def test_top_level_em_start_process_argumentlist_unscoped_denied_without_grant(grant_repo, free_mutex):
+    """Same regression for the top-level EM's grant leg: an unscoped suite
+    command hidden behind `Start-Process -ArgumentList` must be denied
+    exactly as `python -m pytest` already is when the session holds no live
+    Tier-U grant."""
+    payload = _payload("Start-Process python -ArgumentList '-m','pytest'", grant_repo)
+    payload["tool_name"] = "PowerShell"
+    assert guard.check(payload) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest coordinator_core/frontmatter/tests/test_x.py",
+        "pytest coordinator_core/frontmatter/tests/test_x.py::test_case",
+        "pytest -k schema_validate",
+    ],
+)
+def test_subagent_start_process_argumentlist_scoped_allowed(repo, free_mutex, command):
+    """A `-ArgumentList` payload that is genuinely Tier T (node id, file
+    path, `-k` filter) must be allowed, exactly like its un-wrapped form --
+    this fix widens what the classifier SEES, never what it DENIES for an
+    already-scoped invocation."""
+    payload = _payload(
+        "Start-Process pytest -ArgumentList '%s'" % command.split(" ", 1)[1],
+        repo,
+        agent_id=_AGENT_ID,
+    )
+    payload["tool_name"] = "PowerShell"
+    assert guard.check(payload) is None
+
+
+def test_start_process_innocuous_command_allows_with_no_deny(repo, free_mutex):
+    """`Start-Process notepad` (no runner named anywhere) must not start
+    denying -- the argv-reconstruction fix is additive to what the
+    classifier can SEE, never a blanket `Start-Process` deny."""
+    payload = _payload("Start-Process notepad", repo, agent_id=_AGENT_ID)
+    payload["tool_name"] = "PowerShell"
+    assert guard.check(payload) is None
+
+
+def test_start_process_unresolvable_target_does_not_crash(repo, free_mutex):
+    """A `-ArgumentList` target built from a variable (`$target`) is not a
+    literal this classifier can resolve, and must degrade to a plain
+    allow/no-crash rather than raising -- the same fail-open-on-genuinely-
+    unresolvable-input posture `_dialect.py`'s own docstring documents for
+    command substitution generally."""
+    payload = _payload("Start-Process $target -ArgumentList $args", repo, agent_id=_AGENT_ID)
+    payload["tool_name"] = "PowerShell"
+    guard.check(payload)  # must not raise
+
+
 def test_subagent_testpaths_root_is_not_a_scope(repo, free_mutex):
     """`pytest coordinator_core/` looks scoped and is the entire suite."""
     reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
@@ -175,6 +309,106 @@ def test_flag_operand_is_not_credited_as_a_scope(repo, free_mutex):
     mistaken for a positional scope argument."""
     out = guard.check(_payload("pytest -m 'not cadence'", repo, agent_id=_AGENT_ID))
     assert _reason(out)
+
+
+@pytest.mark.parametrize("command", ["Invoke-Pester", "invoke-pester", "Invoke-Pester -CI"])
+def test_subagent_invoke_pester_unscoped_denied(repo, free_mutex, command):
+    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    assert _reason(out)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["Invoke-Pester -Path tests/thing.tests.ps1", "Invoke-Pester -TestName 'my test'"],
+)
+def test_subagent_invoke_pester_scoped_allowed(repo, free_mutex, command):
+    assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is None
+
+
+# ---------------------------------------------------------------------------
+# Pester `-Path`-names-a-directory precision gap (measured against
+# `dispatch.evaluate_payload_json`: bare presence of `-Path` was credited as
+# scope regardless of what it named, so a directory argument ALLOWED for
+# both a subagent -- DR-088 R9, file-and-node-id precision, not directory
+# precision -- and an ungranted top-level EM, neither of which is correct).
+# `_classify_pester` now reuses the same `os.path.isdir` primitive DR-088
+# R9's pytest leg (`_pytest_directory_args`) established.
+# ---------------------------------------------------------------------------
+
+def test_subagent_invoke_pester_path_directory_denied(repo, free_mutex):
+    """R9: a `-Path` argument naming a directory is not file/node-id
+    precision -- denied for a dispatched subagent, same as the unscoped
+    bare-`Invoke-Pester` case."""
+    (repo / "tests").mkdir()
+    out = guard.check(
+        _payload("Invoke-Pester -Path tests", repo, agent_id=_AGENT_ID)
+    )
+    assert _reason(out)
+
+
+def test_em_invoke_pester_path_directory_needs_tier_u_grant(grant_repo, free_mutex):
+    """A directory-scoped `Invoke-Pester -Path` run is Tier U (no configured
+    Pester test command exists for this classifier to credit as Tier F), so
+    the ordinary top-level EM grant leg must deny it with no live grant --
+    before the fix this invocation reached neither the identity leg (no
+    `agent_id`) nor the grant leg (`_classify_pester` reported it scoped) and
+    fell straight through to allow."""
+    (grant_repo / "tests").mkdir()
+    out = guard.check(_payload("Invoke-Pester -Path tests", grant_repo))
+    reason = _reason(out)
+    assert "Tier-U" in reason
+    assert "authorization grant" in reason
+
+
+def test_em_invoke_pester_path_directory_allowed_with_live_grant(grant_repo, free_mutex):
+    (grant_repo / "tests").mkdir()
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    assert guard.check(_payload("Invoke-Pester -Path tests", grant_repo)) is None
+
+
+def test_invoke_pester_path_file_argument_still_scoped(repo, free_mutex):
+    """The positive control: a `-Path` value naming a FILE (not a directory)
+    stays Tier T for both a subagent and an ungranted top-level EM -- this is
+    the shape the fix must not widen the deny to."""
+    (repo / "tests").mkdir()
+    (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
+    cmd = "Invoke-Pester -Path tests/thing.tests.ps1"
+    assert guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)) is None
+    assert guard.check(_payload(cmd, repo)) is None
+
+
+def test_invoke_pester_path_comma_separated_directory_denied(repo, free_mutex):
+    """`-Path` accepts a comma-separated list (PowerShell `[string[]]`
+    binding) -- a directory anywhere in the list must still be caught."""
+    (repo / "tests").mkdir()
+    (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
+    (repo / "other").mkdir()
+    cmd = "Invoke-Pester -Path tests/thing.tests.ps1,other"
+    out = guard.check(_payload(cmd, repo, agent_id=_AGENT_ID))
+    assert _reason(out)
+
+
+def test_invoke_pester_repeated_path_flag_directory_denied(repo, free_mutex):
+    """`-Path` given more than once (repeated-flag `[string[]]` binding) --
+    a directory in either occurrence must still be caught."""
+    (repo / "tests").mkdir()
+    (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
+    (repo / "other").mkdir()
+    cmd = "Invoke-Pester -Path tests/thing.tests.ps1 -Path other"
+    out = guard.check(_payload(cmd, repo, agent_id=_AGENT_ID))
+    assert _reason(out)
+
+
+def test_invoke_pester_fullnamefilter_stays_scoped_no_path_check(repo, free_mutex):
+    """Pester's node-id-equivalent, `-FullNameFilter`, is a name filter, not
+    a path -- it narrows unconditionally with no disk check needed, exactly
+    like `-TestName`. Already correct before this fix; pinned here so a
+    future change to `_PESTER_SCOPING_FLAGS` cannot silently regress it."""
+    cmd = "Invoke-Pester -FullNameFilter '*my test*'"
+    assert guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)) is None
 
 
 def test_non_test_command_allowed(repo, free_mutex):

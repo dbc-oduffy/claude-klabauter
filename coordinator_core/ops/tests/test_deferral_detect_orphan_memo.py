@@ -19,7 +19,6 @@ Detector 2):
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from datetime import date
@@ -37,14 +36,6 @@ from coordinator_core.ops.deferral_detect_orphan_memo import (
 )
 
 TODAY = date(2026, 7, 21)
-
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency.
-
-    Convention matches ops/tests/test_engine_drift.py.
-    """
-    return asyncio.run(coro)
 
 
 def _memo(basename, kind="ask", status="open", created="2026-07-17", frm="claude-central-em"):
@@ -342,7 +333,7 @@ class TestHandoffOwnershipScoping:
             "Discussed the name-dropped topic in passing.\n", encoding="utf-8"
         )
 
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result["state"] == "orphans_found"
 
     def test_handler_end_to_end_handoff_full_basename_reference_owns(self, tmp_path):
@@ -355,7 +346,7 @@ class TestHandoffOwnershipScoping:
             f"Tracked {basename} explicitly in this handoff.\n", encoding="utf-8"
         )
 
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
 
@@ -365,7 +356,7 @@ class TestHandlerWiring:
         _write_memo(inbox, "2026-07-17-orphan.md", kind="ask", status="open",
                     created="2026-07-17")
 
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result["state"] == "orphans_found"
         assert result["findings"][0]["basename"] == "2026-07-17-orphan.md"
 
@@ -377,7 +368,7 @@ class TestHandlerWiring:
                     "2026-07-21-memo-tool-rebuild-full-ownership.md",
                     source_memo=basename)
 
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_fyi_status_actioned_and_too_young_all_clean_via_handler(self, tmp_path):
@@ -387,36 +378,36 @@ class TestHandlerWiring:
                     created="2026-07-17")
         _write_memo(inbox, "2026-07-20-young.md", kind="ask", status="open", created="2026-07-20")
 
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_no_inbox_dir_clean_no_crash_via_handler(self, tmp_path):
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_empty_inbox_dir_clean_no_crash_via_handler(self, tmp_path):
         (tmp_path / "cross-repo" / "inbox").mkdir(parents=True)
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_default_age_threshold_applied_via_handler(self, tmp_path):
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, "2026-07-19-borderline.md", kind="ask", status="open",
                     created="2026-07-19")
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_custom_age_threshold_param_via_handler(self, tmp_path):
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, "2026-07-17-custom.md", kind="ask", status="open",
                     created="2026-07-17")
-        result = _run(_handler({"today": "2026-07-21", "age_threshold_days": 10},
-                                repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21", "age_threshold_days": 10},
+                                repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_repo_root_none_falls_back_to_cwd(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=None))
+        result = _handler({"today": "2026-07-21"}, repo_root=None)
         assert result == {"state": "clean"}
 
     def test_string_age_threshold_param_coerced_via_handler(self, tmp_path):
@@ -426,18 +417,18 @@ class TestHandlerWiring:
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, "2026-07-17-str-threshold.md", kind="ask", status="open",
                     created="2026-07-17")
-        result = _run(_handler({"today": "2026-07-21", "age_threshold_days": "10"},
-                                repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21", "age_threshold_days": "10"},
+                                repo_root=tmp_path)
         assert result == {"state": "clean"}
 
     def test_non_coercible_age_threshold_param_falls_back_to_default(self, tmp_path):
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, "2026-07-17-bad-threshold.md", kind="ask", status="open",
                     created="2026-07-17")
-        result = _run(_handler(
+        result = _handler(
             {"today": "2026-07-21", "age_threshold_days": "not-a-number"},
             repo_root=tmp_path,
-        ))
+        )
         # falls back to the default threshold (3d); memo is 4d old -> flagged.
         assert result["state"] == "orphans_found"
 
@@ -493,7 +484,7 @@ def test_handler_downgrades_to_indeterminate_when_owning_dir_unreadable(tmp_path
     original_mode = plans_dir.stat().st_mode
     os.chmod(plans_dir, 0o000)
     try:
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
     finally:
         os.chmod(plans_dir, original_mode)
 
@@ -505,7 +496,7 @@ def test_handler_downgrades_to_indeterminate_when_owning_dir_unreadable(tmp_path
 
 
 def test_handler_state_clean_when_scan_fully_succeeds(tmp_path):
-    result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+    result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
     assert result == {"state": "clean"}
 
 
@@ -557,7 +548,7 @@ def test_handler_downgrades_to_indeterminate_when_inbox_unreadable(tmp_path):
     original_mode = inbox.stat().st_mode
     os.chmod(inbox, 0o000)
     try:
-        result = _run(_handler({"today": "2026-07-21"}, repo_root=tmp_path))
+        result = _handler({"today": "2026-07-21"}, repo_root=tmp_path)
     finally:
         os.chmod(inbox, original_mode)
 

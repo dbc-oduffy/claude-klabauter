@@ -27,9 +27,11 @@ and one bolt-on:
     entry TEMPLATE (a `WriteSurfaceEntry` with template placeholders in its
     `key`/`path`, e.g. ``"repos.<derived-key>"``) describing the shape
     entries take without enumerating them. The dominant case: 7 of 11
-    surveyed writers compute their surface from a platform branch, a
-    consent gate, or a discovered input set, and cannot honestly be
-    flattened into a static list.
+    surveyed writers cannot enumerate their key set in source at all — the
+    keys themselves are only known at runtime (a discovered input set),
+    not merely conditional on one. A platform branch or consent gate over
+    an otherwise KNOWN, literal key set stays STATIC; the condition is
+    carried in the entry's `reason=` text, not in the declaration's shape.
 
 Worked example — STATIC form, one writer, one clause:
 
@@ -191,6 +193,15 @@ class WriteSurfaceEntry:
     value: `WRITE_SURFACE_KINDS` is the frozen, externally-agreed
     eight-kind vocabulary example-doctrine-repo's schema consumes (see that tuple's
     docstring) -- a marker field avoids touching that cross-repo contract."""
+    unset_group: str | None = None
+    """Non-None only for an entry whose reversal must be treated as an
+    atomic unit with its group siblings by the uninstall leg (C6): entries
+    sharing the same `unset_group` value must all be reversed together, so
+    an uninstall can never strand a partially-removed group. Deliberately
+    NOT a new `kind` value: `WRITE_SURFACE_KINDS` is the frozen,
+    externally-agreed eight-kind vocabulary example-doctrine-repo's schema consumes (see
+    that tuple's docstring) -- a marker field avoids touching that
+    cross-repo contract."""
 
 
 @dataclass(frozen=True)
@@ -215,7 +226,10 @@ class ShapedClause:
     `"_derive_agent_helper_target_map"`). `entry_template` is a
     `WriteSurfaceEntry` whose `key`/`path` may contain template
     placeholders (e.g. `"repos.<derived-key>"`) describing the shape
-    entries take without enumerating them.
+    entries take without enumerating them. Reserved for a key set that is
+    genuinely unknowable in source — not for a known, literal key set that
+    is merely written conditionally (platform branch, consent gate); that
+    case stays `StaticClause` with the condition carried in `reason=`.
     """
 
     discovered_by: str

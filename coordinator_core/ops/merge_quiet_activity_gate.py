@@ -63,10 +63,13 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _DEFAULT_QUIET_THRESHOLD_SECONDS = 300
 _GIT_TIMEOUT_SECONDS = 15
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _head_commit_epoch_seconds(repo_root: Path) -> Optional[float]:
@@ -82,7 +85,7 @@ def _head_commit_epoch_seconds(repo_root: Path) -> Optional[float]:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(
@@ -152,7 +155,7 @@ def evaluate(repo_root: Path, quiet_threshold_seconds: int = _DEFAULT_QUIET_THRE
 
 
 @register_op("merge.quiet_activity_gate")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'merge.quiet_activity_gate' handler.
 
     `repo_root` is the dispatch-supplied CALLING worktree (scope-verdict

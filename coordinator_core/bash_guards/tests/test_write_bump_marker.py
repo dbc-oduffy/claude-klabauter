@@ -24,6 +24,18 @@ from coordinator_core.bash_guards import _write_bump_session_start as session_st
 from coordinator_core.bash_guards import bump_foreign_repo_write as fg_guard
 
 
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized. Accepts a ``Path`` or a
+    plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
+
+
 def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
@@ -182,10 +194,27 @@ def test_clear_line_matches_marker_path_and_prefix(tmp_path):
     session_id = "sess-abc"
 
     line = marker.clear_line(gitdir, session_id)
-    assert line == f"touch {gitdir / marker.marker_basename(session_id)}"
+    assert line == f"touch {(gitdir / marker.marker_basename(session_id)).as_posix()}"
 
     path_str = line[len("touch "):]
-    assert path_str == str(marker.marker_path(gitdir, session_id))
+    assert path_str == marker.marker_path(gitdir, session_id).as_posix()
+
+
+def test_clear_line_uses_posix_separators_so_a_shell_cannot_eat_them(tmp_path):
+    """The operator pastes this line into bash. A native `WindowsPath` renders
+    backslashes, bash reads each one as an escape, and the touch lands a single
+    mangled filename in the CURRENT directory while the gitdir stays empty --
+    the guard then denies again with the identical message, which reads as the
+    approval not working rather than as a path bug. Observed live 2026-08-07.
+
+    Asserted on the string, not via a shell, so the pin holds on POSIX hosts
+    too, where the bug is invisible by construction.
+    """
+    gitdir = tmp_path / ".git"
+    gitdir.mkdir()
+
+    line = marker.clear_line(gitdir, "sess-sep")
+    assert "\\" not in line
 
 
 def test_clear_line_command_works_verbatim_on_a_fresh_machine(tmp_path):
@@ -511,8 +540,8 @@ def test_ac4_clearing_target_a_leaves_target_b_firing(tmp_path, monkeypatch):
     assert a_gitdir is not None
     (a_gitdir / marker.marker_basename(session_id)).touch()
 
-    cmd_a = f"git -C {foreign_a} commit --allow-empty -m x"
-    cmd_b = f"git -C {foreign_b} commit --allow-empty -m x"
+    cmd_a = f"git -C {_posix(foreign_a)} commit --allow-empty -m x"
+    cmd_b = f"git -C {_posix(foreign_b)} commit --allow-empty -m x"
 
     result_a = fg_guard.check_bump_foreign_repo_write(cmd_a, session_id, str(root), {})
     result_b = fg_guard.check_bump_foreign_repo_write(cmd_b, session_id, str(root), {})
@@ -541,7 +570,7 @@ def test_ac5_unwritable_target_gitdir_allows_matching_unresolvable_precedent(tmp
     original_mode = foreign_gitdir.stat().st_mode
     try:
         os.chmod(foreign_gitdir, 0o555)  # read + execute, no write
-        cmd = f"git -C {foreign} commit --allow-empty -m x"
+        cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
         result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
         assert result is None, (
             "an unwritable target gitdir must ALLOW the write, matching "
@@ -561,7 +590,7 @@ def test_ac5_clear_line_executed_verbatim_clears_the_target(tmp_path, monkeypatc
 
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
-    cmd = f"git -C {foreign} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
     result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
     assert result is not None, "guard must actually fire for this test to mean anything"
 
@@ -585,7 +614,7 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
 
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
-    cmd = f"git -C {foreign} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
     result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
     assert result is not None, "guard must actually fire for the absence assertions below to mean anything"
 
@@ -642,8 +671,8 @@ def test_ac6_outside_repo_bump_still_clearable_by_single_anchor_gitdir_touch(tmp
 
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
-    cmd_a = f"echo hi > {outside_a / 'a.txt'}"
-    cmd_b = f"echo hi > {outside_b / 'b.txt'}"
+    cmd_a = f"echo hi > {_posix(outside_a / 'a.txt')}"
+    cmd_b = f"echo hi > {_posix(outside_b / 'b.txt')}"
 
     result_a = outside_guard.check_bump_outside_repo_write(cmd_a, session_id, str(root), {})
     assert result_a is not None, "guard must actually fire for this test to mean anything"

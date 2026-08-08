@@ -65,6 +65,37 @@ def test_the_live_failure_shape_is_rewritten_not_denied():
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
+# ---------------------------------------------------------------------------
+# C4b (docs/reference/guard-dialect-coverage.md row 10) -- `_INVOKE_RE` is a
+# literal text-pattern match over the raw command string, independent of
+# shell dialect. No real PowerShell parse is exercised (this guard takes a
+# bare `cmd: str`, never a payload/tool_name at all) -- this proves the
+# SAME regex-over-text detection reaches the identical rewrite on a
+# PowerShell-spelled invocation (call-operator prefix, `;`-chained
+# statement ahead of it) as on the bash-spelled one.
+# ---------------------------------------------------------------------------
+
+
+def test_powershell_call_operator_prefixed_invocation_rewritten_same_as_bash():
+    payload = json.dumps(_HAZARDOUS_PAYLOAD)
+    cmd = "& " + _cmd_with(payload)
+    verdict = check_offer_invoke_params_stdin(cmd)
+    assert verdict is not None
+    out = verdict["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
+
+
+def test_powershell_semicolon_chained_invocation_rewritten_same_as_bash():
+    payload = json.dumps(_HAZARDOUS_PAYLOAD)
+    cmd = "Set-Location C:\\repo; " + _cmd_with(payload)
+    verdict = check_offer_invoke_params_stdin(cmd)
+    assert verdict is not None
+    out = verdict["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
+
+
 def test_rewrite_preserves_payload_bytes_exactly():
     """The rung-A claim in the guard's docstring, asserted rather than
     argued: the heredoc body is the original JSON, unchanged."""

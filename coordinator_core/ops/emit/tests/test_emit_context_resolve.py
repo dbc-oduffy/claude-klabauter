@@ -52,7 +52,7 @@ def _make_ctx(repo_root: Path) -> EmitContext:
         _FAKE_SHA[:8],
         "2026-07-07T00:00:00Z",
         "test-host",
-        "dbc-example-operator/test-repo",
+        "dbc-oduffy/test-repo",
     )
 
 
@@ -64,13 +64,13 @@ class TestRemoteUrlToSlug:
     """_remote_url_to_slug parses common git remote URL forms."""
 
     def test_ssh_form(self) -> None:
-        assert _remote_url_to_slug("git@github.com:dbc-example-operator/.example-doctrine-mirror-repo.git") == "dbc-example-operator/.example-doctrine-mirror-repo"
+        assert _remote_url_to_slug("git@github.com:dbc-oduffy/.example-doctrine-mirror-repo.git") == "dbc-oduffy/.example-doctrine-mirror-repo"
 
     def test_https_form(self) -> None:
-        assert _remote_url_to_slug("https://github.com/dbc-example-operator/claude-klabauter") == "dbc-example-operator/claude-klabauter"
+        assert _remote_url_to_slug("https://github.com/dbc-oduffy/claude-klabauter") == "dbc-oduffy/claude-klabauter"
 
     def test_https_form_with_git_suffix(self) -> None:
-        assert _remote_url_to_slug("https://github.com/dbc-example-operator/claude-klabauter.git") == "dbc-example-operator/claude-klabauter"
+        assert _remote_url_to_slug("https://github.com/dbc-oduffy/claude-klabauter.git") == "dbc-oduffy/claude-klabauter"
 
     def test_empty_string_returns_none(self) -> None:
         assert _remote_url_to_slug("") is None
@@ -107,12 +107,12 @@ class TestResolveRepoName:
 
     def test_resolves_slug_from_ssh_remote(self, tmp_path: Path) -> None:
         """Slug is resolved correctly from an SSH-form git remote URL."""
-        fixture_url = "git@github.com:dbc-example-operator/claude-klabauter.git"
+        fixture_url = "git@github.com:dbc-oduffy/claude-klabauter.git"
 
         with patch("coordinator_core.ops.emit.context._run_git", return_value=fixture_url):
             result = resolve_repo_name(tmp_path)
 
-        assert result == "dbc-example-operator/claude-klabauter"
+        assert result == "dbc-oduffy/claude-klabauter"
 
     def test_resolves_slug_from_https_remote(self, tmp_path: Path) -> None:
         """Slug is resolved correctly from an HTTPS-form git remote URL.
@@ -120,7 +120,7 @@ class TestResolveRepoName:
         Also verifies that ~/.claude's emission reaches META_REPO_NAME_FALLBACK's value via
         the NORMAL resolution path (its own origin remote), not via any catch clause.
         """
-        fixture_url = "https://github.com/dbc-example-operator/.example-doctrine-mirror-repo"
+        fixture_url = "https://github.com/dbc-oduffy/.example-doctrine-mirror-repo"
 
         with patch("coordinator_core.ops.emit.context._run_git", return_value=fixture_url):
             result = resolve_repo_name(tmp_path)
@@ -214,7 +214,7 @@ class TestEmitContextResolve:
 
     def test_resolve_succeeds_with_valid_remote(self, tmp_path: Path) -> None:
         """EmitContext.resolve() builds a context with the emitting-repo slug on success."""
-        fixture_url = "git@github.com:dbc-example-operator/claude-klabauter.git"
+        fixture_url = "git@github.com:dbc-oduffy/claude-klabauter.git"
 
         def _fake_run_git(repo_root: Path, *args: str):
             if "remote" in args:
@@ -228,7 +228,7 @@ class TestEmitContextResolve:
         with patch("coordinator_core.ops.emit.context._run_git", side_effect=_fake_run_git):
             ctx = EmitContext.resolve(tmp_path, tmp_path, tmp_path / "state")
 
-        assert ctx.repo_name == "dbc-example-operator/claude-klabauter"
+        assert ctx.repo_name == "dbc-oduffy/claude-klabauter"
         assert ctx.repo_root == tmp_path
         assert ctx.git_branch == "main"
         assert len(ctx.git_sha) == 40
@@ -246,7 +246,7 @@ class TestMetaRepoFallbackIsOracleOnly:
 
     def test_fallback_constant_holds_example_doctrine_mirror_repo_slug(self) -> None:
         """The constant's value matches the expected ~/.claude origin slug."""
-        assert META_REPO_NAME_FALLBACK == "dbc-example-operator/.example-doctrine-mirror-repo"
+        assert META_REPO_NAME_FALLBACK == "dbc-oduffy/.example-doctrine-mirror-repo"
 
     def test_resolve_repo_name_reaches_fallback_value_via_normal_resolution(
         self, tmp_path: Path

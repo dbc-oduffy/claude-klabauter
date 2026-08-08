@@ -24,9 +24,22 @@ from coordinator_core.trusted_root_guard import UntrustedRootError
 
 
 def _make_exe(path: Path) -> None:
+    """Create a file at *path* that ``win_portability.is_executable`` treats
+    as launchable on the current OS.
+
+    POSIX: the exec mode bits are the whole story. Windows: an
+    extensionless path (which is what every caller here passes, mirroring
+    the real ``venv_python_path`` shape on POSIX) is only launchable via a
+    PATHEXT-suffixed sibling (see ``is_executable``'s own docstring) — so a
+    plain shebang file with chmod bits set is inert there and silently
+    fails the health check regardless of the mocked ``subprocess.run``.
+    Writing a ``.exe`` sibling makes the fixture executable on both.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\nexit 0\n")
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if os.name == "nt":
+        path.with_name(path.name + ".exe").write_bytes(b"")
 
 
 def _trusted_plugin_root(tmp_path: Path, monkeypatch) -> Path:

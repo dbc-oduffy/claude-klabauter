@@ -13,8 +13,6 @@ Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-d
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from coordinator_core.ops.schema_drift_gate import _handler, evaluate
@@ -146,6 +144,6 @@ class TestHandler:
     def test_handler_delegates_to_evaluate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_scan(monkeypatch, _report("MATCH"))
 
-        result = asyncio.run(_handler({}))
+        result = _handler({})
 
         assert result == {"ok": True, "status": "MATCH", "drifted": [], "message": None}

@@ -30,9 +30,14 @@ Two gates, both pure-Python classification over `git` state (routed through
       (b) known-concurrent-owner (path falls inside the `scope:` block of a
       `state/handoffs/*.md` that carries `consumed_by:` -- another live
       session owns it), (c) unattributable. An EOL-phantom filter runs
-      before classification: a tracked-unstaged path where `git diff --quiet
-      -- <path>` exits 0 (worktree content already equals the index -- a
-      Git-for-Windows stat-staleness artifact) is benign, never (c). Case
+      before classification: a tracked-unstaged path absent from a single
+      batched `git diff --name-only -- <all candidate paths>` (worktree
+      content already equals the index -- a Git-for-Windows stat-staleness
+      artifact) is benign, never (c) -- one `git diff` call classifies every
+      tracked-unstaged porcelain line at once instead of one call per line
+      (docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-
+      gate.md § C1; see `_diff_name_only_worktree()` below for why this is
+      the correct inversion of a per-path `git diff --quiet`). Case
       (c) paths are reported, NEVER auto-stashed or auto-adopted -- see the
       module-level negative-spec below.
       Optionally scoped to `gate_paths` (2026-07-22, mirroring
@@ -141,13 +146,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Union
 
-from coordinator_core.coverage import _get_handoff_consumed_by
+from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.git_native import (
     GitResult,
     _git,
     diff_cached_name_only,
     diff_cached_name_status,
-    diff_quiet,
     status_porcelain,
 )
 
@@ -489,23 +494,41 @@ def _extract_scope_paths(handoff_text: str) -> List[str]:
 
 
 def _build_known_scope(worktree_root: Path) -> Set[str]:
-    """Union of `scope:` paths from every consumed `state/handoffs/*.md`.
+    """Union of `scope:` paths from every claimed `state/handoffs/*.md`.
 
     Purpose: case-(b) known-concurrent-owner membership set for
-    `dirty_tree_gate()`. A handoff is "consumed" (another live session owns
-    its scope) when its frontmatter carries `consumed_by:` -- detected via
-    the existing `coverage._get_handoff_consumed_by` (the single canonical
-    reader; this module does not re-derive that check).
+    `dirty_tree_gate()`. A handoff is "claimed" (another live session owns
+    its scope) when `coordinator_core.claim_state.resolve_claim_state`
+    reports a live holder -- ledger-first, frontmatter mirror as fallback.
+
+    Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+    § C3 / AC4. Before this fix, a live ledger claim with a branch-reverted
+    mirror (no `claimed_by`/`consumed_by`) dropped its `scope:` paths from
+    `known_scope` entirely, reclassifying the claim holder's own in-progress
+    files as case-(c) unattributable.
+
+    `common_dir` is resolved once per call, not once per handoff, per C1's
+    hot-path cost note (`git_common_dir` is itself `lru_cache`d, so this is a
+    dict-lookup saving, not a subprocess-avoidance one).
     """
     known_scope: Set[str] = set()
     handoffs_dir = worktree_root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
         return known_scope
 
+    try:
+        common_dir = git_common_dir(worktree_root)
+    except Exception:
+        common_dir = None
+
     for hf in sorted(handoffs_dir.glob("*.md")):
         if not hf.is_file():
             continue
-        if _get_handoff_consumed_by(str(hf)) is None:
+        # Review: coordinator:code-reviewer C3 P3 — renamed from `claim_state`,
+        # which shadowed the sibling module `coordinator_core.claim_state`
+        # this function imports `resolve_claim_state` from.
+        resolved_claim = resolve_claim_state(hf, common_dir=common_dir, repo_root=worktree_root)
+        if resolved_claim.holder is None:
             continue
         try:
             text = hf.read_text(encoding="utf-8", errors="replace")
@@ -515,6 +538,43 @@ def _build_known_scope(worktree_root: Path) -> Set[str]:
         known_scope.update(_extract_scope_paths(text))
 
     return known_scope
+
+
+def _diff_name_only_worktree(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+    """`git diff --name-only -- <paths>` — batched worktree-vs-index real-diff set.
+
+    Purpose: the batched replacement for calling `git diff --quiet` once per
+    tracked-unstaged porcelain line in `dirty_tree_gate()`'s EOL-phantom
+    filter (docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-
+    amplification-gate.md § C1). One `git diff --name-only` invocation,
+    scoped to every tracked-unstaged candidate path in a single call,
+    returns exactly the subset WITH a real diff; any candidate absent from
+    `stdout` is a phantom (worktree content already equals the index -- a
+    Git-for-Windows stat-staleness artifact). Deliberately NOT "pass all
+    paths to one `git diff --quiet`", which collapses to a single yes/no for
+    the whole set and loses per-path resolution -- this call inverts that:
+    the returned name list IS the per-path resolution.
+
+    DELIBERATELY NOT `--no-optional-locks`, unlike `status_porcelain`
+    (imported from `git_native`) and every other read wrapper in
+    `git_native.py`. Suppressing the optional lock makes git compute the
+    stat-cache refresh in memory and discard it, so a lock-suppressed read
+    can never CLEAR phantom-dirty state -- only a real lock-taking write
+    does. Adding it here would leave every phantom permanently dirty and
+    re-filtered on each ceremony (the flapping-count symptom in
+    example-doctrine-repo's bash-on-windows-gotchas.md § 11) -- this omission is
+    deliberate, not an oversight; do not "fix" it back in to match the
+    house read-wrapper idiom.
+
+    `paths` is the caller's own tracked-unstaged candidate set -- never
+    called unscoped. Empty `paths` short-circuits to an empty, `ok=True`
+    result without spawning a subprocess (an unscoped `git diff --name-only`
+    with no trailing pathspec would scan the whole tree, never the intent of
+    a caller that passed nothing to scope to).
+    """
+    if not paths:
+        return GitResult(returncode=0, stdout="", stderr="")
+    return _git(["diff", "--name-only", "--", *paths], cwd=cwd)
 
 
 def _porcelain_path(line: str) -> str:
@@ -580,6 +640,8 @@ def dirty_tree_gate(
     unattributable: List[str] = []
 
     status_result = status_porcelain(root)
+    parsed_lines: List[tuple] = []
+    phantom_candidates: List[str] = []
     for line in status_result.stdout.splitlines():
         if not line:
             continue
@@ -587,16 +649,33 @@ def dirty_tree_gate(
         xy = line[:2]
         path = _porcelain_path(line)
         x_char = xy[0] if xy else " "
-
-        # (a) Staged: X status char not ' '/'?' -> this session's own pending commit.
-        if x_char not in (" ", "?"):
-            continue
+        parsed_lines.append((x_char, path))
 
         # EOL phantom filter (tracked-unstaged only -- untracked files are
         # never phantoms since there is no index entry to compare against).
         if x_char == " ":
-            if diff_quiet(root, [path]).returncode == 0:
-                continue
+            phantom_candidates.append(path)
+
+    # Batched EOL-phantom check (docs/plans/2026-08-07-n-plus-one-git-spawn-
+    # class-and-amplification-gate.md § C1): ONE `git diff --name-only`
+    # over every tracked-unstaged candidate, instead of one `git diff
+    # --quiet` per porcelain line. `real_diff_paths` is exactly the subset
+    # WITH a real diff; any candidate absent from it is a phantom -- see
+    # `_diff_name_only_worktree()`'s own docstring for why this is the
+    # correct inversion (not "pass all paths to one `git diff --quiet`",
+    # which loses per-path resolution).
+    real_diff_paths: Set[str] = set()
+    if phantom_candidates:
+        diff_result = _diff_name_only_worktree(root, phantom_candidates)
+        real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
+
+    for x_char, path in parsed_lines:
+        # (a) Staged: X status char not ' '/'?' -> this session's own pending commit.
+        if x_char not in (" ", "?"):
+            continue
+
+        if x_char == " " and path not in real_diff_paths:
+            continue
 
         # (b) Known concurrent owner.
         if path in known_scope:

@@ -63,6 +63,7 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -92,6 +93,7 @@ def _resolve_root(explicit_root: Optional[str]) -> Optional[str]:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

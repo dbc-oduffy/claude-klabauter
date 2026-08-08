@@ -433,11 +433,14 @@ def _gather_signal(
     qc_path = (bin_dir / "query-completions.py") if bin_dir else None
     if qc_path and is_executable(qc_path):
         try:
+            from coordinator_core.win_portability import no_console_creationflags
+
             proc = subprocess.run(
                 [*resolve_launchable(str(qc_path)), "--since", since, "--format", "json"],
                 capture_output=True,
                 text=True,
                 timeout=30,
+                **no_console_creationflags(),
             )
             if proc.returncode == 0:
                 completion_signal = proc.stdout

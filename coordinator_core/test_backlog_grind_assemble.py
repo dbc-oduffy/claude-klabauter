@@ -3225,3 +3225,78 @@ class TestTrampolineDispatchRouting:
         assert exit_code == 2
         err = capsys.readouterr().err
         assert "usage" in err
+
+
+class TestCommitOneLockRetry:
+    """`_commit_one` (D-3's own commit primitive) consumes the shared
+    `coordinator_core.git_lock_retry` helper on both its `add` and its
+    `commit` invocation, per the handoff at
+    `state/handoffs/2026-08-07-git-index-lock-retry-at-the-ceremony-commit-seam.md`."""
+
+    def test_held_lock_then_success_completes_without_raising(self, tmp_path, monkeypatch):
+        calls: list[tuple[str, ...]] = []
+
+        def fake_git(args: list[str], cwd: Path):
+            calls.append(tuple(args))
+            if args[0] == "add":
+                # First `git add` sees the lock held by a sibling session;
+                # the second succeeds.
+                if sum(1 for c in calls if c[0] == "add") == 1:
+                    return SimpleNamespace(
+                        returncode=128, stdout="",
+                        stderr="fatal: Unable to create '.git/index.lock': File exists.",
+                    )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["diff", "--cached"]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if args[0] == "commit":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args == ["rev-parse", "HEAD"]:
+                return SimpleNamespace(returncode=0, stdout="deadbeef" * 5 + "\n", stderr="")
+            raise AssertionError(f"unexpected git invocation: {args!r}")
+
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda *_a, **_k: None)
+
+        sha = bga_apply._commit_one(tmp_path, ["state/h1.md"], "apply: d1")
+
+        assert sha == "deadbeef" * 5
+        assert sum(1 for c in calls if c[0] == "add") == 2
+
+    def test_non_lock_add_failure_raises_on_first_attempt(self, tmp_path, monkeypatch):
+        calls: list[tuple[str, ...]] = []
+
+        def fake_git(args: list[str], cwd: Path):
+            calls.append(tuple(args))
+            if args[0] == "add":
+                return SimpleNamespace(returncode=1, stdout="", stderr="disk full")
+            raise AssertionError(f"unexpected call after add failure: {args!r}")
+
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+
+        with pytest.raises(RuntimeError, match="git add"):
+            bga_apply._commit_one(tmp_path, ["state/h1.md"], "apply: d1")
+
+        assert sum(1 for c in calls if c[0] == "add") == 1
+
+    def test_exhausted_lock_contention_still_raises(self, tmp_path, monkeypatch):
+        calls: list[tuple[str, ...]] = []
+
+        def fake_git(args: list[str], cwd: Path):
+            calls.append(tuple(args))
+            if args[0] == "add":
+                return SimpleNamespace(
+                    returncode=128, stdout="",
+                    stderr="fatal: Unable to create '.git/index.lock': File exists.",
+                )
+            raise AssertionError(f"unexpected call: {args!r}")
+
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda *_a, **_k: None)
+
+        with pytest.raises(RuntimeError, match="git add"):
+            bga_apply._commit_one(tmp_path, ["state/h1.md"], "apply: d1")
+
+        from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS
+
+        assert sum(1 for c in calls if c[0] == "add") == DEFAULT_MAX_ATTEMPTS

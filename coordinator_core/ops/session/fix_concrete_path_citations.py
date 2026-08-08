@@ -137,6 +137,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.session.guard_concrete_path_citations import (
     WIN_DRIVE_RE,
     _ANCHOR_RES,
@@ -290,6 +292,7 @@ def _default_machine_local_call(args: List[str]) -> Optional[str]:
             text=True,
             encoding="utf-8",
             timeout=_MACHINE_LOCAL_TIMEOUT_S,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -569,6 +572,7 @@ def _tracked_files(root: Path) -> List[str]:
         text=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     ).stdout
     paths = [p for p in out.split("\0") if p]
     return [p for p in paths if not any(m in f"/{p}" for m in _EXCLUDE_DIR_MARKERS)]
@@ -726,21 +730,16 @@ def _warn_if_family_discovery_degraded(families: List[Family]) -> None:
 
 
 def _git_toplevel_for(cwd: Path) -> Optional[Path]:
-    """`git rev-parse --show-toplevel` run with `cwd`, tolerating a non-zero
-    exit or OSError (not a git repo, git missing) by returning None -- the
-    caller falls back to `cwd` itself in that case."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
+    """Repo toplevel for `cwd`, or None if `cwd` is not inside a git repo.
+    Delegates to `coordinator_core.git.repo_root.show_toplevel`, which walks
+    the tree for a `.git` entry (no spawn) and only spawns `git
+    rev-parse --show-toplevel` as a fallback -- eliminating the fork beats
+    suppressing it. The caller falls back to `cwd` itself when this returns
+    None."""
+    toplevel = show_toplevel(str(cwd))
+    if toplevel is None:
         return None
-    if result.returncode != 0:
-        return None
-    return Path(result.stdout.strip())
+    return Path(toplevel)
 
 
 def _root_for_explicit_path(resolved: Path) -> Path:
@@ -859,10 +858,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     root = args.root
     if root is None:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
-        )
-        root = Path(result.stdout.strip())
+        toplevel = show_toplevel()
+        if toplevel is None:
+            print("error: not inside a git repo (pass --root explicitly)", file=sys.stderr)
+            return 2
+        root = Path(toplevel)
 
     sweep_result = sweep(root, families, only_family=args.only, apply=args.apply)
     _print_report(sweep_result, root, args.apply, args.only)

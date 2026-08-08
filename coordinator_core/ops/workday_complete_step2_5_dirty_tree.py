@@ -181,10 +181,13 @@ import sys
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "step2.5"
 _GIT_TIMEOUT_SECS = 30
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ---------------------------------------------------------------------------
 # Unit 3 message text (AUTO-GITIGNORE / AUTO-COMMIT act blocks use these).
@@ -265,7 +268,7 @@ def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
         text=True,
         stdin=subprocess.DEVNULL,
         timeout=_GIT_TIMEOUT_SECS,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
 
 
@@ -754,7 +757,7 @@ def main(argv: List[str]) -> int:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_GIT_TIMEOUT_SECS,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"[{_PROG}] ERROR: not inside a git repo", file=sys.stderr)

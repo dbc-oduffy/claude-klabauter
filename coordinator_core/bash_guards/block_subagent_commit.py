@@ -1194,7 +1194,7 @@ def _import_assert_paths_in_session_scope():
     return assert_paths_in_session_scope
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 PRIORITY = 40
 
 #: The one narrow, route-keyed commit exemption this module grants (DR-125
@@ -6031,7 +6031,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     Returns ``None`` (allow) or the nested hard-deny envelope.
     """
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}

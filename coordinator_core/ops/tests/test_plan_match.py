@@ -30,7 +30,6 @@ Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-p
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -69,11 +68,6 @@ assert _OP_NAME in _REGISTRY, (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
 
 
 def _make_git_repo(root: Path) -> Path:
@@ -156,7 +150,7 @@ class TestPlanMatchCandidates:
     def test_empty_store_directory_absent(self, tmp_path):
         """No docs/plans/ directory → empty candidates list."""
         common_dir = _make_git_repo(tmp_path / "repo")
-        result = _run(_handler({"text": "provenance"}, repo_root=common_dir))
+        result = _handler({"text": "provenance"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
@@ -164,12 +158,12 @@ class TestPlanMatchCandidates:
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "docs" / "plans").mkdir(parents=True)
-        result = _run(_handler({"text": "provenance"}, repo_root=common_dir))
+        result = _handler({"text": "provenance"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
         """repo_root=None → empty candidates without raising."""
-        result = _run(_handler({"text": "provenance"}, repo_root=None))
+        result = _handler({"text": "provenance"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
@@ -182,7 +176,7 @@ class TestPlanMatchCandidates:
             title="Test Plan",
             plan_id="pln-test-01",
         )
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
@@ -195,7 +189,7 @@ class TestPlanMatchCandidates:
             title="Test Plan",
             plan_id="pln-test-01",
         )
-        result = _run(_handler({"text": ""}, repo_root=common_dir))
+        result = _handler({"text": ""}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_well_formed_plan_fields(self, tmp_path):
@@ -208,7 +202,7 @@ class TestPlanMatchCandidates:
             title="Fork Provenance Tooling",
             plan_id="pln-fork-provenance-01",
         )
-        result = _run(_handler({"text": "provenance"}, repo_root=common_dir))
+        result = _handler({"text": "provenance"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         entry = result["candidates"][0]
         assert entry["plan_id"] == "pln-fork-provenance-01"
@@ -226,7 +220,7 @@ class TestPlanMatchCandidates:
             title="Fork Provenance Tooling",
             plan_id="pln-fork-provenance-01",
         )
-        result = _run(_handler({"text": "provenance"}, repo_root=common_dir))
+        result = _handler({"text": "provenance"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         entry = result["candidates"][0]
         assert "plan_id" in entry
@@ -250,7 +244,7 @@ class TestPlanMatchCandidates:
             plan_id="pln-fork-provenance-01",
         )
 
-        result = _run(_handler({"text": "fork provenance tooling"}, repo_root=common_dir))
+        result = _handler({"text": "fork provenance tooling"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
         # The fork provenance plan must rank first.
@@ -273,7 +267,7 @@ class TestPlanMatchCandidates:
             plan_id="pln-good-01",
         )
 
-        result = _run(_handler({"text": "plan"}, repo_root=common_dir))
+        result = _handler({"text": "plan"}, repo_root=common_dir)
 
         ids = [c["plan_id"] for c in result["candidates"]]
         assert "pln-good-01" in ids
@@ -297,7 +291,7 @@ class TestPlanMatchCandidates:
             plan_id="pln-good-01",
         )
 
-        result = _run(_handler({"text": "plan"}, repo_root=common_dir))
+        result = _handler({"text": "plan"}, repo_root=common_dir)
 
         ids = [c["plan_id"] for c in result["candidates"]]
         assert "pln-good-01" in ids
@@ -328,7 +322,7 @@ class TestPlanMatchCandidates:
             plan_id="pln-good-01",
         )
 
-        result = _run(_handler({"text": "plan"}, repo_root=common_dir))
+        result = _handler({"text": "plan"}, repo_root=common_dir)
 
         ids = [c["plan_id"] for c in result["candidates"]]
         assert "pln-good-01" in ids
@@ -354,7 +348,7 @@ class TestPlanMatchCandidates:
             plan_id=None,
         )
 
-        result = _run(_handler({"text": "plan"}, repo_root=common_dir))
+        result = _handler({"text": "plan"}, repo_root=common_dir)
         assert len(result["candidates"]) == 2
         ids = {c["plan_id"] for c in result["candidates"]}
         assert "pln-explicit-id-01" in ids

@@ -7,8 +7,6 @@ no side effects).
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 import yaml
 
@@ -60,14 +58,14 @@ def test_filter_empty_records_yields_zero_kept():
 
 def test_filter_handler_returns_expected_shape():
     payload = _extraction_yaml([{"id": "r1", "undated": True, "tag_universal": True}])
-    result = asyncio.run(_lessons_filter_undated_universal({"extraction_yaml": payload}))
+    result = _lessons_filter_undated_universal({"extraction_yaml": payload})
     assert result["kept_count"] == 1
     assert "filtered_yaml" in result
 
 
 def test_filter_handler_requires_extraction_yaml_param():
     with pytest.raises(ValueError):
-        asyncio.run(_lessons_filter_undated_universal({}))
+        _lessons_filter_undated_universal({})
 
 
 def test_filter_double_invocation_is_idempotent_no_op():
@@ -146,19 +144,17 @@ def test_reject_orphan_handler_returns_expected_shape(tmp_path):
     _write_yaml(records_path, {"records": [{"id": "r1", "change_kind": "wiki-append"}]})
     _write_yaml(strip_path, {"strip": [{"id": "r1"}]})
 
-    result = asyncio.run(
-        _lessons_reject_orphan_strip_entries(
-            {"records_path": str(records_path), "strip_list_path": str(strip_path)}
-        )
+    result = _lessons_reject_orphan_strip_entries(
+        {"records_path": str(records_path), "strip_list_path": str(strip_path)}
     )
     assert result == {"orphans": [], "ok": True}
 
 
 def test_reject_orphan_handler_requires_both_params(tmp_path):
     with pytest.raises(ValueError):
-        asyncio.run(_lessons_reject_orphan_strip_entries({}))
+        _lessons_reject_orphan_strip_entries({})
     with pytest.raises(ValueError):
-        asyncio.run(_lessons_reject_orphan_strip_entries({"records_path": str(tmp_path / "r.yaml")}))
+        _lessons_reject_orphan_strip_entries({"records_path": str(tmp_path / "r.yaml")})
 
 
 def test_reject_orphan_double_invocation_is_idempotent_no_op(tmp_path):

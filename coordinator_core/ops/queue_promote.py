@@ -432,7 +432,7 @@ def promote_lesson(
 
 
 @register_op("queue.promote")
-async def _queue_promote_handler(
+def _queue_promote_handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC ``queue.promote`` handler — write a lessons-outbox YAML entry.

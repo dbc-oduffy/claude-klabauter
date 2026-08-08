@@ -23,6 +23,7 @@ record.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -638,6 +639,36 @@ def test_ac11_extended_length_prefix_normalizes_same_as_the_bare_path(tmp_path, 
     )
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "AC11 desync-repro: undemonstrable on native Windows, not merely "
+        "un-run there. Owner: claude-klabauter-em (chunk C9a, "
+        "docs/plans/2026-08-07-guard-suite-back-to-a-gate.md). The mechanism "
+        "this repro exploits is `os.path.realpath` failing to recognize a "
+        "backslash-prefixed Windows string as absolute, so it joins the raw "
+        "string onto `cwd` instead -- which is a POSIX-`realpath`-on-NT-"
+        "strings artifact, not a Windows-native one. `ntpath.realpath` "
+        "recognizes BOTH the bare and the `\\\\?\\`-prefixed forms as already "
+        "absolute unconditionally, so disabling only the pre-`realpath` "
+        "strip (this test's whole mechanism) cannot drive the two operands "
+        "apart here: both go into `os.path.realpath` as absolute NT paths "
+        "and normalize consistently regardless of the pre-strip, exactly as "
+        "the test above (`test_ac11_extended_length_prefix_normalizes_same_"
+        "as_the_bare_path`) already proves unconditionally on this "
+        "platform. See that test's own passing result on this host as the "
+        "positive-side confirmation: AC11's guarantee (prefixed == bare) "
+        "holds natively on Windows without the pre-strip needing to be the "
+        "thing proven responsible -- there is no asymmetric-realpath "
+        "failure mode to isolate here. A true Windows-side repro would "
+        "require driving a DIFFERENT desync mechanism (e.g. a real "
+        "extended-length path where `GetFinalPathNameByHandle`-backed "
+        "resolution returns the `\\\\?\\`-prefixed form for one operand and "
+        "not the other) which needs on-disk paths near MAX_PATH and is out "
+        "of this chunk's scope -- flagged for a follow-up chunk, not folded "
+        "in here as a scope-creeping rewrite."
+    ),
+)
 def test_ac11_pre_realpath_strip_is_what_closes_the_extended_length_desync(monkeypatch):
     """Companion to the test above -- proves the PRE-`realpath` strip is
     what makes the two forms compare equal, rather than the equality being
@@ -647,7 +678,7 @@ def test_ac11_pre_realpath_strip_is_what_closes_the_extended_length_desync(monke
     could not distinguish those two explanations, since the strip always
     ran on both operands before comparison).
 
-    On this POSIX test host, `os.path.realpath` does not recognize a
+    On a POSIX test host, `os.path.realpath` does not recognize a
     backslash-prefixed Windows string as absolute and joins it onto `cwd`
     instead (see `_resolve_path`'s own docstring) -- which moves the
     extended-length marker off the string's HEAD, past where
@@ -656,7 +687,11 @@ def test_ac11_pre_realpath_strip_is_what_closes_the_extended_length_desync(monke
     pre-`realpath` strip (leaving `casefold_path`'s own strip in place,
     unmocked, and `os.path.realpath` itself unmocked) reproduces the exact
     asymmetric-realpath failure shape AC11 exists to close: the prefixed and
-    bare forms resolve to genuinely DIFFERENT strings absent the fix."""
+    bare forms resolve to genuinely DIFFERENT strings absent the fix.
+
+    Native-Windows skip: see the `skipif` reason above -- `ntpath.realpath`
+    treats both operands as already-absolute regardless of the pre-strip,
+    so this mechanism cannot be driven to diverge on this platform."""
     bare_drive_path = _SYNTHETIC_DRIVE_LETTER + "\\Users\\Foo\\Bar"
     prefixed_drive_path = "\\\\?\\" + bare_drive_path
 

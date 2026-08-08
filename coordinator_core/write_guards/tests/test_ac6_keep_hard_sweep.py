@@ -37,6 +37,7 @@ Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, AC6.
 """
 from __future__ import annotations
 
+import functools
 import subprocess
 from pathlib import Path
 
@@ -139,7 +140,12 @@ _ENTRY_NAME_BY_MODULE = {
 }
 
 
+@functools.lru_cache()
 def _has_baseline() -> bool:
+    """Cached lazily (not evaluated to build a module-level pytestmark) — the
+    `git cat-file` probes here would otherwise fire on every pytest
+    collection, including --collect-only and -k-filtered runs that never
+    execute a test in this module."""
     result = subprocess.run(
         ["git", "cat-file", "-e", _BASELINE],
         cwd=str(_REPO_ROOT),
@@ -158,11 +164,16 @@ def _has_baseline() -> bool:
     return True
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_baseline(),
-    reason="plan baseline commit %s (or a recorded census disposition_ref) not "
-    "present in this clone's history" % _BASELINE,
-)
+@pytest.fixture(autouse=True)
+def _require_baseline():
+    """Runtime (not collection-time) gate — mirrors the former module-level
+    pytestmark but defers the git-plumbing probe to first test setup so
+    collection never spawns a process (see _has_baseline's docstring)."""
+    if not _has_baseline():
+        pytest.skip(
+            "plan baseline commit %s (or a recorded census disposition_ref) not "
+            "present in this clone's history" % _BASELINE
+        )
 
 
 def _diff_is_empty(rel_path: str) -> bool:

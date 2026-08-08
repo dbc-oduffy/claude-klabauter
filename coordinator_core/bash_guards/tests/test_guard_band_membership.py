@@ -67,6 +67,18 @@ ADVISORY_REWRITE_NAMES = [
     # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
     "offer-git-c",
+    # Mechanical leg of the fleet-wide `.git/index.lock` contention
+    # campaign -- registered immediately after `offer-git-c` (physical
+    # chain position, dispatch.py) -- see guard_no_optional_locks.py.
+    "git-no-optional-locks",
+    # Self-heal leg of the same fleet-wide `.git/index.lock` contention
+    # campaign, registered immediately after `git-no-optional-locks` in
+    # `dispatch.py` -- a stat-gated, side-effect-only reap that always
+    # returns `None` (never a rewrite or a deny) but is `fail_closed=False`
+    # ADVISORY_REWRITE, same as its `git-no-optional-locks` neighbor, per
+    # guard_reap_stale_git_lock.py's own module docstring and dispatch.py's
+    # registration comment.
+    "reap-stale-git-lock",
     "validate-commit",
     "inprocess-search",
     "probe-spray",
@@ -90,6 +102,11 @@ ADVISORY_REWRITE_NAMES = [
     # position (band contiguity requires the physical move, not just the
     # label -- see dispatch.py's own comment at this guard's entry).
     "grep-via-bash-guard",
+    # cross-repo/inbox/ dispatch, "Guard powershell-via-bash mangling"
+    # (2026-08-08) -- registered immediately after `grep-via-bash-guard`
+    # (same physical chain position, dispatch.py). Same "never denies"
+    # shape as its neighbor, so this band, not PLATFORM_CONDITIONED_DENY.
+    "powershell-via-bash-guard",
     # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C5/C7 --
     # both advisory-only, registered adjacent to grep-via-bash-guard, ahead
     # of the two remaining PLATFORM_CONDITIONED_DENY guards below.

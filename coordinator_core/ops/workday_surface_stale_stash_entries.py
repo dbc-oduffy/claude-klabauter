@@ -60,6 +60,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # Unit separator — stash subjects routinely contain literal "|" (cross-repo
 # memo subjects, commit messages quoting shell pipelines), so a printable
 # delimiter would silently misparse; \x1f never appears in a reflog subject.
@@ -83,6 +85,7 @@ def _run_stash_list(repo_root: Path) -> subprocess.CompletedProcess:
         cwd=str(repo_root),
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
 
 

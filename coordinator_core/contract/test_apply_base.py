@@ -536,3 +536,91 @@ class TestScopedCommit:
 
         with pytest.raises(RuntimeError, match="git add"):
             apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _failing_add)
+
+    def test_non_lock_add_failure_fails_fast_with_zero_retries(self, tmp_path):
+        # "disk full" is not lock-shaped stderr -- the AssertionError on any
+        # call past the first `add` proves no retry was attempted.
+        calls: list[list[str]] = []
+
+        def _failing_add(args, cwd):
+            calls.append(args)
+            if args[0] == "add":
+                return SimpleNamespace(returncode=1, stdout="", stderr="disk full")
+            raise AssertionError(f"unexpected call after add failure: {args}")
+
+        with pytest.raises(RuntimeError, match="git add"):
+            apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _failing_add)
+
+        assert len(calls) == 1
+
+    def test_held_lock_on_add_retries_and_completes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda *_a, **_k: None)
+        add_calls: list[list[str]] = []
+
+        def _flaky_run_git(args, cwd):
+            if args[0] == "add":
+                add_calls.append(args)
+                if len(add_calls) == 1:
+                    return SimpleNamespace(
+                        returncode=128, stdout="",
+                        stderr="fatal: Unable to create '.git/index.lock': File exists.",
+                    )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["diff", "--cached"]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if args[0] == "commit":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args == ["rev-parse", "HEAD"]:
+                return SimpleNamespace(returncode=0, stdout="deadbeef" * 5 + "\n", stderr="")
+            raise AssertionError(f"unexpected git invocation: {args}")
+
+        sha = apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _flaky_run_git)
+
+        assert sha == "deadbeef" * 5
+        assert len(add_calls) == 2
+
+    def test_held_lock_on_commit_retries_and_completes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda *_a, **_k: None)
+        commit_calls: list[list[str]] = []
+
+        def _flaky_run_git(args, cwd):
+            if args[0] == "add":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["diff", "--cached"]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if args[0] == "commit":
+                commit_calls.append(args)
+                if len(commit_calls) == 1:
+                    return SimpleNamespace(
+                        returncode=128, stdout="",
+                        stderr="fatal: Unable to create '.git/index.lock': File exists.",
+                    )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args == ["rev-parse", "HEAD"]:
+                return SimpleNamespace(returncode=0, stdout="deadbeef" * 5 + "\n", stderr="")
+            raise AssertionError(f"unexpected git invocation: {args}")
+
+        sha = apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _flaky_run_git)
+
+        assert sha == "deadbeef" * 5
+        assert len(commit_calls) == 2
+
+    def test_exhausted_lock_contention_on_add_still_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda *_a, **_k: None)
+        add_calls: list[list[str]] = []
+
+        def _always_locked(args, cwd):
+            if args[0] == "add":
+                add_calls.append(args)
+                return SimpleNamespace(
+                    returncode=128, stdout="",
+                    stderr="fatal: Unable to create '.git/index.lock': File exists.",
+                )
+            raise AssertionError(f"unexpected call: {args}")
+
+        with pytest.raises(RuntimeError, match="git add"):
+            apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _always_locked)
+
+        from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS
+
+        assert len(add_calls) == DEFAULT_MAX_ATTEMPTS

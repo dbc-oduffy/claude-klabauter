@@ -55,6 +55,15 @@ _ADVISORY_BANDS = (GuardBand.ADVISORY_REWRITE, GuardBand.PLATFORM_CONDITIONED_DE
 #: Review: coordinator:code-reviewer -- docstring previously claimed the
 #: dict was "kept empty by default" while shipping two entries below.
 _NO_OVERRIDE_NOTE_ALLOWLIST: Dict[str, str] = {
+    # docs/plans/2026-08-06-apply-guard-class-census.md, C13/C14b
+    # (commit 2ac049c5b) -- block_noncanonical_branch_creation.py flipped
+    # CONFINEMENT_DENY -> ADVISORY_REWRITE per DR-277 ("guards are advisory
+    # by default"), landing it in this file's scan for the first time. Its
+    # own NEGATIVE SPEC 3 (PM ruling R4, same ruling as the C5/C7 entries
+    # below) says it never appends `operator_override_note` and never names
+    # a bypass env var -- no override route exists to name, same rationale
+    # as its sibling guards in this trio.
+    "block-noncanonical-branch-creation": "PM ruling R4 -- no override env var by design (see block_noncanonical_branch_creation.py's own NEGATIVE SPEC 3).",
     # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunks C5/C7 --
     # PM ruling R4: neither guard names any `COORDINATOR_OVERRIDE_*`/
     # `COORDINATOR_ALLOW_*`/`COORDINATOR_DISABLE_*` bypass, deliberately
@@ -76,6 +85,15 @@ _NO_OVERRIDE_NOTE_ALLOWLIST: Dict[str, str] = {
     # Identical rationale: same shared `_write_bump_message.py` copy, same
     # marker-touch clear mechanism, no separate override route of its own.
     "bump-outside-repo-write": "docs/plans/2026-08-02-write-confinement-guards.md -- no override env var by design; the marker touch line is the clear mechanism, not an env var (see _write_bump_message.py's own NEGATIVE SPEC).",
+    # docs/plans/2026-08-07-git-index-lock-contention-campaign.md -- the
+    # self-heal leg. `check_reap_stale_git_lock` always returns `None`
+    # (allow, unchanged) whatever it finds -- see guard_reap_stale_git_lock
+    # .py's own module docstring ("this guard never rewrites `cmd` at all;
+    # its mechanism is a side effect ... and it always returns None"). It
+    # never emits an advisory message of any kind, so there is no override
+    # route for it to name -- unlike its `git-no-optional-locks` neighbor,
+    # which rewrites `cmd` and therefore has advisory text to gate.
+    "reap-stale-git-lock": "guard_reap_stale_git_lock.py's own module docstring -- side-effect-only guard that always returns None, never emits advisory text, so no override route exists to name.",
 }
 
 #: Matches the call expression inside `lambda: <call>(...)` as registered

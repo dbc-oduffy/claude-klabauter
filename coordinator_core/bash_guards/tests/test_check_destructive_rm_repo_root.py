@@ -164,6 +164,26 @@ class TestCaseVariantAliasing:
         assert "case-insensitive" in reason
 
 
+def _redirect_home(monkeypatch, home: str) -> None:
+    """Redirect the process's notion of "home" through every variable the
+    running platform's home-resolution actually consults.
+
+    Plan `docs/plans/2026-08-07-install-dogfood-mechanical-residue.md`
+    (chunk C4), finding F13e: `os.path.expanduser` ignores `$HOME` on
+    win32 and reads `USERPROFILE` (confirmed empirically -- with only
+    `HOME` set, `expanduser("~/checkout")` still returned the real user
+    profile path; with `USERPROFILE` set it followed the redirect). Setting
+    only `HOME` therefore makes `TestTildeAndHomeVarTargets` assert against
+    the real home directory on Windows, never exercising the guard.
+    `_expand_home_var` (dispatch_checks.py) is a separate code path that
+    reads `$HOME` textually for the `$HOME`/`${HOME}` token-expansion leg,
+    so both variables must be set for the class's assertions to hold on
+    every platform and every leg.
+    """
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+
+
 class TestTildeAndHomeVarTargets:
     """The literal 2026-07-31 incident command, pinned through the public
     entrypoint. Pre-fix, `os.path.exists("~/.claude")` is False (tilde is
@@ -176,21 +196,21 @@ class TestTildeAndHomeVarTargets:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
-        monkeypatch.setenv("HOME", str(home))
+        _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf ~/checkout")
 
     def test_home_var_spelled_root_is_denied(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
-        monkeypatch.setenv("HOME", str(home))
+        _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf $HOME/checkout")
 
     def test_braced_home_var_spelled_root_is_denied(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
-        monkeypatch.setenv("HOME", str(home))
+        _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf ${HOME}/checkout")
 
     def test_unresolvable_var_target_still_skipped(self, monkeypatch, tmp_path):
@@ -200,7 +220,7 @@ class TestTildeAndHomeVarTargets:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
-        monkeypatch.setenv("HOME", str(home))
+        _redirect_home(monkeypatch, str(home))
         # $FOO is not $HOME -- must remain unresolved and therefore skipped,
         # i.e. not denied (the check has nothing to probe).
         assert not _denied("rm -rf $FOO/checkout")

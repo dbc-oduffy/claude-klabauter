@@ -170,9 +170,11 @@ from coordinator_core.reconcile.commit_reality import (
 )
 from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session.shape import session_shape_set
+from coordinator_core.win_portability import no_console_creationflags
 
-# Windows console-flash suppression (DR-054) — mirrors coordinator_core.liveness._NO_CONSOLE.
-_NO_CONSOLE = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+# Windows console-flash suppression (DR-054) — routes through the canonical
+# primitive.
+_NO_CONSOLE = no_console_creationflags()
 
 # shipped_in value grammar (DR-096, 2026-07-26 ruling) — this module owns
 # BOTH shapes a `shipped_in` value may ever take: a resolvable git SHA, or
@@ -409,7 +411,9 @@ def _scope_paths_have_uncommitted_changes(worktree: Path, scope_paths: list[str]
     this fix must not touch (see `stamp_shipped_in`'s Negative-spec / HARD
     CONSTRAINTS)."""
     try:
-        proc = _run_git(["status", "--porcelain", "--", *scope_paths], cwd=worktree)
+        proc = _run_git(
+            ["--no-optional-locks", "status", "--porcelain", "--", *scope_paths], cwd=worktree
+        )
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(
             f"_scope_paths_have_uncommitted_changes: git status failed for "
@@ -615,9 +619,9 @@ def _ownership_block_reason(resolve_worktree: Path, resolved_sha: str) -> Option
     caller_sid = resolve_current_session_id(resolve_worktree)
     if not caller_sid:
         return (
-            "caller session-id unresolvable (no CLAUDE_SESSION_ID/"
-            "CLAUDE_CODE_SESSION_ID env var, no sentinel file) — cannot establish "
-            "ownership of anything, so nothing is safe to stamp"
+            "caller session-id unresolvable (none of COORDINATOR_SESSION_ID/"
+            "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID set in the environment) — "
+            "cannot establish ownership of anything, so nothing is safe to stamp"
         )
     candidate_sid = _commit_session_id(resolve_worktree, resolved_sha)
     if candidate_sid is None:
@@ -1665,7 +1669,8 @@ def cs_claim_handoff(handoff_path: str) -> int:
     if not sid:
         print(
             "cs_claim_handoff: could not resolve a session id (empty claimed_by would "
-            "corrupt the claim gate) — set CLAUDE_CODE_SESSION_ID or the session sentinel",
+            "corrupt the claim gate) — set COORDINATOR_SESSION_ID, CLAUDE_SESSION_ID, "
+            "or CLAUDE_CODE_SESSION_ID in the environment",
             file=sys.stderr,
         )
         return 1
@@ -1715,8 +1720,8 @@ def cs_claim_memo_stamp(memo_path: str, *, return_result: bool = False) -> "int 
     if not sid:
         print(
             "cs_claim_memo_stamp: could not resolve a session id (empty picked_up_by "
-            "would corrupt the claim gate) — set CLAUDE_CODE_SESSION_ID or the session "
-            "sentinel",
+            "would corrupt the claim gate) — set COORDINATOR_SESSION_ID, "
+            "CLAUDE_SESSION_ID, or CLAUDE_CODE_SESSION_ID in the environment",
             file=sys.stderr,
         )
         result = {"exit_code": 1, "applied": False, "error": "could not resolve a session id"}
@@ -1913,8 +1918,8 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
     if not sid:
         print(
             "cs_resolve_memo: could not resolve a session id (empty picked_up_by "
-            "would corrupt the claim gate) — set CLAUDE_CODE_SESSION_ID or the session "
-            "sentinel",
+            "would corrupt the claim gate) — set COORDINATOR_SESSION_ID, "
+            "CLAUDE_SESSION_ID, or CLAUDE_CODE_SESSION_ID in the environment",
             file=sys.stderr,
         )
         result = {"exit_code": 1, "applied": False, "error": "could not resolve a session id"}

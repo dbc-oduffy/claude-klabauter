@@ -129,7 +129,12 @@ def _seed_claimed_handoff(
         f"authoring_session: {authoring_session}\n"
         "---" + body
     )
-    path.write_text(content, encoding="utf-8")
+    # newline="" so the seed lands LF-exact, matching what `locked_rmw` writes
+    # in production (`os.write(fd, new_text.encode("utf-8"))` — no newline
+    # translation). Bare `write_text` translates to CRLF on Windows, which no
+    # production writer ever produces; seeding CRLF made the rollback path look
+    # like it corrupted the file when it had restored it byte-for-byte.
+    path.write_text(content, encoding="utf-8", newline="")
     if commit:
         _git(repo, "add", "--", f"state/handoffs/{name}")
         _git(repo, "commit", "-m", f"chore: seed {name}")
@@ -156,7 +161,12 @@ def _seed_plan(
         f"status: {status}\n"
         "---" + body
     )
-    path.write_text(content, encoding="utf-8")
+    # newline="" so the seed lands LF-exact, matching what `locked_rmw` writes
+    # in production (`os.write(fd, new_text.encode("utf-8"))` — no newline
+    # translation). Bare `write_text` translates to CRLF on Windows, which no
+    # production writer ever produces; seeding CRLF made the rollback path look
+    # like it corrupted the file when it had restored it byte-for-byte.
+    path.write_text(content, encoding="utf-8", newline="")
     if commit:
         _git(repo, "add", "--", f"docs/plans/{name}")
         _git(repo, "commit", "-m", f"chore: seed {name}")
@@ -613,12 +623,12 @@ def test_commit_delivery_failure_restores_pre_mutation_content(tmp_path, monkeyp
 
     real_run_git = propagate_body_mod._run_git
 
-    def _failing_run_git(args, cwd):
+    def _failing_run_git(args, cwd, env=None):
         if args and args[0] == "write-tree":
             return subprocess.CompletedProcess(
                 args=["git"] + list(args), returncode=1, stdout="", stderr="simulated disk-full write-tree failure",
             )
-        return real_run_git(args, cwd)
+        return real_run_git(args, cwd, env=env)
 
     monkeypatch.setattr(propagate_body_mod, "_run_git", _failing_run_git)
 
@@ -750,3 +760,82 @@ def test_plan_propagate_repeated_deliveries_append_single_heading(tmp_path, monk
     assert after.count(_PROPAGATED_SECTION_HEADING) == 1
     assert "first delivery" in after
     assert "second delivery" in after
+
+
+# ---------------------------------------------------------------------------
+# Shared-index contamination — regression lock.
+#
+# `git add -- <path>` scopes what the op STAGES, but `git write-tree` against
+# the SHARED index serializes every path a concurrent peer already staged.
+# Observed 2026-08-07 in the live tree: a delivery into one handoff landed 24
+# files, 23 of them a peer's staged work, under this op's own subject line.
+# The op now builds its tree in a private GIT_INDEX_FILE seeded from HEAD.
+# ---------------------------------------------------------------------------
+
+
+def test_peer_staged_paths_do_not_leak_into_delivery_commit(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-08-01-peer-index.md")
+    rel_path = f"state/handoffs/{hpath.name}"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _DELIVERING_SESSION)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _DELIVERING_SESSION)
+
+    # A concurrent peer stages unrelated work into the shared index — an
+    # addition and a modification to an already-tracked file.
+    peer_new = repo / "peer_new.py"
+    peer_new.write_text("# peer's in-flight work\n", encoding="utf-8")
+    peer_tracked = repo / "state" / "handoffs" / ".gitkeep"
+    peer_tracked.write_text("peer edit\n", encoding="utf-8")
+    _git(repo, "add", "--", "peer_new.py", "state/handoffs/.gitkeep")
+
+    staged_before = set(_git(repo, "diff", "--cached", "--name-only").stdout.split())
+    assert staged_before == {"peer_new.py", "state/handoffs/.gitkeep"}
+
+    before_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    result = _run(_handler(_base_params(hpath), repo_root=repo / ".git"))
+    assert result["exit_code"] == 0, result
+
+    # The commit carries the delivery target and nothing else.
+    changed_files = _git(repo, "diff", "--name-only", f"{before_head}..HEAD").stdout.split()
+    assert changed_files == [rel_path], (
+        f"peer-staged paths leaked into the delivery commit: {changed_files}"
+    )
+
+    # The peer's staging survives untouched — the op neither committed it nor
+    # unstaged it.
+    staged_after = set(_git(repo, "diff", "--cached", "--name-only").stdout.split())
+    assert staged_after == staged_before
+
+
+def test_rollback_does_not_unstage_holder_staged_target(tmp_path, monkeypatch):
+    """A failed delivery must not reset the shared index: the op no longer
+    stages there, so a `git reset -- <path>` would destroy the HOLDER's own
+    staged content rather than undoing anything of the op's."""
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-08-01-rollback-index.md")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _DELIVERING_SESSION)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _DELIVERING_SESSION)
+
+    peer_new = repo / "peer_staged.py"
+    peer_new.write_text("# holder's staged work\n", encoding="utf-8")
+    _git(repo, "add", "--", "peer_staged.py")
+    staged_before = set(_git(repo, "diff", "--cached", "--name-only").stdout.split())
+    assert "peer_staged.py" in staged_before
+
+    original = hpath.read_text(encoding="utf-8")
+
+    import coordinator_core.ops.propagate_body as _pb
+
+    def _boom(*_args, **_kwargs):
+        return None, "simulated commit-tree failure"
+
+    monkeypatch.setattr(_pb, "_commit_delivery", _boom)
+
+    result = _run(_handler(_base_params(hpath), repo_root=repo / ".git"))
+    assert result["exit_code"] == 1
+    assert result["applied"] is False
+
+    # Body restored, and the holder's staging is intact.
+    assert hpath.read_text(encoding="utf-8") == original
+    staged_after = set(_git(repo, "diff", "--cached", "--name-only").stdout.split())
+    assert staged_after == staged_before

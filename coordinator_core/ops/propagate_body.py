@@ -155,10 +155,12 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
@@ -169,6 +171,10 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _LOG = logging.getLogger(__name__)
 
@@ -241,7 +247,6 @@ _ZERO_WIDTH_CHARS = frozenset({
     "﻿",  # ZERO WIDTH NO-BREAK SPACE / BOM
 })
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _contains_invisible_unicode(s: str) -> bool:
@@ -316,7 +321,9 @@ def _append_propagated_section(body: str, block: str) -> str:
 # AC12 — git preconditions + plumbing commit
 # ---------------------------------------------------------------------------
 
-def _run_git(args: List[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
+def _run_git(
+    args: List[str], cwd: Path, env: "Optional[Dict[str, str]]" = None,
+) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(
         ["git"] + args,
         cwd=str(cwd),
@@ -324,7 +331,8 @@ def _run_git(args: List[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        env=env,
+        **_CREATIONFLAGS,
     )
 
 
@@ -369,20 +377,56 @@ def _commit_delivery(
     """Land the write as a commit scoped to exactly `rel_path`, via
     `commit-tree` + a compare-and-swap `update-ref` — plumbing that runs NO
     git hooks (see module docstring AC12 point 3). Returns (sha, error);
-    exactly one is None."""
+    exactly one is None.
+
+    NEGATIVE-SPEC (why the tree is built in a PRIVATE index):
+    - `git add -- <rel_path>` scopes what this op STAGES, but `git write-tree`
+      serializes the WHOLE index — every path a concurrent peer already staged
+      in the shared `.git/index` included. A path-scoped `add` followed by a
+      shared-index `write-tree` is therefore NOT a scoped commit, and the
+      "scoped to exactly `rel_path`" contract above was false whenever the
+      holder's index was non-empty. Observed 2026-08-07: a delivery into one
+      handoff landed 24 files, 23 of them a peer's staged work, under this
+      op's own subject line.
+    - The fix mirrors `ceremony/git_native.py::_commit_scoped_private_index`:
+      redirect `GIT_INDEX_FILE` to a throwaway index seeded from HEAD (never a
+      copy of the shared index), stage only `rel_path` there, and write the
+      tree from that. The shared index is never read for content and never
+      mutated, so a peer's staging is untouchable by this path by
+      construction rather than by the caller happening to hold a clean index.
+    - Seeded from HEAD via `read-tree`, never `shutil.copy2` of `.git/index`
+      — copying the shared index would reintroduce exactly the contamination
+      this closes.
+    """
     old_head_result = _run_git(["rev-parse", "HEAD"], worktree)
     if old_head_result.returncode != 0:
         return None, f"cannot resolve HEAD: {old_head_result.stderr.strip()}"
     old_head = old_head_result.stdout.strip()
 
-    add_result = _run_git(["add", "--", rel_path], worktree)
-    if add_result.returncode != 0:
-        return None, f"git add failed: {add_result.stderr.strip()}"
+    temp_index = (
+        Path(tempfile.gettempdir()) / f"git-index-propagate-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    private_env: Dict[str, str] = dict(os.environ)
+    private_env["GIT_INDEX_FILE"] = str(temp_index)
 
-    write_tree_result = _run_git(["write-tree"], worktree)
-    if write_tree_result.returncode != 0:
-        return None, f"git write-tree failed: {write_tree_result.stderr.strip()}"
-    tree_sha = write_tree_result.stdout.strip()
+    try:
+        read_tree_result = _run_git(["read-tree", "HEAD"], worktree, env=private_env)
+        if read_tree_result.returncode != 0:
+            return None, f"git read-tree failed: {read_tree_result.stderr.strip()}"
+
+        add_result = _run_git(["add", "--", rel_path], worktree, env=private_env)
+        if add_result.returncode != 0:
+            return None, f"git add failed: {add_result.stderr.strip()}"
+
+        write_tree_result = _run_git(["write-tree"], worktree, env=private_env)
+        if write_tree_result.returncode != 0:
+            return None, f"git write-tree failed: {write_tree_result.stderr.strip()}"
+        tree_sha = write_tree_result.stdout.strip()
+    finally:
+        try:
+            temp_index.unlink()
+        except OSError:
+            pass
 
     subject = f"handoff.propagate: deliver into {rel_path}"
     message = (
@@ -400,7 +444,7 @@ def _commit_delivery(
         capture_output=True,
         text=True,
         timeout=15,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
     if commit_tree_result.returncode != 0:
         return None, f"git commit-tree failed: {commit_tree_result.stderr.strip()}"
@@ -414,6 +458,23 @@ def _commit_delivery(
             f"compare-and-swap update-ref failed — HEAD moved concurrently "
             f"since {old_head} was captured: {update_ref_result.stderr.strip()}"
         )
+
+    # The tree was built in a private index, so the SHARED index still holds
+    # the pre-delivery blob for `rel_path` and would report it as staged-
+    # modified against the new HEAD — a phantom-dirty entry for a file this
+    # op just committed. Re-point that ONE path at the new HEAD.
+    #
+    # Safe precisely because `_target_is_dirty` already refused the whole op
+    # if `rel_path` carried any staged or unstaged change on entry: there is
+    # no holder-staged version of this path to destroy. Scoped to `rel_path`,
+    # so every other entry a peer staged is left exactly as it was.
+    sync_result = _run_git(["reset", "-q", "HEAD", "--", rel_path], worktree)
+    if sync_result.returncode != 0:
+        return new_sha, (
+            f"delivery committed as {new_sha} but the shared index still "
+            f"shows {rel_path} as modified (git reset failed): "
+            f"{sync_result.stderr.strip()}"
+        )
     return new_sha, None
 
 
@@ -421,8 +482,7 @@ def _rollback_delivery(
     worktree: Path, rel_path: str, original_text: str,
 ) -> Optional[str]:
     """Restore `rel_path` (repo-relative, under `worktree`) to `original_text`
-    and unstage it — undoes both the `locked_rmw` mutation AND any partial
-    `git add` a failed `_commit_delivery` performed before it errored.
+    — undoes the `locked_rmw` mutation after a failed `_commit_delivery`.
 
     Review: code-reviewer — F2: `_commit_delivery` can fail at `write-tree`,
     `commit-tree`, or (most plausibly) a concurrent-HEAD CAS failure on
@@ -430,9 +490,13 @@ def _rollback_delivery(
     rewritten the file on disk, so a bare error return left the holder's tree
     dirty in violation of AC12. This is the compensating rollback.
 
-    `git reset -- rel_path` unstages whatever `git add` staged; if `add`
-    itself never ran (e.g. `_commit_delivery` failed resolving HEAD before
-    reaching `add`), this is a harmless no-op — nothing was staged to unstage.
+    NEGATIVE-SPEC: does NOT `git reset -- rel_path`. It used to, to unstage
+    what `_commit_delivery`'s `git add` had put in the SHARED index; that add
+    now runs against a private `GIT_INDEX_FILE` (see `_commit_delivery`), so
+    there is nothing of this op's in the shared index to undo. Resetting
+    anyway would unstage content the HOLDER staged themselves before calling
+    the op — turning a compensating rollback into peer-work destruction, the
+    same class of harm the private-index change exists to close.
 
     Returns None on success, or a human-readable error string if rollback
     itself fails. A rollback failure must be surfaced loudly by the caller
@@ -445,12 +509,6 @@ def _rollback_delivery(
     except OSError as exc:
         return f"failed to restore {rel_path} to its pre-mutation content: {exc}"
 
-    reset_result = _run_git(["reset", "--", rel_path], worktree)
-    if reset_result.returncode != 0:
-        return (
-            f"restored {rel_path} content but failed to unstage it "
-            f"(git reset failed): {reset_result.stderr.strip()}"
-        )
     return None
 
 

@@ -139,7 +139,7 @@ def test_malformed_json_returns_empty_banner_not_raise(tmp_path):
 
 def test_url_and_unc_paths_do_not_false_positive():
     urls = {
-        "a": "https://github.com/dbc-example-operator/coordinator-claude",
+        "a": "https://github.com/dbc-oduffy/coordinator-claude",
         "b": "//server/share/some/path",
         "c": "http://localhost:8080/foo",
     }
@@ -477,7 +477,7 @@ def test_multi_segment_nested_path_example_sim_repo_fires():
 
 
 def test_prose_url_not_flagged():
-    text = "See https://github.com/dbc-example-operator/coordinator-claude for the repo."
+    text = "See https://github.com/dbc-oduffy/coordinator-claude for the repo."
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
 
 
@@ -594,7 +594,7 @@ def test_bare_drive_root_and_url_stay_quiet_after_escape_letter_fix():
     )
     assert (
         detect_foreign_platform_paths_in_prose(
-            "See https://github.com/dbc-example-operator/coordinator-claude for the repo.",
+            "See https://github.com/dbc-oduffy/coordinator-claude for the repo.",
             host_is_windows=False,
         )
         == []

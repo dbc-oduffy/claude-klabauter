@@ -43,7 +43,9 @@ pytest_plugins = ("coordinator_core.testing._fixtures",)
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    if asyncio.iscoroutine(coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+    return coro
 
 
 def _call(params: dict) -> dict:

@@ -525,7 +525,7 @@ def build_manifest(repo_root: Path | None = None) -> dict[str, Any]:
 
 
 @register_op("write_surface.emit_manifest")
-async def _emit_write_surface_manifest(params: dict, repo_root: Path | None = None) -> dict:
+def _emit_write_surface_manifest(params: dict, repo_root: Path | None = None) -> dict:
     """JSON-RPC "write_surface.emit_manifest" handler.
 
     Params: none consumed.

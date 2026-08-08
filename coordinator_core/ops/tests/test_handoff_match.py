@@ -31,7 +31,6 @@ Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-p
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -71,10 +70,6 @@ assert _OP_NAME in _REGISTRY, (
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
 
 
 def _make_git_repo(root: Path) -> Path:
@@ -158,7 +153,7 @@ class TestHandoffMatchCandidates:
     def test_empty_store_directory_absent(self, tmp_path):
         """No state/handoffs/ directory → empty candidates list."""
         common_dir = _make_git_repo(tmp_path / "repo")
-        result = _run(_handler({"text": "roadmap"}, repo_root=common_dir))
+        result = _handler({"text": "roadmap"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
@@ -166,12 +161,12 @@ class TestHandoffMatchCandidates:
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "handoffs").mkdir(parents=True)
-        result = _run(_handler({"text": "roadmap"}, repo_root=common_dir))
+        result = _handler({"text": "roadmap"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
         """repo_root=None → empty candidates without raising."""
-        result = _run(_handler({"text": "roadmap"}, repo_root=None))
+        result = _handler({"text": "roadmap"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
@@ -183,7 +178,7 @@ class TestHandoffMatchCandidates:
             "2026-07-02_230112_roadmap-pcore-12.md",
             title="Edifice-wide migration ordering",
         )
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
@@ -195,7 +190,7 @@ class TestHandoffMatchCandidates:
             "2026-07-02_230112_roadmap-pcore-12.md",
             title="Edifice-wide migration ordering",
         )
-        result = _run(_handler({"text": ""}, repo_root=common_dir))
+        result = _handler({"text": ""}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_well_formed_handoff_fields(self, tmp_path):
@@ -207,7 +202,7 @@ class TestHandoffMatchCandidates:
             "2026-07-02_230112_roadmap-pcore-12.md",
             title="Edifice-wide migration ordering",
         )
-        result = _run(_handler({"text": "migration ordering"}, repo_root=common_dir))
+        result = _handler({"text": "migration ordering"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         entry = result["candidates"][0]
         assert entry["handoff_id"] == "2026-07-02_230112_roadmap-pcore-12"
@@ -224,7 +219,7 @@ class TestHandoffMatchCandidates:
             "2026-07-02_230112_roadmap-pcore-12.md",
             title="Edifice-wide migration ordering",
         )
-        result = _run(_handler({"text": "migration"}, repo_root=common_dir))
+        result = _handler({"text": "migration"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         entry = result["candidates"][0]
         assert "handoff_id" in entry
@@ -240,7 +235,7 @@ class TestHandoffMatchCandidates:
             f"{stem}.md",
             title="Fork Authoring Tooling",
         )
-        result = _run(_handler({"text": "fork authoring"}, repo_root=common_dir))
+        result = _handler({"text": "fork authoring"}, repo_root=common_dir)
         assert len(result["candidates"]) == 1
         assert result["candidates"][0]["handoff_id"] == stem
 
@@ -260,7 +255,7 @@ class TestHandoffMatchCandidates:
             title="Fork Authoring Provenance Tooling",
         )
 
-        result = _run(_handler({"text": "fork authoring provenance"}, repo_root=common_dir))
+        result = _handler({"text": "fork authoring provenance"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
         # The fork authoring handoff must rank first.
@@ -282,7 +277,7 @@ class TestHandoffMatchCandidates:
             title="Good Handoff",
         )
 
-        result = _run(_handler({"text": "handoff"}, repo_root=common_dir))
+        result = _handler({"text": "handoff"}, repo_root=common_dir)
 
         ids = [c["handoff_id"] for c in result["candidates"]]
         assert "2026-07-02_000000_good" in ids
@@ -304,7 +299,7 @@ class TestHandoffMatchCandidates:
             title="Good Handoff",
         )
 
-        result = _run(_handler({"text": "handoff"}, repo_root=common_dir))
+        result = _handler({"text": "handoff"}, repo_root=common_dir)
 
         ids = [c["handoff_id"] for c in result["candidates"]]
         assert "2026-07-02_000000_good" in ids
@@ -326,7 +321,7 @@ class TestHandoffMatchCandidates:
             title="Good Handoff",
         )
 
-        result = _run(_handler({"text": "handoff"}, repo_root=common_dir))
+        result = _handler({"text": "handoff"}, repo_root=common_dir)
 
         ids = [c["handoff_id"] for c in result["candidates"]]
         assert "2026-07-02_000000_good" in ids

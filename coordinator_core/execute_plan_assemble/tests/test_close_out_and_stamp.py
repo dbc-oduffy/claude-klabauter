@@ -2420,6 +2420,39 @@ class TestDeliverableIdMismatchDiagnostic:
         assert coas._deliverable_id_near_miss_diagnostics(root, "", ["C1"]) == []
         assert call_count["n"] == 0
 
+    def test_zero_trailered_commits_in_range_never_recommends_an_equivalence(
+        self, tmp_path, monkeypatch
+    ):
+        """Second-defect regression (range-fix, 2026-08-07 -- see this
+        module's own bug-backlog entry `2026-08-07-close-out-and-stamp-s-
+        chunk-evidence-joi-8b6a7a32d833.yaml`): when the searched range
+        carries ZERO commits with any `Deliverable-Id` trailer at all
+        (`JOIN_PROVENANCE_NO_JOIN_CANDIDATES`), this is a range/visibility
+        failure, not a key mismatch -- the caller must never be steered
+        toward declaring a `state/deliverable-equivalence.yaml` equivalence
+        for it, since doing so on a genuine range bug would record a FALSE
+        equivalence between two unrelated workstreams (the exact live
+        incident this fix closes). `deliverable_id_mismatch` must stay
+        empty and the message must carry the `no_join_candidates` reason,
+        never an equivalence NOTE."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        # Nothing else committed at all -- the only commit in this repo's
+        # history is the untrailered "seed" commit `_seed_plan` itself
+        # lands, so the searched range carries zero Deliverable-Id-trailered
+        # commits of any kind.
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is False
+        assert result["join_provenance"] == coas.JOIN_PROVENANCE_NO_JOIN_CANDIDATES
+        assert result["deliverable_id_mismatch"] == []
+        assert "no_join_candidates" in result["message"]
+        assert "equivalence" not in result["message"]
+        assert "NOTE" not in result["message"]
+
     def test_close_out_and_stamp_message_and_result_carry_the_mismatch(
         self, tmp_path, monkeypatch
     ):
@@ -2713,6 +2746,58 @@ class TestMultiChunkSubjectSeparators:
             coas._committed_id_covers_spine_id(cid, "C8p") for cid in committed
         )
 
+    def test_numeric_sub_dispatch_suffix_covers_letter_ending_spine_id(
+        self, tmp_path
+    ):
+        """Defect fix, 2026-08-07 (bug-backlog
+        `2026-08-07-close-out-and-stamp-reports-key-mismatch-dc4072b44474
+        .yaml`): a wave-map fanout that numbers its sub-dispatches
+        (`C6a` -> `C6a1`..`C6a7`) must satisfy its parent spine id `C6a`,
+        the same way a lettered sub-chunk suffix (`C1a`) already does --
+        but ONLY when the base spine id does not itself end in a digit,
+        preserving `C11` must-not-cover-`C1` verbatim."""
+        assert coas._committed_id_covers_spine_id("C6a1", "C6a") is True
+        assert coas._committed_id_covers_spine_id("C6a7", "C6a") is True
+        assert coas._committed_id_covers_spine_id("C6b2", "C6b") is True
+        # Digit-ending base id: the existing C11-vs-C1 exclusion must not
+        # regress -- a trailing digit on a digit-ending base is still a
+        # distinct, unrelated spine id, never a sub-dispatch of it.
+        assert coas._committed_id_covers_spine_id("C11", "C1") is False
+
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root,
+            "plan.md",
+            "C6a1: numbered sub-dispatch of C6a",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+        _commit_with_subject(
+            root,
+            "widget.py",
+            "C6a1: numbered sub-dispatch commit for a foreign plan",
+            deliverable_id="dlv-a-completely-different-plan-abc123",
+        )
+
+        query_ok, committed = coas._committed_chunk_ids(
+            root, _DLV_VALID_SPINE, spine_ids=["C6a", "C1"]
+        )
+        assert query_ok is True
+        assert "C6a1" in committed
+        assert any(
+            coas._committed_id_covers_spine_id(cid, "C6a") for cid in committed
+        )
+        # Deliverable-Id scoping still resolves the SAME-subject, SAME-id
+        # commit for the foreign plan when queried under its OWN
+        # deliverable id -- a colliding subject never leaks the wrong
+        # plan's evidence into the other's committed set.
+        query_ok_foreign, committed_foreign = coas._committed_chunk_ids(
+            root, "dlv-a-completely-different-plan-abc123", spine_ids=["C6a"]
+        )
+        assert query_ok_foreign is True
+        assert "C6a1" in committed_foreign
+
     def test_path_shaped_subject_before_colon_is_not_mis_split_into_chunk_ids(
         self, tmp_path
     ):
@@ -2985,26 +3070,23 @@ class TestNonCPrefixedSpineIds:
         # flip landed.
         assert _head_sha(root) != pre_head
 
-    def test_subject_match_before_merge_base_range_is_not_counted(self, tmp_path):
-        """Requirement: a chunk-shaped commit sitting OUTSIDE the evidence
-        window is never counted, even when its subject would otherwise
-        resolve cleanly. This oracle's window is branch-divergence from
-        `origin/main` (`_chunk_evidence_log_range`), not a date field --
-        see this module's docstring § Range choice for why that replaced
-        an authorization-timestamp bound. A commit AT the merge-base
-        itself (i.e. already on `origin/main`, before this branch's own
-        chunk work started) must not count as evidence, while a
-        same-shaped commit landed AFTER the divergence point must."""
+    def test_subject_match_before_merge_base_range_is_excluded_when_plan_text_absent(
+        self, tmp_path
+    ):
+        """Pre-range-fix behavior, preserved as a rung-3-only regression
+        (`_chunk_evidence_log_range`'s § Range choice, widened again):
+        without `plan_text` (a caller with no plan text at hand, e.g. a
+        direct unit-test call), the range still falls back to the plain
+        `merge-base origin/main HEAD`..`HEAD` bound, so a commit AT the
+        merge-base itself is still excluded. See
+        `test_chunk_commits_behind_a_later_advanced_origin_main_are_still_attributed`
+        below for the WIDENED (plan-text-supplied) behavior this fix adds."""
         root = tmp_path
         _init_repo(root)
         rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
             a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
         )
         _seed_disposition_plan(root, rows_yaml)
-        # Lands on the branch BEFORE origin/main is pinned here -- this
-        # commit becomes the merge-base itself once `_set_origin_main` runs,
-        # so the `<merge-base>..HEAD` range this oracle queries excludes it
-        # by construction (an exclusive lower bound).
         _commit_with_subject(
             root,
             "plan.md",
@@ -3013,8 +3095,6 @@ class TestNonCPrefixedSpineIds:
             touch_file="pre-divergence.py",
         )
         _set_origin_main(root)
-
-        # Lands AFTER the divergence point -- inside the queried range.
         _commit_with_subject(
             root,
             "plan.md",
@@ -3029,6 +3109,72 @@ class TestNonCPrefixedSpineIds:
         )
         assert query_ok is True
         assert "A1" not in committed
+        assert "A2" in committed
+
+    def test_chunk_commits_behind_a_later_advanced_origin_main_are_still_attributed(
+        self, tmp_path
+    ):
+        """Range-fix regression (2026-08-07 -- see this module's own
+        bug-backlog entry `2026-08-07-close-out-and-stamp-s-chunk-evidence-
+        joi-8b6a7a32d833.yaml`, two independent sightings): supersedes this
+        class's own prior single assertion, which pinned the CONFIRMED BUG
+        this fix closes -- a chunk commit that had already landed before
+        `origin/main` advanced past it read as "outside the evidence
+        window" and was silently excluded, even though it genuinely
+        belonged to THIS plan's own deliverable.
+
+        On a shared-main workflow `origin/main` advances as PEERS push,
+        independently of this plan's own chunk work -- interleaving peer
+        commits between this plan's own chunk commits, then advancing
+        `origin/main` past ALL of them (the exact shape both live
+        incidents in the backlog entry record), must not cause
+        `merge-base(origin/main, HEAD)` to swallow this plan's own
+        already-landed chunk commits, PROVIDED the caller supplies
+        `plan_text` so `_chunk_evidence_log_range` can widen past the
+        (now-degenerate) merge-base bound -- see `_chunk_evidence_log_range`'s
+        own docstring for the full rung ladder."""
+        root = tmp_path
+        _init_repo(root)
+        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
+            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
+        )
+        plan_file = _seed_disposition_plan(root, rows_yaml)
+
+        _commit_with_subject(
+            root,
+            "plan.md",
+            "A1: first chunk lands",
+            deliverable_id=_DLV_DISPOSITION,
+            touch_file="a1.py",
+        )
+        # A peer commit, unrelated to this plan, interleaved between chunk
+        # commits -- the ordinary shape of a shared-main worktree.
+        _commit_with_subject(
+            root, "plan.md", "peer: unrelated work", touch_file="peer1.py"
+        )
+        _commit_with_subject(
+            root,
+            "plan.md",
+            "A2: second chunk lands",
+            deliverable_id=_DLV_DISPOSITION,
+            touch_file="a2.py",
+        )
+        _commit_with_subject(
+            root, "plan.md", "peer: more unrelated work", touch_file="peer2.py"
+        )
+        # origin/main now advances PAST every commit landed so far --
+        # simulating peers pushing/mirroring this branch's own history
+        # forward, the root cause the pre-fix `merge-base origin/main HEAD`
+        # bound was blind to.
+        _set_origin_main(root)
+
+        spine_ids = ["A1", "A2", "B1", "B2", "V1"]
+        plan_text = plan_file.read_text(encoding="utf-8")
+        query_ok, committed = coas._committed_chunk_ids(
+            root, _DLV_DISPOSITION, spine_ids, plan_text=plan_text
+        )
+        assert query_ok is True
+        assert "A1" in committed
         assert "A2" in committed
 
 
@@ -5114,6 +5260,131 @@ class TestPartialEvaluationStamp:
         assert result_2["partial_evaluation_stamped"] is False
         assert _head_sha(root) == pre_head_2
         assert _head_sha(root) == second_head
+
+
+# ===========================================================================
+# C1 (2026-08-08, `docs/plans/2026-08-08-a-status-field-cannot-vouch-for-
+# itself.md`): the certified-ship path clears `close_out_last_partial:`
+# rather than leaving it as a stale, unremarked marker on an `implemented`
+# plan (AC1, AC3).
+# ===========================================================================
+
+
+class TestCertifiedShipClearsPartialMarker:
+    def test_certified_ship_clears_marker_and_stamps_implemented(
+        self, tmp_path, monkeypatch
+    ):
+        """Named reviewer finding: a plan that previously halted (and so
+        already carries a `close_out_last_partial:` marker) must have that
+        marker CLEARED, and the `implemented` stamp must actually land, once
+        every chunk ships. This asserts against the LIVE FILE re-read from
+        disk after the call, never the in-memory return value -- a
+        return-value-only assertion cannot see the status-clobber this
+        chunk exists to avoid."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        # C1 alone lands, C2a/C2b uncommitted -- halted -- to plant a real
+        # marker via the existing halted-path stamp mechanism.
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
+        first_exit, first_result, _pre = _run_close_out(monkeypatch, root, "plan.md")
+        assert first_exit == coas.EXIT_OK, first_result
+        assert first_result["partial_evaluation_stamped"] is True
+        assert "close_out_last_partial:" in plan_file.read_text(encoding="utf-8")
+
+        # Now the remaining chunks ship -- certified-ship path.
+        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
+
+        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is True
+        assert result["stamped"] is True
+
+        # Re-read from disk -- the load-bearing assertion this chunk exists
+        # for.
+        live_text = plan_file.read_text(encoding="utf-8")
+        assert "close_out_last_partial:" not in live_text
+        assert _read_status(plan_file) == "implemented"
+        assert _head_sha(root) != pre_head
+
+    def test_stamp_failure_after_clear_restores_the_marker_on_disk(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: code-reviewer -- P2 finding, 2026-08-08. Reproduces the
+        reachable hazard traced against `plan_status_transition._stamp_
+        implemented`: that function can flip `status:` to `implemented` on
+        disk via its own locked_rmw and STILL return a failure rc (its own
+        commit-the-flip attempt fails, or a resumed-stranded-flip commit on
+        a later run also fails) -- `stamp_rc not in (0, 2)` then propagates
+        as this op's own `EXIT_BUSINESS_FAIL`. Faking `cs_stamp_plan_
+        implemented` to do exactly that (write `status: implemented` to the
+        live file, return rc=1) reproduces the on-disk shape without
+        depending on `plan_status_transition`'s own internal commit-failure
+        path. Asserts the marker this op cleared pre-stamp is restored on
+        disk -- the fix for the false-clean read `workstream_complete` leg A
+        would otherwise take (terminal `status:` next to an absent marker)."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
+        first_exit, first_result, _pre = _run_close_out(monkeypatch, root, "plan.md")
+        assert first_exit == coas.EXIT_OK, first_result
+        assert first_result["partial_evaluation_stamped"] is True
+        assert "close_out_last_partial:" in plan_file.read_text(encoding="utf-8")
+
+        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
+
+        def _fake_stamp_writes_then_fails(plan_path: str) -> int:
+            # Simulates plan_status_transition._stamp_implemented's own
+            # locked_rmw landing a real status flip on disk, followed by its
+            # own commit-the-flip attempt failing -- rc=1, the only fatal rc
+            # this call site treats as a genuine stamp failure.
+            path = Path(plan_path)
+            text = path.read_text(encoding="utf-8")
+            text = text.replace("status: draft", "status: implemented", 1)
+            path.write_text(text, encoding="utf-8")
+            return 1
+
+        monkeypatch.setattr(
+            coas.archive_stamp,
+            "cs_stamp_plan_implemented",
+            _fake_stamp_writes_then_fails,
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_BUSINESS_FAIL, result
+        live_text = plan_file.read_text(encoding="utf-8")
+        # The load-bearing assertion: the marker cleared before the (failed)
+        # stamp call must be back on disk, so a reader of this plan's own
+        # frontmatter -- workstream_complete leg A included -- does not see
+        # a terminal `status:` next to a false-clean, absent marker.
+        assert "close_out_last_partial:" in live_text
+        assert _read_status(plan_file) == "implemented"
+
+    def test_certified_ship_with_no_marker_is_byte_clean(self, tmp_path, monkeypatch):
+        """A plan that never halted (no `close_out_last_partial:` marker at
+        all) must not gain one, and stamping must still work identically --
+        the clear is a no-op when there is nothing to clear."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        assert "close_out_last_partial:" not in plan_file.read_text(encoding="utf-8")
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is True
+        assert result["stamped"] is True
+        live_text = plan_file.read_text(encoding="utf-8")
+        assert "close_out_last_partial:" not in live_text
+        assert _read_status(plan_file) == "implemented"
+        assert _head_sha(root) != pre_head
 
 
 # ===========================================================================

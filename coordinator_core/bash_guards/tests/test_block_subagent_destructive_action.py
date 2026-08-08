@@ -3190,3 +3190,261 @@ def test_machine_local_set_mutation_check_matcher_removed_flips_to_allow(monkeyp
         "machine-local set repos.example_doctrine_repo /evil", agent_type="coordinator:executor"
     )
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# POWERSHELL-DIALECT CASES (C4d, 2026-08-07). Every command here is one of
+# the twelve measured returning bare `None` in the spike verdict record
+# (docs/research/spike-verdicts/2026-08-07-powershell-guard-detection-and-
+# tokenizer-mechanism.md, Table 1), plus the one that already denied
+# (`rm -Recurse -Force <path>`, kept here as a regression pin on the "do not
+# duplicate an alias collision" finding) and the object-pipeline blind spot
+# (docs/reference/guard-dialect-coverage.md, "Object-pipeline defeats").
+# `requires_powershell_grammar` skips these cleanly on a peer/clean-install
+# box that lacks tree-sitter-pwsh (C8's dependency, not yet declared) --
+# see that marker's own docstring in test_command_tokenizer_length_ceiling.py.
+# ---------------------------------------------------------------------------
+import importlib.util
+
+from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+_PS_GRAMMAR_PRESENT = all(
+    importlib.util.find_spec(name) is not None
+    for name in ("tree_sitter", "tree_sitter_pwsh")
+)
+requires_powershell_grammar = pytest.mark.skipif(
+    not _PS_GRAMMAR_PRESENT,
+    reason=(
+        "PowerShell grammar package not installed; C8 declares it in "
+        "pyproject.toml."
+    ),
+)
+
+
+def _ps_payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+    p = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": command},
+        "session_id": session_id,
+        "cwd": None,
+    }
+    if agent_id is not None:
+        p["agent_id"] = agent_id
+    if agent_type is not None:
+        p["agent_type"] = agent_type
+    return p
+
+
+def _assert_denies(payload):
+    result = guard.check(payload)
+    assert result is not None, "expected a deny verdict, got a bare clean"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    return result
+
+
+@requires_powershell_grammar
+def test_powershell_remove_item_recurse_force_denies():
+    _assert_denies(
+        _ps_payload(
+            "Remove-Item -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_remove_item_prefix_flags_denies():
+    # Prefix-set matching (finding 2): `-r`/`-fo` are the working PowerShell
+    # spellings -- `rm -rf` (clustered) cannot execute in PowerShell at all.
+    _assert_denies(
+        _ps_payload("Remove-Item -r -fo C:/scratch/target", agent_type="coordinator:executor")
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_ri_alias_denies():
+    _assert_denies(
+        _ps_payload("ri -Recurse -Force C:/scratch/target", agent_type="coordinator:executor")
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_rd_slash_flags_denies():
+    _assert_denies(_ps_payload("rd /s /q C:/scratch/target", agent_type="coordinator:executor"))
+
+
+@requires_powershell_grammar
+def test_powershell_del_slash_flags_denies():
+    _assert_denies(
+        _ps_payload("del /f /s /q C:/scratch/target", agent_type="coordinator:executor")
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_icacls_denies():
+    _assert_denies(
+        _ps_payload(
+            "icacls C:/scratch/target /grant Everyone:F /T", agent_type="coordinator:executor"
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_backtick_continuation_denies():
+    cmd = "Remove-Item -Recurse -Force `\n  C:/scratch/target"
+    _assert_denies(_ps_payload(cmd, agent_type="coordinator:executor"))
+
+
+@requires_powershell_grammar
+def test_powershell_env_path_target_denies():
+    _assert_denies(
+        _ps_payload(
+            "Remove-Item -Recurse -Force $env:TEMP/scratch-target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_semicolon_chain_denies():
+    _assert_denies(
+        _ps_payload(
+            "Set-Location C:/; Remove-Item -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_prefix_denies():
+    _assert_denies(
+        _ps_payload(
+            "& Remove-Item -Recurse -Force C:/scratch/target", agent_type="coordinator:executor"
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_quoted_verb_denies():
+    _assert_denies(
+        _ps_payload(
+            "& 'Remove-Item' -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_double_quoted_verb_denies():
+    _assert_denies(
+        _ps_payload(
+            '& "Remove-Item" -Recurse -Force C:/scratch/target',
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_quoted_icacls_denies():
+    _assert_denies(
+        _ps_payload(
+            "& 'icacls' C:/scratch/target /grant Everyone:F /T",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_quoted_stop_process_denies():
+    _assert_denies(
+        _ps_payload(
+            "& 'Stop-Process' -Id 1234 -Force", agent_type="coordinator:executor"
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_backtick_inside_verb_denies():
+    # `Rem`ove-Item` -- a backtick before an ordinary character is a no-op
+    # escape PowerShell itself resolves to `Remove-Item` at runtime.
+    _assert_denies(
+        _ps_payload(
+            "Rem`ove-Item -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_parenthesized_quoted_verb_denies():
+    _assert_denies(
+        _ps_payload(
+            "&('Remove-Item') -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_call_operator_get_command_denies():
+    _assert_denies(
+        _ps_payload(
+            "&(Get-Command Remove-Item) -Recurse -Force C:/scratch/target",
+            agent_type="coordinator:executor",
+        )
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_stop_process_denies():
+    _assert_denies(
+        _ps_payload("Stop-Process -Id 1234 -Force", agent_type="coordinator:executor")
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_rm_alias_denies_via_existing_dialect_neutral_probe():
+    # `rm` is a real PowerShell alias for Remove-Item. The Bash-leg raw-text
+    # `_RM_SURFACE_RE`/`_RM_DENY_RE` probes are never reached for a
+    # `tool_name == "PowerShell"` dispatch (the PowerShell leg is a fully
+    # separate branch off `check()`), so `rm` is included directly in the
+    # PowerShell verb table (`_PS_REMOVE_VERBS`) -- see that constant's own
+    # comment for why this is genuinely new coverage, not a duplicate.
+    _assert_denies(
+        _ps_payload("rm -Recurse -Force C:/scratch/target", agent_type="coordinator:executor")
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_object_pipeline_target_records_silent_not_bare_clean():
+    # The structurally-unfixable blind spot (guard-dialect-coverage.md,
+    # "Object-pipeline defeats"): the target lives entirely in the object
+    # pipeline, never as a token. Verdict may be a genuine allow (None), but
+    # the guard must have DECLINED to rule, not silently cleared it.
+    payload = _ps_payload(
+        "Get-ChildItem C:/scratch | Remove-Item -Force", agent_type="coordinator:executor"
+    )
+    with collecting() as silences:
+        result = guard.check(payload)
+    assert result is None
+    assert was_silent("block_subagent_destructive_action", silences), (
+        "object-pipeline-fed Remove-Item must record SILENT, not a bare clean"
+    )
+
+
+@requires_powershell_grammar
+def test_powershell_benign_command_allows_no_silent():
+    payload = _ps_payload("Get-ChildItem C:/scratch", agent_type="coordinator:executor")
+    with collecting() as silences:
+        result = guard.check(payload)
+    assert result is None
+    assert not was_silent("block_subagent_destructive_action", silences)
+
+
+def test_powershell_no_agent_id_allows_even_destructive():
+    payload = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "Remove-Item -Recurse -Force C:/scratch/target"},
+        "session_id": "sess1",
+    }
+    assert guard.check(payload) is None

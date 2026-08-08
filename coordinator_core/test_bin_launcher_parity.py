@@ -28,7 +28,10 @@ deliberately not among them.
 from __future__ import annotations
 
 import ast
+import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -1134,3 +1137,207 @@ def test_guard_bites_on_a_drifted_launcher_in_a_newly_swept_root(tmp_path, monke
     # The widened root is what makes that file visible at all: a
     # coordinator/bin-only parity root would never have enumerated it.
     assert "coordinator/lib" in LAUNCHER_PARITY_ROOTS
+
+
+# ---------------------------------------------------------------------------
+# Argv fidelity across both launcher legs (C1, docs/plans/2026-08-07-argv-
+# fidelity-at-the-windows-launcher-seam.md)
+#
+# Every guard above is EXISTENCE/TARGET/BYTE-parity: a twin is present, points
+# at a real file, and matches generator output. None of them look at what a
+# launcher actually does to a caller's ARGV on the way to the callee -- and
+# that gap is exactly how a mechanical argument-corruption defect (embedded-
+# quote stripping, multi-line truncation, a bare `--` consumed by
+# PowerShell's own parameter binder) survived two rounds of forwarder
+# hardening: the existing suite only ever exercised single-line, quote-free
+# arguments.
+#
+# This section is the regression oracle those defects need. Each case spawns
+# a REAL subprocess through one generated launcher leg via `pwsh -NoProfile`
+# and diffs the callee's own `json.dumps(sys.argv[1:])` against the intended
+# argv. An in-process argv list or a bash-spawned run reproduces NONE of
+# these losses -- the corruption happens in the PowerShell-to-native-command-
+# line marshaling step only a real `pwsh` spawn exercises.
+#
+# EXPECTED VALUES ARE MEASURED, NOT DERIVED (PowerShell 7.6.4). The `.cmd`
+# rows marked stripped/truncated/lost are the KNOWN-BAD shape -- asserted
+# explicitly, never skipped, so a future change to that leg's (deliberately
+# still-broken) behavior fails loudly instead of silently. The `.ps1` rows
+# are what prove that leg is the actual fix.
+# ---------------------------------------------------------------------------
+
+_PWSH = shutil.which("pwsh")
+
+_ARGV_PROBE_CALLEE_BODY = "import sys, json\nprint(json.dumps(sys.argv[1:]))\n"
+
+# The `set "_py=__PYTHON_BIN__"` (.cmd) / `$_pybin = '__PYTHON_BIN__'` (.ps1)
+# ASSIGNMENT occurrence, not the bare token -- see `_bake_python_bin` for why
+# the distinction is load-bearing.
+_CMD_BAKE_MARKER = b'=__PYTHON_BIN__"'
+_PS1_BAKE_MARKER = b"'__PYTHON_BIN__'"
+
+
+def _bake_python_bin(data: bytes, python_bin: str, *, quoted: bool) -> bytes:
+    """Substitute ONLY the baked-value ASSIGNMENT occurrence of
+    `__PYTHON_BIN__` with `python_bin` -- never a blind replace-all.
+
+    Each launcher body (gen-launcher-shim.py's render_cmd/render_ps1) carries
+    the literal token in up to THREE places: once in an explanatory header
+    comment, once as the baked-value assignment, once as the sentinel that
+    assignment is compared against to detect "never substituted". A blind
+    replace-all (or even a naive first-occurrence replace, which lands on
+    the header comment) either substitutes the wrong spot or collapses the
+    assignment/sentinel comparison to self-equality (baked path == baked
+    path -> True), which resets the baked value straight back to empty and
+    forces every invocation down the PATH-lookup rung regardless of what was
+    baked. Confirmed live while building this oracle: that same PATH-lookup
+    rung used to carry a defect in the `.ps1` leg's WindowsApps-exclusion
+    regex (`-notmatch '\\WindowsApps\\'` was an invalid .NET pattern -- a
+    trailing bare `\\` -- and threw whenever Get-Command found ANY
+    python.exe on PATH, i.e. on every real install, since
+    `install-substrate.py` never performs the `__PYTHON_BIN__` token
+    substitution). It has since been fixed: the generator fix landed as
+    commit `1250852645e5`, the emitted launchers' fix as `cfece46c375a`.
+    Baking precisely the assignment here is what lets this oracle exercise
+    argv fidelity through the intended "baked path" rung, isolated from
+    the interpreter-ladder's PATH-lookup rung -- a distinction still worth
+    keeping now that specific bug is fixed, since the two rungs remain
+    different code paths with different failure modes.
+    """
+    marker = _PS1_BAKE_MARKER if quoted else _CMD_BAKE_MARKER
+    idx = data.index(marker)
+    replacement = (f"'{python_bin}'" if quoted else f'={python_bin}"').encode("utf-8")
+    return data[:idx] + replacement + data[idx + len(marker) :]
+
+
+def _write_argv_probe_launchers(tmp_path: Path) -> tuple[Path, Path]:
+    """Generate a real `.cmd`/`.ps1` launcher pair for a JSON-argv-dumping
+    callee, via gen-launcher-shim.py's own `generate(..., ps1=True)`.
+
+    Generated into `tmp_path` rather than depending on any `.ps1` already
+    under `coordinator/bin/` -- the `.ps1` leg is not yet emitted by default
+    (peer chunk C2), so this oracle stays independent of that landing.
+    """
+    gen = _load_gen_launcher_shim()
+    callee = tmp_path / "argv_probe.py"
+    callee.write_text(_ARGV_PROBE_CALLEE_BODY, encoding="utf-8")
+    written = gen.generate("argv_probe.py", tmp_path, ps1=True)
+    cmd_path = tmp_path / "argv_probe.cmd"
+    ps1_path = tmp_path / "argv_probe.ps1"
+    assert set(written) == {cmd_path, ps1_path}
+    cmd_path.write_bytes(_bake_python_bin(cmd_path.read_bytes(), sys.executable, quoted=False))
+    ps1_path.write_bytes(_bake_python_bin(ps1_path.read_bytes(), sys.executable, quoted=True))
+    return cmd_path, ps1_path
+
+
+def _pwsh_probe(launcher: Path, invocation_args: str) -> list:
+    """Spawn `pwsh -NoProfile -Command "& '<launcher>' <invocation_args>"` as
+    a REAL subprocess (never an in-process simulation or a bash-spawned run
+    -- see section header) and return the callee's own parsed argv list.
+
+    `invocation_args` is the literal PowerShell source text following the
+    launcher path in the `&` call. Callers supply it pre-quoted (or
+    deliberately unquoted, for the bare-`--` case) so this stays a faithful
+    replay of the exact command line each scenario measures, not a
+    re-quoting layer that could itself mask the defect under test.
+    """
+    script = f"& '{launcher}' {invocation_args}"
+    proc = subprocess.run(
+        [_PWSH, "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, (
+        f"pwsh invocation failed (rc={proc.returncode}):\n"
+        f"script: {script}\nstdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
+    return json.loads(proc.stdout)
+
+
+@pytest.fixture(scope="module")
+def argv_probe_launchers(tmp_path_factory):
+    """The generated `.cmd`/`.ps1` probe pair, or a clean skip when `pwsh` is
+    absent -- this suite also runs on macOS, which does not ship pwsh."""
+    if _PWSH is None:
+        pytest.skip(
+            "pwsh not on PATH -- argv-fidelity oracle needs a real PowerShell subprocess spawn"
+        )
+    return _write_argv_probe_launchers(tmp_path_factory.mktemp("argv-fidelity"))
+
+
+# (leg, scenario label, literal invocation-args text, expected observed argv)
+#
+# Four argument shapes x both launcher legs, EXCEPT the `--` shape (bare vs.
+# quoted), which is meaningful only on the `.ps1` leg -- `.cmd`'s `%*`
+# forwarding has no special-token binder to lose a bare `--` to, so there is
+# no known-bad `.cmd` row for it. Every other shape is asserted on BOTH legs.
+_ARGV_FIDELITY_CASES: list[tuple[str, str, str, list[str]]] = [
+    (
+        "cmd",
+        "embedded-quotes-stripped",
+        '\'he said "hi" there\'',
+        ["he said hi there"],
+    ),
+    (
+        "ps1",
+        "embedded-quotes-intact",
+        '\'he said "hi" there\'',
+        ['he said "hi" there'],
+    ),
+    (
+        "cmd",
+        "multiline-truncated",
+        "'line1\nline2' '--' 'path/to/file'",
+        ["line1"],
+    ),
+    (
+        "ps1",
+        "multiline-intact",
+        "'line1\nline2' '--' 'path/to/file'",
+        ["line1\nline2", "--", "path/to/file"],
+    ),
+    (
+        "ps1",
+        "bare-dashdash-lost",
+        "'before' -- 'after'",
+        ["before", "after"],
+    ),
+    (
+        "ps1",
+        "quoted-dashdash-intact",
+        "'before' '--' 'after'",
+        ["before", "--", "after"],
+    ),
+    (
+        "cmd",
+        "bang-intact",
+        "'value with ! bang'",
+        ["value with ! bang"],
+    ),
+    (
+        "ps1",
+        "bang-intact",
+        "'value with ! bang'",
+        ["value with ! bang"],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "leg, label, invocation_args, expected",
+    _ARGV_FIDELITY_CASES,
+    ids=[f"{leg}-{label}" for leg, label, _, _ in _ARGV_FIDELITY_CASES],
+)
+def test_argv_fidelity_matrix(argv_probe_launchers, leg, label, invocation_args, expected):
+    """The argv-fidelity regression oracle (see section header above).
+
+    Each case spawns a real `pwsh -NoProfile` subprocess through one
+    launcher leg and asserts the callee's OWN observed argv against the
+    intended one -- including the known-bad `.cmd` rows, which are asserted
+    explicitly rather than skipped so a future change to that leg's
+    (deliberately still-broken) behavior fails loudly instead of silently."""
+    cmd_path, ps1_path = argv_probe_launchers
+    launcher = cmd_path if leg == "cmd" else ps1_path
+    assert _pwsh_probe(launcher, invocation_args) == expected

@@ -3,8 +3,8 @@ coordinator_core.ops.ceremony.wsc_tail -- the `ceremony.wsc_tail` orchestrator o
 
 Purpose: the C9 integration chunk of the wsc_tail rebuild
 (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md). Sequences the whole
-single-pass ceremony -- resolve, pre-commit tail ops, the locked
-stage/commit/push critical section, the post-commit consumed-handoff
+single-pass ceremony -- resolve, pre-commit tail ops, the
+stage/commit/push section, the post-commit consumed-handoff
 ship-stamp, and the final receipt -- entirely in-process (AC1/AC2). This
 module contains NO business logic of its own beyond sequencing; every step is
 delegated to its owning C1-C8 module (see imports below).
@@ -24,8 +24,8 @@ Sequence
      `chain_terminal` fill this used to also feed was removed in C4 Phase 2,
      2026-07-23 -- see the `completion_title` bullet below) -- C5's own
      `redrive_consumed_set()`
-     re-derives the actual consumed-handoff SET fresh, inside the lock,
-     immediately before the stamp write (AC6's correctness-critical liveness
+     re-derives the actual consumed-handoff SET fresh, immediately before the
+     stamp write (AC6's correctness-critical liveness
      re-check; this module's initial resolve is NOT that re-check).
   2. Pre-commit tail ops (best-effort, `tail_ops.py`): render-handoff-tracker +
      refresh-roadmap-callout (step_2.75, native `renderers.render_repo_section`
@@ -48,27 +48,32 @@ Sequence
      2026-07-27-computed-commit-mechanism-selection.md § C10 -- see
      `_derive_trailers`'s own docstring for the full incident). Only the
      non-diverged subset is pre-staged; `run_commit_pipeline()`'s own
-     `explicit_stage()` re-stages that same subset inside the lock -- `git
+     `explicit_stage()` re-stages that same subset -- `git
      add` is idempotent there, so this pre-stage is never a double-mutation.
-  4. Commit-sentinel write (AC18, pre-commit): before entering the locked
-     critical section, an empty-content sentinel is written recording pass
+  4. Commit-sentinel write (AC18, pre-commit): before the stage/commit/push
+     section runs, an empty-content sentinel is written recording pass
      intent (mirrors OLD `wsc_commit.py:1884-1896`).
-  5. Locked commit unit, then UNLOCKED post-commit tail (wsc-tail-sub-2s-
+  5. Commit unit, then post-commit tail (wsc-tail-sub-2s-
      invoke-budget DEC-1/DEC-3, PM-ratified 2026-07-22 -- supersedes the
-     original "one outer `ceremony_lock` spans 5a-5d" design):
+     original "one outer `ceremony_lock` spans 5a-5d" design; the mutex
+     itself was later killed by PM ruling, excise-the-ceremony-lock,
+     2026-08-07 -- neither this module nor `run_commit_pipeline` acquires
+     any `ceremony_lock` on this op's live path today):
        a. `commit_pipeline.run_commit_pipeline()` (C4), run inside ONE
           `asyncio.to_thread` call so the ipc dispatch `wait_for` timer CAN
           fire during this section (AC6) -- gates (C3) + stage + commit +
-          [push]. Acquires/releases its OWN internal `ceremony_lock`
-          (name="wsc-commit"); this module no longer wraps it in an outer
-          hold (DEC-3 jettison -- see Negative-spec). In `push_mode=
-          "deferred"` (the default; DEC-1), the lock's critical section
-          spans ONLY stage -> gates -> commit -- the network push is
+          [push]. Formerly acquired/released its OWN internal
+          `ceremony_lock` (name="wsc-commit"), which this module never
+          wrapped in an outer hold (DEC-3 jettison -- see Negative-spec);
+          that inner acquisition is itself now gone (excise-the-ceremony-
+          lock, 2026-08-07). In `push_mode=
+          "deferred"` (the default; DEC-1), stage -> gates -> commit run
+          synchronously in this same call -- the network push is
           skipped here entirely.
        b. On a landed commit, the sentinel is UPDATED with the real
           `committed_sha` (AC18) via the `on_committed` callback passed into
           `run_commit_pipeline()` -- fired the instant the commit lands,
-          still on the worker thread, inside the internal lock. Never
+          still on the worker thread. Never
           re-derived from a racy late `git rev-parse HEAD`.
        c+d. `consumed_handoff_stamp.post_commit_stamp_and_ship()` (C5) --
           R1 (fresh liveness re-check) + R3 (future-date guard) + R4
@@ -140,9 +145,9 @@ Sequence
      failed/breached commit would orphan the workstream (claim gone,
      deliverable never shipped; OLD code's C5/F5 rationale, preserved here
      verbatim). Absent `governing_plan_slug`, release is skipped (not
-     failed) -- a non-governing-plan session holds no such claim. Runs
-     OUTSIDE the ceremony_lock (session-claim housekeeping, not worktree git
-     state -- no lock contention risk) and is best-effort (never raises,
+     failed) -- a non-governing-plan session holds no such claim. Session-
+     claim housekeeping, not worktree git state -- no `ceremony_lock`
+     involvement, past or present -- and is best-effort (never raises,
      never flips the op's exit_code).
   7. Receipt emit (reuse `receipt_emit.emit_receipt`) -- a minimal
      `PipelineContext` (no J/F/B branch graph -- see step 1) carrying one
@@ -213,7 +218,16 @@ Negative-spec (hard-won):
   - Does NOT re-derive `committed_sha` from a late `git rev-parse HEAD` at
     ANY point, including on crash-resumption -- always either the value
     `commit_pipeline.CommitOutcome.committed_sha` captured immediately
-    post-commit, or the sentinel's recovered payload.
+    post-commit, or the sentinel's recovered payload. Originally this
+    freedom-from-races rested on a `ceremony_lock` hold spanning the probe
+    and the capture; that lock is gone (excise-the-ceremony-lock,
+    2026-08-07). The guarantee now rests structurally on C11
+    (docs/plans/2026-08-07-excise-the-ceremony-lock.md § C11,
+    `commit_pipeline.py`): on the private-index branch the sha is the
+    CAS-verified `stdout` of the commit itself; on the agree branch it is a
+    message-matched `git rev-list` result checked against the pre-commit
+    sha, failing loud on ambiguity -- never a bare unqualified `rev-parse
+    HEAD` that a racing peer commit could shift out from under this call.
   - Does NOT release a `governing_plan_slug` claim on a genuinely failed or
     integrity-breached commit -- see step 6 above.
   - Does NOT wire this op into `/workstream-complete` or any other
@@ -250,15 +264,20 @@ Negative-spec (hard-won):
     to `exit_code=2` at most), never `failed_critical`, never `exit_code=1`.
   - Does NOT hold an outer `ceremony_lock` around steps 5c/5d (DEC-3,
     PM-jettisoned 2026-07-22) -- this is a deliberate feature removal, not
-    an omission; do NOT add one back. `run_commit_pipeline`'s own internal
-    lock (step 5a) is the only `ceremony_lock` acquired on this op's live
-    path, and it is never nested.
+    an omission; do NOT add one back. Originally this bullet's rationale was
+    that `run_commit_pipeline`'s own internal lock (step 5a) was the only
+    `ceremony_lock` acquired on this op's live path, never nested under an
+    outer hold. That inner hold is ALSO gone now (excise-the-ceremony-lock,
+    2026-08-07, PM-ratified) -- `run_commit_pipeline` no longer acquires any
+    `ceremony_lock` at all, so there is nothing left on this op's live path
+    to nest under. Do NOT reintroduce a lock at either layer.
   - Does NOT weaken AC17's commit leg -- the stamp follow-up COMMIT (and the
     stub-close follow-up COMMIT) stay synchronous and explicit-pathspec
     regardless of `push_mode`; ONLY the push half of each ever detaches.
   - A fired ipc-dispatch timeout during step 5a's `asyncio.to_thread` call
-    MUST abandon-and-let-complete, never unwind the lock ahead of the work
-    -- see the invariant comment at the `to_thread` call site (AC6).
+    MUST abandon-and-let-complete, never tear down ahead of the worker
+    thread finishing its commit -- see the invariant comment at the
+    `to_thread` call site (AC6).
   - Step 2's archive-sweeps do NOT run in-process any more (C2) -- no
     blocking call to `fleet.archive_completed_plans` / `fleet.
     archive_completed_handoffs` / `fleet.archive_actioned_memos` remains on
@@ -346,10 +365,6 @@ from coordinator_core.hooks import auto_push
 from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.ops.ceremony import consumed_handoff_stamp, tail_ops
 from coordinator_core.ops.ceremony import post_commit_tail
-from coordinator_core.ops.ceremony.ceremony_lock import (
-    DEFAULT_LOCK_TIMEOUT_SECS,
-    CeremonyLockTimeout,
-)
 from coordinator_core.ops.ceremony.commit_message import SweptRenameError, parse_swept_rename
 from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_MODE_DEFERRED,
@@ -621,7 +636,7 @@ def _scan_completion_entry_scaffold_residue(
     returned `exit_code=0` (observed 2026-07-28, commit `1c4de5f2b`).
 
     The gate sits at the COMMIT boundary (this call site, inside `_handler`,
-    immediately before the locked commit unit), not at the scaffold
+    immediately before the commit unit), not at the scaffold
     (`coordinator_complete_entry.py` itself, untouched by this bugfix) -- the
     scaffold is legitimately content-free at write time; the commit is where
     the artifact stops being editable scratch and becomes durable,
@@ -1051,7 +1066,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                 did not genuinely fail/breach, releases the
                                 "plan" claim for this slug (F1, see module docstring).
         scope_mode            (str, optional)  -- receipt scope_mode field.
-        lock_timeout           (float, optional) -- `ceremony_lock` timeout override.
 
     Returns:
         {
@@ -1102,7 +1116,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     common_dir = Path(repo_root)
     worktree_root = main_worktree_root(common_dir)
-    lock_timeout = float(params.get("lock_timeout") or DEFAULT_LOCK_TIMEOUT_SECS)
 
     timing = _TailTiming()
 
@@ -1272,15 +1285,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         with timing.measure("sentinel_write"):
             _write_sentinel(sentinel_path, "")
 
-        # --- Step 5a/5b: locked commit unit (DEC-3: NO outer ceremony_lock
-        # wrap here -- run_commit_pipeline acquires/releases its OWN internal
-        # lock). Run as ONE synchronous function inside ONE asyncio.to_thread
-        # call (AC6) so the ipc dispatch `wait_for` timer CAN fire during
-        # this section. INVARIANT (verbatim, must hold): a fired timeout must
-        # abandon-and-let-complete, never unwind the lock ahead of the work
-        # -- cancelling this await abandons the worker thread; the thread
-        # completes its commit and releases its OWN internal lock on its own
-        # thread, entirely outside asyncio's cancellation reach.
+        # --- Step 5a/5b: commit unit (DEC-3: no outer ceremony_lock wrap
+        # here; excise-the-ceremony-lock 2026-08-07 removed run_commit_
+        # pipeline's own inner acquisition too -- no ceremony_lock is taken
+        # anywhere on this call's path). Run as ONE synchronous function
+        # inside ONE asyncio.to_thread call (AC6) so the ipc dispatch
+        # `wait_for` timer CAN fire during this section. INVARIANT (verbatim,
+        # must hold): a fired timeout must abandon-and-let-complete, never
+        # tear down ahead of the work -- cancelling this await abandons the
+        # worker thread; the thread completes its commit on its own thread,
+        # entirely outside asyncio's cancellation reach.
         #
         # `commit_pipeline` times `run_commit_pipeline()` AS A WHOLE, including
         # its internal `dirty_tree_gate` whole-worktree scan -- that scan is
@@ -1292,40 +1306,30 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # editing commit_pipeline.py, which this chunk's remit hard-forbids.
         # KEEP-BUT-UNMEASURED at the sub-span level, by design -- see the
         # C1 chunk's DONE report.
-        try:
-            with timing.measure("commit_pipeline"):
-                pipeline_result = await asyncio.to_thread(
-                    run_commit_pipeline,
-                    worktree_root,
-                    session_id=sid,
-                    subject=subject,
-                    prose=prose,
-                    deleted_paths=deleted_paths,
-                    kept_entries=kept_entries,
-                    trailers=trailers,
-                    stage_paths=[*full_stage_paths, *swept_srcs],
-                    caller_paths=caller_paths,
-                    lock_timeout=lock_timeout,
-                    push_mode=push_mode,
-                    # Step 5b (AC18, review Finding 2 fix): write the REAL
-                    # committed_sha the instant the commit lands INSIDE
-                    # run_commit_pipeline() -- before push_mode="sync"'s own
-                    # push-with-retry network round-trip runs -- so a crash
-                    # during push is also covered by "resume from stamp step"
-                    # instead of re-running the whole pipeline (which would
-                    # double-commit). Never re-derived from a later `git
-                    # rev-parse HEAD`. See commit_pipeline.run_commit_pipeline's
-                    # `on_committed` docstring for the full rationale.
-                    on_committed=lambda sha: _write_sentinel(sentinel_path, sha),
-                )
-        except CeremonyLockTimeout as exc:
-            print(f"skip: _handler: asyncio.to_thread(run_commit_pipeline, ...) failed: {exc}", file=sys.stderr)
-            return {
-                "exit_code": 1,
-                "error": f"{OP_NAME}: {exc}",
-                "disposition": disposition,
-                "resumed_from_sentinel": False,
-            }
+        with timing.measure("commit_pipeline"):
+            pipeline_result = await asyncio.to_thread(
+                run_commit_pipeline,
+                worktree_root,
+                session_id=sid,
+                subject=subject,
+                prose=prose,
+                deleted_paths=deleted_paths,
+                kept_entries=kept_entries,
+                trailers=trailers,
+                stage_paths=[*full_stage_paths, *swept_srcs],
+                caller_paths=caller_paths,
+                push_mode=push_mode,
+                # Step 5b (AC18, review Finding 2 fix): write the REAL
+                # committed_sha the instant the commit lands INSIDE
+                # run_commit_pipeline() -- before push_mode="sync"'s own
+                # push-with-retry network round-trip runs -- so a crash
+                # during push is also covered by "resume from stamp step"
+                # instead of re-running the whole pipeline (which would
+                # double-commit). Never re-derived from a later `git
+                # rev-parse HEAD`. See commit_pipeline.run_commit_pipeline's
+                # `on_committed` docstring for the full rationale.
+                on_committed=lambda sha: _write_sentinel(sentinel_path, sha),
+            )
 
         diagnostics.extend(pipeline_result.diagnostics)
         commit_failed = pipeline_result.commit_failed
@@ -1625,8 +1629,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # Timing D-node (non-tail-step -- see `_TIMING_NODE_ID` docstring): folded
     # into the ledger BEFORE the first emit so a failed run (exit_code=1,
-    # returned above at the CeremonyLockTimeout branch, or exit_code=2 below)
-    # is still self-evidencing from the persisted receipt alone. The map is
+    # returned above, or exit_code=2 below) is still self-evidencing from
+    # the persisted receipt alone. The map is
     # deliberately NOT complete at this point: `receipt_emit` and
     # `sentinel_clear` below are measured after this D-node is built and are
     # structurally unrepresentable here without a second receipt write --

@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional
 
@@ -132,7 +133,7 @@ def _changed_files(repo_root: Path) -> set:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )  # popup-safe-env-suppressed
     except OSError as exc:
         raise FixManifestError(

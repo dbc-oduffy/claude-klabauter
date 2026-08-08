@@ -47,22 +47,16 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 
 _PROG = "refresh-roadmap-callout.sh"  # literal program-name prefix — matches bash oracle's messages
 
 _ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-# Review: code-reviewer — matches coordinator_core.text.refresh_queries._NO_CONSOLE;
-# suppresses a flashed console window for `git rev-parse` on Windows callers.
-_NO_CONSOLE: Dict[str, object] = (
-    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
-)
 
 
 def _strip_one_quote_layer(value: str) -> str:
@@ -94,25 +88,29 @@ def _validate_roadmap_id(roadmap_id: str) -> bool:
 
 
 def _resolve_root(root_arg: str) -> str:
-    """--root flag -> git-toplevel auto-discovery -> cwd fallback."""
+    """--root flag -> git-toplevel auto-discovery -> cwd fallback.
+
+    Toplevel discovery is delegated to the shared, cwd-keyed
+    ``coordinator_core.git.repo_root.show_toplevel`` seam (C24,
+    2026-08-07 n-plus-one-git-spawn-class-and-amplification-gate plan)
+    rather than a private ``git rev-parse --show-toplevel`` spawn: that
+    seam WALKS for the ordinary case (climbs cwd looking for a `.git`
+    entry) and only spawns as a memoized fallback when no `.git` entry is
+    found. This module has two in-process callers
+    (``coordinator_core.ops.ceremony.tail_ops.refresh_roadmap_callout``
+    and ``coordinator_core.ops.promote_shipped_in_flight_stubs``), both of
+    which invoke ``main()`` — and therefore this function — once per
+    roadmap id in a loop with an INVARIANT cwd across iterations; the
+    seam's per-resolved-cwd memo collapses that to at most one spawn
+    (often zero, via the walk) per process instead of one spawn per
+    roadmap id. Neither caller needed a call-site edit — see this
+    chunk's own scope note.
+    """
     if root_arg:
         return root_arg
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            **_NO_CONSOLE,
-        )
-        if result.returncode == 0:
-            toplevel = result.stdout.strip()
-            if toplevel:
-                return toplevel
-    except (OSError, subprocess.SubprocessError):
-        print(f"skip: _resolve_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        pass
+    toplevel = _show_toplevel()
+    if toplevel:
+        return toplevel
     return os.getcwd()
 
 

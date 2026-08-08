@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -148,7 +149,7 @@ def _run_pip_audit(params: dict, repo_root: Optional[Path] = None) -> dict:
             encoding="utf-8",
             errors="replace",
             timeout=_TIMEOUT_SECONDS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(

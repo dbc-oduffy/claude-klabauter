@@ -12,17 +12,12 @@ Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-invento
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from coordinator_core.ops.probe_fresh_repo_noop import (
     _probe_fresh_repo_noop,
     probe_fresh_repo,
 )
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +114,7 @@ def test_handler_fresh_repo_returns_contract_shape(tmp_path: Path) -> None:
     common_dir = repo / ".git"
     common_dir.mkdir()
 
-    result = _run(_probe_fresh_repo_noop({}, repo_root=common_dir))
+    result = _probe_fresh_repo_noop({}, repo_root=common_dir)
 
     assert result == {
         "is_fresh": True,
@@ -137,14 +132,14 @@ def test_handler_populated_repo_returns_not_fresh(tmp_path: Path) -> None:
     common_dir.mkdir(parents=True)
     (repo / "DIRECTORY.md").write_text("# Directory\n", encoding="utf-8")
 
-    result = _run(_probe_fresh_repo_noop({}, repo_root=common_dir))
+    result = _probe_fresh_repo_noop({}, repo_root=common_dir)
 
     assert result["is_fresh"] is False
 
 
 def test_handler_none_repo_root_raises() -> None:
     try:
-        _run(_probe_fresh_repo_noop({}, repo_root=None))
+        _probe_fresh_repo_noop({}, repo_root=None)
     except ValueError as exc:
         assert "_origin_worktree" in str(exc)
     else:
@@ -162,8 +157,8 @@ def test_handler_double_invocation_is_idempotent(tmp_path: Path) -> None:
     tasks_dir.mkdir()
     (tasks_dir / "todo.md").write_text("- [ ] x\n", encoding="utf-8")
 
-    first = _run(_probe_fresh_repo_noop({}, repo_root=common_dir))
-    second = _run(_probe_fresh_repo_noop({}, repo_root=common_dir))
+    first = _probe_fresh_repo_noop({}, repo_root=common_dir)
+    second = _probe_fresh_repo_noop({}, repo_root=common_dir)
 
     assert first == second
     assert first["is_fresh"] is False

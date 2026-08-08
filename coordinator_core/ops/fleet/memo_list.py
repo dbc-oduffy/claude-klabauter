@@ -146,6 +146,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -302,7 +303,40 @@ def _receiver_shortname_aliases(manifest_aliases: dict, repo_key: str) -> set:
     return out
 
 
-def _enumerate_publish_mirrors() -> list:
+def _normalize_registry_path(path_str: str) -> str:
+    """Normalize a registered path string for cross-namespace collision comparison.
+
+    Collision detection between a `repos.*` receiver and a `publish.mirrors.*`
+    entry must be on the RESOLVED PATH, not on string-similar ids — a
+    `repos.claude_klabauter` and a `publish.mirrors.claude_klabauter` collide
+    because both resolve to the same on-disk path, not because their key
+    names happen to match (a machine could register them under unrelated
+    key names and still collide, or register similar key names pointing at
+    genuinely different paths). `os.path.normcase` folds Windows
+    drive-letter/backslash-vs-forward-slash/case variance; `os.path.normpath`
+    folds `.`/`..`/duplicate-separator variance. Does not touch the
+    filesystem (no `.resolve()`) — a registry entry may point at a path that
+    doesn't exist on this machine yet, and enumeration must not fail on that.
+    """
+    return os.path.normcase(os.path.normpath(path_str))
+
+
+def _mirror_paths(mirrors_by_key: dict) -> set:
+    """Normalized path set of every `publish.mirrors.*` entry with a present path.
+
+    Shared by the receiver-exclusion check in `_enumerate_candidates` and
+    (indirectly, via the same `mirrors_by_key` source) `_enumerate_publish_mirrors`
+    — single normalization authority so both sides of the collision agree on
+    what counts as "the same path".
+    """
+    return {
+        _normalize_registry_path(entry["path"])
+        for entry in mirrors_by_key.values()
+        if entry.get("path")
+    }
+
+
+def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
     """Enumerate `publish.mirrors.*` entries — publish TARGETS, not memo receivers.
 
     Sourced from `_memo_resolver.read_publish_mirrors()` — the SAME
@@ -354,7 +388,9 @@ def _enumerate_publish_mirrors() -> list:
     no id ever appears in both a `publish_mirror` entry's addressable surface
     (`id`/`em_id`/`aliases`) and a `canonical_home_alias` entry.
     """
-    mirrors_by_key = _read_publish_mirrors()
+    mirrors_by_key = (
+        _read_publish_mirrors() if mirrors_by_key is None else mirrors_by_key
+    )
     redirect_aliases = _read_redirect_aliases()
     mirrors = []
     for mirror_key in sorted(mirrors_by_key):
@@ -471,6 +507,21 @@ def _enumerate_candidates() -> list:
         folder-scan fallback, no partial/soft-fail mode on the hard-failure
         path — see module negative-spec).
 
+    Receiver/publish-mirror path collision (send-path authority, per-id
+    subtraction pattern applied at receiver granularity): a `repos.*` entry
+    whose registered path matches a `publish.mirrors.*.path` (compared via
+    `_normalize_registry_path`, not string-similar ids — see that helper's
+    docstring) is EXCLUDED from the `receiver` block entirely and surfaces
+    only via its `publish_mirror` entry. This mirrors `_enumerate_publish_mirrors`'s
+    own per-id subtraction rule for redirect aliases (same invariant: no id's
+    underlying path is ever addressable under two contradictory `kind`s), but
+    at receiver granularity rather than per-alias — a `receiver` entry has one
+    path, not a subtractable alias set, so a colliding entry is dropped
+    wholesale rather than partially. `memo.send` already refuses a `to` whose
+    resolved path is a registered mirror; this keeps enumeration's advertised
+    receivers in agreement with what a send would actually accept (the send
+    path is authoritative — see module docstring).
+
     Read-only: every reader used here (`_read_registry_repos()`,
     `_read_publish_mirrors()`, `_read_central_receiver_ids()`,
     `_read_receiver_aliases()`, `_read_redirect_aliases()`) re-reads its
@@ -480,9 +531,18 @@ def _enumerate_candidates() -> list:
     all_repos = _read_registry_repos()
     central_ids = _read_central_receiver_ids()
     manifest_aliases = _read_receiver_aliases()
+    mirrors_by_key = _read_publish_mirrors()
+    mirror_paths = _mirror_paths(mirrors_by_key)
 
     receivers = []
     for repo_key, repo_path_str in sorted(all_repos.items()):
+        if _normalize_registry_path(repo_path_str) in mirror_paths:
+            # Shadowed by a publish-mirror at the same resolved path — a
+            # send to this repo_key would be refused (mirror precedence on
+            # the send side), so it must not appear as an addressable
+            # receiver here either. It still surfaces via its
+            # `publish_mirror` entry below.
+            continue
         repo_path = Path(repo_path_str)
         inbox_dir = repo_path / "cross-repo" / "inbox"
         matched_central_ids = _central_ids_for_repo_key(
@@ -502,7 +562,7 @@ def _enumerate_candidates() -> list:
             "aliases": sorted(aliases),
         })
 
-    publish_mirrors = _enumerate_publish_mirrors()
+    publish_mirrors = _enumerate_publish_mirrors(mirrors_by_key)
     canonical_home_aliases = _enumerate_canonical_home_aliases()
     registry_status = [{
         "kind": "registry_status",
@@ -610,7 +670,7 @@ def _resolve_candidate(
 
 
 @register_op("memo.list")
-async def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'memo.list' COMPUTE_ONLY UDS op handler.
 
     Enumerate registered receivers, or resolve one `to` target — a no-write

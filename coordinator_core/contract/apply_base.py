@@ -44,7 +44,12 @@ Negative-spec:
       verb.
     - Do NOT call `subprocess`/shell directly here — `scoped_commit`
       takes an injected `run_git` callable; this module has no git
-      opinion of its own beyond the pathspec discipline.
+      opinion of its own beyond the pathspec discipline. Its `add`/
+      `commit` invocations are each wrapped in
+      `coordinator_core.git_lock_retry.run_with_lock_retry`, which is
+      itself callable-injected (takes a zero-arg closure over `run_git`)
+      and does no shelling-out of its own — this module still never
+      shells out, directly or otherwise.
     - Do NOT read `judgment_points[].recommendation` anywhere in
       `execute_directives`'s control flow — a directive only ever fires
       off an EXPLICIT `decisions[jp_id].disposition` whose OWN
@@ -70,6 +75,8 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
+
+from coordinator_core.git_lock_retry import run_with_lock_retry
 
 # ---------------------------------------------------------------------------
 # Exit-code contract — shared by every apply/dispatch half. Locally scoped
@@ -543,7 +550,7 @@ def scoped_commit(
     resolved = assert_in_repo_root(Path(artifact_rel_path), repo_root)
     pathspec = ["--", str(resolved)]
 
-    add_proc = run_git(["add", *pathspec], repo_root)
+    add_proc = run_with_lock_retry(lambda: run_git(["add", *pathspec], repo_root))
     if add_proc.returncode != 0:
         raise RuntimeError(
             f"git add {artifact_rel_path} failed (rc={add_proc.returncode}, "
@@ -554,7 +561,9 @@ def scoped_commit(
     if unchanged.returncode == 0:
         return None
 
-    commit_proc = run_git(["commit", "-m", message, *pathspec], repo_root)
+    commit_proc = run_with_lock_retry(
+        lambda: run_git(["commit", "-m", message, *pathspec], repo_root)
+    )
     if commit_proc.returncode != 0:
         raise RuntimeError(
             f"git commit {artifact_rel_path} failed (rc={commit_proc.returncode}, "

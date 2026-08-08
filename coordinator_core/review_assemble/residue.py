@@ -108,6 +108,7 @@ from coordinator_core.resolve_coordinator_clone import (
     ResolveCoordinatorCloneError,
     resolve_content_root,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 #: The three legal values of a segment's `surface:` frontmatter field.
 #: `shared` applies to every resolved surface; `plan`/`diff` apply only when
@@ -129,7 +130,7 @@ SEGMENT_CLASSES: tuple[str, ...] = ("protected", "droppable")
 #: `baton_assemble/apply.py`) — this repo ships to a Windows-primary
 #: audience (DR-148); a bare `subprocess.run` spawning `git` without this
 #: flag flashes a console window on every invocation.
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+_NO_CONSOLE = no_console_creationflags()
 
 
 class ResidueAssembleError(RuntimeError):

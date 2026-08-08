@@ -316,6 +316,8 @@ from coordinator_core.bash_guards._write_bump_marker import (
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     nearest_existing_ancestor,
+    resolve_relative,
+    translate_msys_path,
 )
 from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
@@ -328,6 +330,7 @@ from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -340,42 +343,55 @@ PRIORITY = 180  # advisory/deny-offer band; next slot after 170 (see nudge_prose
 #: job is the marker's own git-DIR, worktree-private by design); this is a
 #: small, best-effort, display-only resolver, fail-open like every sibling
 #: git resolver in this package.
-_CREATIONFLAGS: Optional[int] = None
-
-
-def _creationflags(subprocess_module) -> int:
-    """Memoized `CREATE_NO_WINDOW` flag (0 off-Windows) -- computed once on
-    first call, not per invocation. Deliberately not module-scope (that would
-    force an eager `import subprocess`, undoing the deferral this file's
-    diff exists to buy); memoized here instead so the one-time cost survives
-    the deferred import. Review: code-reviewer (P3) -- restores the
-    hoisted-constant behaviour without re-adding a module-level import."""
-    global _CREATIONFLAGS
-    if _CREATIONFLAGS is None:
-        _CREATIONFLAGS = getattr(subprocess_module, "CREATE_NO_WINDOW", 0)
-    return _CREATIONFLAGS
+#:
+#: AC4 migration note (2026-08-07 no-window-subprocess-primitive, C3b): this
+#: resolver now delegates to the shared `write_guards._repo_root` seam (see
+#: `_resolve_git_root` below), which owns its own Windows console-popup
+#: suppression -- the `_creationflags`/`_CREATIONFLAGS` memoized-flag helper
+#: that used to feed this module's own inline spawn was removed as dead code
+#: once that spawn was.
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    import subprocess
-    creationflags = _creationflags(subprocess)
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    root = (result.stdout or "").strip()
-    return root or None
+    """``git rev-parse --show-toplevel``. Feeds the ``target_repo``/
+    ``session_repo`` message strings AND, via ``target_repo = _resolve_git_
+    root(target_dir) or target_dir`` at this module's call site,
+    ``target_is_publish_destination``/``publish_destination_owner`` -- so
+    this is NOT purely display text. It drives ``destination_class``
+    (PUBLISH vs FOREIGN) in the emitted advisory, a content-classification
+    branch. It never feeds the bump/no-bump verdict itself, which is
+    computed from ``resolve_gitdir`` elsewhere in this module -- that
+    boolean is unaffected by anything below.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn -- same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``. Unlike the bump/no-bump verdict, the classification
+    branch above IS timeout-sensitive: the shared resolver's fixed 2.0s
+    timeout (down from this call's prior 10s) only matters on the
+    spawn-fallback path (walk found no `.git`, e.g. `target_dir` outside any
+    locally-walkable repo) -- exactly the case where a slow/network-drive
+    spawn is most likely. A timeout there now fails ~5x sooner than before,
+    `target_repo` falls back to the raw `target_dir`, and a target that IS a
+    registered publish mirror can misclassify as FOREIGN instead of PUBLISH.
+
+    Judgment call, left as-is deliberately rather than "fixed" here: this
+    call site cannot get its own longer timeout without either (a) adding a
+    per-call timeout parameter to the shared resolver's public API, which
+    touches `coordinator_core/git/repo_root.py` -- out of scope for this
+    integration pass (a sibling session owns concurrent edits nearby, and
+    the fix is a resolver API change, not a guard-local one) -- or (b)
+    reintroducing a second, guard-local spawn just for this call, which is
+    the exact duplication AC4 eliminated. The risk window is also narrow: it
+    only opens on a target both outside any locally-walkable repo AND slow
+    to reach (network drive), and the failure mode is a stricter-than-true
+    advisory (FOREIGN read where PUBLISH applies), not a silent under-warn.
+    Recommend routing a per-call timeout override through the shared
+    resolver as a follow-up if that risk window proves to matter in
+    practice.
+    """
+    return resolve_repo_root(cwd)
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -447,6 +463,15 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     `priority_drain.py` adopts), not merely a direct child file. Never
     raises: `casefold_path` and plain `str.split` do not raise on any `str`
     input.
+
+    C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md): `file_path`
+    is now the TRANSLATED path `check()` resolved once via
+    `_resolve_translated_file_path` -- an untranslatable candidate (`None`,
+    coerced to `""` by the caller) falls through this same `not file_path`
+    branch to `False` ("not exempt"), which is safe because `check()`'s own
+    `_verdict_bumps` already fails open (no bump) on an unresolved target;
+    this predicate merely stops WIDENING an exemption on a path it cannot
+    read, never causing a bump on its own.
     """
     if not file_path:
         return False
@@ -478,6 +503,12 @@ def _target_is_bare_temp_scratch(file_path: str, target_gitdir: Optional[Path]) 
     `target_gitdir` is accepted as a short-circuit only: when the caller has
     ALREADY resolved it and found a repo, there is no need to re-resolve via
     the shared helper's own `resolve_gitdir` call.
+
+    C4c: `file_path` is now the TRANSLATED path `check()` resolved once via
+    `_resolve_translated_file_path` -- see `_target_is_lessons_outbox_
+    write`'s own C4c note for why an untranslatable (`""`/`None`) input
+    falling through to "not exempt" here is the correct, fail-open-overall
+    behaviour rather than a widening of what bumps.
     """
     if target_gitdir is not None:
         return False
@@ -498,6 +529,15 @@ def _target_is_under_settings_home(
     Resolves the settings home through the SAME shared helper both
     Bash-surface guards already import -- `trusted_root_guard.
     _settings_home_dir_from_env` -- never a hand-rolled env read.
+
+    C4c: `file_path` is now the TRANSLATED path `check()` resolved once via
+    `_resolve_translated_file_path` -- same C4c note as
+    `_target_is_lessons_outbox_write`/`_target_is_bare_temp_scratch`: a
+    `""`/`None` (untranslatable) input falls through
+    `_normalize_for_compare`'s own `not path` branch to `None`, so this
+    predicate returns `False` ("not exempt") without widening anything,
+    relying on `check()`'s own overall fail-open-on-unresolved-target
+    contract for the "never bump" guarantee.
     """
     if target_gitdir is not None:
         return False
@@ -540,12 +580,117 @@ def _resolve_target_gitdir(
     here; if no payload cwd is available, this returns `None` rather than
     guessing a base -- fail open, matching every other unresolvable-anchor
     branch in this module.
+
+    C4 (docs/plans/2026-08-07-guard-posix-path-rerooting.md): translates
+    through `_write_bump_sink_shapes.translate_msys_path`/`resolve_relative`
+    BEFORE any `os.path.isabs`/`os.path.join` call touches the candidate --
+    same invariant C2 applies to the two Bash-surface bump guards, and the
+    same shared helpers, not a third independently-derived copy. Without
+    this, a POSIX-absolute MSYS path (`/x/claude-klabauter/scratch/t.txt`) gets
+    anchored onto the process's current drive on Windows (`os.path.isabs`
+    True pre-3.13 -> `realpath` anchors it; False on 3.13+ -> `os.path.join`
+    re-roots it onto `payload_cwd`'s drive), producing a nonexistent path and
+    bumping a write that is actually inside the session's own repo. An
+    untranslatable shape (`translate_msys_path`/`resolve_relative` returning
+    `None`) takes this same fail-open `None` branch -- never a bump, never
+    reaching `nearest_existing_ancestor`/`resolve_gitdir` (AC6).
+
+    C4b (same plan): the translation step itself now lives in
+    `_resolve_target_dir` below -- this function is a thin wrapper
+    (`_resolve_target_dir` -> `_target_gitdir_from_dir`) kept for existing
+    callers/tests. `check()` calls the two halves directly so the
+    translation runs exactly ONCE per PreToolUse payload and the resolved
+    `target_dir` is threaded to every other site that used to recompute
+    `os.path.dirname(file_path) or file_path` raw (`_verdict_bumps`, and
+    `check()`'s own `target_repo` resolution) -- see C4b's "same module
+    resolves the target twice more" framing.
+    """
+    target_dir = _resolve_target_dir(file_path, payload_cwd)
+    return _target_gitdir_from_dir(target_dir)
+
+
+def _resolve_target_dir(file_path: str, payload_cwd: Optional[str]) -> Optional[str]:
+    """Translate `os.path.dirname(file_path) or file_path` through the
+    shared MSYS/POSIX translation helpers (`translate_msys_path` /
+    `resolve_relative`), returning an absolute, native-form directory path
+    -- or `None` when the candidate is untranslatable or (for a relative
+    translated path) no `payload_cwd` is available to anchor it against.
+
+    C4b: extracted out of `_resolve_target_gitdir` so the translation runs
+    ONCE per `check()` call and the result can be threaded to
+    `_verdict_bumps` and to `check()`'s own `target_repo` resolution,
+    instead of each site recomputing `os.path.dirname(file_path) or
+    file_path` RAW (untranslated) as they did before this chunk. Identity
+    on POSIX and a no-op on an already-native drive-absolute input, same as
+    `translate_msys_path` itself -- correct inputs resolve byte-identically
+    to before this chunk.
     """
     target_dir = os.path.dirname(file_path) or file_path
-    if not os.path.isabs(target_dir):
-        if not payload_cwd:
-            return None
-        target_dir = os.path.join(payload_cwd, target_dir)
+    translated = translate_msys_path(target_dir)
+    if translated is None:
+        return None
+    if os.path.isabs(translated):
+        return translated
+    if not payload_cwd:
+        return None
+    return resolve_relative(payload_cwd, translated)
+
+
+def _resolve_translated_file_path(
+    file_path: str, payload_cwd: Optional[str]
+) -> Optional[str]:
+    """C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md): the FILE
+    (not directory) counterpart of `_resolve_target_dir` -- same
+    `translate_msys_path` -> (absolute short-circuit | `resolve_relative`
+    against `payload_cwd`) shape, but over the raw `file_path` itself, never
+    `os.path.dirname(file_path)`.
+
+    Fixes the exemption-predicate gap this chunk exists for: C4/C4b already
+    translate the DIRECTORY used for the bump/no-bump VERDICT
+    (`_resolve_target_dir` -> `target_dir`/`target_gitdir`), but `check()`
+    was still handing the four exemption predicates
+    (`_target_is_bare_temp_scratch`, `_target_is_under_settings_home` via
+    `_normalize_for_compare`, `_target_is_lessons_outbox_write`,
+    `is_agent_memory_store_path`) the RAW, untranslated `file_path`. An
+    MSYS-spelled write to the harness scratchpad
+    (`/x/AppData/Local/Temp/claude/.../scratch/foo.txt` on Windows) then
+    matched no recognized native temp root, so the temp-scratch exemption
+    never fired -- the write fell through to `_verdict_bumps`, where the
+    correctly-translated `target_gitdir` was already `None` (no repo) and
+    `own_gitdir` was not, so it bumped. That is a `check()`-only fix
+    (this function plus its call site), not a change to any predicate's OWN
+    classification logic.
+
+    Returns `None` when `file_path` is untranslatable, or (for a relative
+    translated result) when no `payload_cwd` is available to anchor it --
+    the SAME two fail-open shapes `_resolve_target_dir` already has. Callers
+    treat `None` as "cannot evaluate this predicate meaningfully" and fall
+    through to "not exempt", relying on `check()`'s own overall
+    fail-open-on-unresolved-target contract (`_verdict_bumps` already
+    returns `False`/no-bump whenever `target_dir` -- resolved via the exact
+    same translation -- is `None`) for the "never bump on an unresolved
+    path" guarantee. Identity on POSIX and a no-op on an already-native
+    drive-absolute input, same as `translate_msys_path` itself -- correct
+    inputs resolve byte-identically to before this chunk.
+    """
+    translated = translate_msys_path(file_path)
+    if translated is None:
+        return None
+    if os.path.isabs(translated):
+        return translated
+    if not payload_cwd:
+        return None
+    return resolve_relative(payload_cwd, translated)
+
+
+def _target_gitdir_from_dir(target_dir: Optional[str]) -> Optional[Path]:
+    """Ancestor-walk + `resolve_gitdir` half of the old
+    `_resolve_target_gitdir` -- takes an ALREADY-TRANSLATED `target_dir`
+    (see `_resolve_target_dir`) rather than a raw `file_path`. `None` in ->
+    `None` out, fail-open, never reaching `nearest_existing_ancestor` on an
+    unresolved candidate."""
+    if target_dir is None:
+        return None
     probe_dir = nearest_existing_ancestor(target_dir)
     if probe_dir is None:
         return None
@@ -558,18 +703,28 @@ def _verdict_bumps(
     anchor: str,
     own_gitdir: Optional[Path],
     target_gitdir: Optional[Path],
-    file_path: str,
+    target_dir: Optional[str],
 ) -> bool:
     """The one-question verdict described in the module docstring, "VERDICT
     LOGIC" -- does NOT itself consult the marker or applicability; those are
-    the caller's job (see `check()`)."""
+    the caller's job (see `check()`).
+
+    C4b: `target_dir` is the SAME translated value `check()` resolved once
+    via `_resolve_target_dir` -- this is a bump DECISION (not a display
+    string), so it must never be taken against an untranslated MSYS-form
+    path (AC6: "a deny is only ever emitted for a path this guard has fully
+    and natively resolved"). `target_dir is None` (untranslatable) takes the
+    same fail-open `return False` branch as `target_gitdir is None` --
+    never a bump on a path this guard could not resolve.
+    """
     if own_gitdir is None:
         # Session anchor is in no git repo -- mirrors C5's outside-repo
         # no-bump condition, except a REGISTERED target still bumps
         # (mirrors C4's cross-repo condition applied to this anchor shape).
         if target_gitdir is None:
             return False
-        target_dir = os.path.dirname(file_path) or file_path
+        if target_dir is None:
+            return False
         return target_is_registered_repo(target_dir)
     return not _same_gitdir(own_gitdir, target_gitdir)
 
@@ -598,12 +753,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         own_gitdir = resolve_gitdir(anchor)
-        target_gitdir = _resolve_target_gitdir(file_path, payload_cwd)
+        # C4b: translate ONCE here and thread `target_dir` to every other
+        # site that used to recompute `os.path.dirname(file_path) or
+        # file_path` raw (`_verdict_bumps` below, and this function's own
+        # `target_repo` resolution further down) -- see module docstring
+        # note on `_resolve_target_dir`/`_target_gitdir_from_dir`.
+        target_dir = _resolve_target_dir(file_path, payload_cwd)
+        target_gitdir = _target_gitdir_from_dir(target_dir)
+        # C4c: translated ONCE here (same MSYS/POSIX translation C4b already
+        # applies to `target_dir`) and threaded to every exemption predicate
+        # below -- see `_resolve_translated_file_path`'s own docstring for
+        # the defect this closes. `translated_file_path` may be `None`
+        # (untranslatable candidate); every predicate below already
+        # fails open ("not exempt") on a falsy input, and `_verdict_bumps`
+        # independently fails open (no bump) whenever `target_dir` -- the
+        # SAME translation, over the dirname -- is `None`.
+        translated_file_path = _resolve_translated_file_path(file_path, payload_cwd)
 
-        if _target_is_bare_temp_scratch(file_path, target_gitdir):
+        if _target_is_bare_temp_scratch(translated_file_path or "", target_gitdir):
             return None
 
-        if _target_is_lessons_outbox_write(file_path):
+        if _target_is_lessons_outbox_write(translated_file_path or ""):
             return None
 
         # Agent memory store -- Claude Code's own per-project persistent
@@ -615,7 +785,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # `target_gitdir`, unlike the temp-scratch/settings-home exemptions
         # below): the whole point is the target IS a foreign repo on this
         # fleet, mirroring the lessons-outbox exemption immediately above.
-        if is_agent_memory_store_path(file_path):
+        if is_agent_memory_store_path(translated_file_path or ""):
             return None
 
         # NOTE: correctness here depends on `target_gitdir` already
@@ -624,11 +794,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # as independent chunks in the governing plan but share this one
         # call's `target_gitdir` value; an isolated future edit to either
         # could silently break the other's assumption (example-doctrine-repo finding #4).
-        if _target_is_under_settings_home(file_path, target_gitdir):
+        if _target_is_under_settings_home(translated_file_path or "", target_gitdir):
             return None
 
         if not _verdict_bumps(
-            session_id, payload_cwd, anchor, own_gitdir, target_gitdir, file_path
+            session_id, payload_cwd, anchor, own_gitdir, target_gitdir, target_dir
         ):
             return None
 
@@ -650,8 +820,20 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         agent_class = resolve_agent_class(payload, own_git_root)
 
-        target_dir = os.path.dirname(file_path) or file_path
-        target_repo = _resolve_git_root(target_dir) or target_dir
+        # C4b: `target_dir` is the SAME translated value resolved once
+        # above -- previously this line recomputed
+        # `os.path.dirname(file_path) or file_path` RAW, so an MSYS-form
+        # `file_path` fed an untranslated string into `_resolve_git_root`
+        # (and, via `target_repo`, into `destination_class`/
+        # `_resolve_sandbox_root` below -- behavioural, not display-only).
+        # `target_dir is None` (untranslatable) falls back to `file_path`,
+        # matching this line's pre-C4b fallback-to-raw-string shape for the
+        # one case with nothing translated to fall back to.
+        target_repo = (
+            (_resolve_git_root(target_dir) if target_dir is not None else None)
+            or target_dir
+            or file_path
+        )
         session_repo = own_git_root or anchor
 
         sandbox_root = ""
@@ -675,6 +857,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             destination_class = DESTINATION_PUBLISH
             destination_owner = publish_destination_owner(target_repo)
 
+        # R1 (docs/plans/2026-08-08-the-bump-message-never-showed-the-
+        # operat.md): `file_path` is the RAW, pre-translation token this
+        # payload carried -- captured straight off `tool_input` by
+        # `_extract_file_path` above, never reconstructed from
+        # `target_repo` (AC2). `target_repo` here is a repo ROOT, not the
+        # file path itself, so the two are expected to differ in the
+        # ordinary case; suppressed only in the (rare) case they are
+        # byte-identical, per `_target_phrase`'s "never print the same
+        # string twice" contract.
         message = render_bump_message(
             agent_class=agent_class,
             target_repo=target_repo,
@@ -684,6 +875,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             sandbox_root=sandbox_root,
             destination_class=destination_class,
             destination_owner=destination_owner,
+            raw_target=file_path if file_path != target_repo else "",
         )
 
         record_applicability_event(

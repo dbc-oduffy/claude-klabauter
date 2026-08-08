@@ -38,17 +38,14 @@ from pathlib import Path
 from typing import Sequence
 
 from coordinator_core.testing.collect import Suite
+from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_TIMEOUT: int = 300
 
 # Portable Windows console-suppression flag, mirroring coverage.py:101-105 —
 # every dispatched suite spawn (and the batched py-native invocation) must
 # not pop a visible console window on Windows.
-_NO_CONSOLE: dict = (
-    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    if os.name == "nt"
-    else {}
-)
+_NO_CONSOLE: dict = no_console_creationflags()
 
 # DEC-3/4/5/6: per-family invocation command builders. py-native is handled
 # separately (batched — see `_build_py_native_command`), never through this

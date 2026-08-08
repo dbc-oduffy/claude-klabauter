@@ -101,11 +101,14 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         return None, 1
 
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             [ml_bin, "get", "repos.example_doctrine_repo"],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         result = None
@@ -177,11 +180,14 @@ def _seed_plugin_mirror_source_path(doe_root: str) -> None:
         print("plugin_mirror_source_path: skipped (machine-local not found)")
         return
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         existing = subprocess.run(
             [ml_bin, "get", "plugin.mirrors.coordinator-claude.source_path"],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         print("plugin_mirror_source_path: skipped (machine-local not found)")
@@ -190,11 +196,14 @@ def _seed_plugin_mirror_source_path(doe_root: str) -> None:
         print("plugin_mirror_source_path: ready (no-op)")
         return
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         subprocess.run(
             [ml_bin, "set", "plugin.mirrors.coordinator-claude.source_path", doe_root],
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         print("plugin_mirror_source_path: skipped (machine-local not found)")

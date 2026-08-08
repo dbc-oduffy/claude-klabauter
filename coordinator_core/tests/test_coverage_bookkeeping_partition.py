@@ -512,6 +512,54 @@ def test_genuine_mixed_commit_note_wording_unchanged(tmp_path: Path) -> None:
     )
 
 
+def test_planning_plus_bookkeeping_commit_emits_planning_note_not_mixed_note(
+    tmp_path: Path,
+) -> None:
+    """L. AC6 fix, third leg. A commit mixing a genuine planning-artifact path
+    (docs/plans/) with a bookkeeping path (state/foo.md) classifies PLANNING
+    (see test R's `_classify_bookkeeping_shas` shape), but the AC6 per-sha
+    note loop re-derives bk_paths/other_paths from path prefixes alone —
+    docs/plans/ is not a bookkeeping prefix, so a naive re-derivation would
+    put the planning path in `other_paths` and render the mixed-commit
+    sentence for a sha the mixed-commit rule never touched. Must instead
+    check `planning_set` first and emit the dedicated PLANNING note, never
+    the mixed-commit note.
+    """
+    repo = _base_repo(tmp_path)
+    base_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    (plans_dir / "2026-08-05-example.md").write_text("# plan\n")
+    state_dir = repo / "state"
+    state_dir.mkdir(exist_ok=True)
+    (state_dir / "foo.md").write_text("bookkeeping\n")
+    _git(["add", "docs/plans/2026-08-05-example.md", "state/foo.md"], repo)
+    _git(["commit", "-m", "author plan and touch bookkeeping"], repo)
+    sha = _rev(repo)
+
+    result = cov.run_coverage_gate(
+        range_arg=f"{base_sha}..HEAD", repo_root=str(repo)
+    )
+
+    planning_notes = [
+        n
+        for n in result.notes
+        if n.startswith("coverage: ") and sha in n and "classified PLANNING" in n
+    ]
+    assert len(planning_notes) == 1, (
+        f"expected exactly one PLANNING per-sha note for {sha}; notes={result.notes!r}"
+    )
+    note = planning_notes[0]
+    assert "docs/plans/2026-08-05-example.md" in note
+    assert "state/foo.md" in note
+    assert "plan review, not a code review" in note
+    assert not any(
+        n.startswith("coverage: ") and sha in n and "AND non-bookkeeping path(s)" in n
+        for n in result.notes
+    ), f"a planning+bookkeeping commit must not emit the mixed-commit note; notes={result.notes!r}"
+
+
 def _classify(repo: Path, shas: List[str]) -> tuple:
     """Call cov._classify_bookkeeping_shas directly with a fresh cache.
 

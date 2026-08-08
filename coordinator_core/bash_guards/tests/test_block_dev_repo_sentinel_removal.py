@@ -15,18 +15,37 @@ Precedent test shape: coordinator_core/bash_guards/tests/test_block_worktree_sen
 
 from __future__ import annotations
 
+import importlib.util
 import json
 
+import pytest
+
+from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal as guard
 from coordinator_core.bash_guards import dispatch
 
 
 SENTINEL = ".coordinator-dev-repo"
 
+#: Same bridge-to-C8 gate as `test_command_tokenizer_length_ceiling.py`'s
+#: own `requires_powershell_grammar` -- the PowerShell cases below need
+#: `tree-sitter-pwsh` actually importable; C8 (not this cohort) is what
+#: declares it in `[project].dependencies`. Absence is covered separately
+#: by the unmarked ImportError->SILENT case in `_dialect.py`'s own test
+#: surface, not re-derived here.
+_GRAMMAR_PRESENT = all(
+    importlib.util.find_spec(name) is not None
+    for name in ("tree_sitter", "tree_sitter_pwsh")
+)
+requires_powershell_grammar = pytest.mark.skipif(
+    not _GRAMMAR_PRESENT,
+    reason="PowerShell grammar package not installed; C8 declares it in pyproject.toml.",
+)
 
-def _payload(command, agent_id=None, agent_type=None):
+
+def _payload(command, agent_id=None, agent_type=None, tool_name="Bash"):
     p = {
-        "tool_name": "Bash",
+        "tool_name": tool_name,
         "tool_input": {"command": command},
         "session_id": "sess1",
         "cwd": "/repo",
@@ -379,3 +398,146 @@ class TestAdvisoryLegAtItsNewChainPosition:
         )
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestPowerShellDialect:
+    """C4f (`docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-
+    stay-silent.md`), triaged at `docs/reference/guard-dialect-coverage.md`
+    row 26 -- `rm` already fires unaided (real PowerShell alias, C3's
+    alias-collision finding); `unlink` has no PowerShell equivalent, so
+    `Remove-Item`/`ri`/`rd`/`del` needed adding. Converted via
+    `Dialect.POWERSHELL` in `_sentinel_removal_guard.evaluate` (widened
+    `_remove_arg_denies`), tokenized through `_dialect.resolve_segments_
+    for_dialect` (tree-sitter-pwsh) instead of the bash `shlex` path.
+    """
+
+    @requires_powershell_grammar
+    def test_remove_item_denies(self):
+        out = guard.check_advisory(
+            _payload("Remove-Item %s" % SENTINEL, tool_name="PowerShell")
+        )
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_ri_alias_denies(self):
+        out = guard.check_advisory(_payload("ri %s" % SENTINEL, tool_name="PowerShell"))
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_rd_alias_denies(self):
+        out = guard.check_advisory(_payload("rd %s" % SENTINEL, tool_name="PowerShell"))
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_del_alias_denies(self):
+        out = guard.check_advisory(_payload("del %s" % SENTINEL, tool_name="PowerShell"))
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_rm_alias_still_denies_under_powershell(self):
+        # `rm` is a real PowerShell alias -- already covered by alias
+        # collision, not a new matcher; proven here under the PowerShell
+        # dialect specifically, not just the bash leg above.
+        out = guard.check_advisory(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_remove_item_with_recurse_force_flags_denies(self):
+        out = guard.check_advisory(
+            _payload(
+                "Remove-Item -Recurse -Force %s" % SENTINEL, tool_name="PowerShell"
+            )
+        )
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_remove_item_unrelated_target_allows(self):
+        assert (
+            guard.check_advisory(_payload("Remove-Item somefile.txt", tool_name="PowerShell"))
+            is None
+        )
+
+    @requires_powershell_grammar
+    def test_git_rm_denies_under_powershell(self):
+        # git rm/mv is a dialect-neutral external exe -- already correct,
+        # exercised here under the PowerShell dialect's own tokenizer to
+        # prove the tokenizer swap did not regress it.
+        out = guard.check_advisory(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
+        _advisory_text(out)
+
+    @requires_powershell_grammar
+    def test_unlink_alias_has_no_powershell_equivalent_and_allows(self):
+        # `unlink` is a bash-only spelling with no PowerShell alias at all
+        # -- under the PowerShell dialect it must not deny/advise (it
+        # cannot execute in PowerShell in the first place), unlike its
+        # bash-leg coverage in TestDirectRemovalDenies.
+        assert (
+            guard.check_advisory(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
+            is None
+        )
+
+    def test_unrecognized_tool_name_records_silent_not_a_guess(self):
+        with _verdict.collecting() as silences:
+            out = guard.check_advisory(
+                _payload("Remove-Item %s" % SENTINEL, tool_name="Zsh")
+            )
+        assert out is None
+        assert _verdict.was_silent(guard._GUARD_NAME, silences)
+
+    def test_check_leg_also_silent_on_unrecognized_dialect(self):
+        with _verdict.collecting() as silences:
+            out = guard.check(_payload("rm %s" % SENTINEL, tool_name="Zsh"))
+        assert out is None
+        assert _verdict.was_silent(guard._GUARD_NAME, silences)
+
+
+class TestPowerShellIndirectionDeclinesRatherThanClean:
+    """The indirection-wrapper walk (`xargs`/piped-interpreter/`-c`-flag/
+    `env`-wrapped payloads) stays bash-only by design under
+    `Dialect.POWERSHELL` -- out of C4f's triaged scope. Left silently
+    unconverted, a PowerShell indirection wrapper would fall through to a
+    bare ALLOW indistinguishable from a genuinely clean command -- the
+    exact false-clean this plan exists to close. These pin that it instead
+    records SILENT (declined to rule) rather than reading as cleared."""
+
+    @requires_powershell_grammar
+    def test_xargs_wrapper_records_silent_not_clean(self):
+        with _verdict.collecting() as silences:
+            out = guard.check_advisory(
+                _payload("echo %s | xargs rm" % SENTINEL, tool_name="PowerShell")
+            )
+        assert out is None
+        assert _verdict.was_silent(guard._GUARD_NAME, silences)
+
+    @requires_powershell_grammar
+    def test_dash_c_flag_wrapper_records_silent_not_clean(self):
+        with _verdict.collecting() as silences:
+            out = guard.check_advisory(
+                _payload('bash -c "rm %s"' % SENTINEL, tool_name="PowerShell")
+            )
+        assert out is None
+        assert _verdict.was_silent(guard._GUARD_NAME, silences)
+
+    @requires_powershell_grammar
+    def test_env_wrapped_direct_removal_still_denies_not_silent(self):
+        # `_env_skip_index` already walks past a leading `env`/`VAR=value`
+        # prefix to the real argv0 -- this is fully examinable and denies
+        # DIRECTLY, the control proving the shape check does not
+        # over-classify an env-prefixed but otherwise plain command as
+        # unresolved indirection.
+        with _verdict.collecting() as silences:
+            out = guard.check_advisory(
+                _payload("env FOO=bar rm %s" % SENTINEL, tool_name="PowerShell")
+            )
+        _advisory_text(out)
+        assert not _verdict.was_silent(guard._GUARD_NAME, silences)
+
+    @requires_powershell_grammar
+    def test_ordinary_command_does_not_record_silent(self):
+        """A genuinely clean, non-wrapper PowerShell command must NOT
+        record SILENT -- only actual indirection shapes do; this is the
+        control proving the shape check is not over-firing."""
+        with _verdict.collecting() as silences:
+            out = guard.check_advisory(_payload("Get-ChildItem", tool_name="PowerShell"))
+        assert out is None
+        assert not _verdict.was_silent(guard._GUARD_NAME, silences)

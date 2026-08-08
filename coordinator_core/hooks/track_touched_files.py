@@ -8,7 +8,7 @@ tool call into two append-only T-event logs:
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
-Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Port of the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-touched-files.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
@@ -75,6 +75,7 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.session.scope import format_touch_event, normalize_touch_path
+from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # D6 — per-target-file asyncio.Lock registry.
@@ -213,7 +214,7 @@ def _ensure_session_dir(
                 ["git", "rev-parse", "HEAD"],
                 cwd=git_root,
                 stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             ).decode("utf-8", errors="replace").strip()
         except Exception:
             head = "unknown"
@@ -228,7 +229,7 @@ def _ensure_session_dir(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=git_root,
                 stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             ).decode("utf-8", errors="replace").strip()
         except Exception:
             branch = "unknown"

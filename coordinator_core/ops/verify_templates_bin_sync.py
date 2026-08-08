@@ -142,7 +142,12 @@ def _claude_home_bin_dir() -> str:
     and the module "Live bin resolution" docstring section for the primary
     (settings-home-rooted) resolution this backs up.
     """
-    home_substitute = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    home_substitute = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(home_substitute, ".claude", "bin")
 
 

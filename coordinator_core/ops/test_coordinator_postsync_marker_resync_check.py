@@ -131,7 +131,7 @@ def test_https_url_in_settings_json_is_not_a_false_positive(tmp_path):
                 },
                 "extraKnownMarketplaces": {
                     "coordinator-claude": {
-                        "source": {"path": "https://github.com/dbc-example-operator/coordinator-claude"}
+                        "source": {"path": "https://github.com/dbc-oduffy/coordinator-claude"}
                     }
                 },
                 "someOtherUrl": "http://localhost:8080/foo",

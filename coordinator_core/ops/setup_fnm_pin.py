@@ -55,7 +55,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 _PROG = "setup-fnm-pin"
 
@@ -110,7 +110,7 @@ def main(argv: List[str]) -> int:
 
     print(f"{_PROG}: installing Node {pin_version} via fnm (pin: {pin_file})")
 
-    subprocess.run([fnm_cmd, "install", pin_version], check=True)
+    subprocess.run([fnm_cmd, "install", pin_version], check=True, **no_console_creationflags())
 
     print()
     print(f"Node {pin_version} installed. To activate in your current shell:")

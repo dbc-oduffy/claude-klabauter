@@ -75,17 +75,21 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.coverage import (
     SAFE_RANGE,
+    _REVLIST_MAX_WORKERS,
     _TrailParseError,
     _classify_bookkeeping_shas,
     _parse_trail_file,
     _verdict_counts,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_CREATIONFLAGS = no_console_creationflags()
+
 _GIT_TIMEOUT_SECS = 60
 
 EXIT_OK = 0
@@ -124,7 +128,7 @@ def _run(cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
             cwd=cwd,
             timeout=_GIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         return result.returncode, result.stdout.strip(), result.stderr
     except subprocess.TimeoutExpired:
@@ -425,8 +429,12 @@ def build_reviewed_set(
 
 # ---------------------------------------------------------------------------
 # --segments-json mode — per-record git rev-list + git log --name-only.
-# Mirrors the bash oracle. NOT batched: per-segment file attribution is
-# required for seam detection.
+# Mirrors the bash oracle. The git log --name-only leg is NOT batched:
+# per-segment file attribution is required for seam detection. The git
+# rev-list leg IS memoised per DISTINCT sha_range (see revlist_memo in
+# build_segments) — that comment does not justify skipping dedup on a
+# range re-cited by multiple records; see build_segments docstring/inline
+# comment for why multi-range batching is still forbidden even so.
 # ---------------------------------------------------------------------------
 
 
@@ -437,25 +445,50 @@ def build_segments(
 ) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
 
+    # Per-range memo for the `git rev-list` leg only (keyed on sha_range
+    # alone — build_segments has no kind-partition, unlike build_reviewed_set).
+    # Each DISTINCT range is still resolved independently (no multi-range
+    # batching: SAFE_RANGE admits symbolic/live-HEAD endpoints, and git
+    # computes reachable(positives) \ reachable(negatives) as ONE set
+    # expression per range — combining ranges would silently drop coverage
+    # on a linear chain with no test failure). This memo only eliminates
+    # RE-resolving a range already seen in this same build_segments call —
+    # the top repeater fires 22x with zero dedup before this fix.
+    #
+    # The sibling `git log --name-only` leg is NOT memoised or batched: it
+    # produces per-segment file attribution required for seam detection, so
+    # every record still needs its own git log call even when sha_range
+    # repeats (a prior record's file list cannot stand in for this one).
+    revlist_memo: Dict[str, Optional[Set[str]]] = {}
+    revlist_skip: Set[str] = set()
+
     for _source_path, rec in all_records:
         classified = _classify(rec)
         if classified is None:
             continue
         sha_range, artifact, _kind = classified
 
-        rc, shas_out, rev_err = _run(["git", "rev-list", sha_range], cwd=cwd)
-        if rc != 0:
-            last_err = rev_err.strip().splitlines()[-1] if rev_err.strip() else "git rev-list failed"
-            if on_unresolvable_ref == "skip":
-                print(
-                    f"WARN: skipping trail record with unresolvable range {sha_range!r}: "
-                    f"{last_err} ({artifact})",
-                    file=sys.stderr,
-                )
-                continue
-            print(f"ERROR: command failed: git rev-list {sha_range}\n{rev_err}", file=sys.stderr)
-            raise _FatalError(f"git rev-list {sha_range} failed")
-        shas = set(shas_out.splitlines()) if shas_out else set()
+        if sha_range in revlist_skip:
+            continue
+
+        if sha_range in revlist_memo:
+            shas = revlist_memo[sha_range]
+        else:
+            rc, shas_out, rev_err = _run(["git", "rev-list", sha_range], cwd=cwd)
+            if rc != 0:
+                last_err = rev_err.strip().splitlines()[-1] if rev_err.strip() else "git rev-list failed"
+                if on_unresolvable_ref == "skip":
+                    print(
+                        f"WARN: skipping trail record with unresolvable range {sha_range!r}: "
+                        f"{last_err} ({artifact})",
+                        file=sys.stderr,
+                    )
+                    revlist_skip.add(sha_range)
+                    continue
+                print(f"ERROR: command failed: git rev-list {sha_range}\n{rev_err}", file=sys.stderr)
+                raise _FatalError(f"git rev-list {sha_range} failed")
+            shas = set(shas_out.splitlines()) if shas_out else set()
+            revlist_memo[sha_range] = shas
 
         rc2, log_out, log_err = _run(
             ["git", "log", "--name-only", "--format=", sha_range], cwd=cwd
@@ -568,18 +601,49 @@ def classify_pending_records(
 
     memo: Dict[str, Optional[Set[str]]] = {}
 
-    def _resolve(sha_range: str) -> Optional[Set[str]]:
-        if sha_range in memo:
-            return memo[sha_range]
-        if resolve_range is not None:
+    if resolve_range is not None:
+        def _resolve(sha_range: str) -> Optional[Set[str]]:
+            if sha_range in memo:
+                return memo[sha_range]
             resolved = resolve_range(sha_range)
-        else:
+            memo[sha_range] = resolved
+            return resolved
+    else:
+        # Batch pre-scan for the default resolver (no caller-injected
+        # resolve_range — i.e. no single graph_range window exists to walk
+        # in one shot, see _make_chain_range_resolver's own docstring for
+        # when that is): resolve every DISTINCT range across pending AND
+        # non_pending in ONE bounded-parallel sweep, instead of the
+        # closers/pending loops below triggering one `git rev-list` spawn
+        # per distinct range each as they walk their own inputs in series.
+        # Same command, same per-distinct-range memoization, same result —
+        # only the SCHEDULING changes (concurrent instead of serial), so
+        # this cannot change which record ends up in which bucket. Worker
+        # cap reuses coverage.py's own `_REVLIST_MAX_WORKERS`, the identical
+        # bound already accepted in this codebase for the identical
+        # primitive (build_reviewed_set's Strategy B fan-out).
+        _distinct_ranges = sorted(
+            {sha_range for sha_range, _artifact in pending}
+            | {sha_range for sha_range, _artifact in non_pending}
+        )
+
+        def _resolve_one(sha_range: str) -> Tuple[str, Optional[Set[str]]]:
             rc, shas_out, _err = _run(["git", "rev-list", sha_range], cwd=cwd)
             resolved = (
                 set(s for s in shas_out.splitlines() if s) if rc == 0 else None
             )
-        memo[sha_range] = resolved
-        return resolved
+            return sha_range, resolved
+
+        _max_workers = min(len(_distinct_ranges), _REVLIST_MAX_WORKERS)
+        if _max_workers <= 1:
+            _resolved_pairs = [_resolve_one(r) for r in _distinct_ranges]
+        else:
+            with ThreadPoolExecutor(max_workers=_max_workers) as pool:
+                _resolved_pairs = list(pool.map(_resolve_one, _distinct_ranges))
+        memo.update(_resolved_pairs)
+
+        def _resolve(sha_range: str) -> Optional[Set[str]]:
+            return memo.get(sha_range)
 
     closers: List[Tuple[str, str, Set[str]]] = []
     for sha_range, artifact in non_pending:

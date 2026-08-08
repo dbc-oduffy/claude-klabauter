@@ -77,16 +77,13 @@ from typing import Optional
 
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock
 from coordinator_core.trusted_root_guard import coordinator_trusted_root_guard
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
-
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 _NETWORK_ERROR_RE = re.compile(
     r"Could not find a version|ConnectionError|TimeoutError|"
@@ -225,13 +222,13 @@ def _is_windows_shell() -> bool:
 
 def _run(argv, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("timeout", 60)
-    return subprocess.run(argv, **_NO_CONSOLE, **kwargs)
+    return subprocess.run(argv, **no_console_creationflags(), **kwargs)
 
 
 def _quiet_output(argv) -> str:
     try:
         proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=15, **_NO_CONSOLE
+            argv, capture_output=True, text=True, timeout=15, **no_console_creationflags()
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"ensure-coordinator-venv: {argv[0] if argv else '<empty argv>'} failed: {exc}", file=sys.stderr)
@@ -269,7 +266,7 @@ def _venv_healthy(venv_py: Path) -> bool:
             [str(venv_py), "-c", probe],
             capture_output=True,
             timeout=30,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         # Routine on a fresh/rebuilding venv (exec missing, probe hangs) —
@@ -411,7 +408,7 @@ def _install_deps(venv_py: Path, whoami_pkg: Path) -> None:
             capture_output=True,
             text=True,
             timeout=600,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired as exc:
         raise EnsureVenvError(

@@ -35,6 +35,7 @@ from coordinator_core.install._shared import (
     wrap_hook_command_guarded,
 )
 from coordinator_core.install.gen_settings_hooks import generate
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
@@ -42,20 +43,17 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
-
-
 def _run(command: str, env: dict) -> subprocess.CompletedProcess:
     # This whole module is skipped on Windows (`pytestmark` above) since it
-    # execs POSIX `sh`; `_NO_CONSOLE` is a no-op here but keeps the call
-    # shape consistent with `_shared.py`'s own `_NO_CONSOLE` convention.
+    # execs POSIX `sh`; `no_console_creationflags()` is a no-op here but keeps
+    # the call shape consistent with `_shared.py`'s own convention.
     return subprocess.run(
         ["sh", "-c", command],
         env=env,
         capture_output=True,
         text=True,
         timeout=10,
-        **_NO_CONSOLE,
+        **no_console_creationflags(),
     )
 
 

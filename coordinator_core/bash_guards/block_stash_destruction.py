@@ -137,7 +137,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 #: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
 #: nothing at runtime; it matches the sibling non-identity-gated guards
 #: (`block_worktree_creation`, the two sentinel guards) it is registered
@@ -330,7 +330,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # dispatcher's job for hard-deny guards (its `guard_chain` fail_closed=True
     # entries route an uncaught exception through the crash-deny wrapper).
     # Swallowing an unexpected error into a silent allow here defeats that.
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}

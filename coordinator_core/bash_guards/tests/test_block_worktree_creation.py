@@ -155,6 +155,24 @@ class TestMentionIsNotInvocation:
         _reason(out)
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 3): this guard gates on
+    `head_base != "git"` -- the external `git` exe, byte-identical in both
+    shell dialects. No `_dialect.py` import exists in this module
+    (confirmed by grep), so a PowerShell-idiom surrounding shape (`;` chain
+    instead of `&&`) reaches the SAME tokenizer and must reach the SAME
+    verdict.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 3 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_denies(self):
+        _reason(guard.check(_payload("Get-Location; git worktree add ../wt-1 x")))
+
+    def test_semicolon_chained_powershell_style_allow_case_unaffected(self):
+        assert guard.check(_payload("Get-Location; git worktree list")) is None
+
+
 class TestHeredocBodyIsNotShellText:
     """Heredoc BODY text is stdin DATA, never a shell command -- see the
     guard module's own "HEREDOC-BODY FALSE-DENY FIX" docstring section.

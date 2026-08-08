@@ -58,11 +58,26 @@ Negative-spec:
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+_LOG = logging.getLogger(__name__)
+
 _LIVENESS_RELPATH = ("state", "housekeeping-liveness.json")
+
+
+class InvalidLivenessRoot(ValueError):
+    """Raised by `liveness_path` when `repo_root` fails validation.
+
+    Not absolute, does not exist, or does not resolve to a git repo (a `.git` directory OR
+    `.git` file root — worktrees/submodules use the file form). `stamp_liveness` catches
+    precisely this type (never a bare `ValueError`) and returns without writing anything;
+    the read paths (`liveness_status`, `check_stale`, `check_stale_detailed`) catch it too
+    and report their existing `never_stamped` shape. See module docstring's THE DESIGN CALL
+    note: the predicate raises, callers swallow it -- do not invert that split.
+    """
 
 # One key per shed housekeeping class named in the plan's § Substrate table.
 ARCHIVE_SWEEPS = "archive_sweeps"
@@ -112,7 +127,21 @@ STATUS_NEVER_STAMPED = "never_stamped"
 
 
 def liveness_path(repo_root: str) -> Path:
-    """Return the shared housekeeping-liveness JSON path for `repo_root`."""
+    """Return the shared housekeeping-liveness JSON path for `repo_root`.
+
+    Raises `InvalidLivenessRoot` if `repo_root` is not absolute, does not exist, or does
+    not resolve to a git repo (a `.git` directory OR `.git` file root). Deliberately does
+    NOT walk up to find a `.git` ancestor -- see module's THE DESIGN CALL note; that
+    normalize-at-the-seam alternative was considered and rejected as strictly worse than
+    the bug it replaces.
+    """
+    root = Path(repo_root)
+    if not root.is_absolute():
+        raise InvalidLivenessRoot(f"repo_root is not absolute: {repo_root!r}")
+    if not root.exists():
+        raise InvalidLivenessRoot(f"repo_root does not exist: {repo_root!r}")
+    if not (root / ".git").exists():
+        raise InvalidLivenessRoot(f"repo_root is not a git repo: {repo_root!r}")
     return Path(repo_root, *_LIVENESS_RELPATH)
 
 
@@ -123,9 +152,20 @@ def stamp_liveness(repo_root: str, housekeeping_class: str) -> None:
     concurrent stamps of DIFFERENT classes is an acceptable race for a liveness signal
     (not a correctness-critical store); a lost stamp merely means that class's next
     staleness check has slightly stale information, self-healing on its own next run.
-    Never raises.
+    Never raises -- including when `repo_root` fails `liveness_path`'s validation, in
+    which case exactly one WARNING is logged and no filesystem entry of any kind is
+    created (not even the parent directory).
     """
-    path = liveness_path(repo_root)
+    try:
+        path = liveness_path(repo_root)
+    except InvalidLivenessRoot as exc:
+        _LOG.warning(
+            "stamp_liveness: rejected repo_root %r for class %r (%s)",
+            repo_root,
+            housekeeping_class,
+            type(exc).__name__,
+        )
+        return
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data: Dict[str, str] = {}
     try:
@@ -157,7 +197,10 @@ def check_stale_detailed(
     and discards the class key for its existing message-only contract.
     """
     classes = list(classes) if classes is not None else list(KNOWN_CLASSES)
-    path = liveness_path(repo_root)
+    try:
+        path = liveness_path(repo_root)
+    except InvalidLivenessRoot:
+        return []
     data: Dict[str, str] = {}
     try:
         if path.is_file():
@@ -202,7 +245,10 @@ def liveness_status(
     unreadable/missing liveness file yields `STATUS_NEVER_STAMPED` for every requested class.
     """
     classes = list(classes) if classes is not None else list(KNOWN_CLASSES)
-    path = liveness_path(repo_root)
+    try:
+        path = liveness_path(repo_root)
+    except InvalidLivenessRoot:
+        return {cls: STATUS_NEVER_STAMPED for cls in classes}
     data: Dict[str, str] = {}
     try:
         if path.is_file():

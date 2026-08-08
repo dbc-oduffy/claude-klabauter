@@ -27,7 +27,6 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from unittest.mock import patch
 
@@ -39,15 +38,6 @@ from coordinator_core.ops.engine_drift import (
 
 FLOOR = "6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9"
 RUNNING = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency.
-
-    Convention matches ops/emit/tests/test_c4a_handler_wiring.py and
-    ops/fleet/tests/test_memo_send.py.
-    """
-    return asyncio.run(coro)
 
 
 class TestClassifyDriftBehind:
@@ -198,7 +188,7 @@ class TestEngineDriftHandlerWiring:
         # No monkeypatching — runs against this checkout's real git state. Whatever
         # the actual state resolves to, the handler must not raise and must return
         # one of the three-value enum.
-        result = _run(_engine_drift({}))
+        result = _engine_drift({})
         assert result["state"] in ("clean", "behind", "indeterminate")
 
     def test_wiring_calls_resolve_engine_sha_and_git_is_behind_with_floor_constant(self):
@@ -209,7 +199,7 @@ class TestEngineDriftHandlerWiring:
             "coordinator_core.ops.engine_drift._git_is_behind",
             return_value=False,
         ) as mock_is_behind:
-            result = _run(_engine_drift({}))
+            result = _engine_drift({})
 
         mock_resolve.assert_called_once_with()
         # Argument order + floor constant: _git_is_behind(running_sha, MIN_KNOWN_GOOD_SHA),
@@ -226,7 +216,7 @@ class TestEngineDriftHandlerWiring:
         ), patch(
             "coordinator_core.ops.engine_drift._git_is_behind",
         ) as mock_is_behind:
-            result = _run(_engine_drift({}))
+            result = _engine_drift({})
 
         assert result["state"] == "indeterminate"
         assert result["running_sha"] is None

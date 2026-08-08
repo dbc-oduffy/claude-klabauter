@@ -167,11 +167,45 @@ Negative-spec:
     also requires no active claim (`claimed_by`/`consumed_by` both empty), since `_claim`
     does not strip `reaped_from_session` on re-pickup (see module docstring).
 
+FOURTH LEG (C8, docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md § C8):
+`DESYNCED` closes a gap in the same no-successor population: a baton whose branch-
+independent claim ledger still holds a LIVE claim while the tracked-frontmatter mirror
+reverted to no-claim (the exact branch-switch-revert incident `coordinator_core.claim_state`
+generalizes a fix for). Such a baton satisfies neither `reaped_orphan` (no
+`reaped_from_session`) nor the successor-based buckets (no successor at all) cleanly, so
+absent this leg it fell through to `tips` and reported as ordinary live work — the sweep
+was accordingly reporting the corpus as healthier than it actually is. Keyed on
+`coordinator_core.claim_state.resolve_claim_state`'s own `disagreement` flag (a live ledger
+claim, no mirror claim) — checked AFTER `reconciled_no_successor` and `reaped_orphan` (both
+stronger/more specific signals) and immediately ahead of the final `tips` fall-through, so a
+baton reaching this leg has already failed every other classification.
+
+Reuses, does not reimplement: `coordinator_core.claim_state.resolve_claim_state` — the SAME
+ledger-first accessor C1 introduced, re-homing the `handoff_claim_dir` +
+`cs_claim_holder_live` pair `handoff_reconcile._ancestor_liveness_blocked` already imports.
+This module does not re-derive ledger-vs-mirror resolution.
+
+Negative-spec (FOURTH LEG / C8):
+  - DETECTION ONLY — does not repair, re-stamp, or otherwise write anything (repair is C9's
+    leg, a distinct writer; adding a second one here would violate DR-212's sanctioned
+    three-writer closure). This module remains READ-ONLY, unconditionally.
+  - Does NOT promote a baton into `desynced` that already qualifies for
+    `reconciled_no_successor` or `reaped_orphan` — both are checked first and win; a baton
+    lands in at most one of the no-successor buckets.
+  - Does NOT walk successor-referenced batons (`held`/`stranded`/`never_started`) — this leg
+    only ever evaluates the same no-successor population `reconciled_no_successor` and
+    `reaped_orphan` already isolate.
+
 Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
 Spec backlink (SECOND LEG): cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 3.
 Spec backlink (C5): docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md § C5.
 Spec backlink (THIRD LEG / C4): docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § AC10.
+Spec backlink (FOURTH LEG / C8): docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+§ Tasks C8, AC17. NOTE: this leg knowingly breaks AC5 of
+docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md (byte-identical result-dict
+output) — the sibling plan's AC5 gives, by PM ruling 2026-08-07; see that plan's own amendment
+recording the collision.
 """
 from __future__ import annotations
 
@@ -184,8 +218,12 @@ from typing import Dict, FrozenSet, List, Tuple
 # DR-242 predicate coordinator_core.archive_stamp.cs_supersede_archive_handoff's own
 # refusal site imports — see this module's "Reuses, does not reimplement" section.
 from coordinator_core.archival import _is_terminal_or_archived_child, claimed_or_shipped_at_path
+# C8 (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md § C8): the SAME
+# ledger-first accessor C1 introduced — see this module's "FOURTH LEG" docstring section.
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta, build_handoff_id_index, handoff_edges, resolve_target
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.handoff_children import _collect_handoff_paths
 
 # Mirrors handoff_archive_transition._TERMINAL_DEPLOYMENT_STATES (vendored, not
@@ -401,6 +439,17 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
                                            # drains on adjudication (shipped/archived) or
                                            # re-pickup (active claim reappears).
           "reaped_orphan_paths": [str, ...],  # absolute paths of that population
+          "desynced": int,                # FOURTH LEG (C8) — non-terminal, referenced by
+                                           # nothing, NOT reconciled, NOT a reaped orphan,
+                                           # but the branch-independent claim ledger holds a
+                                           # LIVE claim the tracked-frontmatter mirror does
+                                           # not reflect (resolve_claim_state's own
+                                           # `disagreement` flag) — the branch-switch-revert
+                                           # desync coordinator_core.claim_state exists to
+                                           # detect. Should be 0; a nonzero count means a
+                                           # fully-worked baton is misfiled as ordinary live
+                                           # work (`tips`).
+          "desynced_paths": [str, ...],   # absolute paths of that population
         }
     """
     open_dir = worktree_root / "state" / "handoffs"
@@ -432,6 +481,17 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
     reconciled_no_successor_paths: List[str] = []
     reaped_orphan = 0
     reaped_orphan_paths: List[str] = []
+    desynced = 0
+    desynced_paths: List[str] = []
+
+    # C8: resolved once for the whole sweep, mirroring resolve_claim_state's own
+    # hot-path contract (pass a pre-resolved common_dir to skip a second
+    # git_common_dir resolution per baton; git_common_dir is itself lru_cache'd,
+    # so this degrades gracefully even on failure).
+    try:
+        common_dir = git_common_dir(worktree_root)
+    except Exception:
+        common_dir = None
 
     for path in open_paths:
         meta = meta_by_path.get(path)
@@ -480,7 +540,16 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
             reaped_orphan += 1
             reaped_orphan_paths.append(path)
         else:
-            tips += 1
+            # FOURTH LEG (C8): checked last, ahead of the `tips` fall-through —
+            # a baton reaching here already failed reconciled/reaped-orphan.
+            claim_state = resolve_claim_state(
+                Path(path), common_dir=common_dir, repo_root=worktree_root
+            )
+            if claim_state.disagreement:
+                desynced += 1
+                desynced_paths.append(path)
+            else:
+                tips += 1
 
     return {
         "total_live": len(open_paths),
@@ -496,4 +565,6 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
         "reconciled_no_successor_paths": reconciled_no_successor_paths,
         "reaped_orphan": reaped_orphan,
         "reaped_orphan_paths": reaped_orphan_paths,
+        "desynced": desynced,
+        "desynced_paths": desynced_paths,
     }

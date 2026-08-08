@@ -324,7 +324,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 
 @register_op("memo.fate_partition")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "memo.fate_partition" handler.
 
     Params:

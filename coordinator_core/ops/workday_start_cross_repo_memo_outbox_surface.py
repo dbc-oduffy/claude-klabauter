@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.state_root import StateRootError, coordinator_state_root as _native_state_root
+from coordinator_core.win_portability import no_console_creationflags
 
 _TO_RE = re.compile(r"^to:\s*(.*)$")
 _TITLE_RE = re.compile(r"^title:\s*(.*)$")
@@ -92,6 +93,7 @@ def _resolve_outbox_dir(repo_root_arg: str) -> Optional[str]:
             cwd=os.getcwd(),
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _resolve_outbox_dir: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

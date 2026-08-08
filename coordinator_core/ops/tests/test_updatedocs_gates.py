@@ -43,7 +43,9 @@ from coordinator_core.ipc import _REGISTRY
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 def _write_fake_cli(path: Path, exit_code: int, stdout: str = "", stderr: str = "") -> None:

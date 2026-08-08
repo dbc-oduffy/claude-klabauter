@@ -388,7 +388,7 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
 
     assert captured["timeout"] == 15
     assert captured["stdin"] is subprocess.DEVNULL
-    assert captured["creationflags"] == ne._CREATIONFLAGS
+    assert captured.get("creationflags", 0) == getattr(subprocess, "CREATE_NO_WINDOW", 0)
     assert "git core.longpaths=true" in runner.steps_succeeded
 
 

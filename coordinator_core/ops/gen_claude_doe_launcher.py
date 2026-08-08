@@ -111,9 +111,15 @@ def is_windows() -> bool:
     if uname_path is not None:
         import subprocess
 
+        from coordinator_core.win_portability import no_console_creationflags
+
         try:
             result = subprocess.run(
-                [uname_path, "-s"], capture_output=True, text=True, check=False
+                [uname_path, "-s"],
+                capture_output=True,
+                text=True,
+                check=False,
+                **no_console_creationflags(),
             )
         except OSError:
             result = None
@@ -148,12 +154,15 @@ def smoke_launcher(dest: str) -> Tuple[int, str]:
         argv = [dest, "--version"]
 
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             argv,
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         print(f"skip: smoke_launcher: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -211,7 +220,12 @@ def main(argv: List[str]) -> int:
         )
         return 0
 
-    claude_home_base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    claude_home_base = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     local_bin_dir = os.path.join(claude_home_base, ".local", "bin")
     cmd_dest = os.path.join(local_bin_dir, "claude-doe.cmd")
     ps1_dest = os.path.join(local_bin_dir, "claude-doe.ps1")

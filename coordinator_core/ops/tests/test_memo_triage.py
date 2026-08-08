@@ -603,7 +603,7 @@ def test_golden_promote_set_matches_pinned_fixture(golden_corpus, monkeypatch):
         "archive_dir": str(golden_corpus / "cross-repo" / "archive"),
         "project_slug": "test-slug",
     }
-    result = _run(_handler(params, repo_root=golden_corpus / ".git"))
+    result = _handler(params, repo_root=golden_corpus / ".git")
 
     assert result["promote"] == _GOLDEN_PROMOTE_SET, (
         f"Golden promote set drifted: expected {_GOLDEN_PROMOTE_SET}, "
@@ -625,7 +625,7 @@ def test_calibration_demotes_known_captured_memos(golden_corpus, monkeypatch):
         "archive_dir": str(golden_corpus / "cross-repo" / "archive"),
         "project_slug": "test-slug",
     }
-    result = _run(_handler(params, repo_root=golden_corpus / ".git"))
+    result = _handler(params, repo_root=golden_corpus / ".git")
 
     assert set(result["disqualified"]) == set(_GOLDEN_DISQUALIFIED_SET)
     for memo_id in _GOLDEN_DISQUALIFIED_SET:
@@ -645,7 +645,7 @@ def test_calibration_does_not_demote_genuine_ratification(golden_corpus, monkeyp
         "archive_dir": str(golden_corpus / "cross-repo" / "archive"),
         "project_slug": "test-slug",
     }
-    result = _run(_handler(params, repo_root=golden_corpus / ".git"))
+    result = _handler(params, repo_root=golden_corpus / ".git")
 
     for memo_id in (
         "m01-fate-ratification",
@@ -709,7 +709,7 @@ def test_zero_distill_fate_reads_with_zero_promote_does_not_raise():
 
 
 def test_handler_returns_empty_outcome_when_repo_root_none():
-    result = _run(_handler({}, repo_root=None))
+    result = _handler({}, repo_root=None)
     assert result["promote"] == []
     assert result["counts"]["total"] == 0
 
@@ -881,7 +881,7 @@ def test_live_corpus_promote_set_matches_golden():
     golden = _load_live_golden()
 
     params: dict = {}
-    result = _run(_handler(params, repo_root=_REPO_ROOT / ".git"))
+    result = _handler(params, repo_root=_REPO_ROOT / ".git")
 
     assert result["promote"] == golden["promote"], (
         "memo.triage promote-set drifted from the checked-in live-corpus "
@@ -1028,7 +1028,7 @@ def test_handler_surfaces_degraded_true_when_archive_dir_unreadable(tmp_path):
     original_mode = archive_dir.stat().st_mode
     os.chmod(archive_dir, 0o000)
     try:
-        result = _run(_handler({}, repo_root=tmp_path / ".git"))
+        result = _handler({}, repo_root=tmp_path / ".git")
     finally:
         os.chmod(archive_dir, original_mode)
 
@@ -1039,5 +1039,5 @@ def test_handler_surfaces_degraded_true_when_archive_dir_unreadable(tmp_path):
 
 
 def test_handler_degraded_false_on_clean_scan(tmp_path):
-    result = _run(_handler({}, repo_root=tmp_path / ".git"))
+    result = _handler({}, repo_root=tmp_path / ".git")
     assert result["degraded"] is False

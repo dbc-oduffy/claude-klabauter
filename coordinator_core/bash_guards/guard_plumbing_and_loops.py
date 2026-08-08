@@ -41,8 +41,10 @@ than re-deriving a parallel judgment of "is this translatable":
     (`docker ps | head`, `git log --oneline | head`), a pipeline longer than
     two segments, or an unrecognized head/tail count form. This module's
     `_seam_confirmed_rewrite` helper is the gate: only the genuine-rewrite
-    outcome licenses `platform_verdict_for_shape` (deny on Windows / advise
-    on macOS); a bare seam advisory is treated identically to a ``None``
+    outcome licenses `platform_verdict_for_shape` (rendering the advisory
+    template; DR-280, 2026-08-07: the deny leg this template could also
+    render is retired as structurally unreachable, see `check()`'s own
+    docstring); a bare seam advisory is treated identically to a ``None``
     return -- `_generic_advisory` on EVERY platform. Collapsing that
     distinction (denying on any non-``None`` return) was tried and reverted
     during this row's adversarial review: it denied common benign commands
@@ -60,9 +62,11 @@ than re-deriving a parallel judgment of "is this translatable":
     rewrite` gate applies here too: a for-loop wrapping a literal
     `find -exec <verb>` where `<verb>` is NOT rm/cat/wc -l gets a bare seam
     advisory (no `updatedInput`), which this module treats exactly like the
-    bare-glob ``None`` case -- a GENERIC advisory on BOTH platforms. Only a
-    for-loop wrapping a translatable `find -exec` verb gets the
-    platform-conditioned deny/advise verdict.
+    bare-glob ``None`` case -- a GENERIC advisory on BOTH platforms. A
+    for-loop wrapping a translatable `find -exec` verb instead renders
+    through `platform_verdict_for_shape`'s advisory template (DR-280,
+    2026-08-07: the deny leg that template could also render is retired as
+    structurally unreachable -- see `check()`'s own docstring).
 
     FOR_LOOP's leg of AC-5 is, ARCHITECTURALLY, advisory-only on every
     platform, full stop -- not merely "usually" (Review: code-reviewer --
@@ -148,13 +152,40 @@ from coordinator_core.bash_guards.guard_head_tail_rewrite import (
 )
 from coordinator_core._hook_envelope import allow_advisory
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards import _dialect
+from coordinator_core.bash_guards._verdict import record_silent
 
 #: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
 #: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing here.
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: HELD at Bash-only (C4, docs/plans/2026-08-07-command-guards-fire-under-
+#: both-tool-names.md). CORRECTED 2026-08-07 -- the wave-map's original
+#: reason for this hold (a fail-closed free-text tokenizer fallback that
+#: misreads unparseable PowerShell input) does not apply to this file:
+#: `_evaluate_legacy` does not appear here. That mechanism belongs to a
+#: DIFFERENT guard family (the stash/worktree/subagent-destructive/suite-
+#: invocation cohort), not this one. This guard's capability objection is
+#: substantially discharged: `_dialect.py` already wires a real, lazily-
+#: imported `tree-sitter-pwsh` parser, with `record_silent` on parse
+#: failure or `has_error` -- this module already has a working
+#: `_verdict_powershell` leg built on it (see that function below), which
+#: returns a live advisory/deny verdict, not a guess.
+#:
+#: What actually holds this file: SEQUENCING, not capability. (1) A
+#: concurrent workstream (DR-280, 2026-08-07) is mid-rewrite on this exact
+#: file right now, retiring its Windows deny leg to advisory-only (four
+#: `host_is_windows=False` call sites as of this writing) -- widening
+#: `MATCHERS` while that rewrite is in flight risks landing a widening
+#: onto a half-changed verdict shape. (2) Five known-red cells are open
+#: against this file's own test suite under this plan's ownership
+#: (`TestVerbatimHeadTailAlternativeIsRealAndEquivalent`, a POSIX-only
+#: `shell=True` alternative that fails on Windows `cmd.exe`) -- widening a
+#: guard whose own tests are red is a coverage claim, not a coverage gain.
+#: Next step here is re-evaluating once DR-280 lands and the red cells
+#: clear, not a capability fix.
+MATCHERS = ("Bash",)
 PRIORITY = 100
 
 #: This guard's OWN escape hatch -- suppresses BOTH shapes' policy outright,
@@ -269,16 +300,14 @@ def _outlet_from_seam_result(result: Dict[str, Any]) -> Tuple[str, str]:
 
     `outlet_summary` is a self-contained phrase, never a placeholder like
     the prior "below." -- `_platform_verdict.platform_verdict_for_shape`
-    splices this summary into TWO different sentence shapes (the deny
-    path's "Use instead: %s", but also the advisory path's "consider %s
-    here too so behavior stays consistent across the fleet"), and only the
-    deny phrasing reads sensibly with a bare "below." pointing at the
-    Example line beneath it -- the advisory phrasing turned that into
-    "consider below. here too", which both misdescribes the outlet and
-    (Review: guard-class census) drags the override note (below) out of
-    the deny template's "Use instead:" cue window and into counted prose,
-    since the advisory template's own cue window starts at "Example:", not
-    at the sentence carrying `%s`.
+    splices this summary into its one live sentence shape ("consider %s
+    here too so behavior stays consistent across the fleet"; the deny-path
+    "Use instead: %s" phrasing this docstring used to describe was retired
+    under DR-280, 2026-08-07 -- `platform_verdict_for_shape` never renders
+    a deny envelope now). A bare "below." would misdescribe the outlet
+    ("consider below. here too") and (Review: guard-class census) drag the
+    override note (below) out of the advisory template's "Example:" cue
+    window and into counted prose.
     """
     hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
     updated = hso.get("updatedInput")
@@ -450,8 +479,11 @@ def _verdict_head_tail(
             "[:N] / [-N:] in-process",
         )
     summary, example = _outlet_from_seam_result(seam_result)
+    # DR-280 (2026-08-07): the deny leg is retired -- always render the
+    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
+    # own docstring for why.
     return platform_verdict_for_shape(
-        "head-tail-plumbing", cmd, summary, example, host_is_windows=host_is_windows
+        "head-tail-plumbing", cmd, summary, example, host_is_windows=False
     )
 
 
@@ -472,25 +504,87 @@ def _verdict_for_loop(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE
         )
     summary, example = _outlet_from_seam_result(seam_result)
+    # DR-280 (2026-08-07): the deny leg is retired -- always render the
+    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
+    # own docstring for why. (In practice this branch is also unreachable
+    # per this module's own "FOR_LOOP's leg of AC-5" note above -- no
+    # FOR_LOOP-classified command can ever produce a seam-confirmed
+    # rewrite -- but the fixed argument stays as defense-in-depth against
+    # that structural fact changing.)
     return platform_verdict_for_shape(
         "for-loop-wrapping-find-exec",
         cmd,
         summary,
         example,
-        host_is_windows=host_is_windows,
+        host_is_windows=False,
     )
+
+
+def _verdict_powershell(
+    cmd: str, session_id: str, host_is_windows: Optional[bool]
+) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg of `check()` (row 14, docs/reference/
+    guard-dialect-coverage.md). HEAD_TAIL_PLUMBING gets the same fix as row
+    13 (`check_head_tail_plumbing_rewrite`'s own `dialect=` parameter, which
+    reuses this guard's existing `_seam_confirmed_rewrite`/
+    `platform_verdict_for_shape` verdict shaping unchanged). FOR_LOOP has no
+    PowerShell statement-grammar analogue at all (`for...in...;do...done` is
+    bash syntax; `foreach ($x in ...) {...}` is a different grammar, not a
+    verb/flag variant -- module docstring, "FOR_LOOP -> ...") and there is
+    no PowerShell-dialect `_shape_classifier.classify_command` this module
+    can call to even ask the question (out of scope for this cohort) -- so
+    for any PowerShell command that is not a confirmed head-tail-plumbing
+    match, this guard declares SILENT for its for-loop leg rather than
+    assert a clean it cannot back up.
+    """
+    seam_result = check_head_tail_plumbing_rewrite(
+        cmd, session_id, dialect=_dialect.Dialect.POWERSHELL
+    )
+    if seam_result is not None:
+        if not _seam_confirmed_rewrite(seam_result):
+            return _generic_advisory(
+                "head-tail-plumbing",
+                cmd,
+                "a single python3 process collecting the same lines and "
+                "slicing head/tail in-process",
+                "python3 -c '...'  # reproduce the generator output and "
+                "slice [:N] / [-N:] in-process",
+            )
+        summary, example = _outlet_from_seam_result(seam_result)
+        # DR-280 (2026-08-07): the deny leg is retired -- always render the
+        # advisory envelope, regardless of `host_is_windows`.
+        return platform_verdict_for_shape(
+            "head-tail-plumbing", cmd, summary, example, host_is_windows=False
+        )
+
+    record_silent(
+        "guard_plumbing_and_loops",
+        "PowerShell input is not a 'generator | Select-Object -First/-Last' "
+        "shape this guard's head-tail-plumbing leg recognizes, and bash's "
+        "'for...in...;do...done' for-loop grammar has no PowerShell "
+        "statement-grammar analogue ('foreach ($x in ...) {...}' is a "
+        "different construct entirely, per this module's own FOR_LOOP "
+        "docstring) -- this guard's for-loop leg cannot rule on PowerShell "
+        "input, so it declines rather than guesses.",
+    )
+    return None
 
 
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
     """Evaluate the head/tail-plumbing-and-for-loop guard against a
-    PreToolUse payload. Returns ``None`` (allow, no advisory), an
-    `allow_advisory` envelope, or a `deny` envelope (Windows only, and only
-    when the relevant BX-16 seam confirms a concrete outlet for this exact
-    command -- see module docstring). An unrecognized payload shape or
-    unparseable command degrades to ``None`` via the explicit checks below
-    -- this function does NOT catch-all internally (Review: code-reviewer
+    PreToolUse payload. Returns ``None`` (allow, no advisory) or an
+    `allow_advisory` envelope -- never a deny (DR-280, 2026-08-07: the
+    platform-conditioned deny branch was retired as structurally
+    unreachable -- each shape gated on `_seam_confirmed_rewrite`, the same
+    seam an earlier-registered `ADVISORY_REWRITE` chain entry already
+    consumes and returns on first, so this guard's own deny leg could never
+    be reached through the real dispatcher; see DR-280's Negative-spec for
+    why the guard itself, its advisory leg, and its seam-calling
+    architecture all stay). An unrecognized payload shape or unparseable
+    command degrades to ``None`` via the explicit checks below -- this
+    function does NOT catch-all internally (Review: code-reviewer
     -- Finding 3: this guard is registered in `dispatch.py`'s `guard_chain`
     with `fail_closed=True`, whose whole contract is that an internal bug
     propagates to `dispatch._crash_deny` rather than being swallowed as a
@@ -498,17 +592,20 @@ def check(
     defeat that registration exactly as it would for
     `guard_grep_via_bash`, which carries no such wrapper).
 
-    ``host_is_windows``: platform override, threaded straight through to
-    `_platform_verdict.platform_verdict_for_shape` -- see that module's
-    docstring "Platform-override contract" and `dispatch.py`'s own
-    docstring for the threading contract this signature satisfies.
+    ``host_is_windows``: still accepted (the chain-wide threading contract
+    every registered shape-guard honors -- see `_platform_verdict.py`'s
+    "Platform-override contract" and `dispatch.py`'s own docstring), but no
+    longer changes this guard's own verdict -- each verdict helper below
+    now calls `platform_verdict_for_shape` with a fixed
+    ``host_is_windows=False``.
     """
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
 
     tool_name = payload.get("tool_name") or ""
-    if tool_name != "Bash":
-        return None
+    dialect = _dialect.dialect_from_tool_name(tool_name)
+    if dialect is None:
+        return None  # unrecognized/absent tool_name -- unchanged prior behavior
 
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
@@ -522,6 +619,9 @@ def check(
     session_id = payload.get("session_id") or ""
     if not isinstance(session_id, str):
         session_id = ""
+
+    if dialect is _dialect.Dialect.POWERSHELL:
+        return _verdict_powershell(cmd, session_id, host_is_windows)
 
     classification = classify_command(cmd)
     if classification.tokens is None:

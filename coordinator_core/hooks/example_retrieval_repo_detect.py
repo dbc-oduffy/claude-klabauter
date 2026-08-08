@@ -68,12 +68,15 @@ def _git(repo_root: str, *args: str) -> str | None:
     """Run `git -C repo_root <args>`, return stripped stdout or None on any failure."""
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
             timeout=10,
+            **no_console_creationflags(),
         )
     except Exception:
         return None

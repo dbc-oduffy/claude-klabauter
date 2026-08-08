@@ -40,15 +40,12 @@ own docstring.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from typing import Any, Dict, Optional, Tuple
 
-_NO_CONSOLE: Dict[str, Any] = (
-    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    if os.name == "nt"
-    else {}
-)
+from coordinator_core.win_portability import no_console_creationflags
+
+_NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 
 
 def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool, Optional[bool]]:

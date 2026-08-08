@@ -176,6 +176,24 @@ class TestShellShapes:
         _reason(guard.check(_payload("git.exe -C /repo stash drop")))
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 2): this guard gates on
+    `_normalize_executable_basename(...) != "git"` -- the external `git`
+    exe, byte-identical in both shell dialects. No `_dialect.py` import
+    exists in this module (confirmed by grep), so a PowerShell-idiom
+    surrounding shape (`;` chain instead of `&&`) reaches the SAME
+    tokenizer and must reach the SAME verdict.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 2 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_denies(self):
+        _reason(guard.check(_payload("Get-Location; git stash drop")))
+
+    def test_semicolon_chained_powershell_style_allow_case_unaffected(self):
+        assert guard.check(_payload("Get-Location; git stash pop")) is None
+
+
 class TestHeredocBodies:
     """A heredoc body is stdin DATA, never shell command text. Persisting a
     document whose prose quotes `git stash drop` must not deny."""

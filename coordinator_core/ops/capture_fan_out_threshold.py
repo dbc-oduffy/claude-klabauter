@@ -47,6 +47,8 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _KEY = "fan_out.large_wave_threshold"
 
 
@@ -86,6 +88,7 @@ def _machine_local_keys() -> Tuple[str, int]:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
+            **no_console_creationflags(),
         )
     except (OSError, FileNotFoundError):
         print(f"skip: _machine_local_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -114,6 +117,7 @@ def capture(check_only: bool = False) -> Tuple[str, int]:
         capture_output=True,
         encoding="utf-8",
         errors="replace",
+        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or "")

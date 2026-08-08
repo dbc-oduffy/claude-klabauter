@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -412,7 +413,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             text=True,
             check=False,
             env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except FileNotFoundError as exc:
         raise DriftError(
@@ -443,7 +444,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             text=True,
             check=False,
             timeout=30,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         warnings.warn(
@@ -490,7 +491,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             check=False,
             timeout=10,
             env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if rev_parse.returncode == 0:
             deref_sha = rev_parse.stdout.strip()

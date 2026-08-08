@@ -103,7 +103,7 @@ def _ladder_manifest(tmp_path: Path) -> tuple[Path, Path]:
         "id": "coordinator-claude",
         "severity": "hard",
         "sibling_dir_name": "coordinator-claude",
-        "upstream_url": "https://github.com/dbc-example-operator/coordinator-claude",
+        "upstream_url": "https://github.com/dbc-oduffy/coordinator-claude",
         "functional_probe": {
             "kind": "file_exists_any",
             "paths": [".claude-plugin/plugin.json", "coordinator/CLAUDE.md"],
@@ -268,6 +268,9 @@ def test_setup_py_check_coordinator_claude_dep_present_passes(setup_mod, tmp_pat
     coord = tmp_path / "coordinator-claude"
     (coord / ".claude-plugin").mkdir(parents=True)
     (coord / ".claude-plugin" / "plugin.json").write_text("{}")
+    # plugin.json ALONE stopped being sufficient at 336aad969 -- a publish mirror
+    # ships it too, so the OSS source shape requires commands/ or hooks/ alongside.
+    (coord / "commands").mkdir()
     args = setup_mod.Args()
     # Must not raise/exit.
     setup_mod.check_coordinator_claude_dep(repo_root, args)
@@ -282,6 +285,7 @@ def test_setup_py_check_coordinator_claude_dep_case3_env_only_passes(setup_mod, 
     override_root = tmp_path / "elsewhere-coord"
     (override_root / ".claude-plugin").mkdir(parents=True)
     (override_root / ".claude-plugin" / "plugin.json").write_text("{}")
+    (override_root / "commands").mkdir()  # see 336aad969 note above
     monkeypatch.setenv("COORDINATOR_CLAUDE_ROOT", str(override_root))
     assert not (tmp_path / "coordinator-claude").is_dir()
     args = setup_mod.Args()
@@ -458,7 +462,7 @@ class TestUpstreamUrlSiblingFallback:
         from coordinator_core.ops.setup_chain_walker import dep_probe
 
         repo_root, manifest_path = self._manifest(
-            tmp_path, "claude-klabauter", "https://github.com/dbc-example-operator/claude-klabauter"
+            tmp_path, "claude-klabauter", "https://github.com/dbc-oduffy/claude-klabauter"
         )
         (tmp_path / "claude-klabauter").mkdir()
         assert dep_probe("the-engine", manifest_path, repo_root) == "present"
@@ -467,7 +471,7 @@ class TestUpstreamUrlSiblingFallback:
         from coordinator_core.ops.setup_chain_walker import dep_probe
 
         repo_root, manifest_path = self._manifest(
-            tmp_path, "claude-klabauter", "https://github.com/dbc-example-operator/claude-klabauter"
+            tmp_path, "claude-klabauter", "https://github.com/dbc-oduffy/claude-klabauter"
         )
         (tmp_path / "claude-klabauter").mkdir()
         assert dep_probe("the-engine", manifest_path, repo_root) == "present"
@@ -476,7 +480,7 @@ class TestUpstreamUrlSiblingFallback:
         from coordinator_core.ops.setup_chain_walker import dep_probe
 
         repo_root, manifest_path = self._manifest(
-            tmp_path, "claude-klabauter", "https://github.com/dbc-example-operator/claude-klabauter.git"
+            tmp_path, "claude-klabauter", "https://github.com/dbc-oduffy/claude-klabauter.git"
         )
         (tmp_path / "claude-klabauter").mkdir()
         assert dep_probe("the-engine", manifest_path, repo_root) == "present"
@@ -485,7 +489,7 @@ class TestUpstreamUrlSiblingFallback:
         from coordinator_core.ops.setup_chain_walker import dep_probe
 
         repo_root, manifest_path = self._manifest(
-            tmp_path, "claude-klabauter", "https://github.com/dbc-example-operator/claude-klabauter"
+            tmp_path, "claude-klabauter", "https://github.com/dbc-oduffy/claude-klabauter"
         )
         assert dep_probe("the-engine", manifest_path, repo_root) == "missing"
 

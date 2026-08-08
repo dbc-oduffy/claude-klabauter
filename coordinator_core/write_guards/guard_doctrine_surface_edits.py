@@ -11,24 +11,45 @@ carried over verbatim from the source docstring.
 
 Why this exists
 ----------------
-A handful of files are always-loaded into every session and every dispatched
-agent's context (the global CLAUDE.md, the EM-only operating-doctrine
-channel, the repo-root project CLAUDE.md, coordinator.local.md). An EM
-editing one of these unilaterally is self-approval of a change that reaches
-every downstream session and agent in the fleet. This guard makes that
-structurally impossible: the EM cannot self-approve, only a PM-created
-sentinel (created out-of-band, never by this hook or by the agent it
-blocks) unlocks the edit, and the unlock is time-boxed so it is never a
-standing bypass.
+Two distinct classes of file are protected here, for two distinct reasons.
+Both reduce to the same structural property — an EM editing one of them
+unilaterally is self-approval of a change nobody else gets to see — so both
+take the same sentinel, but conflating their rationales has already cost a
+sibling repo a round trip (cross-repo/inbox/2026-08-08-example-store-repo-em-…),
+and the deny message is per-class for that reason.
+
+CLASS 1 — always-loaded instruction prose. The global CLAUDE.md, the
+EM-only operating-doctrine channel, and the repo-root project CLAUDE.md are
+injected into every session and every dispatched agent's context. An edit
+here silently changes everyone's instructions, fleet-wide.
+
+CLASS 2 — privileged configuration. coordinator.local.md is NOT
+always-loaded prose, and calling it doctrine is a category error. It is
+protected because its frontmatter is the repo's privileged-execution and
+authority surface, which is a stronger reason to gate it, not a weaker one:
+  - `fast_test_cmd` / `full_test_cmd` and the `*_post_command` keys are
+    command strings the ceremony machinery EXECUTES
+    (coordinator/bin/coordinator-ceremony-hook.py, argv-only).
+  - `fast_tier_unscoped_reason` / `fast_tier_shape` DISCHARGE the Tier-U
+    caller-authority check for this repo's literal resolved `fast_test_cmd`
+    (coordinator_core/session/tier_u_gate.py, DR-088 R6 / DR-235).
+An EM free to edit these keys could narrow the gate command and, in the same
+edit, keep the declaration that authorizes running it — self-approving a
+gutted cadence gate. The file's prose body is the part closest to ordinary
+documentation; the frontmatter is the part that must not move unwitnessed.
 
 Protected surfaces (resolved, symlink-free, absolute real paths; matched
 exactly — never by substring or basename, so a nested CLAUDE.md deeper in
 the tree, e.g. coordinator/tests/CLAUDE.md, is NOT protected):
-  - <repo-root>/global-doctrine/CLAUDE.md
-  - $HOME/.claude/CLAUDE.md              (the derived live copy)
-  - <repo-root>/coordinator/snippets/em-operating-doctrine.md
-  - <repo-root>/CLAUDE.md                (repo-root project instructions)
-  - <repo-root>/coordinator.local.md
+  - <repo-root>/global-doctrine/CLAUDE.md                 (class 1)
+  - $HOME/.claude/CLAUDE.md              (class 1, the derived live copy)
+  - <repo-root>/coordinator/snippets/em-operating-doctrine.md   (class 1)
+  - <repo-root>/CLAUDE.md          (class 1, repo-root project instructions)
+  - <repo-root>/coordinator.local.md                      (class 2)
+
+Negative spec — do NOT "split" this guard by gating coordinator.local.md's
+prose body while ungating its frontmatter keys. That is the intuitive split
+and it is exactly inverted: the frontmatter is the executed/authority half.
 
 Approval mechanism
 -------------------
@@ -71,18 +92,21 @@ boundary to fail-open, which is the one identified way to put a hole in it.
 
 Deny message
 -------------
-Design-as-offers: leads with why the file matters (always-loaded, reaches
-every session and every dispatched agent) and what to do about it (describe
-the proposed change to the PM, ask for approval; consider whether the
-content belongs in a wiki/skill surface instead, which needs no approval).
-It deliberately never names the sentinel file or prints a command that
-would create one — an eager agent reading its own bypass in a deny message
-treats it as sanctioned, exactly the failure mode that bit
-block-home-dir-memo-delivery.py's precedent (that guard's own docstring
-cites this) and the block-destructive-rm incident where a printed override
-string led to a peer's in-flight work being destroyed. Regression-pinned by
-test_guard_doctrine_surface_edits.py, which asserts the sentinel filename
-never appears in the deny reason.
+Design-as-offers: leads with why THIS file matters — per class, because a
+class-1 reason attached to coordinator.local.md reads as false to anyone who
+has looked at the file, and a deny message a reader can falsify is a deny
+message they route around — and follows with what to do about it (describe
+the proposed change to the PM, ask for approval).
+
+It names the sentinel and prints the creation command deliberately, paired
+with an explicit "relay this, do NOT run it": creation is blocked on BOTH
+surfaces (Write/Edit here via `sentinel_write_denial`, Bash via
+coordinator_core.bash_guards.block_approval_sentinel_creation), so the
+agent reading it cannot act on it, and withholding it only made the agent
+re-derive the same command for the PM by hand. This SUPERSEDES the original
+never-name-it posture inherited from block-home-dir-memo-delivery.py, whose
+precedent applies to guards with no creation-side block — the printed
+override there was genuinely actionable by the reader; here it is not.
 
 Fail-open paths (all return None, in order):
   - tool_name not in the guarded set.
@@ -99,6 +123,7 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
     sentinel_write_denial,
@@ -120,27 +145,21 @@ def _norm(path: str) -> str:
 
 
 def _git_root() -> "str | None":
-    """`git rev-parse --show-toplevel`, 1s timeout.
+    """Repo root via the shared memoized resolver
+    (`coordinator_core.write_guards._repo_root.resolve_repo_root`), which
+    delegates to `coordinator_core.git.repo_root.show_toplevel` -- see that
+    module for the walk-first/spawn-fallback resolution and per-process memo
+    policy.
 
     Any failure (not a git repo, git missing, timeout) returns None; the
     caller falls back to the HOME-only protected-path check and treats the
     approval sentinel as absent (deny), per this guard's fail-closed
     posture.
     """
-    import subprocess
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
+        return resolve_repo_root() or None
     except Exception:
         return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
 
 
 def _home_claude_md() -> "str | None":
@@ -210,12 +229,44 @@ def _sentinel_state(repo_root: "str | None") -> str:
     return "allow"
 
 
-def _deny_reason(target: str) -> str:
+def _local_config_path(repo_root: "str | None") -> "str | None":
+    if not repo_root:
+        return None
+    try:
+        return _norm(os.path.join(repo_root, "coordinator.local.md"))
+    except Exception:
+        return None
+
+
+def _why_protected(is_local_config: bool) -> str:
+    """The class-specific first sentence of the deny message.
+
+    Split per the class-1/class-2 distinction in the module docstring: the
+    generic always-loaded-doctrine wording is FALSE of coordinator.local.md
+    and reads as such to anyone who has opened the file.
+    """
+    if is_local_config:
+        return (
+            "is this repo's privileged configuration — its frontmatter holds "
+            "the command strings the ceremony machinery executes "
+            "(fast_test_cmd, full_test_cmd, *_post_command) and the "
+            "declarations that discharge the Tier-U authority check for them "
+            "(fast_tier_unscoped_reason, fast_tier_shape). An EM editing "
+            "these could narrow a cadence gate and, in the same edit, keep "
+            "the declaration authorizing the narrowed command — which is "
+            "self-approval, not configuration"
+        )
+    return (
+        "is always-loaded doctrine — it reaches every session and every "
+        "dispatched agent in the fleet, so a change here is not a unilateral "
+        "edit the EM can make on its own"
+    )
+
+
+def _deny_reason(target: str, is_local_config: bool = False) -> str:
     return (
         "[doctrine-surface guard] BLOCKED: "
-        f"{target} is always-loaded doctrine — it reaches every session and "
-        "every dispatched agent in the fleet, so a change here is not a "
-        "unilateral edit the EM can make on its own. Describe the proposed "
+        f"{target} {_why_protected(is_local_config)}. Describe the proposed "
         "change to the PM and ask them to approve it before editing this "
         "file.\n"
         "What approval looks like, so you do not have to re-derive it: the PM "
@@ -288,6 +339,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(target_raw),
+            "permissionDecisionReason": _deny_reason(
+                target_raw, is_local_config=(target == _local_config_path(repo_root))
+            ),
         }
     }

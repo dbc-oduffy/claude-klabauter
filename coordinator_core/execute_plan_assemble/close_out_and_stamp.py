@@ -50,6 +50,33 @@ still a defensible (if wider than strictly necessary) search space, and
 "wider than necessary" is the safe failure direction here (a chunk-id can
 still be found; it just isn't excluded by branch-divergence scoping).
 
+Range choice, widened again (range-fix, 2026-08-07 -- see bug-backlog entry
+`2026-08-07-close-out-and-stamp-s-chunk-evidence-joi-8b6a7a32d833.yaml`,
+two independent sightings): `merge-base origin/main HEAD` is DEGENERATE on
+a shared-main workflow (this fleet's normal case -- the branch gate refuses
+to cut a feature branch when live peers share the worktree, so plan
+execution on `main` is not an operator error): `origin/main` advances as
+peers push, so a session's own already-landed chunk commits fall BEHIND
+that merge-base within minutes of landing, and the range this oracle
+searches collapses toward empty. `_chunk_evidence_log_range` now tries,
+in order, before falling back to the `merge-base`/`HEAD` ladder above: (1)
+the plan's own `execution_authorized_sha:` frontmatter, resolved as a
+literal commit-ish (works only for a plan hit by the historical mis-
+stamping bug this module's docstring already records elsewhere -- see
+`_plan_execution_authorized_sha`'s own docstring for why this is a no-op
+for an ordinary, correctly-stamped plan, whose `execution_authorized_sha`
+is a `canonical_body_sha` content hash, never a real git object); (2) the
+earliest commit anywhere in `HEAD`'s own history carrying a `Deliverable-
+Id` trailer that canonicalizes equal to this plan's own `deliverable_id`
+(`_first_deliverable_commit_range_base`) -- deliberately NOT bounded by
+`origin/main` at all. Widening the RANGE this far is safe specifically
+BECAUSE the `Deliverable-Id:` exact-equality join below (see § Deliverable
+scoping) is what scopes evidence to THIS plan, not the range -- a wider
+range still cannot attribute a commit carrying a DIFFERENT plan's
+Deliverable-Id, so this does not reopen the 2026-07-27 false-positive
+incident § Deliverable scoping records. Do not re-narrow this back toward
+`origin/main`-bounding without re-reading that incident.
+
 Deliverable scoping (Defect, 2026-07-27 -- chunk-ids collide ACROSS plans):
 `<chunk-id>: ...` is only unique WITHIN a single plan's own spine -- `C1`,
 `C2`, `C8b`, etc. are reused by convention across every plan on the shared
@@ -384,6 +411,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
     rebuild,
+    remove_fm_field,
     replace_fm_field,
     serialize_yaml_scalar,
     split_frontmatter,
@@ -673,12 +701,13 @@ def _extract_chunk_ids(
 
 _SINGLE_LETTER_SUFFIX_RE = re.compile(r"^[a-z]$")
 _DASH_TAG_SUFFIX_RE = re.compile(r"^-[a-z][a-z0-9]*$")
+_TRAILING_DIGITS_SUFFIX_RE = re.compile(r"^\d+$")
 
 
 def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
     """True iff `committed_id` satisfies `spine_id`'s chunk-completion
-    check -- an exact match, or `committed_id` is `spine_id` plus one of two
-    recognized suffix shapes:
+    check -- an exact match, or `committed_id` is `spine_id` plus one of
+    three recognized suffix shapes:
 
     1. A SINGLE trailing lowercase letter (Defect 2(c)): `/execute-plan`'s
        own disjoint-write-target expansion rule legitimately expands one
@@ -695,14 +724,31 @@ def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
        log -- it never reaches into a sibling repo's history to resolve
        the OTHER side of a cross-repo-split chunk (that remains explicitly
        out of scope for this oracle).
+    3. One or more trailing DIGITS (Defect fix, 2026-08-07 -- see bug-
+       backlog entry `2026-08-07-close-out-and-stamp-reports-key-mismatch-
+       dc4072b44474.yaml`), but ONLY when `spine_id` itself does NOT end in
+       a digit: a wave-map fanout of a single spine row into several
+       disjoint dispatches sometimes numbers them (`C6a` -> `C6a1`..`C6a7`,
+       `C6b` -> `C6b1`/`C6b2` -- observed live, `docs/plans/2026-08-07-
+       claim-state-ledger-first-authoritative-read.md`), the same
+       disjoint-write-target expansion the single-letter suffix already
+       covers, just numbered instead of lettered. Gating on `spine_id` not
+       ending in a digit preserves the EXISTING `C11` must-not-cover-`C1`
+       guarantee verbatim: `C1` ends in the digit `1`, so this new rule
+       never fires for it and `C11` is still read as its own, unrelated,
+       spine row -- the ambiguity this suffix shape would otherwise create
+       is exactly the one the digit-suffix exclusion below (rule 3's own
+       gate) was written to avoid, and it still does, because the gate is
+       on the BASE id's own last character, not on the suffix alone.
 
     Conservative on purpose -- `C1a` covers `C1`, but `C11` must NOT: a
     single-lowercase-letter suffix is the sub-chunk-expansion shape
-    (`C1a`, `C3r`); a trailing DIGIT is a different, unrelated chunk id
-    (`C11` is its own spine row, not a sub-chunk of `C1`) -- and a
-    dash-tag suffix must itself start with a lowercase letter right after
-    the dash (`-doe`, not `-3x` or a bare `-`), so neither suffix shape
-    can ever be satisfied by a numeric extension of the base id."""
+    (`C1a`, `C3r`); a trailing DIGIT on a digit-ending base id is a
+    different, unrelated chunk id (`C11` is its own spine row, not a
+    sub-chunk of `C1`) -- and a dash-tag suffix must itself start with a
+    lowercase letter right after the dash (`-doe`, not `-3x` or a bare
+    `-`), so none of these suffix shapes can be satisfied by an extension
+    that would collide with a genuinely distinct spine id."""
     if committed_id == spine_id:
         return True
     if not committed_id.startswith(spine_id):
@@ -710,7 +756,11 @@ def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
     suffix = committed_id[len(spine_id):]
     if _SINGLE_LETTER_SUFFIX_RE.match(suffix):
         return True
-    return bool(_DASH_TAG_SUFFIX_RE.match(suffix))
+    if _DASH_TAG_SUFFIX_RE.match(suffix):
+        return True
+    if spine_id and not spine_id[-1].isdigit() and _TRAILING_DIGITS_SUFFIX_RE.match(suffix):
+        return True
+    return False
 
 
 def _plan_deliverable_id(plan_text: str) -> Optional[str]:
@@ -963,7 +1013,7 @@ def _sibling_committed_chunk_ids(
             skipped.append(f"{repo_id}: {resolve_error}")
             continue
         query_ok, sibling_committed = _committed_chunk_ids(
-            sibling_root, deliverable_id, spine_ids
+            sibling_root, deliverable_id, spine_ids, plan_text=plan_text
         )
         if not query_ok:
             skipped.append(f"{repo_id}: git-log query failed against {sibling_root}")
@@ -976,6 +1026,7 @@ def _committed_chunk_ids(
     repo_root: Path,
     deliverable_id: Optional[str],
     spine_ids: Optional[Iterable[str]] = None,
+    plan_text: Optional[str] = None,
 ) -> tuple[bool, set[str]]:
     """Chunk-ids with a landed commit BELONGING TO THIS PLAN, per the
     DEC-2 recovery-triple convention (`<chunk-id>: ...` or a `,`/`+`/`/`-
@@ -1004,18 +1055,143 @@ def _committed_chunk_ids(
     the one every pre-existing caller (this module's own
     `_determine_shipped`, and this file's test suite) already depends on
     by this exact 2-tuple shape; `_committed_chunk_shas` is the widened
-    3-tuple form AC8's auto-resolution needs the commit sha from."""
+    3-tuple form AC8's auto-resolution needs the commit sha from.
+
+    `plan_text` (range-fix, 2026-08-07 -- see `_chunk_evidence_log_range`'s
+    own docstring) is forwarded verbatim to `_committed_chunk_shas` as the
+    range-widening anchor; `None` (a caller with no plan text at hand)
+    degrades to the pre-fix range exactly, never a hard failure."""
     query_ok, committed, _shas, _join_stats = _committed_chunk_shas(
-        repo_root, deliverable_id, spine_ids
+        repo_root, deliverable_id, spine_ids, plan_text=plan_text
     )
     return query_ok, committed
 
 
-def _chunk_evidence_log_range(repo_root: Path) -> list[str]:
-    """The `git log` range every chunk-evidence query runs over: this
-    branch's own commits (`merge-base origin/main HEAD`..HEAD), falling
-    back to bare `HEAD` when no merge-base resolves (a repo with no
-    `origin/main`, or a fresh history).
+def _plan_execution_authorized_sha(plan_text: str) -> Optional[str]:
+    """Reads the plan's own `execution_authorized_sha:` frontmatter field,
+    unquoted -- the four-field execution-authorization stamp's content-
+    binding witness (`review_assemble.exec_auth_stamp`). `None` when the
+    plan has no parseable frontmatter or no such field.
+
+    NEGATIVE SPEC, load-bearing for `_chunk_evidence_log_range` below: this
+    value is `canonical_body_sha` -- `git_blob_sha1` of the plan BODY text
+    ALONE (frontmatter excluded), a synthetic content hash never written
+    into this (or any) repo's git object store, since no real git blob ever
+    holds body-without-frontmatter content. `git cat-file -e <this-sha>`
+    therefore fails on essentially every plan, confirmed empirically against
+    a live fixture on this branch (2026-08-07). `_chunk_evidence_log_range`
+    still attempts to resolve it as a commit FIRST (cheap, and the one case
+    it succeeds -- a plan re-stamped by the historical bug this module's own
+    docstring already records, "three plans stamped a commit sha where a
+    plan-body blob hash belonged" -- makes it a genuinely useful anchor for
+    those specific plans) before falling through to the range below that
+    does not depend on it resolving at all."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    return read_fm_field_unquoted(split.fm_text, "execution_authorized_sha")
+
+
+def _first_deliverable_commit_range_base(
+    repo_root: Path, deliverable_id: Optional[str]
+) -> Optional[str]:
+    """The exclusive lower bound of "every commit this repo's `HEAD` history
+    carries for THIS plan's own deliverable" -- the earliest (oldest, via
+    `--reverse`) commit anywhere in `HEAD`'s ancestry whose `Deliverable-Id`
+    trailer canonicalizes (via `deliverable_equivalence.canonicalize()`, the
+    same join-key transform every other chunk-evidence reader already uses)
+    equal to `deliverable_id`. Returns that commit's OWN PARENT sha (so the
+    earliest chunk commit itself stays INSIDE the `<base>..HEAD` range this
+    function's caller builds), `""` when that earliest commit is a root
+    commit with no parent (the whole history is this deliverable's own, so
+    the caller should use bare `HEAD`), or `None` when `deliverable_id` is
+    falsy, the git query fails, or no commit anywhere in `HEAD`'s history
+    carries a matching trailer at all.
+
+    Range-fix (2026-08-07, close-out-and-stamp's chunk-evidence range
+    collapsing to empty on `main`): NOT bounded by `origin/main` at all,
+    unlike the merge-base rung below it in `_chunk_evidence_log_range` --
+    on a shared-main workflow `origin/main` advances past a session's own
+    already-landed chunk commits within minutes as peers push, so a
+    merge-base-bounded search excludes exactly the commits this oracle
+    needs to find (the confirmed root cause; see this module's own bug-
+    backlog entry `2026-08-07-close-out-and-stamp-s-chunk-evidence-joi-
+    8b6a7a32d833.yaml`). Safe to widen this far specifically BECAUSE the
+    `Deliverable-Id:` exact-equality (post-canonicalization) join is the
+    thing doing the scoping here, not the range -- see this module's
+    docstring § Deliverable scoping and its own 2026-07-27 false-positive
+    incident for why an UNSCOPED subject-match widening would be dangerous;
+    this widening is scoped by deliverable identity, never by subject shape
+    alone, so it does not reintroduce that incident."""
+    if not deliverable_id:
+        return None
+    result = _run_git(
+        [
+            "log",
+            "--reverse",
+            "--format=%H%x09%(trailers:key=Deliverable-Id,valueonly)",
+            "HEAD",
+        ],
+        repo_root,
+    )
+    if result.returncode != 0:
+        return None
+    equivalence_map = load_equivalence_map(repo_root)
+    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
+    for line in (result.stdout or "").splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) < 2 or not parts[0]:
+            continue
+        commit_sha, trailer_value = parts[0], parts[1].strip()
+        if not trailer_value:
+            continue
+        if canonicalize(trailer_value, equivalence_map) != canonical_deliverable_id:
+            continue
+        parent_result = _run_git(["rev-parse", "--verify", "--quiet", f"{commit_sha}^"], repo_root)
+        parent_sha = (parent_result.stdout or "").strip()
+        if parent_result.returncode == 0 and parent_sha:
+            return parent_sha
+        return ""
+    return None
+
+
+def _chunk_evidence_log_range(
+    repo_root: Path, plan_text: Optional[str] = None
+) -> list[str]:
+    """The `git log` range every chunk-evidence query runs over.
+
+    Range-fix ladder (2026-08-07 -- see this module's own bug-backlog entry
+    `2026-08-07-close-out-and-stamp-s-chunk-evidence-joi-8b6a7a32d833.yaml`,
+    which supersedes the single `merge-base origin/main HEAD`..`HEAD` range
+    this function used before this fix): `merge-base origin/main HEAD` is
+    correct on a feature branch but DEGENERATE when a plan executes directly
+    on `main` (this fleet's normal case -- the branch gate refuses to cut a
+    feature branch when live peers share the worktree) -- `origin/main`
+    advances as peers push, so a session's own already-landed chunk commits
+    fall BEHIND that merge-base within minutes, and the range collapses to
+    almost nothing. Rungs, tried in order, first one that yields a usable
+    base wins:
+
+      1. The plan's own `execution_authorized_sha:` -- attempted as a
+         literal commit-ish (`<sha>^{commit}`). Resolves ONLY for a plan hit
+         by the historical mis-stamping bug this module's docstring already
+         records (a commit sha landed where a plan-body blob hash belonged)
+         -- see `_plan_execution_authorized_sha`'s own docstring for why
+         this rung is a no-op for an ordinary, correctly-stamped plan.
+      2. The earliest commit anywhere in `HEAD`'s history carrying a
+         `Deliverable-Id` trailer that canonicalizes equal to this plan's
+         own `deliverable_id` (`_first_deliverable_commit_range_base`) --
+         NOT `origin/main`-bounded, which is the load-bearing widening this
+         fix exists for. Safe because the Deliverable-Id join, not the
+         range, is what scopes evidence to THIS plan (see that function's
+         own docstring).
+      3. `merge-base origin/main HEAD`..`HEAD` -- the pre-fix range,
+         preserved as a rung rather than removed: still correct and
+         cheapest on an ordinary feature branch, and a safety net when
+         `plan_text` is `None` (a caller with no plan text at hand, e.g. a
+         direct unit-test call) or carries no `deliverable_id:` at all.
+      4. Bare `HEAD` -- the pre-fix fallback for when no merge-base
+         resolves at all (a repo with no `origin/main`, or a fresh history).
 
     Negative-spec: this exists so the evidence query
     (`_committed_chunk_shas`) and the diagnostic that EXPLAINS that
@@ -1025,6 +1201,21 @@ def _chunk_evidence_log_range(repo_root: Path) -> list[str]:
     trailer counts the verdict never saw -- a wrong explanation is worse
     than none here, since the whole point of the diagnostic is to be
     trusted at face value. Both callers MUST route through this."""
+    if plan_text is not None:
+        sha = _plan_execution_authorized_sha(plan_text)
+        if sha:
+            resolved = _run_git(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], repo_root)
+            resolved_sha = (resolved.stdout or "").strip()
+            if resolved.returncode == 0 and resolved_sha:
+                return [f"{resolved_sha}..HEAD"]
+
+        deliverable_id = _plan_deliverable_id(plan_text)
+        base = _first_deliverable_commit_range_base(repo_root, deliverable_id)
+        if base is not None:
+            if base == "":
+                return ["HEAD"]
+            return [f"{base}..HEAD"]
+
     merge_base_result = _run_git(["merge-base", "origin/main", "HEAD"], repo_root)
     base_sha = (merge_base_result.stdout or "").strip()
     if merge_base_result.returncode == 0 and base_sha:
@@ -1032,7 +1223,9 @@ def _chunk_evidence_log_range(repo_root: Path) -> list[str]:
     return ["HEAD"]
 
 
-def _chunk_evidence_log_lines(repo_root: Path) -> tuple[bool, list[str]]:
+def _chunk_evidence_log_lines(
+    repo_root: Path, plan_text: Optional[str] = None
+) -> tuple[bool, list[str]]:
     """Runs the ONE `git log` query every chunk-evidence caller
     (`_committed_chunk_shas`, `_deliverable_id_near_miss_diagnostics`,
     `_hyphen_range_subject_diagnostics`) needs -- same range
@@ -1041,6 +1234,11 @@ def _chunk_evidence_log_lines(repo_root: Path) -> tuple[bool, list[str]]:
     so the format string itself can never drift between the three call
     sites the way `_chunk_evidence_log_range` already prevents range drift
     (Review: code-reviewer -- Finding 3, 2026-08-05).
+
+    `plan_text` (range-fix, 2026-08-07) is forwarded verbatim to
+    `_chunk_evidence_log_range` as its own widening anchor; `None` (a
+    caller with no plan text at hand) degrades to the pre-fix range
+    exactly -- see that function's own docstring for the full ladder.
 
     Returns `(query_ok, lines)`. `query_ok` carries the identical BROKEN-
     query distinction every caller already documents (Defect 2(d)):
@@ -1054,7 +1252,7 @@ def _chunk_evidence_log_lines(repo_root: Path) -> tuple[bool, list[str]]:
     length/emptiness filters over the same tab-separated shape and
     unifying THAT parsing is a separate, riskier change than sharing the
     query construction alone."""
-    log_range = _chunk_evidence_log_range(repo_root)
+    log_range = _chunk_evidence_log_range(repo_root, plan_text)
     result = _run_git(
         [
             "log",
@@ -1066,6 +1264,38 @@ def _chunk_evidence_log_lines(repo_root: Path) -> tuple[bool, list[str]]:
     if result.returncode != 0:
         return False, []
     return True, (result.stdout or "").splitlines()
+
+
+def _chunk_evidence_range_summary(
+    repo_root: Path, plan_text: Optional[str] = None
+) -> dict[str, Any]:
+    """Human-and-machine-readable facts about the range
+    `_chunk_evidence_log_range` actually searched -- the misdirection fix
+    named in this module's own bug-backlog entry
+    `2026-08-07-close-out-and-stamp-s-chunk-evidence-joi-8b6a7a32d833.yaml`:
+    a caller told "commits in range carry a Deliverable-Id trailer, but
+    never one equal to this plan's own frontmatter value" (the
+    `key_mismatch` reason string) has no way to tell "the range was
+    genuinely wide and this really is a key mismatch" apart from "the range
+    was a narrow, buggy sliver that happened to contain exactly one
+    unrelated commit" without this. Never influences `shipped`/`missing`/
+    `join_provenance` -- reporting only, computed from the SAME range
+    (`_chunk_evidence_log_range`) and format `_chunk_evidence_log_lines`
+    already queries, no second range convention.
+
+    Returns `{"base": str, "commit_count": int}`. `base` is the literal
+    lower-bound token `_chunk_evidence_log_range` resolved to (a sha, or
+    the string `"HEAD"` when the range is bare `HEAD` -- i.e. the whole
+    history). `commit_count` is `0` when the git query itself failed (never
+    conflated with "zero commits found" -- a caller already has `query_ok`
+    from the evidence query itself to distinguish those; this summary is
+    diagnostic-only and degrades to `0` rather than raising)."""
+    log_range = _chunk_evidence_log_range(repo_root, plan_text)
+    range_token = log_range[0] if log_range else "HEAD"
+    base = range_token.split("..", 1)[0] if ".." in range_token else "HEAD"
+    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
+    commit_count = len([line for line in log_lines if line]) if query_ok else 0
+    return {"base": base, "commit_count": commit_count}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1115,6 +1345,7 @@ def _committed_chunk_shas(
     repo_root: Path,
     deliverable_id: Optional[str],
     spine_ids: Optional[Iterable[str]] = None,
+    plan_text: Optional[str] = None,
 ) -> tuple[bool, set[str], dict[str, str], DeliverableJoinStats]:
     """Chunk-ids with a landed commit BELONGING TO THIS PLAN, PLUS the
     covering commit's own (abbreviated) sha per id -- a one-capture-group
@@ -1156,6 +1387,10 @@ def _committed_chunk_shas(
     pair absent from the map canonicalizes to itself, i.e. today's raw
     comparison, unchanged.
 
+    `plan_text` (range-fix, 2026-08-07) is forwarded verbatim to
+    `_chunk_evidence_log_lines`/`_chunk_evidence_log_range` as the range-
+    widening anchor -- `None` degrades to the pre-fix range exactly.
+
     Returns `(query_ok, committed_ids, committed_shas, join_stats)`.
     `committed_shas` maps each committed id to the MOST RECENT covering
     commit's sha (`git log` lists newest-first, and `dict.setdefault` keeps
@@ -1174,7 +1409,7 @@ def _committed_chunk_shas(
     a zeroed placeholder (`attempted` still reflects whether `deliverable_id`
     was truthy; the two counts are `0` since no commits were ever read) --
     callers must check `query_ok` first, exactly as they already do."""
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root)
+    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return (
             False,
@@ -1220,7 +1455,10 @@ def _committed_chunk_shas(
 
 
 def _deliverable_id_near_miss_diagnostics(
-    repo_root: Path, deliverable_id: Optional[str], missing_chunk_ids: list[str]
+    repo_root: Path,
+    deliverable_id: Optional[str],
+    missing_chunk_ids: list[str],
+    plan_text: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Diagnostic-only, unhappy-path helper: names the CAUSE when
     `_committed_chunk_shas`'s exact-equality `Deliverable-Id:` join reports
@@ -1304,11 +1542,16 @@ def _deliverable_id_near_miss_diagnostics(
     plausible candidate first. `[]` when `deliverable_id` is falsy (nothing
     to compare against -- mirrors `_committed_chunk_shas`'s own posture for
     an absent `deliverable_id`), when the git query itself fails, or when
-    no near-miss candidate exists at all."""
+    no near-miss candidate exists at all.
+
+    `plan_text` (range-fix, 2026-08-07) is forwarded verbatim to
+    `_chunk_evidence_log_lines` so this diagnostic always scans the
+    IDENTICAL range `_committed_chunk_shas` scanned for the verdict it
+    explains -- see `_chunk_evidence_log_range`'s own negative-spec."""
     if not deliverable_id:
         return []
 
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root)
+    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return []
 
@@ -1340,7 +1583,10 @@ def _deliverable_id_near_miss_diagnostics(
 
 
 def _hyphen_range_subject_diagnostics(
-    repo_root: Path, deliverable_id: Optional[str], missing_chunk_ids: list[str]
+    repo_root: Path,
+    deliverable_id: Optional[str],
+    missing_chunk_ids: list[str],
+    plan_text: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Diagnostic-only, unhappy-path helper: names a THIRD cause (distinct
     from the two `_deliverable_id_near_miss_diagnostics` already covers) a
@@ -1430,11 +1676,16 @@ def _hyphen_range_subject_diagnostics(
     the subject's own components, per the distinctness bar above). `[]`
     when `deliverable_id` is falsy, the git query fails, or no offending
     commit is found -- mirrors `_deliverable_id_near_miss_diagnostics`'s
-    own empty-result posture."""
+    own empty-result posture.
+
+    `plan_text` (range-fix, 2026-08-07) is forwarded verbatim to
+    `_chunk_evidence_log_lines` so this diagnostic scans the IDENTICAL
+    range the oracle it explains scanned -- see `_chunk_evidence_log_range`'s
+    own negative-spec."""
     if not deliverable_id:
         return []
 
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root)
+    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return []
 
@@ -1881,7 +2132,7 @@ def _determine_shipped(
     spine_ids = _all_spine_ids(rows)
     deliverable_id = _plan_deliverable_id(plan_text)
     query_ok, committed, _committed_shas, join_stats = _committed_chunk_shas(
-        repo_root, deliverable_id, spine_ids
+        repo_root, deliverable_id, spine_ids, plan_text=plan_text
     )
     if not query_ok:
         return (
@@ -2966,14 +3217,16 @@ def _stamp_close_out_partial_evaluation(
     itself has already refused earlier for that case in practice, but this
     helper does not assume that invariant holds forever).
 
-    Idempotent by PRESENCE, not by value (deliberate choice, NOT the
-    obvious "always refresh the timestamp" design): once
-    `close_out_last_partial:` exists at all, a later call NEVER rewrites
-    it, even when this run's own verdict (missing-id list, provenance)
-    differs from what is already stamped. The alternative -- rewriting on
-    every call -- was tried and reverted during this fix's own test pass:
-    it silently broke the pre-existing "a halted plan with nothing new to
-    report is a genuine no-op" guarantee (`TestCloseOutAndStampContinued
+    Idempotent by PRESENCE, not by value, ON THE HALTED PATH ONLY
+    (deliberate choice, NOT the obvious "always refresh the timestamp"
+    design): while this plan keeps evaluating as halted, once
+    `close_out_last_partial:` exists at all, a later halted-path call
+    NEVER rewrites it, even when this run's own verdict (missing-id list,
+    provenance) differs from what is already stamped. The alternative --
+    rewriting on every call -- was tried and reverted during this fix's own
+    test pass: it silently broke the pre-existing "a halted plan with
+    nothing new to report is a genuine no-op" guarantee
+    (`TestCloseOutAndStampContinued
     ::test_partially_shipped_with_nothing_committed_at_all_is_a_genuine_
     noop`, `TestIdempotentRerunDoesNotAttemptAZeroDiffCommit`'s sibling
     invariant for the halted path) -- every repeat close-out call against
@@ -2985,15 +3238,30 @@ def _stamp_close_out_partial_evaluation(
     strictly better failure mode than a perpetually dirtying halted plan,
     and `missing_chunk_ids` in this call's own live return value is
     already the CURRENT verdict regardless of what the frontmatter
-    field's own last-recorded snapshot says.
+    field's own last-recorded snapshot says. This never-rewrite-on-repeat
+    posture is UNCHANGED and still load-bearing -- nothing about it moved.
 
-    Note (Review: coordinator:code-reviewer): once a plan later ships,
-    `close_out_last_partial:` is NOT cleared or refreshed -- it survives,
-    unremarked, as a permanent record on an `implemented` plan. This is
-    harmless to any programmatic reader (`status:` always dominates), but a
-    human reading the field in isolation without also checking `status:`
-    first can be misled by a stale "as of <old timestamp>, N missing"
-    snapshot. No behavior change; flagging the gap for a future reader.
+    Note (Review: coordinator:code-reviewer -- SUPERSEDED, C1,
+    2026-08-08): this note originally claimed the field is "NOT cleared or
+    refreshed" once a plan ships, and that a stale field is "harmless to
+    any programmatic reader (`status:` always dominates)". Both claims are
+    now FALSE, not merely stale. `close_out_and_stamp`'s certified-ship
+    path (`status_target == "implemented"`) now clears
+    `close_out_last_partial:` from the plan's frontmatter BEFORE calling
+    `archive_stamp.cs_stamp_plan_implemented` -- see that call site's own
+    comment for why the clear must precede the stamp, not follow it. So a
+    plan that ships via this op's own certified path, WHEN THE STAMP ITSELF
+    SUCCEEDS, never carries a stale marker at all. A stamp failure after the
+    clear (`stamp_rc not in (0, 2)`) is a narrower, different case -- the
+    call site now restores the marker on disk before returning, so this
+    still does not leave a stray false-clean marker behind; see that call
+    site's own comment for the reachable scenario this covers (a real,
+    non-no-op status flip whose own commit attempt fails). The "harmless to
+    any programmatic reader" half is doubly
+    stale: `coordinator_core.workstream_complete` now reads this field as a
+    programmatic signal in its own right (leg A) -- the exact reader this
+    claim did not anticipate -- so a stray, uncleared marker is no longer
+    harmless-by-construction; it is load-bearing input to a different op.
 
     Returns the rewritten plan text, or `None` when nothing was written
     (frontmatter unparseable, OR the field is already present -- both
@@ -3011,6 +3279,44 @@ def _stamp_close_out_partial_evaluation(
     new_fm = insert_fm_field(
         split.fm_text, _CLOSE_OUT_PARTIAL_FIELD, value, after_key="status"
     )
+    return rebuild(split, new_fm)
+
+
+def _clear_close_out_partial_marker(plan_text: str) -> Optional[str]:
+    """Certified-ship counterpart to `_stamp_close_out_partial_evaluation`
+    (C1, 2026-08-08 -- `docs/plans/2026-08-08-a-status-field-cannot-vouch-
+    for-itself.md`): removes `close_out_last_partial:` from `plan_text`'s
+    own frontmatter, via the same `remove_fm_field`/`rebuild` primitives
+    every other write in this module already composes over -- not a second
+    writer.
+
+    Returns the rewritten text, or `None` when there is nothing to clear
+    (frontmatter unparseable, OR the field is already absent) -- identical
+    "no write needed" contract to `_stamp_close_out_partial_evaluation`'s
+    own return convention, so callers can gate a write on `is not None`
+    the same way in both directions.
+
+    Placement is load-bearing and MUST NOT be re-derived by a future
+    reader: the only caller (`close_out_and_stamp`'s `status_target ==
+    "implemented"` branch) calls this, and writes the result to
+    `live_path`, BEFORE calling `archive_stamp.cs_stamp_plan_implemented`
+    -- never after. `cs_stamp_plan_implemented` forwards to
+    `plan_status_transition._stamp_implemented`, which reads the LIVE FILE
+    off disk itself (via its own locked read-modify-write) and commits its
+    write itself; this module's own in-memory `text` is never re-read
+    after that call returns. A write-back mirroring the halted-path
+    marker's OWN placement (mutate `text`, write it out AFTER the stamp
+    call) would silently REVERT `status: implemented` back to whatever
+    status `text` still held at that point, since `text` predates the
+    stamp's own disk write. Clearing first means `plan_status_transition`'s
+    `locked_rmw` reads the already-cleaned file and flips `status:` in the
+    SAME read-modify-write, landing both changes in one commit."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    if read_fm_field(split.fm_text, _CLOSE_OUT_PARTIAL_FIELD) is None:
+        return None
+    new_fm = remove_fm_field(split.fm_text, _CLOSE_OUT_PARTIAL_FIELD)
     return rebuild(split, new_fm)
 
 
@@ -3554,7 +3860,7 @@ def close_out_and_stamp(
     # only, explaining an already-decided verdict, not changing it.
     plan_deliverable_id = _plan_deliverable_id(text)
     deliverable_id_mismatch: list[dict[str, Any]] = (
-        _deliverable_id_near_miss_diagnostics(root, plan_deliverable_id, missing)
+        _deliverable_id_near_miss_diagnostics(root, plan_deliverable_id, missing, plan_text=text)
         if missing
         else []
     )
@@ -3568,9 +3874,19 @@ def close_out_and_stamp(
     # separator set must not be widened to fix it). Never feeds back into
     # `shipped`/`missing` -- diagnostic only.
     hyphen_range_subjects: list[dict[str, Any]] = (
-        _hyphen_range_subject_diagnostics(root, plan_deliverable_id, missing)
+        _hyphen_range_subject_diagnostics(root, plan_deliverable_id, missing, plan_text=text)
         if missing
         else []
+    )
+
+    # Range-searched summary (2026-08-07 misdirection fix -- see this
+    # module's own bug-backlog entry `2026-08-07-close-out-and-stamp-s-
+    # chunk-evidence-joi-8b6a7a32d833.yaml`): unhappy path ONLY, same
+    # posture as the two diagnostics above. Never a substitute for
+    # `deliverable_id_mismatch`/`join_provenance` -- see
+    # `_chunk_evidence_range_summary`'s own docstring.
+    chunk_evidence_range: dict[str, Any] = (
+        _chunk_evidence_range_summary(root, text) if missing else {}
     )
 
     # AC8: auto-resolve any committed-but-open row BEFORE deciding the
@@ -3622,7 +3938,7 @@ def close_out_and_stamp(
     if rows:
         deliverable_id = _plan_deliverable_id(text)
         query_ok, _committed_ids, committed_shas, _join_stats = _committed_chunk_shas(
-            root, deliverable_id, spine_ids
+            root, deliverable_id, spine_ids, plan_text=text
         )
         if query_ok and committed_shas:
             new_text, resolve_error = _auto_resolve_committed_open_rows(
@@ -3689,6 +4005,49 @@ def close_out_and_stamp(
         # messages below -- those are human-facing display, repo-relative is
         # right there; only the stamp call needed the absolute path.
         pre_stamp_status = _peek_plan_status(text)
+        # C1 (2026-08-08): clear `close_out_last_partial:` BEFORE the stamp
+        # call, not after -- see `_clear_close_out_partial_marker`'s own
+        # docstring for why a post-stamp write-back would revert the
+        # `implemented` flip. The clear itself is NOT dry-run-gated -- it
+        # folds into `text` unconditionally, identically on both legs; only
+        # the LIVE-FILE WRITE below it is gated on `dry_run`. Under
+        # `dry_run` the live file is never touched, so the cleared `text` is
+        # instead materialized into the (already-existing) throwaway scratch
+        # copy below, which picks it up the same way.
+        #
+        # Review: code-reviewer -- P2 finding, 2026-08-08: this pre-stamp
+        # live-file write is not transactional with the stamp call
+        # succeeding. `pre_clear_marker_value` captures the marker's raw
+        # value (before the clear) so a failed stamp can restore it -- see
+        # the `stamp_rc not in (0, 2)` handling below for why this matters:
+        # `plan_status_transition._stamp_implemented` can flip `status:` to
+        # `implemented` on disk via its own locked_rmw and STILL return a
+        # failure rc (a real flip whose own commit attempt fails, or whose
+        # subsequent commit-plan-flip resume also fails) -- that makes
+        # `status:` terminal on disk with the marker already cleared, both
+        # uncommitted. `coordinator_core.workstream_complete` leg A reads a
+        # terminal `status:` next to an absent marker as "not-applicable"
+        # (verified clean) -- exactly the false-clean read this fix must not
+        # produce. Restoring only the marker field (never touching `status:`
+        # or anything else `_stamp_implemented` may have written) undoes the
+        # part of this hazard this module owns, without reverting a
+        # genuinely-landed-but-uncommitted status flip that plan_status_
+        # transition's own next-run resume logic (`_stamp_implemented`'s
+        # "stranded uncommitted status flip" branch) already knows how to
+        # recover.
+        pre_clear_split = split_frontmatter(text)
+        pre_clear_marker_value = (
+            read_fm_field_unquoted(pre_clear_split.fm_text, _CLOSE_OUT_PARTIAL_FIELD)
+            if pre_clear_split is not None
+            else None
+        )
+        cleared_text = _clear_close_out_partial_marker(text)
+        cleared_live_marker = False
+        if cleared_text is not None:
+            text = cleared_text
+            if not dry_run:
+                live_path.write_text(text, encoding="utf-8")
+                cleared_live_marker = True
         if dry_run:
             # See `_dry_run_scratch_plan`'s own docstring: composes over the
             # REAL, unmodified `cs_stamp_plan_implemented` (never a second,
@@ -3710,6 +4069,39 @@ def close_out_and_stamp(
         # handoff carrying its deliverable_id). That is not a stamp failure and must
         # not be reported as one -- only rc=1 (a genuine stamp error) is fatal here.
         if stamp_rc not in (0, 2):
+            # Review: code-reviewer -- P2 finding, 2026-08-08: restore the
+            # marker this branch cleared before the stamp call, since a
+            # failed stamp does not undo it. Re-reads the LIVE file (never
+            # `text`) because `_stamp_implemented` may itself have written
+            # to `live_path` (a real, non-no-op status flip whose own
+            # commit attempt then failed) -- restoring `text` verbatim would
+            # revert that flip too, which is plan_status_transition's own
+            # concern to resume on a later run, not this op's to undo. Only
+            # the marker field is touched, and only when it is still absent
+            # (a defensive re-check -- see this call's own docstring for why
+            # this can legitimately no longer be true, e.g. a later run
+            # already resumed and re-cleared it).
+            if cleared_live_marker and pre_clear_marker_value is not None:
+                try:
+                    current_text = live_path.read_text(encoding="utf-8", errors="replace")
+                    current_split = split_frontmatter(current_text)
+                    if current_split is not None and read_fm_field(
+                        current_split.fm_text, _CLOSE_OUT_PARTIAL_FIELD
+                    ) is None:
+                        restored_fm = insert_fm_field(
+                            current_split.fm_text,
+                            _CLOSE_OUT_PARTIAL_FIELD,
+                            pre_clear_marker_value,
+                            after_key="status",
+                        )
+                        live_path.write_text(
+                            rebuild(current_split, restored_fm), encoding="utf-8"
+                        )
+                except OSError:
+                    # Restoring the marker is best-effort recovery on top of
+                    # an already-failing stamp -- a second disk error here
+                    # must not mask the real failure being reported below.
+                    pass
             return EXIT_BUSINESS_FAIL, {
                 "error": f"{plan_path_rel}: stamp-plan-implemented failed (rc={stamp_rc})",
                 "dry_run": dry_run,
@@ -3857,26 +4249,12 @@ def close_out_and_stamp(
         # defeat this fix.
         session_id = f"close-out-and-stamp-{uuid.uuid4().hex}"
 
-        # Review: code-reviewer -- Finding 1 (2026-08-05, plan "touched.txt
-        # sibling-path escape and the suppressed absorbed-peer-claims
-        # trailer" C4/C5): `session_id` above is minted ONLY as
-        # `run_commit_pipeline`'s ceremony_lock re-entrancy key -- P2's exact
-        # shape, no `core.init` ever creates a session directory for it --
-        # so `_derive_absorbed_peer_claims_trailer`'s own attribution lookup
-        # must not receive it either. Resolve the ACTUAL committing
-        # session's identity separately, the same way `scoped_git_commit.py`
-        # `_handler` does (`session_core.resolve_session_id`), and thread it
-        # as `attribution_session_id` -- keeping the minted lock key as
-        # `session_id` (AC7 separation, unchanged).
-        attribution_session_id = session_core.resolve_session_id(str(root))
-
         pipeline_result = run_commit_pipeline(
             root,
             session_id=session_id,
             subject=subject,
             stage_paths=stage_paths,
             caller_paths=set(stage_paths),
-            attribution_session_id=attribution_session_id,
         )
         commit_result = {
             "committed_sha": pipeline_result.committed_sha,
@@ -3897,6 +4275,7 @@ def close_out_and_stamp(
                 "missing_chunk_ids": missing,
                 "deliverable_id_mismatch": deliverable_id_mismatch,
                 "hyphen_range_subjects": hyphen_range_subjects,
+                "chunk_evidence_range": chunk_evidence_range,
                 "disposition_ref_rejections": disposition_ref_rejections,
                 "open_chunk_ids": open_blocking,
                 "ac_table_desync": ac_table_desync,
@@ -3941,6 +4320,16 @@ def close_out_and_stamp(
                 f"{_JOIN_PROVENANCE_REASON[join_provenance]}; "
                 "committed partial state"
             )
+            if chunk_evidence_range:
+                # Range-searched summary (2026-08-07 misdirection fix): a
+                # `key_mismatch` reader must be able to tell a genuinely
+                # wide search apart from a narrow, buggy one WITHOUT
+                # re-deriving the range by hand -- see
+                # `_chunk_evidence_range_summary`'s own docstring.
+                message += (
+                    f" (searched {chunk_evidence_range['commit_count']} "
+                    f"commit(s) from {chunk_evidence_range['base']} to HEAD)"
+                )
         else:
             message = (
                 f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
@@ -4054,6 +4443,7 @@ def close_out_and_stamp(
         "missing_chunk_ids": missing,
         "deliverable_id_mismatch": deliverable_id_mismatch,
         "hyphen_range_subjects": hyphen_range_subjects,
+        "chunk_evidence_range": chunk_evidence_range,
         "disposition_ref_rejections": disposition_ref_rejections,
         "open_chunk_ids": open_blocking,
         "ac_table_desync": ac_table_desync,

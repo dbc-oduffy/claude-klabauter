@@ -13,7 +13,6 @@ Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 
 import coordinator_core.ops  # noqa: F401 -- populates _REGISTRY for the eagerly-wired ops
@@ -36,10 +35,6 @@ from coordinator_core.ops.queue_cluster import (  # noqa: E402
     _handler,
     cluster_records,
 )
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +153,7 @@ class TestAllThreeFamilies:
     def test_debt_backlog_clusters_by_tag(self, tmp_path) -> None:
         for i in range(3):
             _seed_debt(tmp_path, f"entry-{i}.yaml", title=f"Debt entry {i}", tags=["widget"])
-        result = _run(_handler({"family": "debt-backlog"}, repo_root=tmp_path))
+        result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "widget"
@@ -167,7 +162,7 @@ class TestAllThreeFamilies:
     def test_improvement_queue_clusters_by_tag(self, tmp_path) -> None:
         for i in range(3):
             _seed_improvement(tmp_path, f"entry-{i}.yaml", title=f"Improvement {i}", tags=["gadget"])
-        result = _run(_handler({"family": "improvement-queue"}, repo_root=tmp_path))
+        result = _handler({"family": "improvement-queue"}, repo_root=tmp_path)
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "gadget"
@@ -175,7 +170,7 @@ class TestAllThreeFamilies:
     def test_bug_backlog_clusters_by_tag(self, tmp_path) -> None:
         for i in range(3):
             _seed_bug(tmp_path, f"entry-{i}.yaml", title=f"Bug {i}", tags=["sprocket"])
-        result = _run(_handler({"family": "bug-backlog"}, repo_root=tmp_path))
+        result = _handler({"family": "bug-backlog"}, repo_root=tmp_path)
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "sprocket"
@@ -190,7 +185,7 @@ class TestEnvelopeShape:
     def test_item_carries_id_derived_from_filename_stem(self, tmp_path) -> None:
         for i in range(3):
             _seed_debt(tmp_path, f"widget-entry-{i}.yaml", title=f"Widget entry {i}", tags=["shared"])
-        result = _run(_handler({"family": "debt-backlog"}, repo_root=tmp_path))
+        result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
         cluster = next(c for c in result if c["signal"] == "tag")
         ids = {item["id"] for item in cluster["items"]}
         assert ids == {"widget-entry-0", "widget-entry-1", "widget-entry-2"}
@@ -199,7 +194,7 @@ class TestEnvelopeShape:
 
     def test_empty_family_returns_empty_list_not_none(self, tmp_path) -> None:
         (tmp_path / "state" / "debt-backlog").mkdir(parents=True)
-        result = _run(_handler({"family": "debt-backlog"}, repo_root=tmp_path))
+        result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
         assert result == []
         assert result is not None
 
@@ -221,7 +216,7 @@ class TestCommonDirRepoRootShape:
         common_dir = tmp_path / ".git"
         assert common_dir.is_dir()  # sanity: standard (non-worktree) layout
 
-        result = _run(_handler({"family": "debt-backlog"}, repo_root=common_dir))
+        result = _handler({"family": "debt-backlog"}, repo_root=common_dir)
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "widget"

@@ -139,7 +139,7 @@ def _last_distill_run(worktree_root: Path) -> tuple[Optional[str], Optional[_dt.
 
 
 @register_op("distill.curation_status")
-async def _distill_curation_status(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _distill_curation_status(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "distill.curation_status" handler.
 
     Params (all optional):

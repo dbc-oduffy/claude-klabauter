@@ -19,13 +19,17 @@ concurrent sibling EM session has staged on a shared `work/*` branch, and
 hazard. See DEC-3 for the full rationale and the `scoped-safety-commits.md`
 citation.
 
-`run_commit_pipeline` composes its own session_id-scoped `ceremony_lock`
-acquisition and message; this op has no real ceremony session backing it, so
-it mints a private per-invocation session_id (`scoped-git-commit-<uuid4>`)
-purely as the lock's re-entrancy/liveness-bridge key — never reused across
-calls, so it carries no session-registry meaning beyond "this one lock hold".
+This op has no real ceremony session backing it, so it mints a private
+per-invocation session_id (`scoped-git-commit-<uuid4>`) — never reused
+across calls, so it carries no session-registry meaning of its own. It is
+still genuinely consumed downstream: `run_commit_pipeline` passes it through
+to `_derive_absorbed_peer_claims_trailer` (SC-DR-019) as the `session_id`
+used to resolve whether this id names a real session directory (it never
+does, being lock-only-shaped), which gates that trailer to its
+"undetermined" marker rather than attempting `compute_offer` against an
+unregistered id (see `commit_pipeline.py`'s own docstring for that gate).
 (2026-08-05, P2 fix: this minted id is passed to `run_commit_pipeline` ONLY
-as its `session_id`/lock key, never for attribution — the ACTUAL committing
+as its `session_id`, never for attribution — the ACTUAL committing
 session's resolved identity is threaded separately via `attribution_session_
 id`, so `_derive_absorbed_peer_claims_trailer`'s `compute_offer` lookup runs
 against a real session, not a lock-only id with no session directory. See
@@ -75,110 +79,39 @@ after the pipeline's rollback) is never laundered into a success.
 Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
 § DEC-3, Wave 1 C1d.
 
-Sink-side ownership enforcement (C4c, AC17/AC18,
-docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md): this
-module's `_handler` is the EM-selected insertion point for the ownership-scope
-gate, in preference to `run_commit_pipeline` itself, on three independent
-grounds:
+Sink-side ownership enforcement: REMOVED (PM ruling, 2026-08-08).
 
-  1. CONTRACT. `run_commit_pipeline` has three in-process callers — this
-     module's `_handler`, `ops/ceremony/wsc_tail.py`, and
-     `execute_plan_assemble`/`close_out_and_stamp.py`. The latter two
-     legitimately stage ceremony artifacts and the plan document, which are
-     not necessarily inside a session's OWN touched-paths scope. An
-     ownership gate inside `run_commit_pipeline` would break both of them.
-     Gating here keeps `run_commit_pipeline`'s existing contract clean.
-  2. COLLISION. `commit_pipeline.py` carries a live peer session's
-     uncommitted work at chunk-authoring time; this module does not.
-  3. THREAT MODEL. AC18 protects the property "the sink holds against a
-     caller that bypasses the PreToolUse guard". The attacker path is an
-     obfuscated Bash payload (the AC13 residual —
-     `subprocess.run(['g'+'it','com'+'mit'])` defeats any text matcher
-     structurally) invoking the `ceremony.scoped_git_commit` op directly.
-     That path necessarily goes through this module's `_handler`. Direct
-     in-process `run_commit_pipeline` imports (wsc_tail,
-     execute_plan_assemble) are claude-klabauter's own trusted ceremony callers, never
-     reachable by obfuscating a command line.
+The C4c/AC17/AC18 ownership-scope gate that used to run here is gone. It
+composed `scope_report.assert_paths_in_session_scope`, which walks
+`compute_scope`/`compute_offer` -- both O(dirty tree x live claims), not
+O(pathspec). Measured on this repo at 594 dirty paths and 918 live claims,
+against a ONE-FILE pathspec: 13.9s for the gate, plus a second ~7.9s
+`compute_offer` re-walk inside `commit_pipeline`'s absorbed-peer-claims
+trailer, against a 30s `DISPATCH_TIMEOUT_SECS` with no per-op override.
+Cost scaled with how busy the tree was, not with what was being committed,
+so on a busy shared tree the op became structurally unable to commit
+anything -- and the caller-side timeout surfaced it as
+"Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation" on a healthy engine.
 
-Correction to a premise a reviewer flagged and ruled out already:
-`run_commit_pipeline`'s existing `caller_paths` parameter (see its docstring
-around `missing_caller_paths`/`ignored_caller_paths`) is a
-staging-tolerance bookkeeping set that distinguishes caller-supplied paths
-from swept/discovered ones for missing/ignored diagnostics. It carries no
-ownership or session-scope semantics and is NOT a pre-existing ownership
-gate — the check below is new sink-side logic, not a wiring-up of dormant
-machinery.
+What this means for the threat model, stated plainly rather than left to be
+inferred: the sink-side backstop against a caller that bypasses the
+PreToolUse guard is GONE. `block_subagent_commit` (C4b, the guard-side
+check) is upstream, still live, and still composes the same
+`assert_paths_in_session_scope` predicate -- which is why that predicate was
+deliberately NOT deleted along with this gate. The obfuscated-Bash-payload
+path AC18 existed to close is open again.
 
-REVERTED 2026-08-03 (P1 security fix, same-day reversal of a same-day
-amendment): the gate briefly composed `coordinator_core.ops.session
-.scope_report.assert_paths_not_foreign_owned`, a deny-list-shaped predicate
-adopted after a live incident where the strict allow-list rejected the EM's
-OWN commit of a file its own freshly-dispatched executor had written moments
-earlier (`compute_offer` cannot yet attribute a sub-agent's touch to its
-dispatching session during the async `.agents/<aid>/em-session-id.txt`
-back-pointer race window — see `coordinator_core.session.scope.compute_scope`
-Step 3b). That amendment is UNSOUND: `compute_offer`'s own orphan/race-window
-pass-through is not scoped to the CALLING session at all — it scans every
-currently-dirty path in the repo regardless of who is asking, and a
-fabricated `session_id` resolves just as successfully as a real one. Composed
-into this sink, that let ANY caller — including a fabricated identity
-reaching the sink via the exact obfuscated-payload threat model AC18 exists
-to defend against — sweep a genuinely live peer's in-flight race-window path,
-or a dead session's leftover uncommitted work, into its own commit. See
-`scope_report.py`'s own module docstring ("REVERTED 2026-08-03") for the full
-rationale; the permissive predicate has been deleted from that module
-entirely rather than left unused.
+The replacement is to be designed (PM: "then size trying to make it not
+suck on Windows"). NEGATIVE SPEC for whatever lands: it must not be
+O(dirty tree) or O(claims) on the commit hot path. A gate whose cost is a
+function of how busy the tree is will re-create this outage exactly.
 
-The gate is back to composing `coordinator_core.ops.session.scope_report
-.assert_paths_in_session_scope` — the SAME strict allow-list
-`block_subagent_commit` (C4b) uses. A fail-closed gate with occasional
-operational friction beats a gate with a hole: the accepted cost is that a
-caller invoking this sink during the back-pointer race window described above
-can be falsely rejected. The workaround is an explicit `git add -- <paths>` /
-`git commit -- <paths>`, which is EM-available and not subagent-available, so
-AC17/AC18's caller-confinement property is preserved. Imported wrapped (see
-the `try`/`except` around the import below) so an ImportError degrades to a
-hard deny rather than either propagating (taking op registration down with
-it) or silently disabling the gate.
-
-Ownership-gate observability (`ownership_gate`, 2026-08-04 — reported by
-Example-cockpit-repo-em after a live consumer-side probe: the op ran to
-completion and emitted exactly one line, `committed 8c246dfadf98 (pushed)`).
-Only the DENY path produced any text at all — an `error` string — so a
-consumer could not tell whether the gate had evaluated, and could only infer
-an allow backwards from a commit having happened. The closing evidence
-`docs/plans/2026-08-04-ownership-inherited-at-dispatch.md` AC9 asks for
-("the guard ALLOW decision plus the resulting commit sha") was therefore an
-artifact the engine structurally could not produce. `_run_ownership_gate`
-now returns its verdict alongside the rejection envelope, and `_handler`
-attaches it to every response the gate was consulted for — see
-`OWNERSHIP_VERDICT_*`.
-
-  NEGATIVE SPEC (hard) for `ownership_gate` — this is a VISIBILITY change
-  and nothing else:
-    - It does NOT change any allow/deny outcome. Every path that committed
-      before still commits; every path that was refused before is still
-      refused, with the same `error` text.
-    - It adds NO new denial condition, and nothing anywhere gates on the
-      new field. It is written, never read, by this module.
-    - It never fails the op. An unresolvable owner identity renders as
-      `owner_session_id: None` (the tri-state's unknown arm), never as a
-      refusal, and a response that predates the field (an older engine
-      across the seam) is a valid response, not an error.
-    - "The helper was unimportable, so the predicate never ran"
-      (`OWNERSHIP_VERDICT_HELPER_UNIMPORTABLE`) and "the pathspec was clean,
-      so the gate was skipped" (`OWNERSHIP_VERDICT_NOT_EVALUATED`) stay
-      DISTINCT from "evaluated and allowed" (`OWNERSHIP_VERDICT_ALLOWED`).
-      Collapsing any of the three into another re-creates the exact
-      unobservability this field exists to remove.
-
-Sweeping-pathspec rejection (below the ownership gate, independent of it):
+Sweeping-pathspec rejection SURVIVES, and is independent of ownership:
 `.`, `./`, `:/`, `:(top)`, a glob (`*`/`?`/`[`), an empty pathspec element,
 the repo root, an ancestor of the repo root, or a `-A`/`-a`/`--all` flag
-token is rejected REGARDLESS of ownership — a sweeping pathspec is unsafe on
-a shared branch even when every path it happens to resolve to right now is
-this session's own; the strict own-scope check above does not, and must not,
-relax this.
+token is rejected regardless -- a sweeping pathspec is unsafe on a shared
+branch whoever owns the files. That check is pure string/path work and
+costs nothing.
 """
 
 from __future__ import annotations
@@ -196,6 +129,7 @@ from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import PipelineResult, run_commit_pipeline
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # C4c (2026-08-03-narrow-subagent-commit-confinement-two-classes.md):
 # imported wrapped so an ImportError degrades to `None` rather than
@@ -210,24 +144,6 @@ from coordinator_core.session import scope as session_scope
 # shell this out as the `session.scope_report` op -- see that module's own
 # docstring for why an in-process import is required on this commit-sink's
 # fail-closed seam.
-try:
-    from coordinator_core.ops.session.scope_report import (
-        assert_paths_in_session_scope as _assert_paths_in_session_scope,
-    )
-except Exception:
-    _assert_paths_in_session_scope = None
-
-# Advisory-only: used solely to word the orphan-adoption OFFER on a denial
-# (see `_run_ownership_gate`) -- never consulted for the verdict itself,
-# which is `_assert_paths_in_session_scope` alone. `None` on import failure
-# just means the offer wording is skipped; it never changes allow/deny.
-try:
-    from coordinator_core.ops.session.safe_commit_offer import (
-        compute_offer as _compute_offer_for_wording,
-    )
-except Exception:
-    _compute_offer_for_wording = None
-
 _LOG = logging.getLogger(__name__)
 
 #: Literal pathspec tokens rejected outright, regardless of what they
@@ -249,12 +165,11 @@ def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[
     """Return a human-readable rejection reason for the first sweeping
     pathspec element in `paths`, or `None` if none of them are sweeping.
 
-    Checked INDEPENDENTLY of `assert_paths_in_session_scope` (C4c) --
-    ownership answers "who does this path belong to", not "does this
-    pathspec element name more than one path". A sweeping element is unsafe
-    on a shared branch even when everything it currently resolves to happens
-    to be this session's own; the ownership check must never be read as
-    having relaxed this.
+    This is the structural check that SURVIVED the 2026-08-08 ownership-gate
+    excision, and it answers a different question than ownership ever did:
+    not "who does this path belong to" but "does this pathspec element name
+    more than one path". A sweeping element is unsafe on a shared branch
+    whoever owns the files.
 
     Rejects: an empty/non-string element; one of `_SWEEPING_PATHSPEC_
     LITERALS`; any element containing a glob metacharacter
@@ -342,42 +257,13 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
 
     Review: code-reviewer -- Finding 3, 2026-08-05. Extracted so the
     identical `params.get("session_id") or session_core.resolve_session_id
-    (worktree_root)` expression -- the ownership gate's `owner_session_id`,
-    `_handler`'s `attribution_session_id`, and `_handler`'s post-commit
-    `owner_session_id` for `release_committed_claims` -- is spelled once,
-    not three times: a future edit to the precedence rule (e.g. adding a
-    fourth tier) now has one call site to keep in sync, not three.
+    (worktree_root)` expression is spelled once rather than repeated at each
+    call site. Since the 2026-08-08 ownership-gate excision the sole
+    remaining consumer is `_handler`'s post-commit `owner_session_id` for
+    `release_committed_claims`.
     """
     return params.get("session_id") or session_core.resolve_session_id(worktree_root)
 
-
-def _partition_clean_dirty(
-    worktree_root: str, paths: List[str]
-) -> tuple[List[str], List[str]]:
-    """Partition *paths* into `(clean_subset, dirty_subset)` -- the PER-PATH
-    variant of `_commit_paths_are_clean` the mixed-pathspec fix needs
-    (SC-DR-019: "a scoped-commit refusal is per-path, not per-commit").
-
-    Deliberately reuses `_commit_paths_are_clean` (probed once per path)
-    rather than adding a THIRD cleanliness probe alongside it and the
-    now-removed `_ownership_gate_paths_are_clean` alias -- both answered the
-    exact same underlying question ("does git think there is anything left
-    to commit under this pathspec"), just over a whole pathspec at once
-    instead of per element. Order of `paths` is preserved within each
-    returned list.
-
-    Fails closed the same way the shared primitive does: any path git
-    cannot answer for is treated as dirty (not clean), never silently
-    dropped from either list.
-    """
-    clean: List[str] = []
-    dirty: List[str] = []
-    for p in paths:
-        if _commit_paths_are_clean(worktree_root, [p]):
-            clean.append(p)
-        else:
-            dirty.append(p)
-    return clean, dirty
 
 
 def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:
@@ -429,11 +315,12 @@ def _expand_directory_pathspecs(worktree_root: str, paths: List[str]) -> List[st
     unclassifiable directory string.
 
     Live incident this closes (2026-08-06): a caller named a directory of
-    125 rewritten tracked JSON records and was refused -- "unclaimed/never
-    classified by compute_offer" -- because `compute_offer`/
-    `assert_paths_in_session_scope` classify individual dirty paths, never a
-    directory string, and orphan adoption matches on named file paths too.
-    The only way through was hand-pasting 125 explicit paths.
+    125 rewritten tracked JSON records and was refused, because the
+    then-live ownership gate classified individual dirty paths and never a
+    directory string. The only way through was hand-pasting 125 explicit
+    paths. That gate is gone (2026-08-08), but the expansion is kept: the
+    downstream staging path and the directory-pathspec rejection below both
+    still want individual files rather than a directory string.
 
     A directory element that expands to at least one dirty tracked file is
     REPLACED, in place, by that expansion (deduplicated, order preserved
@@ -450,11 +337,8 @@ def _expand_directory_pathspecs(worktree_root: str, paths: List[str]) -> List[st
     untracked file into a commit that a caller would have had to name
     explicitly otherwise.
 
-    Per-path classification survives expansion by construction: each
-    expanded member is just another string in the returned list, gated
-    individually by `_run_ownership_gate` exactly like any caller-named file
-    -- a directory that expands to 10 files where 2 belong to a live peer
-    still denies on those 2, named individually, not on the directory.
+    Each expanded member is just another string in the returned list,
+    treated downstream exactly like any caller-named file.
     """
     root = Path(worktree_root)
     expanded_paths: List[str] = []
@@ -482,223 +366,6 @@ def _expand_directory_pathspecs(worktree_root: str, paths: List[str]) -> List[st
     return expanded_paths
 
 
-def _directory_denial_note(paths: List[str], worktree_root: str) -> str:
-    """Explain a denial that still carries an unexpanded directory element
-    (B): `_expand_directory_pathspecs` only leaves a directory unresolved
-    when it found no dirty TRACKED member to expand to (empty, fully clean,
-    or containing only untracked/ignored content) -- name that explicitly so
-    a caller does not have to reverse-engineer "directory vs. file" from an
-    ownership-shaped denial that says nothing about it.
-
-    Returns "" when none of *paths* is currently a directory on disk.
-    """
-    root = Path(worktree_root)
-    dirs = [p for p in paths if isinstance(p, str) and (root / p).is_dir()]
-    if not dirs:
-        return ""
-    return (
-        " -- %s %s a directory pathspec with no dirty TRACKED file beneath "
-        "it to resolve to (untracked/ignored content is never swept in by "
-        "directory expansion): name the individual file path(s) directly" % (
-            ", ".join(repr(d) for d in dirs),
-            "is" if len(dirs) == 1 else "are",
-        )
-    )
-
-
-def _include_orphans_ineffective_note(
-    include_orphans: bool, directory_note: str
-) -> str:
-    """Explain why `include_orphans: true` did not change the outcome (B) --
-    the second half of the incident this module's docstring closes: a
-    caller re-invoked with `--include-orphans` after an unexplained refusal
-    and got the SAME unexplained refusal back, with nothing new to act on.
-
-    Only fires when the caller already opted in (`include_orphans` True) and
-    the denial persists. When `directory_note` is non-empty, the directory
-    explanation already covers it (an unresolved directory is never an
-    orphan-adoptable shape -- orphan matching is on named file paths) and
-    this stays silent rather than duplicating the same fact two ways.
-    """
-    if not include_orphans or directory_note:
-        return ""
-    return (
-        " -- --include-orphans made no difference here: the denied path(s) "
-        "are claimed by a live peer session, not an orphan; orphan adoption "
-        "never overrides a peer claim"
-    )
-
-
-def _orphan_offer_suffix(owner_session_id: str, worktree_root: str, paths: List[str]) -> str:
-    """Word the orphan-adoption OFFER for a denied pathspec, or return `""`
-    when no offer applies.
-
-    Advisory-only classification, entirely independent of the verdict itself
-    (`_assert_paths_in_session_scope` already decided that) -- a failure here
-    degrades to no offer, never to a changed allow/deny outcome. Offers ONLY
-    when EVERY path this call would deny is an orphan (claimed by no session
-    at all) -- a mixed pathspec (one orphan, one peer-claimed, or one
-    unclassified) makes no offer at all, since `include_orphans: true` would
-    not resolve the non-orphan half anyway.
-
-    Review: staff-eng F5 -- the predicate previously read
-    `any_orphan and not any_peer_owned`, which offers whenever at least one
-    path is an orphan and none is peer-claimed -- true even for a pathspec
-    like `["orphan.md", "never-classified.md"]`, where the offered remedy
-    (`include_orphans: true`) would still deny on the second path. Corrected
-    to `all(...)`, matching this docstring.
-    """
-    if _compute_offer_for_wording is None or not owner_session_id:
-        return ""
-    try:
-        offer = _compute_offer_for_wording(owner_session_id, worktree_root)
-    except Exception:
-        return ""
-
-    orphan_set = set(offer.get("orphans") or [])
-    str_paths = [p for p in paths if isinstance(p, str)]
-    if not str_paths or not all(p in orphan_set for p in str_paths):
-        return ""
-    return (
-        " -- re-invoke with include_orphans: true to include the orphan "
-        "path(s) (claimed by no session, not a live peer)"
-    )
-
-
-#: `ownership_gate.verdict` values -- the four-valued ownership-gate
-#: observability discriminator, modelled on `push_state` below (same
-#: convention: module-level `#:`-documented constants, and an explicit arm
-#: for every state including the ones a two-valued report would have to
-#: guess at). The invariant it encodes: an ALLOW is an OBSERVABLE decision,
-#: not something a consumer infers backwards from a commit having happened.
-#: A gate that was never consulted, and a gate whose predicate could not
-#: even be imported, are each their own arm -- neither is an allow, and
-#: neither is a deny the caller can act on.
-OWNERSHIP_VERDICT_ALLOWED = "allowed"
-OWNERSHIP_VERDICT_DENIED = "denied"
-OWNERSHIP_VERDICT_HELPER_UNIMPORTABLE = "helper-unimportable"
-OWNERSHIP_VERDICT_NOT_EVALUATED = "not-evaluated-clean-pathspec"
-
-#: Response key carrying the verdict record built by `_ownership_verdict`.
-OWNERSHIP_GATE_KEY = "ownership_gate"
-
-
-def _ownership_verdict(
-    verdict: str, owner_session_id: Optional[str], include_orphans: bool
-) -> Dict[str, Any]:
-    """Build the `ownership_gate` record: WHAT the gate decided, WHO it
-    resolved the caller to, and WHETHER orphan adoption was in effect.
-
-    `owner_session_id` is tri-state by construction -- a real session id, or
-    `None` for "not resolved" (the gate was skipped, or the ambient identity
-    came back empty). An empty string is normalized to `None` rather than
-    rendered as an identity that resolved to nothing: `""` reads as an answer
-    and is not one.
-
-    Purely descriptive. See this module's docstring, § Ownership-gate
-    observability, for the negative spec -- nothing in this op reads the
-    record back, and no allow/deny outcome depends on it.
-    """
-    return {
-        "verdict": verdict,
-        "owner_session_id": owner_session_id or None,
-        "include_orphans": bool(include_orphans),
-    }
-
-
-def _run_ownership_gate(
-    params: dict, worktree_root: str, paths: List[str], include_orphans: bool = False
-) -> tuple[Optional[dict], Dict[str, Any]]:
-    """Run the C4c ownership-scope gate (AC17/AC18) against *paths*.
-
-    Returns `(rejection, verdict)`. `rejection` is `None` when the gate
-    passes -- the caller proceeds to staging -- and the handler's rejection
-    envelope when it does not, so both call sites in `_handler` (the upfront
-    gate, and the TOCTOU re-check
-    immediately before staging -- see `_handler`'s own "TOCTOU closure"
-    comment) share one gate implementation rather than drifting apart, and
-    both MUST pass the same `include_orphans` value -- that shared-gate
-    property is deliberate.
-
-    `include_orphans` (default `False`, orphan-adoption opt-in — example-doctrine-repo
-    doctrine, scoped-safety-commits.md:131): threaded straight through to
-    `assert_paths_in_session_scope`'s `allow_orphans` kwarg. Does NOT relax
-    the peer-claimed case -- a path claimed by a live peer session still
-    denies regardless (incident 62e9a1f73); see that function's own
-    docstring for why the two classes cannot collide.
-
-    On an orphan-only denial (every denied path is an unclaimed orphan, none
-    peer-claimed), the error is an OFFER: it names the path an orphan and
-    tells the caller that re-invoking with `include_orphans: true` will
-    include it. On a peer-claimed denial -- or a mixed pathspec with even one
-    peer-claimed path -- no offer is made; the peer-claimed rejection wins
-    and the error just names the owning session and stops.
-
-    Resolves the CALLING session's own identity, never the private
-    per-invocation `scoped-git-commit-<uuid4>` id `_handler` mints for
-    `run_commit_pipeline`'s ceremony_lock -- that id carries no
-    session-registry meaning, and using it here would make every call
-    trivially "own" whatever it asked to stage, defeating the check.
-    `params.get("session_id")` mirrors `session.scope_report`'s own handler
-    (C4a): an explicit override takes precedence over resolving the
-    environment's ambient session identity.
-
-    `verdict` is the always-returned `_ownership_verdict` record, on the
-    allow path as much as the deny path -- the observability the ALLOW path
-    previously had none of (see this module's docstring, § Ownership-gate
-    observability, including its negative spec). The fail-closed
-    unimportable-helper branch below reports
-    `OWNERSHIP_VERDICT_HELPER_UNIMPORTABLE`, never
-    `OWNERSHIP_VERDICT_DENIED`: nothing was evaluated there, and a consumer
-    reading the record must be able to tell an unrun predicate from a
-    predicate that ran and refused.
-    """
-    if _assert_paths_in_session_scope is None:
-        return (
-            {
-                "committed": False,
-                "sha": None,
-                "pushed": None,
-                "error": (
-                    "ceremony.scoped_git_commit: rejected -- ownership-scope "
-                    "helper is unimportable, failing closed"
-                ),
-            },
-            _ownership_verdict(
-                OWNERSHIP_VERDICT_HELPER_UNIMPORTABLE, None, include_orphans
-            ),
-        )
-
-    owner_session_id = _resolve_committing_session_id(params, worktree_root)
-    allowed, deny_reason = _assert_paths_in_session_scope(
-        owner_session_id, paths, worktree_root, allow_orphans=include_orphans
-    )
-    if not allowed:
-        offer_suffix = ""
-        if not include_orphans:
-            offer_suffix = _orphan_offer_suffix(owner_session_id, worktree_root, paths)
-        directory_note = _directory_denial_note(paths, worktree_root)
-        ineffective_note = _include_orphans_ineffective_note(
-            include_orphans, directory_note
-        )
-        return (
-            {
-                "committed": False,
-                "sha": None,
-                "pushed": None,
-                "error": (
-                    "ceremony.scoped_git_commit: rejected -- path(s) outside "
-                    "session scope: %s%s%s%s"
-                    % (deny_reason, offer_suffix, directory_note, ineffective_note)
-                ),
-            },
-            _ownership_verdict(
-                OWNERSHIP_VERDICT_DENIED, owner_session_id, include_orphans
-            ),
-        )
-    return None, _ownership_verdict(
-        OWNERSHIP_VERDICT_ALLOWED, owner_session_id, include_orphans
-    )
 
 
 #: `push_state` values — the three-valued push-reporting discriminator, modelled
@@ -721,8 +388,34 @@ _REMOTE_UNKNOWN = "unknown"
 
 
 @register_op("ceremony.scoped_git_commit")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'ceremony.scoped_git_commit' handler.
+
+    Deliberately a PLAIN sync function, not `async def` (2026-08-07 transport-
+    hang fix). This handler calls `run_commit_pipeline()` synchronously below,
+    which blocks on `git` subprocess calls (stage/commit/push, incl. a
+    network round trip) -- and this file contains zero `await` statements
+    anywhere. A coroutine that never awaits can still be dispatched as
+    `async def`, but `coordinator_core.ipc.dispatch_message` then invokes it
+    via `asyncio.wait_for(handler(...), timeout=op_timeout)` on the async
+    branch, which "cannot interrupt a blocked event loop" (dispatch_message's
+    own documented C3 invariant) -- so `DISPATCH_TIMEOUT_SECS` silently
+    stopped bounding this op at all, and a caller waiting on a slow `git`
+    call (e.g. a network-bound push) hung well past both the server's own
+    timeout budget and the CLI transport's client-side ceiling
+    (cc_invoke.py), surfacing only as an opaque `engine timeout after Ns`
+    from the CLIENT side. Being a plain sync function instead routes this
+    handler through
+    dispatch_message's SYNC branch, which already offloads it via
+    `asyncio.to_thread` -- restoring the timeout's actual effect (a clean,
+    bounded `op timed out after Ns` response) instead of an unbounded hang.
+    Negative-spec: do NOT re-mark this `async def` without first moving every
+    blocking call inside it (including inside `run_commit_pipeline`) behind
+    its own `asyncio.to_thread` -- the CI grep gate
+    (`coordinator_core/tests/test_async_handler_discipline.py`) only flags a
+    blocking call written DIRECTLY in an async body, not one reached through
+    an intermediate function call like `run_commit_pipeline()`, so it would
+    not catch a regression here.
 
     Params (from JSON-RPC request params dict):
         worktree_root (str, required) — path to the worktree to commit in.
@@ -762,15 +455,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                      # three-valued discriminator that makes
                                      # `pushed is None` readable: one of
                                      # PUSH_STATE_* below
-          "ownership_gate": {       # present on EVERY response the gate was
-                                     # consulted for, allow and deny alike --
-                                     # an ALLOW is an observable decision,
-                                     # never inferred backwards from a commit
-                                     # having happened
-            "verdict": str,         # one of OWNERSHIP_VERDICT_*
-            "owner_session_id": str | None,  # None = not resolved
-            "include_orphans": bool,
-          },
         }
 
         `pushed`/`push_state` answer "is this commit published", NOT "did
@@ -806,28 +490,20 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     On a validation error (missing/empty required param):
         {"committed": False, "sha": None, "pushed": None, "error": str}
 
-    On a rejected pathspec (C4c, AC17): when the calling session's identity
-    is unresolvable, its scope is unreadable/malformed, or any element of
-    `paths` is outside the calling session's own scope (per
-    `coordinator_core.ops.session.scope_report.assert_paths_in_session_
-    scope` — the SAME strict allow-list the C4b guard-side check uses; see
-    that function's own docstring), the call is rejected BEFORE any staging
-    happens. The SAME rejection shape covers
-    a sweeping pathspec element (`.`, `./`, `:/`, `:(top)`, a glob, an empty
-    element, the repo root, an ancestor of it, or `-A`/`-a`/`--all`) —
-    checked independently of ownership, see `_reject_sweeping_pathspec`:
+    On a rejected pathspec: a sweeping pathspec element (`.`, `./`, `:/`,
+    `:(top)`, a glob, an empty element, the repo root, an ancestor of it, or
+    `-A`/`-a`/`--all`) — see `_reject_sweeping_pathspec` — is rejected
+    BEFORE any staging happens:
         {"committed": False, "sha": None, "pushed": None, "error": str}
     — the same shape as a validation error; the reason is folded into
     `error` rather than given its own key, since this is still "the call
     was invalid", just discovered one step later.
 
-    `include_orphans` (bool, optional, default `False`): when a denied path
-    is an orphan (dirty, claimed by no session at all — never a path a live
-    peer session claims, which stays a hard rejection regardless of this
-    flag; incident 62e9a1f73), re-invoking with `include_orphans: true`
-    admits it. Threaded to BOTH the upfront ownership gate and the TOCTOU
-    re-check immediately before staging (see `_run_ownership_gate`) — the
-    same value at both call sites is deliberate, not incidental.
+    `include_orphans` (bool, optional): ACCEPTED AND IGNORED since the
+    2026-08-08 ownership-gate excision. It opted a caller into orphan
+    adoption past a gate that no longer exists, so there is nothing left for
+    it to relax. Still accepted rather than rejected so existing callers that
+    pass it keep working; it has no effect on any outcome.
     """
     worktree_root_raw = params.get("worktree_root")
     paths_raw = params.get("paths")
@@ -892,101 +568,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (sweep_reason,),
         }
 
-    # Ownership-scope gate (C4c, AC17/AC18) -- resolved from the CALLING
-    # session's own identity, never from the private per-invocation
-    # `scoped-git-commit-<uuid4>` id minted below. That id exists solely as
-    # `run_commit_pipeline`'s ceremony_lock re-entrancy key and carries no
-    # session-registry meaning -- using it here would make every call
-    # trivially "own" whatever it asked to stage, defeating the check.
-    # `params.get("session_id")` mirrors `session.scope_report`'s own
-    # handler (C4a): an explicit override takes precedence over resolving
-    # the environment's ambient session identity.
-    #
-    # Clean-pathspec bypass, PER-PATH (SC-DR-019: "a scoped-commit refusal
-    # is per-path, not per-commit").
-    #
-    # Live incident, 2026-08-05, which this partition exists to prevent
-    # recurring: a caller named two paths -- one dirty and in-scope, one
-    # already committed moments earlier by `pickup-assemble apply`. The
-    # bypass was evaluated over the WHOLE pathspec, so the single dirty path
-    # made `paths_were_clean` False and dragged the already-clean path
-    # through a gate that structurally cannot classify it. The commit was
-    # refused, naming the clean path "unclaimed/never classified by
-    # compute_offer" -- an ownership-shaped message for what was really a
-    # nothing-to-commit condition, routing the operator toward
-    # `--include-orphans` (which cannot help: a clean path is never in
-    # `orphans`) instead of toward dropping the path. `compute_
-    # offer` (and therefore `assert_paths_in_session_scope`) only ever
-    # classifies DIRTY paths -- see `compute_scope`'s own docstring, Steps
-    # 1-5. A path with nothing left to commit (already-landed idempotent
-    # re-invocation, AC7; or a caller-named path that never existed/was
-    # never dirty) is structurally invisible to that classification, and is
-    # not a sweep of anyone's work either -- there is no uncommitted content
-    # to sweep. Partitioned via `_partition_clean_dirty` (per-path variant
-    # of `_commit_paths_are_clean`, reused rather than a third probe): the
-    # ownership gate runs ONLY over the dirty subset; the full, ORIGINAL
-    # pathspec is still passed to `run_commit_pipeline` below unchanged --
-    # this bypass only ever narrows what reaches `_run_ownership_gate`, it
-    # never narrows what gets staged/committed.
-    #
-    # TOCTOU closure (review finding, 2026-08-03): a point-in-time clean
-    # probe can be raced -- a peer's write can land in the window between
-    # this probe and `run_commit_pipeline`'s own staging step, so a path
-    # skipped here as "nothing to sweep" could be genuinely dirty foreign
-    # content by the time it is actually staged, with NO ownership check
-    # ever having run against it. The bypass itself stays (AC7 idempotency
-    # is a real, polarity-independent need `compute_offer` structurally
-    # cannot serve any other way -- see the comment above), but it is never
-    # the SOLE reason a path is allowed: immediately before staging, below,
-    # the probe is repeated over the CLEAN subset only, and anything that
-    # turned dirty in the interim is routed back through the same ownership
-    # gate before `run_commit_pipeline` is ever called.
-    ownership_gate = _ownership_verdict(
-        OWNERSHIP_VERDICT_NOT_EVALUATED, None, include_orphans
-    )
-
-    clean_paths, dirty_paths = _partition_clean_dirty(worktree_root, paths)
-
-    if dirty_paths:
-        rejection, ownership_gate = _run_ownership_gate(
-            params, worktree_root, dirty_paths, include_orphans
-        )
-        if rejection is not None:
-            rejection[OWNERSHIP_GATE_KEY] = ownership_gate
-            return rejection
-
-    # Re-probe immediately before staging (see "TOCTOU closure" above),
-    # scoped to the paths this call's FIRST probe found clean -- the dirty
-    # subset above was already gated (or, if empty, there was nothing to
-    # gate). If any of the clean subset is no longer clean now, something
-    # landed in the race window and must be gated exactly as if it had been
-    # dirty from the start -- never staged on the strength of a stale probe.
-    if clean_paths:
-        _, now_dirty = _partition_clean_dirty(worktree_root, clean_paths)
-        if now_dirty:
-            rejection, race_gate = _run_ownership_gate(
-                params, worktree_root, now_dirty, include_orphans
-            )
-            if rejection is not None:
-                rejection[OWNERSHIP_GATE_KEY] = race_gate
-                return rejection
-            ownership_gate = race_gate
-
     session_id = f"scoped-git-commit-{uuid.uuid4().hex}"
-
-    # 2026-08-05 fix (P2, plan "touched.txt sibling-path escape and the
-    # suppressed absorbed-peer-claims trailer"): the minted `session_id`
-    # above is `run_commit_pipeline`'s ceremony_lock re-entrancy key ONLY
-    # (AC7 -- see this module's own docstring, "one wrapper" section) and
-    # STAYS that; it carries no session-registry meaning, so no `started_at`
-    # is ever written for it and `_derive_absorbed_peer_claims_trailer`'s own
-    # `compute_offer` call previously received it anyway, silently emitting
-    # "" on EVERY invocation (SC-DR-019 never fired). Resolve the ACTUAL
-    # committing session's identity the same way the C4c ownership gate
-    # above already does -- reusing that resolver, INCLUDING its
-    # `params["session_id"]` override precedence, rather than inventing a
-    # second one -- and thread it separately as `attribution_session_id`.
-    attribution_session_id = _resolve_committing_session_id(params, worktree_root)
 
     result = run_commit_pipeline(
         worktree_root,
@@ -995,14 +577,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prose=str(prose_raw or ""),
         stage_paths=paths,
         caller_paths=set(paths),
-        attribution_session_id=attribution_session_id,
     )
 
     response: Dict[str, Any] = {
         "committed": result.committed_sha is not None,
         "sha": result.committed_sha,
         "pushed": result.pushed,
-        OWNERSHIP_GATE_KEY: ownership_gate,
     }
 
     # A bare {"committed": False, "sha": None, "pushed": False} is returned for
@@ -1298,6 +878,7 @@ def _remote_sha_state(
         upstream = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             cwd=worktree_root, capture_output=True, text=True, timeout=2,
+            **no_console_creationflags(),
         )
         if upstream.returncode != 0:
             return _REMOTE_UNKNOWN  # no upstream configured — nothing to violate
@@ -1307,6 +888,7 @@ def _remote_sha_state(
             contains = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", sha, upstream_ref],
                 cwd=worktree_root, capture_output=True, text=True, timeout=2,
+                **no_console_creationflags(),
             )
             if contains.returncode == 0:
                 return _REMOTE_PRESENT

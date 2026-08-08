@@ -77,12 +77,15 @@ def _run_producer(producer, *args: str, cwd: Optional[str] = None) -> list[dict]
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
     """
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         out = subprocess.run(
             [sys.executable, str(producer), *args],
             capture_output=True,
             text=True,
             check=False,
             cwd=cwd,
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return []

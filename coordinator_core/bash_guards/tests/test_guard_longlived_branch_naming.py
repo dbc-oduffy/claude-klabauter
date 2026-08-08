@@ -103,6 +103,27 @@ class TestAdvisoryFiresOnAllSanctionedPrefixes:
         _ctx(guard.check(_payload("FOO=1 git checkout -b feature/x")))
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 5): this guard gates on
+    `token_matches_binary(tokens[0], "git")` -- the external `git` exe,
+    byte-identical in both shell dialects. No `_dialect.py` import exists
+    in this module (confirmed by grep), so a PowerShell-idiom surrounding
+    shape (`;` chain instead of `&&`) reaches the SAME tokenizer and must
+    reach the SAME verdict.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 5 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_still_fires(self):
+        ctx = _ctx(guard.check(_payload("Get-Location; git checkout -b feature/x")))
+        assert "feature/" in ctx
+
+    def test_semicolon_chained_powershell_style_non_sanctioned_untouched(self):
+        assert guard.check(
+            _payload("Get-Location; git checkout -b work/machine-b/2026-07-13")
+        ) is None
+
+
 class TestEnvelopeShape:
     def test_envelope_is_allow_advisory_shaped(self):
         out = guard.check(_payload("git checkout -b feature/x"))

@@ -728,12 +728,16 @@ async def run_coverage_gate(
                 else verdict_line
             )
             # Success-path-only liveness stamp (COVERAGE_GATE): exit_code == 0
-            # means the gate produced a real COVERED/UNCOVERED verdict -- stamped
-            # against `common_dir`, mirroring coverage_gate.py's own repo_root
-            # (the handler above was called with `repo_root=common_dir`).
+            # means the gate produced a real COVERED/UNCOVERED verdict. Stamped
+            # against `main_worktree_root(common_dir)`, NOT `common_dir` itself --
+            # `common_dir` is `.git`-internal (the coverage.gate handler above is
+            # called with `repo_root=common_dir` for ITS own purposes, but the
+            # liveness stamp must land at the worktree root, which is the only
+            # path `housekeeping_liveness.liveness_path`'s predicate accepts and
+            # the only path `orientation/regenerate_cache.py`'s reader ever reads).
             # INDETERMINATE (ec == 2) and any other error fall through to the
             # _fail(...) branches below and do NOT stamp.
-            stamp_liveness(str(common_dir), _HL_COVERAGE_GATE)
+            stamp_liveness(str(main_worktree_root(common_dir)), _HL_COVERAGE_GATE)
             return {"acted": [f"{OP_COVERAGE_GATE}:{token}"], "skipped": [], "failed": []}
         if ec == 2:
             notes = "; ".join(str(n) for n in result.get("notes", []))

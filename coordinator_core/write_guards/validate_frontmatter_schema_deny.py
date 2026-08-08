@@ -131,6 +131,7 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus as _LocateStat
 from coordinator_core.frontmatter.body_blocks import locate_fenced_block as _locate_fenced_block
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.frontmatter.schema_validate import (
     _apply_cross_field_rules,
@@ -827,7 +828,14 @@ def _memo_guard_step(
                     landing_is_central = landing_em_id == ctx.central_canonical_id
                     if to_is_central and landing_is_central:
                         pass
-                    elif to_is_central and doe_root_realpath is None:
+                    elif doe_root_realpath is None:
+                        # Fail open when the example-doctrine-repo root is unresolvable. This deliberately does NOT
+                        # also test `to_is_central`: `central_em_ids` is only populated once the
+                        # example-doctrine-repo root HAS resolved, so `to_is_central and doe_root_realpath is None`
+                        # was unsatisfiable by construction and the regex fallback below fired
+                        # unconditionally on any `-em`-suffixed `to:`. With the root unresolvable we
+                        # cannot tell whether `to:` is central, so the honest move is to emit
+                        # nothing rather than guess.
                         pass
                     else:
                         to_em_id = to_field_raw.strip()
@@ -1543,6 +1551,7 @@ def _capture_guard_forensics(
                 git_result = subprocess.run(
                     ["git", "status", "--porcelain"],
                     cwd=doe_root, capture_output=True, text=True, timeout=2,
+                    **no_console_creationflags(),
                 )
                 if git_result.returncode == 0:
                     doe_tree_dirty = bool(git_result.stdout.strip())

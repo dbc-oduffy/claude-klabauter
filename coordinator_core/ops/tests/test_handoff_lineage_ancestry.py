@@ -30,7 +30,6 @@ Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-p
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -63,9 +62,6 @@ assert _OP_NAME in _REGISTRY, (
 # ---------------------------------------------------------------------------
 
 
-def _run(coro):
-    """Execute a coroutine synchronously (test helper)."""
-    return asyncio.run(coro)
 
 
 def _make_git_repo(root: Path) -> Path:
@@ -145,7 +141,7 @@ class TestHandoffLineageAncestry:
 
     def test_repo_root_none_returns_empty(self):
         """repo_root=None -> empty ancestry without raising."""
-        result = _run(_handler({"handoff_id": "whatever"}, repo_root=None))
+        result = _handler({"handoff_id": "whatever"}, repo_root=None)
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_missing_start_handoff_returns_empty(self, tmp_path):
@@ -153,16 +149,14 @@ class TestHandoffLineageAncestry:
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "handoffs").mkdir(parents=True)
-        result = _run(
-            _handler({"handoff_id": "does-not-exist"}, repo_root=common_dir)
-        )
+        result = _handler({"handoff_id": "does-not-exist"}, repo_root=common_dir)
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_missing_params_returns_empty(self, tmp_path):
         """Neither handoff_id nor path supplied -> empty ancestry."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
-        result = _run(_handler({}, repo_root=common_dir))
+        result = _handler({}, repo_root=common_dir)
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_root_handoff_no_origin_handoff_field(self, tmp_path):
@@ -172,7 +166,7 @@ class TestHandoffLineageAncestry:
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(handoffs_dir, "root.md", title="Root Handoff")
 
-        result = _run(_handler({"handoff_id": "root"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "root"}, repo_root=common_dir)
 
         assert result["terminated_early"] == ""
         assert len(result["ancestry"]) == 1
@@ -188,7 +182,7 @@ class TestHandoffLineageAncestry:
             handoffs_dir, "sentinel-none.md", title="Sentinel None", origin_handoff="none"
         )
 
-        result = _run(_handler({"handoff_id": "sentinel-none"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "sentinel-none"}, repo_root=common_dir)
 
         assert result["terminated_early"] == ""
         assert len(result["ancestry"]) == 1
@@ -203,7 +197,7 @@ class TestHandoffLineageAncestry:
             handoffs_dir, "sentinel-null.md", title="Sentinel Null", origin_handoff="null"
         )
 
-        result = _run(_handler({"handoff_id": "sentinel-null"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "sentinel-null"}, repo_root=common_dir)
 
         assert result["terminated_early"] == ""
         assert len(result["ancestry"]) == 1
@@ -229,7 +223,7 @@ class TestHandoffLineageAncestry:
             origin_handoff="parent.md",
         )
 
-        result = _run(_handler({"handoff_id": "fork"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "fork"}, repo_root=common_dir)
 
         assert result["terminated_early"] == ""
         ids = [entry["handoff_id"] for entry in result["ancestry"]]
@@ -246,7 +240,7 @@ class TestHandoffLineageAncestry:
         _seed_handoff(handoffs_dir, "a.md", title="A", origin_handoff="b.md")
         _seed_handoff(handoffs_dir, "b.md", title="B", origin_handoff="a.md")
 
-        result = _run(_handler({"handoff_id": "a"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "a"}, repo_root=common_dir)
 
         assert result["terminated_early"] == "lineage-cycle"
         ids = [entry["handoff_id"] for entry in result["ancestry"]]
@@ -260,9 +254,7 @@ class TestHandoffLineageAncestry:
         handoffs_dir = repo_root / "state" / "handoffs"
         fork_path = _seed_handoff(handoffs_dir, "fork-by-path.md", title="Fork By Path")
 
-        result = _run(
-            _handler({"path": str(fork_path)}, repo_root=common_dir)
-        )
+        result = _handler({"path": str(fork_path)}, repo_root=common_dir)
 
         assert result["terminated_early"] == ""
         assert len(result["ancestry"]) == 1
@@ -275,11 +267,9 @@ class TestHandoffLineageAncestry:
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(handoffs_dir, "by-id.md", title="By Id")
 
-        result = _run(
-            _handler(
-                {"handoff_id": "by-id", "path": "state/handoffs/does-not-exist.md"},
-                repo_root=common_dir,
-            )
+        result = _handler(
+            {"handoff_id": "by-id", "path": "state/handoffs/does-not-exist.md"},
+            repo_root=common_dir,
         )
 
         assert result["terminated_early"] == ""
@@ -307,7 +297,7 @@ class TestHandoffLineageAncestry:
             origin_handoff="nonexistent-parent.md",
         )
 
-        result = _run(_handler({"handoff_id": "fork"}, repo_root=common_dir))
+        result = _handler({"handoff_id": "fork"}, repo_root=common_dir)
 
         assert result["terminated_early"] == "missing-link"
         ids = [entry["handoff_id"] for entry in result["ancestry"]]
@@ -321,10 +311,8 @@ class TestHandoffLineageAncestry:
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(handoffs_dir, "fork-by-path.md", title="Fork By Path")
 
-        result = _run(
-            _handler(
-                {"path": "state/handoffs/fork-by-path.md"}, repo_root=common_dir
-            )
+        result = _handler(
+            {"path": "state/handoffs/fork-by-path.md"}, repo_root=common_dir
         )
 
         assert result["terminated_early"] == ""
@@ -340,14 +328,12 @@ class TestHandoffLineageAncestry:
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(handoffs_dir, "by-path.md", title="By Path")
 
-        result = _run(
-            _handler(
-                {
-                    "handoff_id": "does-not-exist",
-                    "path": "state/handoffs/by-path.md",
-                },
-                repo_root=common_dir,
-            )
+        result = _handler(
+            {
+                "handoff_id": "does-not-exist",
+                "path": "state/handoffs/by-path.md",
+            },
+            repo_root=common_dir,
         )
 
         # handoff_id was supplied but unresolvable -> None, never falls
@@ -367,11 +353,9 @@ class TestHandoffLineageAncestry:
         secret = repo_root / "secret.md"
         secret.write_text("---\ntitle: \"Secret\"\n---\n", encoding="utf-8")
 
-        result = _run(
-            _handler(
-                {"handoff_id": "../secret"},
-                repo_root=common_dir,
-            )
+        result = _handler(
+            {"handoff_id": "../secret"},
+            repo_root=common_dir,
         )
 
         assert result == {"ancestry": [], "terminated_early": ""}
@@ -388,11 +372,9 @@ class TestHandoffLineageAncestry:
         outside.parent.mkdir(parents=True)
         outside.write_text('---\ntitle: "Secret"\n---\n', encoding="utf-8")
 
-        result = _run(
-            _handler(
-                {"path": str(outside)},
-                repo_root=common_dir,
-            )
+        result = _handler(
+            {"path": str(outside)},
+            repo_root=common_dir,
         )
 
         assert result == {"ancestry": [], "terminated_early": ""}

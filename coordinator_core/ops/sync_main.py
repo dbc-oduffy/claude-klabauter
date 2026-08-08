@@ -58,12 +58,15 @@ from __future__ import annotations
 import subprocess
 import sys
 
+from coordinator_core.win_portability import no_console_creationflags
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
 
 

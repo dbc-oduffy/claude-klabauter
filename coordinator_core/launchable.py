@@ -88,7 +88,7 @@ import shutil
 import sys
 from typing import List, Optional
 
-__all__ = ["resolve_launchable", "resolve_by_shebang"]
+__all__ = ["resolve_launchable", "resolve_by_shebang", "which_path_ordered"]
 
 # Extension -> interpreter *name* (resolved through PATH at call time). Keyed on the
 # lowercased suffix; extension-less scripts intentionally have no entry and fall
@@ -172,6 +172,49 @@ def _interpreter_for(suffix: str) -> List[str]:
     # shutil.which keeps the vector absolute where possible; fall back to the bare
     # name so a PATH that is populated in the child but not the parent still works.
     return [shutil.which(name) or name]
+
+
+def which_path_ordered(name: str, *, extensions: Optional[List[str]] = None) -> Optional[str]:
+    """PATH-order-preserving lookup for ``name``, directory-major, extension-minor.
+
+    ``shutil.which`` gets two related cases wrong on Windows:
+
+    - An extensionless command that has no ``PATHEXT``-suffixed twin at all in its
+      OWN directory but DOES have one further along ``PATH`` reports the far match
+      first, because CPython's implementation checks ``PATHEXT`` candidates across
+      the WHOLE ``PATH`` before ever falling back to a bare-name pass. That gets
+      search order backwards: PATH precedence means an EARLIER directory always
+      wins, regardless of which candidate shape (suffixed vs. bare) matched there.
+    - A name that already ends in its own non-``PATHEXT`` extension (e.g. a
+      ``.sh`` test shim) still gets ``PATHEXT`` entries appended
+      (``foo.sh.COM``, ``foo.sh.EXE``, ...) since ``.sh`` isn't itself a
+      ``PATHEXT`` member -- so it never tries the literal filename at all.
+
+    This walks ``PATH`` ourselves, one directory at a time: within each directory,
+    try ``name`` suffixed with each of ``extensions`` (in order), THEN the bare
+    ``name``, before advancing to the next directory. Never checks one candidate
+    shape across all directories before another.
+
+    ``extensions`` defaults to ``PATHEXT`` (split on ``os.pathsep``) on Windows and
+    ``[]`` on POSIX, matching ``shutil.which``'s own platform default. Pass ``[]``
+    explicitly to force a bare-name-only search even on Windows -- e.g. when
+    ``name`` already carries a full, specific filename (such as a ``.sh`` shim) and
+    no further extension should ever be appended.
+
+    Returns the first existing regular-file candidate, or ``None`` if nothing
+    matched anywhere on ``PATH``.
+    """
+    if extensions is None:
+        extensions = os.environ.get("PATHEXT", "").split(os.pathsep) if _is_windows() else []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidates = [os.path.join(directory, name + ext) for ext in extensions]
+        candidates.append(os.path.join(directory, name))
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 
 
 def resolve_launchable(script_path: str) -> List[str]:

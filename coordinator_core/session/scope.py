@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
 from coordinator_core.session import core, liveness
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
 #: drive-qualified ``C:…`` form. Mirrors the bash glob test
@@ -338,7 +339,8 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
 
     THE single subprocess seam for this module — :func:`_git_output` is a thin
     projection of this, deliberately, so there is exactly one git dialect here
-    (same argv shape, same ``core._NO_CONSOLE`` flags, same text mode).
+    (same argv shape, same ``no_console_creationflags()`` flags, same text
+    mode).
 
     Negative spec: ``None`` means "no git ran", NOT "git failed" — a non-zero
     exit is a fully-populated ``GitRun`` and must stay distinguishable from
@@ -351,7 +353,7 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
             capture_output=True,
             text=True,
             cwd=cwd,
-            **core._NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except OSError:
         return None
@@ -447,6 +449,42 @@ def _ls_files_failure_is_benign(
     return _path_is_outside_worktree(fpath, root) is True
 
 
+def _relpath_failure_is_benign(exc: Exception, fpath: str, root: str) -> bool:
+    """Did ``os.path.relpath(realpath(fpath), realpath(root))`` fail merely
+    because ``fpath`` and ``root`` are on different Windows drives?
+
+    On Windows, ``os.path.relpath`` raises ``ValueError`` whenever the two
+    paths do not share a drive letter. That is exactly the routine
+    path-outside-this-repo case — a ``C:``-drive scratchpad, ``~/.claude``, a
+    sibling repo — when this repo's worktree lives on a non-system drive
+    (e.g. ``X:``). It is not evidence of anything unexpected and must not
+    arm :func:`_emit_normalize_diagnostic`'s latch — mirrors
+    :func:`_ls_files_failure_is_benign`'s discrimination for the ``ls-files``
+    arm (2026-08-07 finding: independently reported by example-doctrine-repo and
+    carried as an undiagnosed item on a live handoff in this tree, both
+    traced to the same false premise — that relpath failure is non-routine
+    on every platform, which holds on POSIX but not on Windows).
+
+    Determined from the actual path values (drive/anchor comparison), never
+    from the exception's message text — message text is locale- and
+    version-fragile.
+
+    Negative spec: only a ``ValueError`` attributable to a drive mismatch is
+    benign. An ``OSError`` is never classified benign here — that stays an
+    operational failure and still arms the latch, exactly as before this
+    function existed. On POSIX there are no drive letters
+    (``os.path.splitdrive`` always returns ``""`` for both sides), so this
+    predicate is unconditionally ``False`` there and POSIX behavior is
+    byte-identical to before this function existed: every relpath failure
+    still arms the latch.
+    """
+    if not isinstance(exc, ValueError):
+        return False
+    fdrive = os.path.splitdrive(os.path.realpath(fpath))[0]
+    rdrive = os.path.splitdrive(os.path.realpath(root))[0]
+    return fdrive.lower() != rdrive.lower()
+
+
 def normalize_touch_path(path: str, cwd: Optional[str] = None) -> Optional[str]:
     """Normalize a ``touched.txt`` candidate entry to repo-relative, or signal
     "skip" via ``None`` if it is STILL absolute after the attempt.
@@ -476,17 +514,27 @@ def normalize_touch_path(path: str, cwd: Optional[str] = None) -> Optional[str]:
     scope set (see :func:`compute_scope`). Never raises for an operational
     failure — mirrors ``touch()``'s own fail-open contract.
 
-    Diagnostic calibration (2026-08-05): an ``ls-files`` failure arms
-    :func:`_emit_normalize_diagnostic`'s latch ONLY when
+    Diagnostic calibration (2026-08-05, revised 2026-08-07): an ``ls-files``
+    failure arms :func:`_emit_normalize_diagnostic`'s latch ONLY when
     :func:`_ls_files_failure_is_benign` cannot positively attribute it to
     "this pathspec is not in this repo". A path outside the worktree — a
     sibling repo, a settings home, a scratch dir — is the routine case, is
     resolved correctly by the relpath fallback below, and must NOT arm the
-    latch; an unclassifiable failure still must. The relpath arm's own
-    diagnostic is UNCHANGED and deliberately not given the same treatment:
-    ``os.path.relpath`` failing is not a routine condition on any platform,
-    and that arm loses the entry outright (returns ``None``) rather than
-    falling back further.
+    latch; an unclassifiable failure still must.
+
+    The relpath arm gets the SAME treatment now, via
+    :func:`_relpath_failure_is_benign`. The original premise here — "relpath
+    failing is not a routine condition on any platform" — was FALSE: on
+    Windows, ``os.path.relpath`` raises ``ValueError`` whenever ``fpath`` and
+    ``root`` sit on different drive letters, which is exactly the routine
+    path-outside-this-repo case when this repo's worktree lives on a
+    non-system drive (e.g. ``X:``) and a session touches a path on another
+    drive (a ``C:``-drive scratchpad, ``~/.claude``, a sibling repo). That is
+    not evidence of anything unexpected and must not arm the latch. On
+    POSIX, where there are no drive letters, the predicate never fires and
+    every relpath failure still arms the latch, unchanged. Either way the
+    entry is still dropped (``rel = ""``, entry lost) — only whether the
+    diagnostic arms is affected, never the fail-open skip behavior.
     """
     fpath = path
     if _is_absolute(fpath):
@@ -511,9 +559,10 @@ def normalize_touch_path(path: str, cwd: Optional[str] = None) -> Optional[str]:
                     rel = os.path.relpath(
                         os.path.realpath(fpath), os.path.realpath(root)
                     ).replace(os.sep, "/")
-                except (OSError, ValueError):
+                except (OSError, ValueError) as exc:
                     rel = ""
-                    _emit_normalize_diagnostic("relpath")
+                    if not _relpath_failure_is_benign(exc, fpath, root):
+                        _emit_normalize_diagnostic("relpath")
                 else:
                     # C2 (2026-08-05): relpath succeeding is not the same as
                     # resolving INSIDE the worktree — a sibling-directory
@@ -1114,8 +1163,16 @@ def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
     whose last event is ``R`` or absent gets a fresh ``T``), then refresh
     ``last_activity`` in ``meta.json``.
 
-    HOT path — fired from PreToolUse hooks on every file write. No jq, no
-    subshells beyond the git-root lookup. Fail-open: always returns
+    HOT path. Live callers are the engine's self-report scope-touch contract
+    (``ipc.py``'s ``_SCOPE_TOUCH_PATHS_KEY`` block, recorded by
+    ``dispatch_message``) and ``cli_entry.py`` — so this fires on every
+    sanctioned-mutating engine op that declares a write, NOT on the PreToolUse
+    Edit/Write path. That path runs ``hooks.track_touched_files``, which
+    deliberately does not refresh ``last_activity`` (see its own note: the
+    meta.json write costs ~36ms on Windows). Negative spec: do not re-describe
+    this as a per-tool-call heartbeat — the distinction is what decides whether
+    a session with no Bash call and no commit reads as live.
+    No jq, no subshells beyond the git-root lookup. Fail-open: always returns
     ``None`` (bash ``return 0``), never raises for an operational failure.
 
     Normalization: an incoming absolute path is
@@ -3084,7 +3141,7 @@ def compute_scope(
         # compute_scope from this module at module scope, so a module-scope
         # import here would be circular.
         from coordinator_core.ops.session.safe_commit_offer import (
-            _dirty_files_under,
+            _dirty_files_under_batch,
             _normalize_agent_touched_entry,
         )
 
@@ -3192,13 +3249,23 @@ def compute_scope(
                                 f"residual, not a fail-closed arm)",
                                 file=sys.stderr,
                             )
+                        normalized_race_lines = [
+                            _normalize_agent_touched_entry(raw) for raw in raw_lines
+                        ]
+                        race_dir_entries = [
+                            n
+                            for n in normalized_race_lines
+                            if n is not None and n.endswith("/")
+                        ]
+                        dirty_by_dir_race = _dirty_files_under_batch(
+                            race_dir_entries, cwd
+                        )
                         contested_here: List[str] = []
-                        for raw in raw_lines:
-                            norm = _normalize_agent_touched_entry(raw)
+                        for norm in normalized_race_lines:
                             if norm is None:
                                 continue
                             if norm.endswith("/"):
-                                for opath in _dirty_files_under(norm, cwd):
+                                for opath in dirty_by_dir_race.get(norm, []):
                                     norm_opath = normalize_peer_claim_key(
                                         opath, root_path
                                     )
@@ -3295,12 +3362,20 @@ def compute_scope(
                             em_sid, "undetermined", "unreadable"
                         )
                 peer_liveness = _peer_liveness_str(em_sid)
-                for raw in attr_raw_lines:
-                    norm = _normalize_agent_touched_entry(raw)
+                normalized_attr_lines = [
+                    _normalize_agent_touched_entry(raw) for raw in attr_raw_lines
+                ]
+                attr_dir_entries = [
+                    n
+                    for n in normalized_attr_lines
+                    if n is not None and n.endswith("/")
+                ]
+                dirty_by_dir_attr = _dirty_files_under_batch(attr_dir_entries, cwd)
+                for norm in normalized_attr_lines:
                     if norm is None:
                         continue
                     if norm.endswith("/"):
-                        for opath in _dirty_files_under(norm, cwd):
+                        for opath in dirty_by_dir_attr.get(norm, []):
                             norm_attr_path = normalize_peer_claim_key(
                                 opath, root_path
                             )
@@ -3355,17 +3430,25 @@ def compute_scope(
             agent_claimed_paths = project_peer_claims(
                 nonblank_raw_lines, agent_path_mtimes, challenger_t_events
             )
+            normalized_claim_lines: List[Optional[str]] = []
             for raw in raw_lines:
                 if not raw:
+                    normalized_claim_lines.append(None)
                     continue
                 _, _, raw_claim_path = parse_touch_event(raw)
                 if raw_claim_path not in agent_claimed_paths:
+                    normalized_claim_lines.append(None)
                     continue
-                norm = _normalize_agent_touched_entry(raw)
+                normalized_claim_lines.append(_normalize_agent_touched_entry(raw))
+            claim_dir_entries = [
+                n for n in normalized_claim_lines if n is not None and n.endswith("/")
+            ]
+            dirty_by_dir_claims = _dirty_files_under_batch(claim_dir_entries, cwd)
+            for norm in normalized_claim_lines:
                 if norm is None:
                     continue
                 if norm.endswith("/"):
-                    for opath in _dirty_files_under(norm, cwd):
+                    for opath in dirty_by_dir_claims.get(norm, []):
                         if not opath:
                             continue
                         # AC8: same directional other_owner-key

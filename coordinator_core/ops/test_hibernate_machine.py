@@ -14,8 +14,6 @@ Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from coordinator_core.ops import hibernate_machine
@@ -149,8 +147,8 @@ def test_handler_double_invocation_via_dispatch_surface(monkeypatch, spawn_log):
     """Same AC7 shape through the registered async handler (platform pinned
     so the assertion is host-independent; dispatch seams stay mocked)."""
     monkeypatch.setattr(hibernate_machine.sys, "platform", "darwin")
-    first = asyncio.run(hibernate_machine._machine_hibernate({}, repo_root=None))
-    second = asyncio.run(hibernate_machine._machine_hibernate({}, repo_root=None))
+    first = hibernate_machine._machine_hibernate({}, repo_root=None)
+    second = hibernate_machine._machine_hibernate({}, repo_root=None)
     assert first == second
     assert first["dispatched"] is True
     assert spawn_log == [["pmset", "sleepnow"], ["pmset", "sleepnow"]]

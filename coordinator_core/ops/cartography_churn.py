@@ -220,6 +220,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -235,6 +236,7 @@ from coordinator_core.cartography.churn import (
     compute_emergent_set,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
 
 _GIT_TIMEOUT_SECS = 30
 
@@ -263,6 +265,7 @@ def _git_name_only(root: Path, since: str, system_dirs: Optional[list[str]] = No
             encoding="utf-8",
             timeout=_GIT_TIMEOUT_SECS,
             cwd=root,
+            **no_console_creationflags(),
         )
     except Exception:  # noqa: BLE001
         return []
@@ -298,6 +301,7 @@ def _git_ls_files(root: Path, system_dirs: Optional[list[str]] = None) -> list[s
             encoding="utf-8",
             timeout=_GIT_TIMEOUT_SECS,
             cwd=root,
+            **no_console_creationflags(),
         )
     except Exception:  # noqa: BLE001
         return []
@@ -352,10 +356,10 @@ async def _cartography_churn(params: dict, repo_root: Optional[Path] = None) -> 
         # gets no prefiltering, never the retired tree-specific default.
         excluded_dirs = ()
 
-    churned_all = _git_name_only(root, since)
-    catalogued = _git_name_only(root, since, system_dirs)
-    head_present = _git_ls_files(root)
-    catalogued_at_head = _git_ls_files(root, system_dirs)
+    churned_all = await asyncio.to_thread(_git_name_only, root, since)
+    catalogued = await asyncio.to_thread(_git_name_only, root, since, system_dirs)
+    head_present = await asyncio.to_thread(_git_ls_files, root)
+    catalogued_at_head = await asyncio.to_thread(_git_ls_files, root, system_dirs)
 
     result = compute_emergent_set(
         churned_all=churned_all,

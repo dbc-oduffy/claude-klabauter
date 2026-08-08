@@ -11,7 +11,6 @@ Port of: append-goal-event.sh (example-doctrine-repo b5a4192c, 2026-07-20).
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import subprocess
@@ -36,11 +35,6 @@ assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "
     "coordinator_core.ops.goal_append @register_op did not fire"
 )
-
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
@@ -588,18 +582,16 @@ class TestGoalAppendHandlerPassthrough:
             "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Handler passthrough goal",
-                        "key_results_status": kr_status,
-                        "weekly_perceptible": True,
-                        "parent_goal_id": "abc123def456",
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Handler passthrough goal",
+                    "key_results_status": kr_status,
+                    "weekly_perceptible": True,
+                    "parent_goal_id": "abc123def456",
+                },
+                repo_root=repo / ".git",
             )
 
         row = result["row"]
@@ -616,15 +608,13 @@ class TestGoalAppendHandlerPassthrough:
             "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Handler bare goal",
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Handler bare goal",
+                },
+                repo_root=repo / ".git",
             )
 
         row = result["row"]
@@ -640,16 +630,14 @@ class TestGoalAppendHandlerPassthrough:
             "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Handler status goal",
-                        "status": "superseded",
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Handler status goal",
+                    "status": "superseded",
+                },
+                repo_root=repo / ".git",
             )
 
         assert result["row"]["status"] == "superseded"
@@ -736,16 +724,14 @@ class TestGoalAppendHandlerNormalizesCoordinatorRootPath:
             "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Absolute crp goal",
-                        "coordinator_root_path": str(repo),
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Absolute crp goal",
+                    "coordinator_root_path": str(repo),
+                },
+                repo_root=repo / ".git",
             )
 
         assert result["row"]["coordinator_root_path"] == "."
@@ -760,16 +746,14 @@ class TestGoalAppendHandlerNormalizesCoordinatorRootPath:
             "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Absolute subdir crp goal",
-                        "coordinator_root_path": str(sub),
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Absolute subdir crp goal",
+                    "coordinator_root_path": str(sub),
+                },
+                repo_root=repo / ".git",
             )
 
         assert result["row"]["coordinator_root_path"] == "sub"
@@ -1026,16 +1010,14 @@ class TestAppendGoalExplicitGoalId:
         ):
             (tmp_path / "fake-coordinator" / "bin").mkdir(parents=True, exist_ok=True)
             (tmp_path / "fake-coordinator" / "bin" / "query-records.js").touch()
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Handler explicit goal_id goal",
-                        "goal_id": "abc123def456",
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Handler explicit goal_id goal",
+                    "goal_id": "abc123def456",
+                },
+                repo_root=repo / ".git",
             )
 
         assert result["row"]["goal_id"] == "abc123def456"
@@ -1051,15 +1033,13 @@ class TestAppendGoalExplicitGoalId:
         ):
             (tmp_path / "fake-coordinator" / "bin").mkdir(parents=True, exist_ok=True)
             (tmp_path / "fake-coordinator" / "bin" / "query-records.js").touch()
-            result = _run(
-                _goal_append(
-                    {
-                        "period": "week",
-                        "period_value": "2026-W27",
-                        "text": "Handler no goal_id goal",
-                    },
-                    repo_root=repo / ".git",
-                )
+            result = _goal_append(
+                {
+                    "period": "week",
+                    "period_value": "2026-W27",
+                    "text": "Handler no goal_id goal",
+                },
+                repo_root=repo / ".git",
             )
 
         assert len(result["row"]["goal_id"]) == 12
@@ -1087,14 +1067,12 @@ class TestGoalAppendHandlerRejectsOutOfRepoAbsoluteCrp:
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             with pytest.raises(ValueError, match="outside repo_root"):
-                _run(
-                    _goal_append(
-                        {
-                            "period": "week",
-                            "period_value": "2026-W27",
-                            "text": "Out-of-repo crp goal",
-                            "coordinator_root_path": str(outside),
-                        },
-                        repo_root=repo / ".git",
-                    )
+                _goal_append(
+                    {
+                        "period": "week",
+                        "period_value": "2026-W27",
+                        "text": "Out-of-repo crp goal",
+                        "coordinator_root_path": str(outside),
+                    },
+                    repo_root=repo / ".git",
                 )

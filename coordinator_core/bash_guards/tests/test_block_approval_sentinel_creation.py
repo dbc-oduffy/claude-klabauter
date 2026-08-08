@@ -778,3 +778,76 @@ class TestReachableThroughTheDispatchChain:
 
     def test_unrelated_touch_allowed_end_to_end(self):
         assert self._decision("touch somefile.txt") == "allow"
+
+
+class TestPowerShellDialect:
+    """C4e (2026-08-07, guard-dialect-coverage.md row 22): PowerShell-syntax
+    coverage via `_dialect`/`_sentinel_creation_guard.SentinelCreationDetector
+    .evaluate_for_dialect`. This guard's own `_ApprovalSentinelDetector`
+    default-deny `_segment_denies` override still applies on the PowerShell
+    leg (polymorphic dispatch through the shared engine's dialect-aware
+    entry point) -- a safe head (`git status`) allows, an unsafe head
+    mentioning the sentinel denies. A guard declaring `Dialect.POWERSHELL`
+    must reach a correct verdict or record SILENT -- never a bare clean
+    (AC3)."""
+
+    @staticmethod
+    def _ps_payload(command):
+        return {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": command},
+            "session_id": "sess1",
+            "cwd": "/repo",
+        }
+
+    def test_set_content_cmdlet_denies(self):
+        out = guard.check(self._ps_payload("Set-Content %s" % SENTINEL))
+        assert out is not None
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_redirect_denies(self):
+        out = guard.check(self._ps_payload("echo ok > %s" % SENTINEL))
+        assert out is not None
+
+    def test_default_deny_posture_still_applies_unsafe_head(self):
+        """`Copy-Item` is not in `_SAFE_ARGV0` -- mentioning the sentinel
+        anywhere in its tokens denies, same default-deny inversion as the
+        bash leg."""
+        # abs-path-ok: a literal PowerShell command-line argument the
+        # detector tokenizes as text -- not a filesystem path this test
+        # resolves or depends on.
+        out = guard.check(self._ps_payload("Copy-Item %s C:\\tmp\\x" % SENTINEL))
+        assert out is not None
+
+    def test_safe_git_status_allows_with_no_silence(self):
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("git status"))
+        assert out is None
+        assert silences == []
+
+    def test_grammar_gap_shape_records_silent_not_clean(self):
+        from coordinator_core.bash_guards import _verdict
+
+        with _verdict.collecting() as silences:
+            out = guard.check(self._ps_payload("Remove-Item x &> out.txt"))
+        assert out is None
+        assert any(
+            s.guard_name == "block_approval_sentinel_creation" for s in silences
+        )
+
+    def test_non_bash_non_powershell_tool_allows(self):
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
+        assert guard.check(payload) is None
+
+    def test_stale_taint_state_not_leaked_from_prior_bash_call(self):
+        """Regression for the module-level singleton `_detector`: a prior
+        bash-dialect call that tainted a variable must not leave
+        `_tainted_vars` populated for a LATER PowerShell-dialect call on the
+        same long-lived detector instance."""
+        bash_payload = _payload("S=%s; touch $S" % SENTINEL)
+        assert guard.check(bash_payload) is not None  # bash leg taints S
+
+        ps_out = guard.check(self._ps_payload("git status"))
+        assert ps_out is None

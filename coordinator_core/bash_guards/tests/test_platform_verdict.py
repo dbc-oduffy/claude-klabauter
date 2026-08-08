@@ -1,23 +1,25 @@
 """Tests for coordinator_core.bash_guards._platform_verdict.
 
 Coverage:
-  (a) host_is_windows=True  -> deny envelope (permissionDecision: deny),
-      reason names the shape, the truncated command, and the outlet.
-  (b) host_is_windows=False -> allow_advisory envelope (permissionDecision:
-      allow + additionalContext), context names the shape and the outlet,
-      never a deny key.
-  (c) host_is_windows omitted -> tracks `os.name` at CALL time (monkeypatched
-      both ways from a single macOS test process), proving the default is
-      not baked in at import time and cannot be influenced by any
-      environment variable (AC-8 discharge).
-  (d) `platform_verdict` (the low-level function) honors the same override
-      independent of the message-templating convenience wrapper.
-  (e) a long matched command is truncated in the deny path (mirrors
-      `block_worktree_creation._deny_reason`'s truncation convention).
+  (a) `platform_verdict_for_shape` is ADVISORY-ONLY (DR-280, 2026-08-07): it
+      never returns a deny envelope, at any `host_is_windows` value
+      (explicit True/False, omitted-and-sniffed, or declared-registry-
+      overridden) -- always `permissionDecision: allow` +
+      `additionalContext` naming the shape and the outlet, never a
+      `permissionDecisionReason` key.
+  (b) The low-level `platform_verdict` function is UNAFFECTED by DR-280 and
+      still renders either envelope shape (deny/advise) from
+      caller-supplied text, honoring the same override contract
+      independent of the message-templating convenience wrapper above it.
+  (c) `_resolve_host_is_windows` / `_sniff_host_is_windows` /
+      `_declared_host_is_windows` platform-resolution plumbing (used by
+      `platform_verdict`, and still exercised in isolation here) is
+      unchanged by DR-280.
 
 Pure Python -- no shell spawns, no real platform dependency.
 
 Spec backlink: coordinator_core/bash_guards/_platform_verdict.py
+Spec backlink (governing decision): docs/decisions/DR-280-unreachable-deny-legs-retire-rather-than.md
 """
 
 from __future__ import annotations
@@ -28,7 +30,9 @@ import sys
 from coordinator_core.bash_guards import _platform_verdict as pv
 
 
-def test_windows_override_denies():
+def test_windows_override_still_advises_never_denies():
+    # DR-280: platform_verdict_for_shape is advisory-only -- host_is_windows
+    # no longer changes the envelope shape, even explicitly True.
     result = pv.platform_verdict_for_shape(
         "grep-via-bash",
         "grep -r foo .",
@@ -38,13 +42,13 @@ def test_windows_override_denies():
     )
     out = result["hookSpecificOutput"]
     assert out["hookEventName"] == "PreToolUse"
-    assert out["permissionDecision"] == "deny"
-    reason = out["permissionDecisionReason"]
-    assert "grep-via-bash" in reason
-    assert "grep -r foo ." in reason
-    assert "the search outlet" in reason
-    assert "search_outlet(query='foo')" in reason
-    assert "additionalContext" not in out
+    assert out["permissionDecision"] == "allow"
+    ctx = out["additionalContext"]
+    assert "grep-via-bash" in ctx
+    assert "the search outlet" in ctx
+    assert "search_outlet(query='foo')" in ctx
+    assert "permissionDecisionReason" not in out
+    assert "DENIED" not in ctx
 
 
 def test_macos_override_advises_never_denies():
@@ -65,35 +69,36 @@ def test_macos_override_advises_never_denies():
     assert "permissionDecisionReason" not in out
 
 
-def test_default_tracks_os_name_windows(monkeypatch):
+def test_shape_helper_allows_regardless_of_os_name(monkeypatch):
+    # DR-280: platform_verdict_for_shape no longer varies by real host --
+    # both os.name values render the same allow+advisory envelope.
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "nt")
-    result = pv.platform_verdict_for_shape(
+    windows_result = pv.platform_verdict_for_shape(
         "for-loop-plumbing", "for f in *.txt; do cat $f; done", "the outlet", "outlet_call()"
     )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_default_tracks_os_name_posix(monkeypatch):
-    monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "posix")
     monkeypatch.setattr(sys, "platform", "linux")
-    result = pv.platform_verdict_for_shape(
+    posix_result = pv.platform_verdict_for_shape(
         "for-loop-plumbing", "for f in *.txt; do cat $f; done", "the outlet", "outlet_call()"
     )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert windows_result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert posix_result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_default_is_not_baked_in_at_import_time(monkeypatch):
+def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch):
     # Same process, same imported module object -- flipping os.name between
-    # two calls must flip the verdict both times, proving the read happens
-    # at call time (never cached on a prior import or a prior call).
+    # two calls must flip the LOW-LEVEL platform_verdict's verdict both
+    # times, proving the read happens at call time (never cached on a prior
+    # import or a prior call). platform_verdict_for_shape no longer varies
+    # by host at all (DR-280), so this property is exercised against
+    # `platform_verdict` directly instead.
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "nt")
-    first = pv.platform_verdict_for_shape("shape", "cmd", "outlet", "example")
+    first = pv.platform_verdict("deny text", "advise text")
     monkeypatch.setattr(os, "name", "posix")
     monkeypatch.setattr(sys, "platform", "linux")
-    second = pv.platform_verdict_for_shape("shape", "cmd", "outlet", "example")
+    second = pv.platform_verdict("deny text", "advise text")
     assert first["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
 
@@ -114,23 +119,31 @@ def test_sniff_widens_to_cygwin_and_msys_sys_platform(monkeypatch):
 def test_declared_registry_value_wins_over_sniffing(monkeypatch):
     # A declared registry value is the operator's authoritative correction
     # for a misdetecting box -- it must win regardless of what os.name/
-    # sys.platform say.
+    # sys.platform say. Exercised against the low-level `platform_verdict`
+    # (via `_resolve_host_is_windows`, which both public functions share);
+    # `platform_verdict_for_shape` itself no longer varies by this signal
+    # (DR-280).
     monkeypatch.setattr(os, "name", "posix")
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: True)
-    result = pv.platform_verdict_for_shape("shape", "cmd", "outlet", "example")
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert pv._resolve_host_is_windows(None) is True
 
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: False)
-    result = pv.platform_verdict_for_shape("shape", "cmd", "outlet", "example")
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert pv._resolve_host_is_windows(None) is False
 
 
-def test_explicit_override_kwarg_still_wins_over_declared_registry_value(monkeypatch):
+def test_shape_helper_ignores_host_is_windows_kwarg_entirely(monkeypatch):
+    # DR-280: host_is_windows is vestigial on platform_verdict_for_shape --
+    # still accepted (threaded by every live caller and dispatch.py's
+    # registration lambdas) but has no effect on the rendered envelope.
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: True)
     result = pv.platform_verdict_for_shape(
         "shape", "cmd", "outlet", "example", host_is_windows=False
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    result = pv.platform_verdict_for_shape(
+        "shape", "cmd", "outlet", "example", host_is_windows=True
     )
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
@@ -168,14 +181,16 @@ def test_low_level_platform_verdict_honors_override():
     assert advised["hookSpecificOutput"]["additionalContext"].endswith("advise text")
 
 
-def test_long_command_truncated_in_deny_message():
+def test_shape_helper_advisory_does_not_echo_matched_cmd():
+    # DR-280: platform_verdict_for_shape's advisory template never rendered
+    # `matched_cmd` (only the retired deny message did); a pathological
+    # long command costs nothing extra since it is accepted but unused.
     long_cmd = "grep -r " + ("x" * 400)
     result = pv.platform_verdict_for_shape(
         "grep-via-bash", long_cmd, "the outlet", "outlet_call()", host_is_windows=True
     )
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert long_cmd not in reason
-    assert "..." in reason
+    ctx = result["hookSpecificOutput"]["additionalContext"]
+    assert long_cmd not in ctx
 
 
 def test_no_override_env_var_influences_anything(monkeypatch):

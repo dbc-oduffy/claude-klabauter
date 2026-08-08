@@ -118,7 +118,7 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
 
 
 @register_op("handoff.match_candidates")
-async def _handler(
+def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC "handoff.match_candidates" handler.

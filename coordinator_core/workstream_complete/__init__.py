@@ -1427,6 +1427,29 @@ def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> 
     plan_status = plan_frontmatter.get("status") if isinstance(plan_frontmatter, dict) else None
     plan_display = f"docs/plans/{resolved_plan.name}"
     if isinstance(plan_status, str) and plan_status in _LEG_A_TERMINAL_PLAN_STATUS:
+        close_out_last_partial = (
+            plan_frontmatter.get("close_out_last_partial") if isinstance(plan_frontmatter, dict) else None
+        )
+        if close_out_last_partial:
+            # C4 (2026-08-08): a terminal-status plan that STILL carries
+            # close_out_last_partial: cannot be trusted the way an ordinary
+            # terminal plan can -- the marker itself records that the last
+            # close-out attempt found the plan not fully shipped/resolved
+            # (see C1's `_clear_close_out_partial_marker`, which clears it
+            # ONLY on the genuine `implemented` flip). A `status:` field
+            # sitting next to an uncleared marker is exactly the
+            # self-attestation gap this whole plan (C1-C4) exists to catch
+            # -- `not-applicable` here would silently read that unverified
+            # status as "correctly nothing to look at". `indeterminate` is
+            # the honest verdict: the gate COULD have looked, and what it
+            # found was itself suspect, so this must not read as verified.
+            return {
+                "verdict": "indeterminate",
+                "detail": f"plan {plan_display}: status {plan_status!r} is terminal but still "
+                f"carries close_out_last_partial: {close_out_last_partial!r}",
+                "open": None,
+                "total": None,
+            }
         return {
             "verdict": "not-applicable",
             "detail": f"plan {plan_display}: status {plan_status!r} is terminal",
@@ -1470,20 +1493,42 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
                             `deliverable_id` resolving to no (or more than
                             one) plan, an unreadable/non-UTF-8 plan, or a
                             joined plan whose own `status:` is terminal
-                            (`_LEG_A_TERMINAL_PLAN_STATUS`). Deliberately
-                            distinct from `indeterminate`: "the gate could
-                            not look, which unreported reads as verified"
-                            (indeterminate) vs. "there was nothing to
-                            look at, and that is correct" (not-applicable)
-                            — see _evaluate_session_handoff_leg_a. Never
-                            blocks.
-        "indeterminate"  — every kind EXCEPT `session-handoff`, one of
+                            (`_LEG_A_TERMINAL_PLAN_STATUS`) AND carries no
+                            `close_out_last_partial:` marker — a terminal
+                            plan that STILL carries that marker resolves
+                            `indeterminate` instead (C4, 2026-08-08): the
+                            marker itself records that the last close-out
+                            attempt found the plan not fully shipped, so
+                            its `status:` cannot be trusted the way an
+                            ordinary terminal plan's can — see
+                            _evaluate_session_handoff_leg_a. Deliberately
+                            distinct from `indeterminate`: for the
+                            no-`deliverable_id`/no-join/unreadable-plan
+                            branches this is "there was nothing to look
+                            at, and that is correct"; for the C4
+                            uncleared-marker branch (which DOES read the
+                            plan and the marker) it is "what the gate
+                            found was affirmatively untrustworthy, not
+                            merely absent" — either way the verdict
+                            legitimately reads as verified-clear, unlike
+                            `indeterminate` — see
+                            _evaluate_session_handoff_leg_a. Never blocks.
+        "indeterminate"  — for every kind EXCEPT `session-handoff`, one of
                             AC3b's three named leg-A holes: the handoff
                             could not be resolved/read at all, C3 found no
                             heading (`None`), or the heading was present
                             with zero checkboxes (`total == 0`) — a
                             heading with no checkboxes is not verifiable
                             completeness, so it does NOT count as a pass.
+                            `session-handoff` ALSO resolves this verdict
+                            (C4, 2026-08-08) when the `deliverable_id` join
+                            led to a plan whose `status:` is terminal but
+                            which still carries an uncleared
+                            `close_out_last_partial:` marker — the marker
+                            records that its own status cannot be trusted
+                            as self-attestation, so a terminal-looking
+                            `status:` next to it must not read as verified
+                            (see _evaluate_session_handoff_leg_a).
     leg_b["verdict"] is one of "live-child" (FIRES, AC4), "no-children"
     (does not block), or "indeterminate" (AC5's non-blocking `exit_code=2`
     mapping — `leg_b["error"]` always carries the op's own `error` string
@@ -1889,6 +1934,44 @@ def _deliverable_id_from_consumed_handoff(repo_root: Path, gate: SessionShapeGat
     return fm.get("deliverable_id")
 
 
+# Kept in sync BY HAND with the M2 "VERIFIED" re-entrant table in
+# coordinator_core/workstream_complete/directives_session_hygiene.py's module
+# docstring (C3, docs/plans/2026-08-08-wsc-judgment-directive-boundary.md) —
+# update both together if a directive's re-entrancy verdict changes. Every
+# other directive in the envelope is either M3 (hardcoded
+# `already_satisfied: False`, re-fires on every pass) or an UNVERIFIED claim
+# and must NOT be added here on convenience. `d-append-orientation-pinboard`
+# is deliberately excluded despite having a real satisfaction check: no
+# production call site threads `existing_pinboard_line` into
+# `build_pinboard_directive` (see this module's own call site), so the check
+# never runs and the directive still re-fires in practice.
+_VERIFIED_REPLAY_SAFE_DIRECTIVE_IDS = frozenset(
+    {
+        "d-claim-plan-execution-lock",
+        "d-complete-entry",
+        "d-release-plan-claim",
+    }
+)
+
+#: The deferral-harvest directive is emitted one-per-governing-plan with an
+#: ordinal suffix (`build_deferral_harvest_directives` ->
+#: `d-harvest-deferrals-1`, `-2`, ...), so it cannot be matched by the exact-id
+#: set above. Matched on prefix instead; an exact-id entry silently never
+#: matched, which under-reported the safe set rather than over-reporting it.
+_VERIFIED_REPLAY_SAFE_ID_PREFIXES = ("d-harvest-deferrals-",)
+
+
+def _is_verified_replay_safe(directive_id: Optional[str]) -> bool:
+    """True when `directive_id` is a directive C3's audit verified as
+    genuinely re-entrant at the CLI level, and so safe to replay.
+    """
+    if not directive_id:
+        return False
+    if directive_id in _VERIFIED_REPLAY_SAFE_DIRECTIVE_IDS:
+        return True
+    return directive_id.startswith(_VERIFIED_REPLAY_SAFE_ID_PREFIXES)
+
+
 def _narration_and_next_move(
     gate: SessionShapeGate, directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]
 ) -> tuple[str, str]:
@@ -1897,7 +1980,29 @@ def _narration_and_next_move(
         f"({len(directives)} directive(s) computed, {len(judgment_points)} judgment point(s) open)."
     )
     if judgment_points:
-        next_move = "Resolve the open judgment point(s) below, then work the directives in dependency order."
+        replay_safe_ids = sorted(
+            d.get("id") for d in directives if _is_verified_replay_safe(d.get("id"))
+        )
+        if replay_safe_ids:
+            replay_note = (
+                f" Only {len(replay_safe_ids)} of this run's directives ({', '.join(replay_safe_ids)}) "
+                "are verified safe to replay — the rest re-fire on every apply pass, including the "
+                "ceremony's own commit step (see directives_session_hygiene.py's module docstring for "
+                "the full verdict table); resolve what you can, run apply, and repeat, but a re-run "
+                "is not free."
+            )
+        else:
+            replay_note = (
+                " None of this run's directives are verified safe to replay — they re-fire on every "
+                "apply pass, including the ceremony's own commit step (see "
+                "directives_session_hygiene.py's module docstring for the full verdict table); resolve "
+                "what you can, run apply, and repeat, but a re-run is not free."
+            )
+        next_move = (
+            "Resolve the open judgment point(s) below, then work the directives in dependency "
+            "order. A judgment point you leave open only blocks the directives that depend on "
+            "it, not the rest of the run — resolve a subset and re-run to pick up the rest."
+        ) + replay_note
     elif directives:
         next_move = "Work the directives in dependency order to finalize this workstream."
     else:

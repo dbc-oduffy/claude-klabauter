@@ -65,7 +65,7 @@ from typing import Dict, List, Optional, Sequence
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
 
-_PROG = "check-plugin-drift.sh"
+_PROG = "check-plugin-drift"
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +934,7 @@ def _resolve_refresh_log() -> Path:
 # CLI / op entry
 # ---------------------------------------------------------------------------
 
-_USAGE = """Usage: check-plugin-drift.sh [<plugin>] [--check-clean-only]
+_USAGE = """Usage: check-plugin-drift [<plugin>] [--check-clean-only]
 Two-leg drift probe. Exit 0=clean, 1=drift detected.
 Environment: MACHINE_LOCAL_REGISTRY_DIR, HOME
 """

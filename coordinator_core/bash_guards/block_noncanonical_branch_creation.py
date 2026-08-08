@@ -180,7 +180,7 @@ from coordinator_core.daily_branch import is_canonical_branch
 from coordinator_core.daily_day import local_day
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+MATCHERS = ("Bash",)
 PRIORITY = 42
 
 #: Longlived branch prefixes this guard deliberately does NOT deny -- see
@@ -366,7 +366,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Deliberately no try/except -- fail-CLOSED-on-exception is the
     # dispatcher's job for a CLASS = "hard-deny" guard (see module
     # docstring "NEGATIVE SPEC 4").
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}

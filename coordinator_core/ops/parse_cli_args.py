@@ -118,7 +118,7 @@ def parse_date_flags(arguments: str) -> dict:
 
 
 @register_op("cli.parse_flag")
-async def _handler_parse_flag(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler_parse_flag(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'cli.parse_flag' handler.
 
     `params["arguments"]` (contractual) is the raw `$ARGUMENTS` string;
@@ -132,7 +132,7 @@ async def _handler_parse_flag(params: dict, repo_root: Optional[Path] = None) ->
 
 
 @register_op("cli.parse_date_flags")
-async def _handler_parse_date_flags(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler_parse_date_flags(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'cli.parse_date_flags' handler.
 
     `params["arguments"]` (contractual) is the raw `$ARGUMENTS` string.

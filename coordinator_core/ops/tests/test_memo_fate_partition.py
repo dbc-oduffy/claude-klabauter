@@ -29,7 +29,6 @@ Plan: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C16 
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -67,8 +66,6 @@ def _write_memo(archive_dir: Path, memo_id: str, **kwargs) -> None:
     (archive_dir / f"{memo_id}.md").write_text(_memo(**kwargs), encoding="utf-8")
 
 
-def _run(coro):
-    return asyncio.run(coro)
 
 
 def _build_fixture_corpus(worktree_root: Path) -> Path:
@@ -246,11 +243,9 @@ def test_handler_writes_shard_to_run_scoped_path(tmp_path: Path):
     worktree_root = tmp_path / "repo"
     archive_dir = _build_fixture_corpus(worktree_root)
 
-    result = _run(
-        _handler(
-            {"run_id": "run-xyz", "archive_dir": str(archive_dir)},
-            repo_root=worktree_root / ".git",
-        )
+    result = _handler(
+        {"run_id": "run-xyz", "archive_dir": str(archive_dir)},
+        repo_root=worktree_root / ".git",
     )
 
     assert result["schema_version"] >= 1
@@ -268,8 +263,8 @@ def test_handler_is_idempotent_on_rerun_same_run_id(tmp_path: Path):
     worktree_root = tmp_path / "repo"
     archive_dir = _build_fixture_corpus(worktree_root)
 
-    first = _run(_handler({"run_id": "run-rerun", "archive_dir": str(archive_dir)}, repo_root=worktree_root / ".git"))
-    second = _run(_handler({"run_id": "run-rerun", "archive_dir": str(archive_dir)}, repo_root=worktree_root / ".git"))
+    first = _handler({"run_id": "run-rerun", "archive_dir": str(archive_dir)}, repo_root=worktree_root / ".git")
+    second = _handler({"run_id": "run-rerun", "archive_dir": str(archive_dir)}, repo_root=worktree_root / ".git")
     assert first["counts"] == second["counts"]
 
 
@@ -281,15 +276,15 @@ def test_handler_is_idempotent_on_rerun_same_run_id(tmp_path: Path):
 def test_handler_rejects_missing_run_id(tmp_path: Path):
     worktree_root = tmp_path / "repo"
     with pytest.raises(ValueError, match="run_id"):
-        _run(_handler({}, repo_root=worktree_root / ".git"))
+        _handler({}, repo_root=worktree_root / ".git")
 
 
 def test_handler_rejects_unsafe_run_id(tmp_path: Path):
     worktree_root = tmp_path / "repo"
     with pytest.raises(ValueError, match="safe path segment"):
-        _run(_handler({"run_id": "../escape"}, repo_root=worktree_root / ".git"))
+        _handler({"run_id": "../escape"}, repo_root=worktree_root / ".git")
 
 
 def test_handler_rejects_none_repo_root():
     with pytest.raises(ValueError, match="repo_root"):
-        _run(_handler({"run_id": "run-a"}, repo_root=None))
+        _handler({"run_id": "run-a"}, repo_root=None)

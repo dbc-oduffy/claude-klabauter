@@ -23,6 +23,10 @@ def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "tasks").mkdir(parents=True)
     (repo / "state").mkdir()
+    # `.git` marker: `housekeeping_liveness.liveness_path` now validates that repo_root
+    # resolves to a git repo -- every fixture that stamps/reads through that seam needs
+    # a real (if minimal) marker, not a bare non-git tmp dir.
+    (repo / ".git").mkdir()
     return repo
 
 

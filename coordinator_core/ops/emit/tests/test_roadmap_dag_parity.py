@@ -45,7 +45,7 @@ from coordinator_core.ops.emit.validate import ValidationError, validate_array
 
 _SAMPLE_PROVENANCE: Dict[str, Any] = {
     "source_kind": "local_fs",
-    "repo": "dbc-example-operator/claude-klabauter",
+    "repo": "dbc-oduffy/claude-klabauter",
     "ref": None,
     "path": "state/handoffs/2026-07-06_100000_strang-01.md",
     "observed_at": "2026-07-06T10:00:00Z",
@@ -54,7 +54,7 @@ _SAMPLE_PROVENANCE: Dict[str, Any] = {
 }
 
 _COORDINATOR_ROOT_PATH = "/home/test/.claude/plugins/coordinator-claude/coordinator"
-_REPO = "dbc-example-operator/claude-klabauter"
+_REPO = "dbc-oduffy/claude-klabauter"
 _ROADMAP_ID = "dag-parity-test"
 
 

@@ -86,7 +86,8 @@ def _claude_home() -> str:
     override = os.environ.get("CLAUDE_HOME")
     if override:
         return override
-    return os.path.join(os.path.expanduser("~"), ".claude")
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, ".claude")
 
 
 def _machine_local_impl() -> str:

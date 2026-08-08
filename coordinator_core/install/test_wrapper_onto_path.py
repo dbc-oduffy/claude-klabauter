@@ -19,6 +19,7 @@ from coordinator_core.install.wrapper_onto_path import (
     _default_wrapper_bin_dir,
     _install_wrapper_onto_path,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -271,7 +272,7 @@ def test_fresh_process_import_does_not_trigger_ops_eager_import_cycle():
         capture_output=True,
         text=True,
         timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
         cwd=_REPO_ROOT,
     )
     assert result.returncode == 0, result.stderr

@@ -49,7 +49,7 @@ from typing import List, Optional
 
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 _PROG = "render-template-tree.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
 
@@ -95,6 +95,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
             capture_output=True,
             text=True,
             timeout=15,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"{_PROG}: machine-local invocation failed: {exc}", file=sys.stderr)
@@ -231,7 +232,10 @@ def main(argv: List[str]) -> int:
     for fpath in token_bearing:
         # resolve_launchable, not a bare path: render-template.py carries a shebang,
         # which Windows CreateProcess cannot exec (WinError 193).
-        proc = subprocess.run([*render_single_argv, fpath, "-o", fpath, *kv_pairs])
+        proc = subprocess.run(
+            [*render_single_argv, fpath, "-o", fpath, *kv_pairs],
+            **no_console_creationflags(),
+        )
         if proc.returncode != 0:
             return proc.returncode
 

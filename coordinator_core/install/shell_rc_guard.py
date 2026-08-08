@@ -43,8 +43,11 @@ when porting"). A stale bake is recovered the same way a relocated PATH
 entry is (see § Relocation self-heal below): rerun the writer.
 
 Rc-path resolution (legacy single-file shape) mirrors the pre-generalization
-``substrate.py`` PATH-block writer: `$SHELL`'s basename selects `.zshrc` /
-`.bashrc`, defaulting to `.zshrc`. The multi-file shape does NOT have this
+``substrate.py`` PATH-block writer, with one platform correction: `MSYSTEM`
+(Git-Bash/MSYS) forces `.bashrc`, else `$SHELL` selects `.zshrc` / `.bashrc`
+by an `.exe`-tolerant suffix match, defaulting to `.zshrc`. The bare
+basename-equality form it replaced silently missed Git-Bash's `bash.exe` —
+see ``_resolve_rc_path``'s own negative-spec. The multi-file shape does NOT have this
 single-pick limitation — ``applicable_rc_files`` returns every applicable
 login-profile (`.zprofile`, `.bash_profile`, `.profile`) and interactive-rc
 (`.zshrc`, `.bashrc`) file independently, fixing the trap where `$SHELL`
@@ -105,6 +108,10 @@ Negative-spec:
     selection is exactly this two-way branch; a wider shell family is out
     of scope for a mechanical port. The multi-file shape sidesteps this
     entirely by writing every applicable file rather than picking one.
+  - Does NOT compare `$SHELL`'s basename for EQUALITY against `"bash"` /
+    `"zsh"` — Git-Bash/MSYS `$SHELL` values carry a `.exe` suffix, and an
+    exact match silently resolves them to `.zshrc`, a file that shell
+    never sources. Suffix-match, and honour `MSYSTEM` first.
   - Does NOT strip or fully remove a previously-written block on its own —
     full removal (uninstall) is `coordinator_core.install.uninstall_legs`'s
     job. This module's own strip-and-rewrite only fires on a body-content
@@ -154,15 +161,26 @@ SENTINEL_BEGIN, SENTINEL_END = _sentinel_markers("CLAUDE_KLABAUTER_CLONE")
 
 def _resolve_rc_path() -> Path:
     """Pick the rc file to guard for the LEGACY single-file calling shape:
-    `$SHELL`'s basename selects `.zshrc` / `.bashrc`, defaulting to
-    `.zshrc` when `$SHELL` is unset or names neither. Retained unchanged
-    for the `install.write_shell_rc_guard_block` op contract and its
-    existing CLAUDE_KLABAUTER_CLONE-only test coverage — the multi-file shape
-    (`applicable_rc_files`) is the fix for this resolver's single-pick
-    limitation, not a replacement of it."""
+    `MSYSTEM` (Git-Bash/MSYS) forces `.bashrc`, otherwise `$SHELL` selects
+    `.zshrc` / `.bashrc`, defaulting to `.zshrc` when `$SHELL` is unset or
+    names neither. Retained for the `install.write_shell_rc_guard_block` op
+    contract — the multi-file shape (`applicable_rc_files`) is the fix for
+    this resolver's single-pick limitation, not a replacement of it.
+
+    Negative-spec — never compare `$SHELL`'s basename for EQUALITY with
+    `"bash"`. Under Git-Bash/MSYS on Windows `$SHELL` basenames to
+    `bash.exe`, an exact-match miss that silently returned `.zshrc` — a
+    file that shell never sources, so the guard block landed where it
+    could not take effect and `uninstall_legs`' CLAUDE_KLABAUTER_CLONE strip leg
+    (the resolver's other live caller) looked for it in the wrong file.
+    The `.exe`-tolerant suffix match plus the `MSYSTEM` precedence below
+    mirror `ops/gen_claude_doe_shim.py`'s resolver, which got this right
+    first; two resolvers, one platform assumption."""
     home = Path(os.environ.get("HOME") or str(Path.home()))
-    shell = os.path.basename(os.environ.get("SHELL", "zsh"))
-    if shell == "bash":
+    if os.environ.get("MSYSTEM"):
+        return home / ".bashrc"
+    shell = os.environ.get("SHELL", "zsh")
+    if shell.endswith(("bash", "bash.exe")):
         return home / ".bashrc"
     return home / ".zshrc"
 

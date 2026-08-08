@@ -37,7 +37,12 @@ table (AC4/AC6).
 
 Route table (PM directive 2026-07-30 — see `_BASE_ROUTE_BY_TSHIRT` for the
 hard-gate ruling): XS->dispatch, S->spec-dispatch, M->plan, L->plan,
-XL->pm-decision. `spec-dispatch` is a light plan artifact
+XL->pm-decision, XXL->goal-setting (2026-08-07 sizing-ladder-xxl-notch-and-
+goal-setting-route plan, C1). `goal-setting` is a terminal room, not a halt
+like `pm-decision`: an XXL resolves an OKR-scale programme rather than a
+plan, and `coordinator:goal-setting` is PM-gated (see `goal_setting_pm_gated`
+in the Negative-spec / detent notes below). `spec-dispatch` is a light plan
+artifact
 (`scope_mode: spec-dispatch`) — substrate verification, scaffold-plus-commit,
 and the cross-plan conflict scan still run; the four-lens body composition
 and the Opus plan review do not. `pm-decision` is not a room: the engine
@@ -72,17 +77,30 @@ the "only over-reads get collapsed" gap Finding 2 named. When the resize
 changes which routing tier the estimate lands in, the `route_boundary_crossed`
 detent is set, naming the catch explicitly.
 
-Appetite<->estimate reconciliation (AC5): a diverging estimate (bigger than
-the appetite budget's ceiling) is surfaced via the `appetite_exceeded`
-detent — the SOLE divergence signal `route()` emits (Finding 2, code-reviewer
-2026-07-24). `fork` stays `None` from this module always; it is the
-RESOLUTION slot the sizing *skill* fills once the PM has actually picked
-cut_to_fit vs raise_appetite (the point the schema's `status` lifecycle
-flips draft->sized->routed). `fork` non-null means "the PM resolved this,"
-full stop — never an engine placeholder pre-filled with a default guess. A
+Appetite<->estimate reconciliation (AC5): appetite is OPTIONAL and is never
+collected before a size is delivered (PM directive 2026-08-07 — sizing comes
+first; the EM does not ask for or assume a budget up front). When a caller
+DOES volunteer an appetite, a diverging estimate (bigger than the budget's
+ceiling) is surfaced via the `appetite_exceeded` detent — the sole divergence
+signal `route()` emits for that path (Finding 2, code-reviewer 2026-07-24).
+`fork` stays `None` from this module always; it is the RESOLUTION slot the
+sizing *skill* fills once the PM has actually picked cut_to_fit vs
+raise_appetite (the point the schema's `status` lifecycle flips
+draft->sized->routed). `fork` non-null means "the PM resolved this," full
+stop — never an engine placeholder pre-filled with a default guess. A
 within-budget or under-budget estimate never sets a detent for this and
 `fork` stays `None`, same as the divergent case — the only observable
 difference is `appetite_exceeded` in `detents`.
+
+When appetite is ABSENT (the default path), neither `appetite_conform` nor
+`appetite_exceeded` fires — there is no budget to compare against. Instead,
+a resized t-shirt at or above `"M"` (see `_POST_SIZE_PROMPT_TSHIRTS`) sets
+the `post_size_prompt_pending` detent and `next_move` appends an OPEN
+question asking the PM whether to proceed, split, or cut — never the closed
+cut_to_fit/raise_appetite pair, which presumes a budget the PM was never
+asked for. XS/S never ask; `route` itself is identical across appetite
+absent/small/medium/large for every t-shirt (AC2) — appetite never feeds the
+route, only the detent.
 
 Express lane (D3): `express_lane=True` short-circuits straight to
 `route="dispatch"` with no detents/fork and no reconciliation — no
@@ -100,15 +118,16 @@ assemble.md): `premise_provenance` is one of `executed` | `read` |
 `not-applicable` | `unrecorded` | None, validated unconditionally by
 `_validate_premise_provenance` (same unconditional-validation property as
 `_validate_probe_signal` — Finding 5, code-reviewer 2026-07-24). When
-provenance is `read` AND the RESIZED t-shirt is in `_LARGE_TSHIRTS` (L/XL),
-the `premise_unproven` detent fires; when provenance is `not-applicable`
-under the same size gate, `premise_not_applicable` fires instead. Both land
-in the same `DETENT_ENUM` widen (never staggered — the example-doctrine-repo-side schema
-parity test asserts symmetric set equality against this tuple). The gate
-keys on resized SIZE, not resolved ROUTE, so it fires identically on
-`shape`- and `pm-decision`-routed L/XL, not only `plan`-routed — routing
-away from `plan` does not reduce the premise-truth-value multiplier the
-detent exists to name. Like `appetite_exceeded` and `pm_decision_pending`,
+provenance is `read` AND the RESIZED t-shirt is in `_LARGE_TSHIRTS`
+(L/XL/XXL), the `premise_unproven` detent fires; when provenance is
+`not-applicable` under the same size gate, `premise_not_applicable` fires
+instead. Both land in the same `DETENT_ENUM` widen (never staggered — the
+Example-doctrine-repo-side schema parity test asserts symmetric set equality against this
+tuple). The gate keys on resized SIZE, not resolved ROUTE, so it fires
+identically on `shape`-, `pm-decision`-, and `goal-setting`-routed L/XL/XXL,
+not only `plan`-routed — routing away from `plan` does not reduce the
+premise-truth-value multiplier the detent exists to name. Like
+`appetite_exceeded` and `pm_decision_pending`,
 this detent NEVER alters `route` and NEVER populates `xl_exit` — it is
 advisory only, discharged by citing executed evidence inline, never by
 producing a spike-result artifact (a structural-in-mechanism,
@@ -147,14 +166,18 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-# Reuses the loe.tshirt XS-XL enum + weights verbatim (schema-mandated, D1.2
+# Reuses the loe.tshirt XS-XXL enum + weights verbatim (schema-mandated, D1.2
 # — "do not invent a parallel scale"). See coordinator/schemas/
-# completion-entry.schema.json loe.tshirt for the canonical source.
-TSHIRT_ORDER = ["XS", "S", "M", "L", "XL"]
-TSHIRT_WEIGHT = {"XS": 1, "S": 2, "M": 4, "L": 8, "XL": 16}
+# completion-entry.schema.json loe.tshirt for the canonical source. XXL is
+# the sixth notch (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route
+# plan, C1) — it routes to `goal-setting`, not `pm-decision`; see
+# `_BASE_ROUTE_BY_TSHIRT`'s HARD GATE comment for why a new KEY is an
+# extension of this table's domain, not an override of it.
+TSHIRT_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
+TSHIRT_WEIGHT = {"XS": 1, "S": 2, "M": 4, "L": 8, "XL": 16, "XXL": 32}
 
 APPETITE_ENUM = ("small", "medium", "large")
-ROUTE_ENUM = ("dispatch", "spec-dispatch", "shape", "plan", "roadmap", "pm-decision")
+ROUTE_ENUM = ("dispatch", "spec-dispatch", "shape", "plan", "roadmap", "pm-decision", "goal-setting")
 FORK_ENUM = ("cut_to_fit", "raise_appetite")
 XL_EXIT_ENUM = ("split", "shape", "roadmap", "accept_multi_session")
 DETENT_ENUM = (
@@ -165,6 +188,9 @@ DETENT_ENUM = (
     "pm_decision_pending",
     "premise_unproven",
     "premise_not_applicable",
+    "post_size_prompt_pending",
+    "xxl_unprobed",
+    "goal_setting_pm_gated",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -173,6 +199,12 @@ PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
 # budget comfortably absorbs without the estimate being flagged as
 # exceeding it. Small/medium/large map onto the same coarse bands the
 # sizing skill's gut-read step already uses.
+#
+# DELIBERATELY NOT widened for XXL (2026-08-07 sizing-ladder-xxl-notch-and-
+# goal-setting-route plan, C1 Part B): `large` topping out at "XL" is what
+# makes an XXL correctly read `appetite_exceeded` against the largest
+# budget. Widening this to include "XXL" would silence exactly the
+# divergence signal the lobby exists to surface — do not "fix" this.
 _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 
 # Base route by resolved tshirt weight, before the D5 shape-entry gate is
@@ -210,15 +242,37 @@ _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 # and let the table re-resolve. XL is not an exception: `pm-decision` is a
 # routed outcome, and the PM's pick lands in `xl_exit` — that is not an
 # override of this map, it is the map's own designed terminal for XL.
+#
+# Adding a KEY for a new size (XXL, below) is an EXTENSION of this table's
+# domain, not an override of the HARD GATE above — the gate governs the
+# output for a given size, not the set of sizes the table has an opinion
+# about. XXL routes straight to `goal-setting` rather than halting at
+# `pm-decision` because XL has FOUR legitimate exits (split / shape /
+# roadmap / accept_multi_session) and picking one without the PM is exactly
+# the in-the-head routing this table exists to discharge — whereas XXL has
+# ONE room, so routing it is a determinate map, not a guess. The relocated
+# PM gate is made observable by the `goal_setting_pm_gated` detent proposed
+# in C0 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan) and
+# recorded by C2 below — this comment does not claim the gate "relocates"
+# as an already-true fact independent of that detent existing.
 _BASE_ROUTE_BY_TSHIRT = {
     "XS": "dispatch",
     "S": "spec-dispatch",
     "M": "plan",
     "L": "plan",
     "XL": "pm-decision",
+    "XXL": "goal-setting",
 }
 
-_LARGE_TSHIRTS = ("L", "XL")
+_LARGE_TSHIRTS = ("L", "XL", "XXL")
+
+# "M and above" — any TSHIRT_ORDER notch added above M MUST be added here
+# too. See state/sizings/2026-08-07-sizing-ladder-xxl-notch-and-goal-setting.yaml
+# (XXL notch). Distinct from `_LARGE_TSHIRTS` above —
+# that band gates the premise-provenance advisory; this one gates the
+# post-size open-appetite prompt. Do not couple the two (see the appetite
+# plan's Anti-scope).
+_POST_SIZE_PROMPT_TSHIRTS = ("M", "L", "XL", "XXL")
 
 
 class SizingAssembleError(ValueError):
@@ -235,9 +289,28 @@ def _validate_tshirt(tshirt: str) -> None:
 
 
 def _step_tshirt(tshirt: str, delta: int) -> str:
+    # Clamp mechanism unchanged by the XXL notch (2026-08-07 sizing-ladder-
+    # xxl-notch-and-goal-setting-route plan, C1 Part B) — it correctly
+    # bounds a one-notch step to the ladder's ends. Behaviour DOES change,
+    # though: a `raise` probe at XL was a no-op before the sixth notch
+    # (clamped at the old top) and is now a promotion XL -> XXL ->
+    # `goal-setting`. This is the substrate fact C2's `xxl_unprobed`
+    # predicate is built on.
     idx = TSHIRT_ORDER.index(tshirt)
     new_idx = max(0, min(len(TSHIRT_ORDER) - 1, idx + delta))
     return TSHIRT_ORDER[new_idx]
+
+
+def _validate_appetite(appetite: Optional[str]) -> None:
+    """Fails loud on a malformed `appetite` regardless of whether the
+    caller's branch will end up consuming it — same unconditional-validation
+    property as `_validate_probe_signal` / `_validate_premise_provenance`:
+    optional, validated when present, fails loud unconditionally. Appetite is
+    no longer collected before a size is delivered (PM directive
+    2026-08-07); `None` is the default, expected path, not a malformed
+    input."""
+    if appetite is not None and appetite not in APPETITE_ENUM:
+        raise SizingAssembleError(f"appetite must be one of {APPETITE_ENUM}, got {appetite!r}")
 
 
 def _validate_probe_signal(probe_signal: Optional[str]) -> None:
@@ -282,7 +355,7 @@ def _apply_symmetric_resize(tshirt: str, probe_signal: Optional[str]) -> tuple[s
 
 def route(
     *,
-    appetite: str,
+    appetite: Optional[str] = None,
     estimate: dict[str, Any],
     scout_evidence: Optional[list[str]] = None,
     express_lane: bool = False,
@@ -294,8 +367,15 @@ def route(
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
     Args:
-        appetite: one of small|medium|large (Shape-Up budget enum).
-        estimate: dict with at least "tshirt" (XS..XL); "provisional" is
+        appetite: one of small|medium|large (Shape-Up budget enum), or
+            `None` (the default). Appetite is never collected before a size
+            is delivered — `None` means no budget has been stated yet, not a
+            missing required value. When `None`, neither `appetite_conform`
+            nor `appetite_exceeded` fires, `route` is identical to what it
+            would be for any stated appetite (AC2), and a resized t-shirt at
+            or above `"M"` sets `post_size_prompt_pending` instead (see
+            module docstring's "Appetite<->estimate reconciliation" note).
+        estimate: dict with at least "tshirt" (XS..XXL); "provisional" is
             echoed back true unconditionally per the schema's const:true.
         scout_evidence: provenance passthrough only — NOT parsed for signal
             (see module docstring's negative-spec).
@@ -307,16 +387,16 @@ def route(
         premise_provenance: None | "executed" | "read" | "not-applicable" |
             "unrecorded" — where the sizing's underlying mechanism claim
             came from. Advisory only (warn, never block): `read` at a
-            resized L/XL sets `premise_unproven`; `not-applicable` at a
-            resized L/XL sets `premise_not_applicable`. Never alters `route`
-            or `xl_exit` (see module docstring's "Premise provenance" note).
+            resized L/XL/XXL sets `premise_unproven`; `not-applicable` at a
+            resized L/XL/XXL sets `premise_not_applicable`. Never alters
+            `route` or `xl_exit` (see module docstring's "Premise
+            provenance" note).
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate,
         scout_evidence, narration, next_move} — READ-ONLY, mutates nothing.
     """
-    if appetite not in APPETITE_ENUM:
-        raise SizingAssembleError(f"appetite must be one of {APPETITE_ENUM}, got {appetite!r}")
+    _validate_appetite(appetite)
     tshirt = estimate.get("tshirt")
     _validate_tshirt(tshirt)
     _validate_probe_signal(probe_signal)
@@ -344,8 +424,6 @@ def route(
     if resize_changed and pre_resize_route != post_resize_route:
         detents.append("route_boundary_crossed")
 
-    ceiling_tshirt = _APPETITE_CEILING_TSHIRT[appetite]
-    ceiling_weight = TSHIRT_WEIGHT[ceiling_tshirt]
     resized_weight = TSHIRT_WEIGHT[resized_tshirt]
 
     # `fork` stays None from this module always — appetite_exceeded is the
@@ -357,10 +435,15 @@ def route(
     # (see negative-spec). The sizing skill fills it once the PM has picked
     # one of the four XL exits.
     xl_exit: Optional[str] = None
-    if resized_weight > ceiling_weight:
-        detents.append("appetite_exceeded")
-    else:
-        detents.append("appetite_conform")
+    if appetite is not None:
+        ceiling_tshirt = _APPETITE_CEILING_TSHIRT[appetite]
+        ceiling_weight = TSHIRT_WEIGHT[ceiling_tshirt]
+        if resized_weight > ceiling_weight:
+            detents.append("appetite_exceeded")
+        else:
+            detents.append("appetite_conform")
+    elif resized_tshirt in _POST_SIZE_PROMPT_TSHIRTS:
+        detents.append("post_size_prompt_pending")
 
     if (resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear) or well_trodden_step_change:
         resolved_route = "shape"
@@ -371,9 +454,36 @@ def route(
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")
 
+    # `goal_setting_pm_gated` (2026-08-07 sizing-ladder-xxl-notch-and-goal-
+    # setting-route plan, C0 item 2 / C2): the observable marker equivalent
+    # to `pm_decision_pending` above, for the relocated PM gate — an XXL
+    # sizing-object otherwise carries no machine-readable sign that
+    # `coordinator:goal-setting` is PM-gated (the earlier claim that "the PM
+    # gate relocates into the room" was true in prose but false in this
+    # module's observable output; this detent is the fix). Advisory only,
+    # same append shape as every other detent here — never alters `route`.
+    if resolved_route == "goal-setting":
+        detents.append("goal_setting_pm_gated")
+
+    # `xxl_unprobed` (same plan, C2 item 2, Key-decision section — the
+    # ACCEPTED counter-proposal to example-doctrine-repo's originally specced
+    # `probe_signal is None and not scout_evidence`, inbound memo
+    # `2026-08-07-example-doctrine-repo-em-xxl-notch-four-answers.md` item 1). Testing
+    # `probe_signal is None` reads "a probe ran, therefore the size is
+    # trustworthy" — but `--probe-signal raise` is a caller ASSERTION, not
+    # evidence, and `_step_tshirt`'s clamp (see its own comment) means a
+    # raise probe reaches XXL from either `--tshirt XL` (promotion) or
+    # `--tshirt XXL` (no-op clamp) — both are the exact false-HIGH this
+    # advisory exists to catch, and example-doctrine-repo's original predicate exempts both.
+    # This predicate tests `scout_evidence` EMPTINESS only, never its
+    # contents (module docstring's negative-spec).
+    if resized_tshirt == "XXL" and not scout_evidence:
+        detents.append("xxl_unprobed")
+
     # Premise-provenance detent (advisory, warn-never-block — DR-068
     # precedent): keyed on RESIZED size, never resolved route, so it fires
-    # identically on shape/pm-decision/plan L/XL (see module docstring).
+    # identically on shape/pm-decision/goal-setting/plan L/XL/XXL (see
+    # module docstring).
     if resized_tshirt in _LARGE_TSHIRTS:
         if premise_provenance == "read":
             detents.append("premise_unproven")
@@ -386,17 +496,29 @@ def route(
     narration_bits = [f"Resolved tshirt {resized_tshirt}"]
     if resize_changed:
         narration_bits.append(f"(probe {probe_signal}d from {tshirt})")
-    narration_bits.append(f"against appetite={appetite} -> route={resolved_route}.")
+    if appetite is not None:
+        narration_bits.append(f"against appetite={appetite} -> route={resolved_route}.")
+    else:
+        narration_bits.append(f"-> route={resolved_route}.")
     narration = " ".join(narration_bits)
 
-    # Precedence, in order (settled design §3/§4):
+    # Precedence, in order (settled design §3/§4; goal-setting branch added
+    # 2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan, C2):
     #   1. appetite_exceeded + pm-decision together -> ONE combined message,
     #      so the EM makes a single PM ask rather than two separate ones.
     #   2. appetite_exceeded alone -> unchanged cut-vs-raise fork message.
-    #   3. pm-decision alone -> surface the four XL exits.
-    #   4. shape -> unchanged.
-    #   5. spec-dispatch -> light-plan-lane framing.
-    #   6. else -> unchanged generic "Route to X."
+    #      NOTE (review-integrator, appetite plan P1 fix): this arm also
+    #      catches the goal-setting route (an XXL never resolves
+    #      pm-decision, so rule 1 never fires for it) -- the goal-setting/
+    #      PM-gated framing is APPENDED to this arm's text below rather than
+    #      going unreachable; see the append block right after this chain.
+    #   3. pm-decision alone -> surface the XL exits.
+    #   4. goal-setting -> OKR-programme framing, PM-gated. Only reached when
+    #      appetite is absent/conforming -- reachable, not shadowed, when
+    #      rule 2 above doesn't claim the cell first.
+    #   5. shape -> unchanged.
+    #   6. spec-dispatch -> light-plan-lane framing.
+    #   7. else -> unchanged generic "Route to X."
     if "appetite_exceeded" in detents and resolved_route == "pm-decision":
         next_move = (
             "Estimate exceeds the appetite budget AND resolves to an XL. Make ONE combined "
@@ -413,12 +535,16 @@ def route(
         )
     elif resolved_route == "pm-decision":
         next_move = (
-            "XL resolves to pm-decision, not a room. Surface the four exits to the PM — "
-            "split (decomposes into independently-shippable pieces), shape (JTBD unclear), "
-            "roadmap (spans >=2 workstreams / needs an initiative FK), or "
-            "accept_multi_session (one coherent job, simply large, PM assents). The choice "
-            "is recorded in the sizing-object's xl_exit field; the engine does not "
-            "auto-select, and a null xl_exit never means accept."
+            "XL resolves to pm-decision, not a room. Surface the exits to the PM — "
+            "shape (JTBD unclear), roadmap (spans >=2 workstreams / needs an initiative "
+            "FK), or accept_multi_session (one coherent job, simply large, PM assents). "
+            "The choice is recorded in the sizing-object's xl_exit field; the engine does "
+            "not auto-select, and a null xl_exit never means accept."
+        )
+    elif resolved_route == "goal-setting":
+        next_move = (
+            "XXL resolves to goal-setting, not a plan. This ask is OKR-programme scale — "
+            "route to coordinator:goal-setting, which is PM-gated."
         )
     elif resolved_route == "shape":
         next_move = "Route to /shape for PM problem-alignment before plan/roadmap."
@@ -431,6 +557,54 @@ def route(
         )
     else:
         next_move = f"Route to {resolved_route}."
+
+    # Goal-setting framing, appended when the goal_setting_pm_gated detent
+    # fired but rule 2 above (appetite_exceeded alone) already claimed the
+    # base next_move text for this cell -- an XXL never resolves
+    # pm-decision, so rule 1's combined-ask arm never applies here; without
+    # this append the goal-setting/PM-gated framing the XXL plan's C2 item
+    # 3(b) specced would silently drop for a caller who volunteers an
+    # appetite (review-integrator P1 fix, coordinator:code-reviewer
+    # 2026-08-07). APPEND, not a new precedence branch — matches the
+    # append-not-reorder discipline the other advisories below use, and
+    # keeps the closed cut_to_fit/raise_appetite fork text intact (AC6: the
+    # volunteered-appetite path keeps that closed fork, unlike the absent-
+    # appetite open question).
+    if "goal_setting_pm_gated" in detents and "appetite_exceeded" in detents:
+        next_move += (
+            " This also resolves to goal-setting (XXL, OKR-programme scale) — route to "
+            "coordinator:goal-setting, which is PM-gated, in addition to the appetite "
+            "fork above."
+        )
+
+    # Open appetite prompt — appended to whichever branch above was selected
+    # (never a new precedence branch), matching the advisory appends below.
+    # Suppressed at `resolved_route == "pm-decision"`: that branch already
+    # asks the PM to pick among the XL exits (which include an open-ended
+    # "split it" resolution), so the open appetite question is already
+    # being asked there (precedence rule #1 — ONE combined PM ask, not two).
+    # Ordered BEFORE the xxl_unprobed/premise advisories: those are
+    # explicitly non-actionable ("does not alter the route above"), so a
+    # live PM question after them would read as qualified by them.
+    if "post_size_prompt_pending" in detents and resolved_route != "pm-decision":
+        next_move += (
+            f" Looks like a {resized_tshirt}, shall we go with that or want to split it, "
+            "cut it, what's up?"
+        )
+
+    # `xxl_unprobed` advisory statement — appended to whichever branch above
+    # was selected, BEFORE the premise-provenance advisory (2026-08-07
+    # sizing-ladder-xxl-notch-and-goal-setting-route plan, C2 item 5
+    # ordering: route text -> appetite question -> xxl_unprobed -> premise
+    # advisory). ADVISORY, warn-never-block (DR-277) — never withholds the
+    # route above.
+    if "xxl_unprobed" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "this XXL resolved with no scout_evidence recorded. Discharge by "
+            "citing inline evidence for the size — never by producing a "
+            "spike-result artifact."
+        )
 
     # Premise-provenance advisory statement — appended to whichever branch
     # above was selected (never a new branch in the precedence chain).
@@ -474,7 +648,8 @@ EXIT_TRANSPORT_FAIL = 3
 
 def _usage(prog: str) -> int:
     print(
-        f"{prog}: usage: {prog} --appetite <small|medium|large> --tshirt <XS|S|M|L|XL> "
+        f"{prog}: usage: {prog} --tshirt <XS|S|M|L|XL|XXL> "
+        "[--appetite small|medium|large] "
         "[--express-lane] [--probe-signal collapse|raise] [--jtbd-unclear] "
         "[--well-trodden-step-change] "
         "[--premise-provenance executed|read|not-applicable|unrecorded] "
@@ -531,7 +706,7 @@ def main(argv: list[str]) -> int:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
 
-    if appetite is None or tshirt is None:
+    if tshirt is None:
         return _usage(prog)
 
     try:

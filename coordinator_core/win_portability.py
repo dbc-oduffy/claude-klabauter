@@ -42,6 +42,23 @@ The three primitives, and the platform-semantics gap each one exists to absorb:
      (``X:\\a\\b``), a POSIX path (``/a/b``), and an MSYS/Git-Bash mount-form
      path (``/x/a/b`` for ``X:\\a\\b``) all split into the same segment shape.
 
+  4. ``no_console_creationflags()`` -- absorbs the console-popup defect
+     (`docs/plans/2026-08-07-no-window-subprocess-primitive.md`, this repo): a
+     subprocess spawned without console suppression allocates a fresh
+     ``conhost.exe`` window on Windows that flashes and steals keyboard focus,
+     with no POSIX equivalent to omit -- there is nothing to suppress there.
+     Returns a kwargs mapping meant to be splatted into ``subprocess.run`` /
+     ``subprocess.Popen`` as ``**no_console_creationflags()``: empty on POSIX,
+     ``{"creationflags": <CREATE_NO_WINDOW>}`` on Windows. Covers the
+     ``creationflags`` route only -- a call site that also passes
+     ``shell=True`` needs the separate STARTUPINFO route
+     (``STARTF_USESHOWWINDOW`` + ``wShowWindow=SW_HIDE``) instead, because
+     with ``shell=True`` Python spawns ``cmd.exe`` as an intermediary and
+     ``CREATE_NO_WINDOW`` does not suppress that intermediary's own window;
+     see the function's own docstring for this gap. Not built here
+     speculatively -- add it only if a test demonstrates ``CREATE_NO_WINDOW``
+     alone insufficient for a child process type this repo actually spawns.
+
 AC-2 finding (home-resolution primitive): NOT built here, by design.
 ``coordinator_core._settings_home.py`` already implements this correctly --
 ``Path.home()`` (which honours ``USERPROFILE`` on Windows via CPython's own
@@ -101,6 +118,8 @@ __all__ = [
     "split_path_list",
     "join_path_list",
     "split_path",
+    "no_console_creationflags",
+    "same_path",
 ]
 
 StrPath = Union[str, "os.PathLike[str]"]
@@ -197,6 +216,43 @@ def is_executable(path: StrPath) -> bool:
     return False
 
 
+def same_path(a: StrPath, b: StrPath) -> bool:
+    """True if ``a`` and ``b`` resolve to the same filesystem entry
+    (cross-platform), never raising.
+
+    Consolidates twelve independently-authored copies of this exact check
+    found across this plane (probe: ``state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml``) that collapsed to two semantic
+    families -- ``samefile``-then-fallback (the stronger of the two) and
+    realpath+normcase-only. This function is the samefile-first family,
+    chosen as the ONE primitive because it is strictly more correct:
+    ``os.path.samefile`` detects hardlink/junction/bind-mount aliases that a
+    realpath-only comparison misses, and that gap is load-bearing on
+    Windows, where the settings home is commonly reached through a
+    junction -- two paths that are the SAME directory via a junction hop
+    must compare equal, and only ``samefile`` (which stats both paths and
+    compares device+inode / file-index) can see that; ``realpath`` alone can
+    resolve to different strings for the two aliases depending on which
+    hop the caller's path went through.
+
+    Tries ``os.path.samefile`` first (requires both paths to exist); falls
+    back to ``os.path.normcase(os.path.realpath(...))`` string comparison
+    when either path is absent or unreadable, so an unregistered/not-yet-
+    cloned repo path never raises. The realpath fallback is itself guarded
+    -- any exception resolving either path returns ``False`` rather than
+    propagating, matching every existing per-site copy's "never raises"
+    contract.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except Exception:
+        pass
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except Exception:
+        return False
+
+
 def split_path_list(value: str) -> List[str]:
     """Split a PATH-style list on ``os.pathsep`` (``:`` on POSIX, ``;`` on
     Windows) -- never a hardcoded ``":"``, which fails open (returns the whole
@@ -248,3 +304,65 @@ def _model_windows_split(value: str, maxsplit: int = -1, *, from_right: bool = F
     if from_right:
         return normalized.rsplit("/", maxsplit)
     return normalized.split("/", maxsplit)
+
+
+def no_console_creationflags() -> dict:
+    """Kwargs mapping to splat into ``subprocess.run`` / ``subprocess.Popen``
+    as ``**no_console_creationflags()`` to suppress the ``conhost.exe`` popup
+    window a Windows child process otherwise allocates.
+
+    POSIX: returns ``{}`` -- there is no console-popup defect to suppress
+    there, and an empty mapping splats to no-op kwargs, leaving stdout/stderr
+    capture semantics on every existing call site completely unchanged.
+
+    Windows: returns ``{"creationflags": <CREATE_NO_WINDOW>}``. This is the
+    ONLY reliable suppression at the ``CreateProcess`` call itself -- it does
+    NOT touch ``stdout``/``stderr``/``stdin`` handling, so a caller's existing
+    ``capture_output=True`` / ``PIPE`` wiring is unaffected.
+
+    GAP, not covered here: a call site that also passes ``shell=True`` needs
+    the separate STARTUPINFO route (``STARTF_USESHOWWINDOW`` +
+    ``wShowWindow=SW_HIDE``) instead of (or in addition to) this primitive.
+    With ``shell=True``, Python spawns ``cmd.exe`` as an intermediary process,
+    and ``CREATE_NO_WINDOW`` on the outer call does not suppress that
+    intermediary's own console window -- verified against python.org's
+    ``subprocess`` docs. Callers with ``shell=True`` must not rely on this
+    function alone.
+
+    SECOND GAP -- REPORTED, THEN UNREPRODUCED; do not cite it as measured.
+    This docstring previously stated that applying the flag to a **git-bash /
+    MSYS child** breaks the child's own stdio: a script doing ``echo "got: $1"``
+    under ``C:\\Program Files\\Git\\bin\\bash.exe`` returning rc 0 unsuppressed
+    and rc 1 under ``CREATE_NO_WINDOW``. Re-run verbatim on the same host later
+    the same day, then widened to 22 comparisons across ``bin\\bash.exe``,
+    ``usr\\bin\\bash.exe``, ``sh.exe`` and ``rm.EXE``, four stdio shapes, and
+    LF/CRLF/``set -euo pipefail`` script variants, the flag changed no return
+    code and truncated no output. The one rc 1 reachable that way comes from
+    ``set -u`` with an unbound ``$1`` and is identical bare and suppressed --
+    the shape that yields a spurious "rc 0 before, rc 1 after" when argv changes
+    in the same edit that adds the flag. Evidence:
+    ``state/audits/2026-08-07-create-no-window-git-bash-stdio-claim-does-not-reproduce.md``.
+
+    One host is not a proof of absence, so treat a shell child as unproven
+    rather than safe: prefer leaving one unsuppressed when its stdio is
+    load-bearing. What does NOT rest on the retracted claim, and still holds: a
+    process whose console behaviour is itself the thing under test must never be
+    suppressed -- see ``coordinator_core/ops/verify_no_powershell_flash.py``'s
+    exemption for the worked case.
+
+    ``import subprocess`` is function-local, not module-scope: this module's
+    own docstring declares "stdlib only (os, pathlib), zero external calls,
+    zero subprocess, safe to import before the venv exists" -- a module-scope
+    import here would falsify that contract for every existing importer.
+    """
+    if not _is_windows():
+        return {}
+
+    import subprocess
+
+    # getattr with a fallback, not a bare attribute access: CREATE_NO_WINDOW
+    # only exists on subprocess when the REAL host is Windows. _is_windows()
+    # is this module's documented monkeypatch seam (see its own docstring),
+    # so a test exercising this branch on a real POSIX host must not raise
+    # AttributeError reaching for a Windows-only constant that isn't there.
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}

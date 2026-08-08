@@ -46,7 +46,6 @@ Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md §
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
@@ -457,7 +456,7 @@ def test_registered_op_handler_round_trips(_isolated_central_root):
         requested_by="example-cockpit-repo",
     )
 
-    result = asyncio.run(_priority_drain({}))
+    result = _priority_drain({})
 
     assert result["exit_code"] == 0
     assert len(result["drained"]) == 1

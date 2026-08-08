@@ -91,12 +91,25 @@ def _claude_home() -> str:
 
 
 def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Import kept function-local, matching
+    this module's other coordinator_core imports (module docstring: bare
+    ``bash <path>`` subprocess invocation, no top-level coordinator_core
+    dependency). Promoted from realpath-only to samefile-then-fallback
+    semantics: broader (junction-aware) equality is correct here since this
+    call site only checks "is repo_root the meta-repo home", where a
+    junction-aliased home must compare equal."""
+    from coordinator_core.win_portability import same_path
+
+    return same_path(a, b)
 
 
 def _machine_local_get(key: str) -> Optional[str]:
     """Best-effort `machine-local get <key>` subprocess call; None on any failure."""
     import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
 
     try:
         result = subprocess.run(
@@ -104,7 +117,7 @@ def _machine_local_get(key: str) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -128,9 +141,9 @@ def _resolve_state_root(repo_root: str) -> str:
     (non-fail-loud) fallback when CLAUDE_KLABAUTER_ROOT is unresolvable.
     """
     if _same_path(repo_root, _claude_home()):
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter:
-            return os.path.join(claude-klabauter, "state")
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root:
+            return os.path.join(claude_klabauter_root, "state")
     return os.path.join(repo_root, "state")
 
 

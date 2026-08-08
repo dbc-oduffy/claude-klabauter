@@ -7,7 +7,6 @@ coordinator_core/tests/test_draft_plan_aging.py (untouched by this file).
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import os
 import subprocess
@@ -175,6 +174,86 @@ def test_git_commit_epoch_returns_none_for_unknown_path(tmp_path):
     assert _git_commit_epoch(tmp_path, "docs/plans/nope.md") is None
 
 
+# ---------------------------------------------------------------------------
+# C14 — `list_stale_executing` batches its per-candidate `git log -1
+# --format=%ct` spawn into one `_batch_git_commit_epochs` walk. These tests
+# pin the batched multi-plan shape and the absence-reconciliation contract
+# (§ Anti-scope 25: a path absent from the walk's output must read as "no
+# resolved timestamp", never silently defaulted).
+# ---------------------------------------------------------------------------
+
+
+def test_batch_git_commit_epochs_resolves_each_distinct_path_independently(tmp_path):
+    from coordinator_core.ops.draft_plan_aging import _batch_git_commit_epochs
+
+    today = date(2026, 7, 22)
+    _init_repo(tmp_path)
+    _write_and_commit_plan(tmp_path, "old.md", "executing", commit_days_ago=10, today=today)
+    _write_and_commit_plan(tmp_path, "fresh.md", "executing", commit_days_ago=1, today=today)
+
+    result = _batch_git_commit_epochs(
+        tmp_path, ["docs/plans/old.md", "docs/plans/fresh.md"]
+    )
+
+    assert set(result.keys()) == {"docs/plans/old.md", "docs/plans/fresh.md"}
+    assert result["docs/plans/old.md"] < result["docs/plans/fresh.md"]
+
+
+def test_batch_git_commit_epochs_omits_paths_with_no_touching_commit(tmp_path):
+    """§ Anti-scope 25: a path with no commit reaching it is simply absent
+    from the returned map — never coerced to a resolved epoch."""
+    from coordinator_core.ops.draft_plan_aging import _batch_git_commit_epochs
+
+    today = date(2026, 7, 22)
+    _init_repo(tmp_path)
+    _write_and_commit_plan(tmp_path, "tracked.md", "executing", commit_days_ago=5, today=today)
+
+    result = _batch_git_commit_epochs(
+        tmp_path, ["docs/plans/tracked.md", "docs/plans/never-committed.md"]
+    )
+
+    assert "docs/plans/tracked.md" in result
+    assert "docs/plans/never-committed.md" not in result
+
+
+def test_batch_git_commit_epochs_empty_input_no_spawn():
+    from coordinator_core.ops.draft_plan_aging import _batch_git_commit_epochs
+
+    assert _batch_git_commit_epochs(Path("."), []) == {}
+
+
+def test_list_stale_executing_multi_plan_uses_one_batched_git_log_call(tmp_path, monkeypatch):
+    """Regression pin for C14: with N `status: executing` plans present,
+    `list_stale_executing` must call `_batch_git_commit_epochs` exactly ONCE
+    (a single git-log walk), never once per plan.
+    """
+    today = date(2026, 7, 22)
+    _init_repo(tmp_path)
+    _write_and_commit_plan(tmp_path, "old-a.md", "executing", commit_days_ago=10, today=today)
+    _write_and_commit_plan(tmp_path, "old-b.md", "executing", commit_days_ago=20, today=today)
+    _write_and_commit_plan(tmp_path, "old-c.md", "executing", commit_days_ago=30, today=today)
+
+    call_count = 0
+    real_batch = _draft_plan_aging._batch_git_commit_epochs
+
+    def _counting_batch(repo_root, rel_paths):
+        nonlocal call_count
+        call_count += 1
+        return real_batch(repo_root, rel_paths)
+
+    monkeypatch.setattr(_draft_plan_aging, "_batch_git_commit_epochs", _counting_batch)
+
+    result = list_stale_executing(tmp_path, threshold_days=3, today=today)
+
+    assert call_count == 1
+    assert {e["path"] for e in result} == {
+        "docs/plans/old-a.md",
+        "docs/plans/old-b.md",
+        "docs/plans/old-c.md",
+    }
+    assert result == sorted(result, key=lambda e: e["path"])
+
+
 def test_list_stale_executing_is_idempotent_across_repeated_invocation(tmp_path):
     today = date(2026, 7, 22)
     _init_repo(tmp_path)
@@ -193,14 +272,14 @@ def test_op_registered_under_contractual_key():
 
 def test_handler_fails_loud_when_repo_root_is_none():
     with pytest.raises(ValueError, match="repo_root is None"):
-        asyncio.run(_plan_list_stale_executing({"threshold_days": 3}, repo_root=None))
+        _plan_list_stale_executing({"threshold_days": 3}, repo_root=None)
 
 
 def test_handler_requires_integer_threshold_days(tmp_path):
     _init_repo(tmp_path)
     common_dir = tmp_path / ".git"
     with pytest.raises(ValueError, match="threshold_days"):
-        asyncio.run(_plan_list_stale_executing({}, repo_root=common_dir))
+        _plan_list_stale_executing({}, repo_root=common_dir)
 
 
 def test_handler_derives_worktree_root_from_common_dir(tmp_path):
@@ -209,9 +288,7 @@ def test_handler_derives_worktree_root_from_common_dir(tmp_path):
     _write_and_commit_plan(tmp_path, "old.md", "executing", commit_days_ago=10, today=today)
     common_dir = tmp_path / ".git"
 
-    result = asyncio.run(
-        _plan_list_stale_executing({"threshold_days": 3}, repo_root=common_dir)
-    )
+    result = _plan_list_stale_executing({"threshold_days": 3}, repo_root=common_dir)
 
     assert result == {"stale": [{"path": "docs/plans/old.md", "age_days": result["stale"][0]["age_days"]}]}
     assert result["stale"][0]["age_days"] >= 9
@@ -906,14 +983,14 @@ def test_op_registered_under_plan_list_orphaned_key():
 
 def test_plan_list_orphaned_handler_fails_loud_when_repo_root_is_none():
     with pytest.raises(ValueError, match="repo_root is None"):
-        asyncio.run(_plan_list_orphaned({"threshold_days": 14}, repo_root=None))
+        _plan_list_orphaned({"threshold_days": 14}, repo_root=None)
 
 
 def test_plan_list_orphaned_handler_requires_integer_threshold_days(tmp_path):
     _init_repo(tmp_path)
     common_dir = tmp_path / ".git"
     with pytest.raises(ValueError, match="threshold_days"):
-        asyncio.run(_plan_list_orphaned({}, repo_root=common_dir))
+        _plan_list_orphaned({}, repo_root=common_dir)
 
 
 def test_plan_list_orphaned_handler_derives_worktree_root_from_common_dir(tmp_path):
@@ -924,7 +1001,7 @@ def test_plan_list_orphaned_handler_derives_worktree_root_from_common_dir(tmp_pa
     )
     common_dir = tmp_path / ".git"
 
-    result = asyncio.run(_plan_list_orphaned({"threshold_days": 14}, repo_root=common_dir))
+    result = _plan_list_orphaned({"threshold_days": 14}, repo_root=common_dir)
 
     assert result["authorized_orphan"] == [
         {"path": "docs/plans/authorized.md", "execution_authorized_by": "PM"}

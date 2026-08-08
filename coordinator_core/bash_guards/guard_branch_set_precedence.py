@@ -117,9 +117,10 @@ from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
 from coordinator_core.daily_branch import _HOURS_48_SECONDS, is_canonical_branch, should_prompt_rename
 from coordinator_core.daily_day import local_day
 from coordinator_core._hook_envelope import allow_advisory
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
-MATCHERS = ["Bash"]
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
 #: `git checkout` creation flags -- the token immediately following one of
@@ -265,7 +266,7 @@ def check(
     """
     try:
         tool_name = payload.get("tool_name") or ""
-        if tool_name != "Bash":
+        if tool_name not in MATCHERS:
             return None
 
         tool_input = payload.get("tool_input") or {}

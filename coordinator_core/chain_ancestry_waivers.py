@@ -2,20 +2,22 @@
 chain_ancestry_waivers.py
 
 Shared home for the chain-ancestry waiver artifact's directory name and
-on-disk path shape — the gate-minted counterpart to DR-243's `pm-vouches`
-waivers (coordinator_core.coverage._PM_VOUCH_WAIVER_DIRNAME /
-coordinator_core.ops.review_trail_write._PM_VOUCH_WAIVER_DIRNAME).
+on-disk path shape. The PM-vouch waiver shape it once stood alongside
+(coordinator_core.coverage._pm_vouched_waiver_shas /
+coordinator_core.ops.review_trail_write's PM-vouch waiver recording) was
+deleted in docs/plans/2026-08-08-vouch-free-review-coverage-gates.md — this
+store is now the sole waiver source for coverage crediting.
 
 Why a THIRD module, not folded into coverage.py or review_trail_write.py:
 this plan (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
 § C1) adds a third write site for a waiver-shaped artifact
 (coordinator_core.ops.coverage_gate, landing in C2) alongside the two
-existing readers/writers of the PM-vouch shape. `_PM_VOUCH_WAIVER_DIRNAME`
-is ALREADY duplicated across coverage.py and review_trail_write.py; adding
-a third copy of a NEW constant, rather than giving the new artifact one
-canonical home, is exactly the shape this plan's Anti-scope explicitly
-permits avoiding ("This does NOT forbid one shared dirname/path-builder
-module for the new artifact alone").
+existing readers/writers of the PM-vouch shape that then existed.
+`_PM_VOUCH_WAIVER_DIRNAME` was ALREADY duplicated across coverage.py and
+review_trail_write.py; adding a third copy of a NEW constant, rather than
+giving the new artifact one canonical home, is exactly the shape this
+plan's Anti-scope explicitly permits avoiding ("This does NOT forbid one
+shared dirname/path-builder module for the new artifact alone").
 
 Anti-scope, hard (binding on later chunks too): this module holds ONLY the
 chain-ancestry waiver's path shape and its own read/write primitives. It
@@ -36,6 +38,11 @@ import os
 import re
 from pathlib import Path
 from typing import FrozenSet, Optional
+
+from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.ops.session.resolve_chain_terminal_disposition import (
+    classify_chain_terminal_disposition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +103,14 @@ def chain_waiver_dir(cwd: str, chain_id: str) -> Optional[Path]:
 #: and therefore read as a coverage certification it never was. Per this repo's
 #: discharge test (CLAUDE.md § North star): the artifact discharges the claim,
 #: not the operator's memory of a DR.
-_MINT_BASIS = "dag-mode-uncovered-at-chain-terminal-close"
+_MINT_BASIS = "dag-mode-uncovered-shas-at-chain-terminal-close"
 
 _READER_NOTE = (
     "This waiver records ONLY that this commit was in the minting chain's walked "
-    "ancestry when the coverage gate HALTed on a DAG-mode UNCOVERED verdict. It is "
-    "NOT a record that anyone reviewed the commit, and no reviewer, verdict or "
+    "ancestry when the coverage gate found it uncovered at a chain-terminal close. "
+    "The gate does not necessarily HALT to reach this point: a chain whose only "
+    "uncovered commits are planning artifacts nets a COVERED verdict and still "
+    "mints. It is NOT a record that anyone reviewed the commit, and no reviewer, verdict or "
     "justification is implied by its existence. Its sole effect is to relax the "
     "foreign-session strip (coverage.py::_narrow_foreign_session_scope) so that a "
     "close record whose range covers this commit MAY credit it. Crediting is "
@@ -261,6 +270,66 @@ def record_chain_ancestry_waiver(
                 "credit this commit for chain %r without a waiver file",
                 target, exc, chain_id,
             )
+
+
+def chain_reached_terminal_close(cwd: str, chain_id: str) -> bool:
+    """True only when `chain_id` (the closing session's own id — the SAME
+    identity that minted this chain's waiver subdirectory, per
+    `record_chain_ancestry_waiver`'s `_MINT_BASIS` docstring comment) has
+    itself reached a TERMINAL "closed" disposition, per the ratified DR-084
+    vocabulary (`open` / `claimed` / `continued` / `closed`).
+
+    `cwd` is the repo/worktree root, matching every other function in this
+    module (`chain_root_dir`, `chain_waiver_dir`); it is resolved to the
+    git COMMON dir (`git_common_dir`, e.g. `<cwd>/.git`) before being handed
+    to the classification core, which expects that shape as its `common_dir`
+    param (`main_worktree_root` derives the worktree back out via
+    `common_dir.parent` — passing `cwd` itself in would double that
+    derivation and scan the wrong tree). Any failure resolving it (not a
+    git repo, `git` unavailable) fails closed — non-terminal, never terminal.
+
+    Reuses, rather than re-derives, the classification core already built
+    for `session.resolve_chain_terminal_disposition`
+    (`coordinator_core.ops.session.resolve_chain_terminal_disposition.
+    classify_chain_terminal_disposition`) — this repo's single-accessor
+    convention for archived-handoff `deployment_state` reads (the same
+    discipline that module's own docstring names for claimed_by/consumed_by
+    reads). Calling with `chain_id` as the EXPLICIT `param_sid` argument
+    bypasses that op's 5-way env-based session-id resolution entirely: no
+    env var reads, no ambient-session confusion — the classification runs
+    against `chain_id` itself, not whatever session happens to be calling.
+
+    Semantics (easy to get wrong — read carefully):
+      - `disposition == "closed"` (which the op only ever returns alongside
+        `chain_terminal == True`) is the ONLY terminal case this returns
+        True for.
+      - `"continued"` is NOT terminal: the chain handed off to a successor
+        session under a DIFFERENT chain_id. A later close under that
+        successor's own chain_id does not license reaping waivers minted
+        under THIS chain_id — those are two distinct waiver subdirectories.
+      - `"open"` / `"claimed"` are non-terminal (the chain has not reached
+        any terminal disposition yet).
+
+    FAIL CLOSED, always: an exit_code:1 CC-7 structured-error result (an
+    unknown/banned `deployment_state` token, or a malformed `closed_reason`)
+    and a "no claimed handoff found" (`disposition == "open"`) result are
+    BOTH treated as NON-terminal. A classification failure or ambiguity must
+    never be read as "safe to reap" — this predicate is a published contract
+    a later reaper builds on, and widening what counts as terminal fails
+    OPEN in the direction that matters (a reaped waiver that should not have
+    been removed silently strips coverage crediting a later close could
+    otherwise have relied on).
+    """
+    try:
+        common_dir = git_common_dir(Path(cwd))
+    except RuntimeError:
+        # Not inside a git repo (or `git` unresolvable) — cannot classify;
+        # fail closed, same posture as every other error branch below.
+        return False
+    result = classify_chain_terminal_disposition(common_dir, chain_id, {})
+    if result.get("exit_code") != 0:
+        return False
+    return result.get("disposition") == "closed"
 
 
 def chain_ancestry_waived_shas(cwd: str, chain_id: str) -> FrozenSet[str]:

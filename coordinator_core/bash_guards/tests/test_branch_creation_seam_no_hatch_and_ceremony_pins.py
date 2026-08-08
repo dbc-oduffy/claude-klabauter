@@ -40,13 +40,6 @@ def _payload(command, cwd="/repo", tool_name="Bash"):
     }
 
 
-def _deny_reason(out):
-    assert out is not None, "expected a deny envelope, got allow"
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    return hso["permissionDecisionReason"]
-
-
 def _advisory_ctx(out):
     assert out is not None, "expected an advisory envelope, got no-op"
     hso = out["hookSpecificOutput"]
@@ -204,13 +197,18 @@ def _hazard_repo_by_default(monkeypatch):
 
 
 class TestAC3NoHatch:
-    def test_env_prefix_override_still_denies(self):
+    # C1 flipped CONFINEMENT_DENY -> ADVISORY_REWRITE in 2ac049c5b (C14b,
+    # per DR-277 "guards are advisory by default"); these two tests still
+    # pin AC3's real guarantee -- the retired env-prefix hatch does not let
+    # a caller escape the guard's notice -- now expressed against the
+    # advisory envelope instead of a deny.
+    def test_env_prefix_override_still_advises(self):
         out = c1.check(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
-        _deny_reason(out)
+        _advisory_ctx(out)
 
-    def test_env_prefix_override_still_denies_git_branch_form(self):
+    def test_env_prefix_override_still_advises_git_branch_form(self):
         out = c1.check(_payload("COORDINATOR_OVERRIDE_BRANCH=1 git branch bad-name"))
-        _deny_reason(out)
+        _advisory_ctx(out)
 
     def test_override_key_absent_from_guard_module_source(self):
         """Deliberately NOT a raw substring scan of the whole module
@@ -298,9 +296,9 @@ class TestAC3NoHatch:
             )
 
     def test_override_key_absent_from_every_emitted_message(self, monkeypatch):
-        # C1 deny.
-        deny_reason = _deny_reason(c1.check(_payload("git checkout -b fix/some-topic")))
-        assert "COORDINATOR_OVERRIDE_BRANCH" not in deny_reason
+        # C1 advisory (post-2ac049c5b flip, see class-level note above).
+        c1_ctx = _advisory_ctx(c1.check(_payload("git checkout -b fix/some-topic")))
+        assert "COORDINATOR_OVERRIDE_BRANCH" not in c1_ctx
 
         # C7 advisory (sanctioned longlived prefix).
         c7_ctx = _advisory_ctx(c7.check(_payload("git checkout -b migration/topic-x")))
@@ -359,10 +357,12 @@ class TestAC5CeremonyNonRegression:
         # NOT accepted by is_canonical_branch and never will be, because the
         # guard never has to judge them at the seam (they never arrive as
         # Bash). This is the accepted, non-regressed state -- not something
-        # this pin asks C1 to change.
+        # this pin asks C1 to change. C1 fires (now advisory, not deny --
+        # see TestAC3NoHatch's class-level note on the 2ac049c5b flip)
+        # rather than staying silent on them.
         for n in range(2, 10):
             out = c1.check(_payload("git checkout -b work/machine-b/2026-08-01-%d" % n))
-            _deny_reason(out)
+            _advisory_ctx(out)
 
     def test_workday_start_step0_rename_and_rollback_untouched(self):
         rename = "git branch -m work/machine-b/2026-07-30to01 work/machine-b/2026-08-01"
@@ -383,23 +383,28 @@ class TestAC5CeremonyNonRegression:
 
 
 class TestAC9NoDateComparisonInC1:
-    def test_local_day_only_referenced_inside_deny_reason(self):
+    # Post-2ac049c5b (C14b), C1's remediation-text helper is named
+    # `_advisory_reason` (was `_deny_reason`) -- see DR-277 and
+    # TestAC3NoHatch's class-level note above. The AC9 guarantee itself
+    # (local_day never feeds a comparison, only remediation text) is
+    # unchanged by the flip.
+    def test_local_day_only_referenced_inside_advisory_reason(self):
         """Structural (AST) assertion: `local_day` is named nowhere in C1's
-        module except inside `_deny_reason` (remediation text only)."""
+        module except inside `_advisory_reason` (remediation text only)."""
         src = inspect.getsource(c1)
         tree = ast.parse(src)
         offending = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name != "_deny_reason":
+            if isinstance(node, ast.FunctionDef) and node.name != "_advisory_reason":
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Name) and sub.id == "local_day":
                         offending.append(node.name)
-        assert offending == [], "local_day referenced outside _deny_reason in: %r" % offending
+        assert offending == [], "local_day referenced outside _advisory_reason in: %r" % offending
 
     def test_no_compare_node_involving_local_day_anywhere(self):
         """No ast.Compare node in C1's module has `local_day` (call or
         name) as either operand -- a stronger structural guarantee than the
-        function-scoping check above: even inside `_deny_reason` itself,
+        function-scoping check above: even inside `_advisory_reason` itself,
         `local_day()`'s return value is only ever interpolated into text,
         never compared."""
         src = inspect.getsource(c1)
@@ -427,8 +432,8 @@ class TestAC9NoDateComparisonInC1:
         monkeypatch.setattr(c1, "local_day", lambda: "2030-12-31")
         out_b = c1.check(_payload("git checkout -b fix/some-topic"))
         assert out_a is not None and out_b is not None
-        assert out_a["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert out_b["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert out_a["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert out_b["hookSpecificOutput"]["permissionDecision"] == "allow"
 
     def test_verdict_identical_across_different_todays_for_canonical_name(self, monkeypatch):
         monkeypatch.setattr(c1, "local_day", lambda: "2020-01-01")
@@ -452,11 +457,13 @@ class TestAC10AC14RenameVsCreate:
         for g in _GUARDS:
             assert g.check(_payload(cmd)) is None
 
-    def test_branch_create_denied_by_c1_only(self):
+    def test_branch_create_advised_by_c1_only(self):
+        # C1 fires (advisory, post-2ac049c5b flip -- see TestAC3NoHatch's
+        # class-level note above); C5/C7 do not even inspect `git branch`
+        # -- see each module's own docstring ("WHAT THIS DOES"/"Injection
+        # seam").
         cmd = "git branch some-noncanonical-name"
-        _deny_reason(c1.check(_payload(cmd)))
-        # C5/C7 do not even inspect `git branch` -- see each module's own
-        # docstring ("WHAT THIS DOES"/"Injection seam").
+        _advisory_ctx(c1.check(_payload(cmd)))
         assert c5.check(_payload(cmd)) is None
         assert c7.check(_payload(cmd)) is None
 

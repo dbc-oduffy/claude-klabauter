@@ -39,13 +39,17 @@ uses ONLY the ratified DR-084 vocabulary — `open` / `claimed` / `continued` /
 
 DR-084 single-accessor constraint (HARD): every lifecycle-field read
 (claimed_by/consumed_by, and the spoof guard's preference read) routes through
-the ONE shared Python accessor, `coordinator/bin/lib/handoff_lifecycle.py`
-(`claim_holder`), loaded via `coordinator_core.session.claims.handoff_lifecycle()`
-(the shared importlib-load site) — this module contains zero raw
-`claimed_by`/`consumed_by` frontmatter reads and zero bare
-status comparisons, keeping `coordinator/tests/test_dr084_single_accessor_guard.py`'s
-invariant intact and making this op indifferent to C7's timing (the accessor
-is the single collapse site when the migration window closes).  Non-lifecycle
+the ONE shared claim accessor. As of the claim-state ledger-first plan's C5
+chunk (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md),
+that accessor is `coordinator_core.claim_state.resolve_claim_state` (`_claim_holder`
+below) — ledger-first with the tracked-frontmatter mirror as fallback, so a
+branch-switch-desynced mirror no longer causes this op's dual detectors to miss
+a live claim (this plan's own 2026-08-07 incident). `_claim_holder` still
+contains zero raw `claimed_by`/`consumed_by` frontmatter reads and zero bare
+status comparisons in THIS module, keeping
+`coordinator/tests/test_dr084_single_accessor_guard.py`'s invariant intact —
+the dual-tolerant `claimed_by`-wins-over-`consumed_by` reads now live inside
+`coordinator_core.claim_state`'s mirror-fallback path, not here. Non-lifecycle
 frontmatter fields (predecessor, deployment_state, closed_reason) read via the
 shared `coordinator_core.ops._fm_util.extract_frontmatter_scalar`.
 
@@ -58,9 +62,25 @@ the wire param as the direct-override tier):
                                     CLAUDE_CODE_SESSION_ID, matching
                                     coordinator_core.ops.session_context
   P4: `CLAUDE_CODE_SESSION_ID`    — platform-injected, per-session
-  P5: `.current-session-id` sentinel under <common_dir>/coordinator-sessions/
-  P6: last-6-digits-of-epoch fallback (the fence's `date +%s | tail -c 7 |
-      head -c 6` last resort, natively `str(epoch)[-6:]`)
+  P5: REMOVED (KS-3, 2026-08-07) — was the `.current-session-id` sentinel
+      under <common_dir>/coordinator-sessions/. Unsound under concurrency
+      (last-writer-wins across concurrent sessions sharing one worktree —
+      see coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND
+      its sole writer (session-init.py, the example-doctrine-repo SessionStart hook)
+      was deleted by PM directive 2026-07-15 — no production writer
+      survives. Falls through to P6 directly now.
+  P6: REMOVED (KS-5, 2026-08-07) — was a last-6-digits-of-epoch fallback
+      (the fence's `date +%s | tail -c 7 | head -c 6` last resort,
+      natively `str(epoch)[-6:]`), fabricating a session id that names no
+      session that ever existed — strictly worse than the P5 sentinel it
+      sat below: a stale sentinel at least named a session that once
+      existed, a fabricated epoch id is different on every invocation and
+      indistinguishable to a downstream reader from a real id. With no
+      env tier resolving, `_resolve_session_id` now returns "" (source
+      "unresolved") and `_classify_sync` fails loud (CC-7 error result)
+      instead of running the detectors against a value that cannot
+      possibly match real claim-holder data — see `_classify_sync`'s
+      unresolved-sid guard.
 
 Scope keying: _OP_KEY_SCOPE = "common_dir" (B4 settlement, ratified —
 `handoff.match_candidates` / `session.boot_sweep` precedent): reads
@@ -86,7 +106,8 @@ Spec backlinks:
     (op-key session.resolve_chain_terminal_disposition)
   - Fence source: example-doctrine-repo coordinator/skills/workstream-complete/SKILL.md Step 0 (~L55-176)
   - Vocabulary: example-doctrine-repo docs/decisions/DR-084-handoff-lifecycle-vocabulary-overhaul-open-claimed-continued-closed.md
-  - Accessor: coordinator/bin/lib/handoff_lifecycle.py (single Python edit site)
+  - Accessor: coordinator_core/claim_state.py::resolve_claim_state (ledger-first,
+    C5 migration site — see docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md)
 
 Negative-spec:
   - Does NOT write, stamp, archive, or mutate anything — classification only;
@@ -119,14 +140,17 @@ import asyncio
 import logging
 import os
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
-from coordinator_core.session import claims
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_NO_WINDOW = no_console_creationflags()
 
 _LOG = logging.getLogger(__name__)
 
@@ -190,7 +214,6 @@ def _is_sweep_attributed_subject(subject: str) -> bool:
     _SWEEP_ATTRIBUTED_SUBJECT_PREFIXES above."""
     return any(subject.startswith(prefix) for prefix in _SWEEP_ATTRIBUTED_SUBJECT_PREFIXES)
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _GIT_TIMEOUT_SECONDS = 30
 
 # ---------------------------------------------------------------------------
@@ -202,11 +225,19 @@ _GIT_TIMEOUT_SECONDS = 30
 # ---------------------------------------------------------------------------
 
 
-def _claim_holder(path: Path) -> str:
-    """Single routed lifecycle read: the accessor's dual-read/preference
-    `claim_holder` over a handoff file path.  Returns "" when neither
-    vocabulary carries a value (accessor contract)."""
-    return claims.handoff_lifecycle().claim_holder(str(path))
+def _claim_holder(path: Path, common_dir: Optional[Path] = None) -> str:
+    """Single routed lifecycle read: `coordinator_core.claim_state`'s
+    ledger-first accessor (C1) resolved over a handoff file path, threading a
+    pre-resolved `common_dir` where the caller already has one in hand (hot
+    path — avoids a second `git_common_dir` resolution per call).  Returns ""
+    when neither the ledger nor the frontmatter mirror carries a value
+    (accessor contract) — migrated off the frontmatter-only
+    `handoff_lifecycle.claim_holder` per this plan's C5 chunk so a
+    branch-switch-desynced mirror no longer misses a live ledger claim (see
+    module docstring's 2026-08-05 misattribution incident and this plan's own
+    2026-08-07 branch-switch-desync incident)."""
+    state = resolve_claim_state(path, common_dir=common_dir)
+    return state.holder or ""
 
 
 # ---------------------------------------------------------------------------
@@ -233,17 +264,17 @@ def _resolve_session_id(
         val = str(environ.get(env_var, "") or "").strip()
         if val:
             return val, label
-    sentinel = common_dir / "coordinator-sessions" / ".current-session-id"
-    try:
-        content = sentinel.read_text(encoding="utf-8").strip()
-    except OSError:
-        content = ""
-    if content:
-        return content, "sentinel"
-    # P6 — the fence's `date +%s | tail -c 7 | head -c 6` last resort:
-    # last six decimal digits of the UTC epoch (CC-2 wall-clock source).
-    epoch = str(int(datetime.now(timezone.utc).timestamp()))
-    return epoch[-6:], "epoch_fallback"
+    # P5 (`.current-session-id` sentinel) REMOVED — KS-3, 2026-08-07: unsound
+    # under concurrency (last-writer-wins) AND its sole writer was deleted
+    # 2026-07-15 (PM directive). See module docstring for detail.
+    # P6 (epoch-tail fabricated-id fallback) REMOVED — KS-5, 2026-08-07: a
+    # fabricated id is different on every invocation and indistinguishable
+    # from a real one downstream, which turned an unidentifiable session
+    # into a passing "open"/not-terminal disposition (the same false-clean
+    # failure mode the P5 removal fixed, reached by a different route — see
+    # module docstring). No tier resolved; report unresolved honestly and
+    # let `_classify_sync` fail loud instead.
+    return "", "unresolved"
 
 
 # ---------------------------------------------------------------------------
@@ -251,18 +282,22 @@ def _resolve_session_id(
 # ---------------------------------------------------------------------------
 
 
-def _scan_claimed_by_session(scan_root: Path, sid: str) -> List[Path]:
+def _scan_claimed_by_session(
+    scan_root: Path, sid: str, common_dir: Optional[Path] = None
+) -> List[Path]:
     """Return every *.md under scan_root (recursive, sorted) whose accessor-read
     claim holder equals sid.  Sorted for determinism — a deliberate native
     tightening of the fence's fs-order `grep -rl | head -1` primary scan; its
-    detector-A arm already piped through `sort`."""
+    detector-A arm already piped through `sort`.  `common_dir` threads through
+    to the ledger-first accessor (C1) so callers with a pre-resolved
+    `common_dir` (the hot path) never trigger a second resolution."""
     if not scan_root.is_dir():
         return []
     hits: List[Path] = []
     for path in sorted(scan_root.rglob("*.md")):
         if not path.is_file():
             continue
-        if _claim_holder(path) == sid:
+        if _claim_holder(path, common_dir) == sid:
             hits.append(path)
     return hits
 
@@ -303,7 +338,7 @@ def _run_git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         check=False,
         timeout=_GIT_TIMEOUT_SECONDS,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
 
 
@@ -454,6 +489,24 @@ def _archived_disposition(path: Path, relpath: str) -> Tuple[dict, Optional[dict
 # ---------------------------------------------------------------------------
 
 
+def classify_chain_terminal_disposition(
+    common_dir: Path, param_sid: Optional[str], environ: dict
+) -> dict:
+    """Public entrypoint for the classification core — thin wrapper around
+    `_classify_sync`, added so callers OUTSIDE this module (e.g.
+    `coordinator_core.chain_ancestry_waivers.chain_reached_terminal_close`)
+    have a documented, non-underscored seam onto the SAME classification
+    logic the op handler uses, rather than reaching into a private name.
+
+    Calling with an explicit `param_sid` (the `param_sid` tier) bypasses the
+    5-way env-based session-id resolution entirely and classifies that exact
+    id — the shape a caller with an explicit chain_id in hand wants, with no
+    env-var ambient-session confusion. See `_classify_sync` for the full
+    contract (disposition vocabulary, evidence shape, CC-7 error path).
+    """
+    return _classify_sync(common_dir, param_sid, environ)
+
+
 def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) -> dict:
     """Full Step-0 classification: resolve sid, run the dual detectors + spoof
     guard, map to the locked disposition vocabulary."""
@@ -473,6 +526,27 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
         "notes": notes,
     }
 
+    # Unresolved-sid guard (KS-5): with the P6 fabricated-epoch fallback
+    # gone, an unresolvable sid is "" — never let that empty value flow into
+    # the detectors below. `_claim_holder` returns "" for a genuinely
+    # unclaimed handoff too, so `"" == sid` would spuriously match every
+    # unclaimed record as "claimed by this session", and even without that
+    # false-match risk, no detector could possibly hit against a value that
+    # names no session — the fall-through would read as a clean "open"/
+    # not-terminal verdict identical to the false clean the P6 removal was
+    # fixing. Fail loud instead (CC-7 shape) so this can never read as a
+    # passing chain-end coverage gate.
+    if not sid:
+        error = _error_result(
+            "session id could not be resolved via any tier (param/em_sid/"
+            "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID) — refusing to classify "
+            "chain-terminal disposition against an unidentified session "
+            "(KS-5: the fabricated-epoch fallback that used to paper over "
+            "this was removed as strictly worse than reporting unresolved)"
+        )
+        error["evidence"] = evidence
+        return error
+
     def _result(disposition: str, chain_terminal: bool) -> dict:
         return {
             "exit_code": 0,
@@ -488,7 +562,9 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
             return str(path)
 
     # Primary detector — live state/handoffs/ claim stamp.
-    live_hits = _scan_claimed_by_session(worktree / "state" / "handoffs", sid)
+    live_hits = _scan_claimed_by_session(
+        worktree / "state" / "handoffs", sid, common_dir
+    )
     if live_hits:
         evidence["detector"] = "live_claim_stamp"
         evidence["consumed_handoff"] = _rel(live_hits[0])
@@ -497,7 +573,9 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
     # Detector A — archived handoff naming this session as claim holder, with
     # the well-formed-handoff predecessor guard; first (sorted) hit wins.
     arch_hit: Optional[Path] = None
-    for candidate in _scan_claimed_by_session(worktree / "archive" / "handoffs", sid):
+    for candidate in _scan_claimed_by_session(
+        worktree / "archive" / "handoffs", sid, common_dir
+    ):
         if _has_predecessor_field(candidate):
             arch_hit = candidate
             break
@@ -537,7 +615,7 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
             # predecessor with no claim ever stamped and no origin_session
             # recorded either) — only a field being set AND naming someone
             # else rejects.
-            consumer = _claim_holder(shipped_path)
+            consumer = _claim_holder(shipped_path, common_dir)
             origin = _origin_session(shipped_path)
             if consumer and consumer != sid:
                 notes.append(

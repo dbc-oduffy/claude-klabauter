@@ -140,7 +140,11 @@ def _extract_sentinel_body(text: str, begin: str, end: str) -> str:
 
 
 def _resolve_home() -> str:
-    return os.environ.get("HOME") or os.path.expanduser("~")
+    return (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
 
 
 def _resolve_claude_home_base() -> str:
@@ -210,8 +214,14 @@ def main(argv: List[str]) -> int:
             ml_bin = shutil.which("machine-local")
             if ml_bin is not None:
                 try:
+                    from coordinator_core.win_portability import no_console_creationflags
+
                     result = subprocess.run(
-                        [ml_bin, "get", "repos.example_doctrine_repo"], capture_output=True, text=True, check=False
+                        [ml_bin, "get", "repos.example_doctrine_repo"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        **no_console_creationflags(),
                     )
                     doe_resolved = result.returncode == 0 and bool(result.stdout.strip())
                 except OSError:

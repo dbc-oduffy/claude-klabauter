@@ -242,11 +242,13 @@ def test_derive_dag_chain_set_vacuous_match(tmp_path: Path, monkeypatch) -> None
     segment-enumeration grep.
 
     Real git repo/commits for the add-commit + trailer lookup (so this pins
-    the real UUID-validation and add-commit resolution paths); only the final
-    `git log --all --no-merges --grep=...` segment-enumeration call is forced
-    to return zero matches — the one leg with no clean real-git construction
-    (a commit whose trailer is discoverable via --diff-filter=A is, by
-    construction, also a real non-merge commit `--grep` would find).
+    the real UUID-validation and add-commit resolution paths); only the
+    batched `git log HEAD --no-merges` segment-enumeration walk (C6a: this
+    replaced the old per-node `--grep=...` call with one shared
+    `%(trailers:key=Session-Id,...)` walk over HEAD) is forced to return zero
+    matches — the one leg with no clean real-git construction (a commit whose
+    trailer is discoverable via --diff-filter=A is, by construction, also a
+    real non-merge commit the HEAD walk would find).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -284,8 +286,15 @@ def test_derive_dag_chain_set_vacuous_match(tmp_path: Path, monkeypatch) -> None
     real_run = cov._run
 
     def _fake_run(cmd, cwd=None):
-        if "--grep=" in " ".join(cmd):
-            return (0, "", "")  # force zero matches on the segment-enumeration call
+        # C6a: the segment-enumeration walk is now one batched
+        # `git log HEAD --no-merges --format=...%(trailers:key=Session-Id...)`
+        # call shared across every node, rather than a per-node `--grep=...`
+        # call — intercept THAT shape (distinguished from the per-add_sha
+        # single-commit trailer lookup, which uses `-1` + one sha, not
+        # `HEAD --no-merges`).
+        joined = " ".join(cmd)
+        if "HEAD" in cmd and "--no-merges" in cmd and "trailers:key=Session-Id" in joined:
+            return (0, "", "")  # force zero matches on the segment-enumeration walk
         return real_run(cmd, cwd=cwd)
 
     monkeypatch.setattr(cov, "_run", _fake_run)

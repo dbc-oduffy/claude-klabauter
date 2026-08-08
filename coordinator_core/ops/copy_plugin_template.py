@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import Optional
@@ -141,7 +142,7 @@ def _run_pytest(dest: Path, cwd: Path) -> bool:
         encoding="utf-8",
         errors="replace",
         env=pytest_child_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )  # popup-safe-env-suppressed
     return proc.returncode == 0
 

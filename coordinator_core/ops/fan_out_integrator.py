@@ -87,9 +87,12 @@ import sys
 from typing import List, Optional, Sequence, Tuple
 
 import coordinator_core.resolve_coordinator_clone as rcc
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _SUBPROCESS_TIMEOUT_SECS = 10
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _USAGE_TEXT = """Usage: fan-out-integrator.sh [--spec <file>]
        printf 'slice-id\\tsidecar-path\\tfile1,file2\\n' | fan-out-integrator.sh
@@ -162,7 +165,7 @@ def _git_is_inside_work_tree() -> bool:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -179,7 +182,7 @@ def _git_current_branch() -> str:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):

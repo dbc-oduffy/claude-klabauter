@@ -33,7 +33,6 @@ Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.m
 
 from __future__ import annotations
 
-import asyncio
 import datetime as _dt
 import json
 import os
@@ -55,10 +54,6 @@ assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "
     "coordinator_core.ops.distill_curation_status @register_op did not fire"
 )
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 def _seed_repo(tmp_path: Path) -> Path:
@@ -94,13 +89,13 @@ def test_op_is_registered():
 
 def test_repo_root_none_raises():
     with pytest.raises(ValueError):
-        _run(dcs._distill_curation_status({}, repo_root=None))
+        dcs._distill_curation_status({}, repo_root=None)
 
 
 def test_bare_compute_does_not_write(tmp_path):
     repo_root = _seed_repo(tmp_path)
     common_dir = repo_root / ".git"
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
 
     assert reply["emitted"] is False
     assert reply["schema_version"] == 1
@@ -117,7 +112,7 @@ def test_default_run_id_branch_mints_wallclock_id_when_omitted(tmp_path):
     # minted id's shape rather than merely exercising the code path.
     repo_root = _seed_repo(tmp_path)
     common_dir = repo_root / ".git"
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
 
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}h\d{2}m\d{2}s", reply["run_id"])
 
@@ -125,9 +120,8 @@ def test_default_run_id_branch_mints_wallclock_id_when_omitted(tmp_path):
 def test_explicit_run_id_is_never_overridden_by_wallclock(tmp_path):
     repo_root = _seed_repo(tmp_path)
     common_dir = repo_root / ".git"
-    reply = _run(
-        dcs._distill_curation_status({"run_id": "caller-supplied-id"}, repo_root=common_dir)
-    )
+    reply = dcs._distill_curation_status({"run_id": "caller-supplied-id"}, repo_root=common_dir)
+    
 
     assert reply["run_id"] == "caller-supplied-id"
 
@@ -135,7 +129,7 @@ def test_explicit_run_id_is_never_overridden_by_wallclock(tmp_path):
 def test_emit_writes_schema_valid_artifact(tmp_path):
     repo_root = _seed_git_repo(tmp_path)
     common_dir = repo_root / ".git"
-    reply = _run(dcs._distill_curation_status({"emit": True, "run_id": "r-test-1"}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({"emit": True, "run_id": "r-test-1"}, repo_root=common_dir)
 
     assert reply["emitted"] is True
     out_path = repo_root / "state" / "ceremony" / "curation-status.json"
@@ -162,7 +156,7 @@ def test_age_math_frozen_clock(tmp_path, monkeypatch):
     now = t_log + _dt.timedelta(seconds=100)
     monkeypatch.setattr(dcs, "_now_utc", lambda: now)
 
-    reply = _run(dcs._distill_curation_status({"emit": True, "run_id": "r-caller"}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({"emit": True, "run_id": "r-caller"}, repo_root=common_dir)
 
     assert reply["last_run_id"] == "2026-07-23-11h58"
     assert reply["last_run_age_seconds"] == pytest.approx(100.0)
@@ -182,7 +176,7 @@ def test_absent_log_degrades_to_no_last_run(tmp_path):
     repo_root = _seed_bare_repo(tmp_path)
     common_dir = repo_root / ".git"
 
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
     assert reply["last_run_id"] is None
     assert reply["last_run_age_seconds"] is None
 
@@ -212,7 +206,7 @@ def test_log_wins_over_stale_prior_emission(tmp_path, monkeypatch):
     now = t_log + _dt.timedelta(seconds=42)
     monkeypatch.setattr(dcs, "_now_utc", lambda: now)
 
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
 
     assert reply["last_run_id"] == "2026-07-23-11h58"
     assert reply["last_run_id"] != stale_prior["run_id"]
@@ -246,7 +240,7 @@ def test_fresh_mtime_does_not_fake_a_recent_run(tmp_path, monkeypatch):
     os.utime(log_path, (now.timestamp(), now.timestamp()))
     monkeypatch.setattr(dcs, "_now_utc", lambda: now)
 
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
 
     assert reply["last_run_id"] == "2026-01-02-03h04"
     # ~202 days, derived from the run-id's own bytes — NOT ~0 from the fresh mtime.
@@ -268,7 +262,7 @@ def test_unparseable_run_id_reports_known_run_unknown_age(tmp_path):
         encoding="utf-8",
     )
 
-    reply = _run(dcs._distill_curation_status({}, repo_root=common_dir))
+    reply = dcs._distill_curation_status({}, repo_root=common_dir)
 
     assert reply["last_run_id"] == "legacy-nondate-id"
     assert reply["last_run_age_seconds"] is None

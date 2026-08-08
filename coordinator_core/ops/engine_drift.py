@@ -152,7 +152,7 @@ def _git_is_behind(running_sha: str, floor_sha: str) -> Optional[bool]:
 
 
 @register_op("engine.drift")
-async def _engine_drift(params: dict, repo_root=None) -> dict:
+def _engine_drift(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'engine.drift' handler — probe the running engine's freshness.
 
     Params: none consumed.

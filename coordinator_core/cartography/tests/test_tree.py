@@ -22,7 +22,6 @@ Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-stra
 from __future__ import annotations
 
 import subprocess
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -230,18 +229,17 @@ def test_ac5_classification_py_loc_matches_ground_truth_not_atlas_1462():
 
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError):
-        asyncio.run(_cartography_tree({}))
+        _cartography_tree({})
 
 
 def test_op_happy_path(git_repo):
-    result = asyncio.run(_cartography_tree({"target_root": str(git_repo)}))
+    result = _cartography_tree({"target_root": str(git_repo)})
     assert result["file_count"] == 4
     assert "a.py" in result["files"]
 
 
 def test_op_scope_narrows_result(git_repo):
-    result = asyncio.run(
-        _cartography_tree({"target_root": str(git_repo), "scope": ["sub"]})
-    )
+    result = _cartography_tree({"target_root": str(git_repo), "scope": ["sub"]})
+
     assert result["file_count"] == 1
     assert set(result["files"]) == {"sub/c.js"}

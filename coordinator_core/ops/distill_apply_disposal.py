@@ -123,7 +123,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -158,6 +157,7 @@ from coordinator_core.ops.fleet.migrate_handoff_vocabulary import (
     _successor_ref,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
 __all__ = [
@@ -257,10 +257,10 @@ def _subprocess_kwargs() -> dict[str, Any]:
     module — CREATE_NO_WINDOW on win32 (Windows first-class: a console-
     spawning git subprocess on every apply_disposal call is a visible,
     avoidable regression), no-op on POSIX (creationflags is a Windows-only
-    subprocess kwarg; passing it on POSIX raises)."""
-    if sys.platform == "win32":
-        return {"creationflags": 0x08000000}  # CREATE_NO_WINDOW
-    return {}
+    subprocess kwarg; passing it on POSIX raises). Routed through the
+    canonical coordinator_core.win_portability.no_console_creationflags()
+    primitive rather than a hardcoded flag literal."""
+    return no_console_creationflags()
 
 
 async def _run_git(

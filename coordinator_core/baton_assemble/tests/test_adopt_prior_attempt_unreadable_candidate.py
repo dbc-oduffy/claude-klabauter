@@ -82,7 +82,7 @@ class TestAdoptPathSurvivesUnreadableCandidate:
         finally:
             os.chmod(unreadable, 0o644)
 
-        assert result == str(Path("state") / "handoffs" / valid.name)
+        assert result == (Path("state") / "handoffs" / valid.name).as_posix()
 
 
 class TestAdoptPathSurvivesNonUtf8Candidate:
@@ -97,4 +97,4 @@ class TestAdoptPathSurvivesNonUtf8Candidate:
 
         result = ba._adopt_prior_attempt_scaffold_path(_PRED_REL, "HID-PRED", tmp_path)
 
-        assert result == str(Path("state") / "handoffs" / valid.name)
+        assert result == (Path("state") / "handoffs" / valid.name).as_posix()

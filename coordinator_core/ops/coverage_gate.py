@@ -42,20 +42,42 @@ Wire params (all optional):
                                      match is what lets the chain-ancestry-waiver READ side
                                      (``coverage.py``'s ``_chain_ancestry_waived_shas``) credit it
                                      back later. Only ``wsc-coverage-gate-runner.py``'s
-                                     ceremony-close path may pass True (via
+                                     ceremony-close paths may pass True (via
                                      ``review-coverage-gate.py``'s ``--mint-chain-waivers`` flag);
                                      every diagnostic invocation — the ad-hoc EM CLI
                                      (``review-coverage-gate.py`` bare/``--from-handoff``/
                                      ``--verbose``) and ``ops/review_brightline_gate.py`` (which
                                      does not call this op at all) — MUST keep defaulting to
                                      False, so a human poking at the gate never mints evidence as
-                                     a side effect of looking. Minting is best-effort (never
+                                     a side effect of looking. As of 2026-08-07
+                                     (state/audits/2026-08-07-review-gate-scoping-predecessor-and-
+                                     planning-artifacts.md), TWO ceremony-close subcommands of
+                                     ``wsc-coverage-gate-runner.py`` pass True: ``coverage-gate``
+                                     (unconditionally) and ``brightline-gate`` (from its own
+                                     PARTITION-MANDATORY discharge check, so it is self-sufficient
+                                     without requiring ``coverage-gate`` to have run first). This is
+                                     safe because minting is keyed per (sha, chain_id) and
+                                     idempotent — see the next sentence — so either subcommand
+                                     alone, or both in sequence in either order, mint the same set
+                                     of waivers exactly once each. Minting is best-effort (never
                                      raises — see ``record_chain_ancestry_waiver``'s own
-                                     contract) and never fires on COVERED or INDETERMINATE (an
-                                     indeterminate DAG derivation returns early with
-                                     ``verdict="INDETERMINATE"`` before this op ever sees a
+                                     contract) and gates on ``result.uncovered_shas`` being
+                                     non-empty, NOT on ``result.verdict`` (2026-08-07 fix,
+                                     state/audits/2026-08-07-review-gate-scoping-predecessor-and-
+                                     planning-artifacts.md — the verdict answers a CODE-coverage
+                                     question, the mint answers a foreign-session-narrowing
+                                     question; a chain whose only uncovered commits are planning
+                                     artifacts can net verdict COVERED while still needing the
+                                     mint). It therefore CAN fire on a COVERED verdict, provided
+                                     uncovered_shas is non-empty; it never fires when
+                                     uncovered_shas is empty (the fabrication-hazard guard — see
+                                     the mint call site's own comment) and never fires on
+                                     INDETERMINATE (an indeterminate DAG derivation returns early
+                                     with ``verdict="INDETERMINATE"`` before this op ever sees a
                                      verdict to key on — see ``coverage.py``'s
-                                     ``run_coverage_gate``/``_derive_dag_chain_set``).
+                                     ``run_coverage_gate``/``_derive_dag_chain_set`` — and that
+                                     early return also means uncovered_shas is never populated
+                                     for it).
 
 Reply fields (result object in JSON-RPC response):
     verdict_line (str)      — frozen CLI contract line (AC11):
@@ -283,11 +305,13 @@ import logging
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core.chain_ancestry_waivers import (
+    chain_ancestry_waived_shas,
     chain_waiver_dir,
     record_chain_ancestry_waiver,
 )
@@ -338,7 +362,7 @@ def _git_head_timestamp(repo_root: Path) -> Optional[str]:
             stdin=subprocess.DEVNULL,
             # Review: code-reviewer (F1) — match every sibling subprocess call site's
             # console-flash/stdin-hang guard convention.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         ts = proc.stdout.strip()
         return ts if proc.returncode == 0 and ts else None
@@ -410,7 +434,7 @@ def _stage_chain_ancestry_waivers(repo_root: Path, chain_id: str) -> None:
             timeout=5,
             cwd=str(repo_root),
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if proc.returncode != 0:
             # Review: code-reviewer (Finding 2) — a non-zero exit (e.g. a peer holding
@@ -545,27 +569,46 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
     # early return, this chokepoint stops being free and must be re-guarded explicitly
     # there.
     #
-    # C10 token-flip fix (2026-08-06, DR-245 deadlock reopened): `run_coverage_gate`
+    # C10 token-flip history (2026-08-06, DR-245 deadlock reopened): `run_coverage_gate`
     # retired the binary "UNCOVERED" token in favour of "WARN" for the below-threshold
     # case (see module docstring's C10 note) — "UNCOVERED" can no longer be produced by
     # `run_coverage_gate` (verified: coordinator_core/coverage.py's verdict assembly
     # only ever assigns "COVERED", "WARN", or "INDETERMINATE" — grep confirms no other
-    # call site sets `verdict = "UNCOVERED"`). This guard tested the retired token, so
-    # it silently stopped matching every real uncovered chain-terminal close, and
-    # `record_chain_ancestry_waiver` was never reached — the exact deadlock DR-245 was
-    # written to close (review_trail_write._guard_foreign_session_range legitimately
-    # refuses to record a review over an ancestor the gate calls uncovered, and with no
-    # waiver ever minted that refusal had no relaxation to observe). Testing `"WARN"`
-    # restores minting on every below-threshold DAG-mode close while the legacy
-    # "UNCOVERED" literal is kept alongside it (dead today, cheap to keep, reinstates
-    # itself for free if that token is ever reintroduced upstream) — never `COVERED` or
-    # `INDETERMINATE`, which must not mint (minting on COVERED would fabricate coverage
-    # evidence for commits nobody reviewed — see the em_disposition note below and the
-    # sibling-repo incident it cites).
+    # call site sets `verdict = "UNCOVERED"`). At the time, this guard tested the
+    # retired token, so it silently stopped matching every real uncovered
+    # chain-terminal close, and `record_chain_ancestry_waiver` was never reached — the
+    # exact deadlock DR-245 was written to close. That fix widened the check to
+    # `result.verdict in ("WARN", "UNCOVERED")`, which is itself now retired below (see
+    # the following paragraph) — kept here as history, not as the current gate.
+    #
+    # 2026-08-07 fix (three PM-vouch escalations in one evening — state/audits/
+    # 2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md): the
+    # `result.verdict` leg above answered the wrong question and is now DROPPED. The
+    # mint and the verdict are about two different things — `result.verdict` /
+    # `coverage_ratio` (coordinator_core.coverage.run_coverage_gate) is CODE coverage,
+    # deliberately netting `planning_shas` out of both ratio terms; the chain-ancestry
+    # waiver is about FOREIGN-SESSION NARROWING, whether a chain-terminal session may
+    # credit commits a predecessor session authored. Coupling them produced a dead end:
+    # a chain whose only uncovered commits were planning artifacts nets
+    # `coverage_ratio == 1.0` -> `verdict == "COVERED"`, so the mint never fired even
+    # though the narrowing obligation was real (a planning commit still owes a plan
+    # review and stays in `uncovered_shas` until one credits it — see this module's own
+    # `planning_shas` doc above). Gating on `result.uncovered_shas` alone below is what
+    # correctly fires the mint whenever there is a real uncovered commit to narrow,
+    # independent of whether that commit's presence also moves the CODE-coverage
+    # verdict.
+    #
+    # The fabrication hazard this guard exists to prevent is UNCHANGED and is preserved
+    # by the `result.uncovered_shas` leg, not by the (now-removed) verdict leg: minting
+    # when there is genuinely nothing uncovered would fabricate coverage evidence for
+    # commits nobody reviewed (see the em_disposition note below and the sibling-repo
+    # incident it cites). With `result.uncovered_shas` required truthy, the mint can
+    # only fire when uncovered commits actually exist — do not restore the verdict leg
+    # believing this hazard was overlooked; it was deliberately relocated onto the
+    # `uncovered_shas` check, which is strictly necessary for the mint to fire at all.
     if (
         mint_chain_waivers
         and from_handoff
-        and result.verdict in ("WARN", "UNCOVERED")
         and result.uncovered_shas
     ):
         # Chain identity: mint under the SAME closing_session_id this call threaded to
@@ -581,24 +624,100 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
         # nobody performed). This op cannot derive the disposition itself — the
         # brightline verdict lives in ops/review_brightline_gate.py, which does not call
         # this op — so the ceremony-close caller is the only layer that can supply one.
-        await asyncio.to_thread(
-            record_chain_ancestry_waiver,
-            repo_root_str,
-            frozenset(result.uncovered_shas),
-            closing_session_id,
-            from_handoff,
-            em_disposition,
-        )
-        # C7 (AC12): the mint happens at HALT, which aborts the ceremony before its
-        # bookkeeping commit runs, so these files are untracked at the moment they are
-        # created. Staging them here (best-effort, non-fatal) keeps a later ceremony's
-        # dirty-tree gate (coordinator_core.ops.ceremony.commit_gates.dirty_tree_gate)
-        # from ever seeing them as an "unattributable" dirty path — a staged path is
-        # excluded from that classification unconditionally. This does NOT by itself
-        # get the files into a commit (a scoped `git commit -- <pathspec>` only commits
-        # paths named in ITS OWN pathspec, staged or not) — that remains a real gap,
-        # see this op's module docstring's own C7 negative-spec note below.
-        await asyncio.to_thread(_stage_chain_ancestry_waivers, repo_root_path, closing_session_id)
+        # Operator-facing mint note (this incident): the old gate emitted
+        # NOTHING on either branch of this condition, so an operator seeing
+        # exit 0 could not tell "minted 16 waivers" from "minted nothing" —
+        # a chain-terminal EM read silence as success, escalated a false
+        # write-guard failure to the PM, and burned an evening on it (see
+        # this file's own history for the fix to the *condition* that
+        # preceded this note). `chain_ancestry_waived_shas` is read-only and
+        # never raises (see its own docstring), so this before/after diff
+        # can safely distinguish a NEWLY-written waiver from a re-mint that
+        # only rediscovers an already-idempotent one, without touching
+        # `record_chain_ancestry_waiver`'s signature or its best-effort
+        # contract.
+        _waiver_dir = chain_waiver_dir(repo_root_str, closing_session_id)
+        try:
+            _before_waived = await asyncio.to_thread(
+                chain_ancestry_waived_shas, repo_root_str, closing_session_id
+            )
+            await asyncio.to_thread(
+                record_chain_ancestry_waiver,
+                repo_root_str,
+                frozenset(result.uncovered_shas),
+                closing_session_id,
+                from_handoff,
+                em_disposition,
+            )
+            # C7 (AC12): the mint happens at HALT, which aborts the ceremony before its
+            # bookkeeping commit runs, so these files are untracked at the moment they are
+            # created. Staging them here (best-effort, non-fatal) keeps a later ceremony's
+            # dirty-tree gate (coordinator_core.ops.ceremony.commit_gates.dirty_tree_gate)
+            # from ever seeing them as an "unattributable" dirty path — a staged path is
+            # excluded from that classification unconditionally. This does NOT by itself
+            # get the files into a commit (a scoped `git commit -- <pathspec>` only commits
+            # paths named in ITS OWN pathspec, staged or not) — that remains a real gap,
+            # see this op's module docstring's own C7 negative-spec note below.
+            await asyncio.to_thread(_stage_chain_ancestry_waivers, repo_root_path, closing_session_id)
+            _after_waived = await asyncio.to_thread(
+                chain_ancestry_waived_shas, repo_root_str, closing_session_id
+            )
+            _newly_written = _after_waived - _before_waived
+            if _newly_written:
+                _mint_note = (
+                    f"chain_ancestry_waivers: minted {len(_newly_written)} waiver(s) "
+                    f"for chain {closing_session_id!r} under {_waiver_dir}/ "
+                    f"({len(_after_waived)} total waived for this chain)"
+                )
+            else:
+                # Idempotent re-mint: every uncovered sha already had a waiver
+                # file on disk for this chain before this call. Reporting the
+                # resulting total covered set here (rather than guessing at a
+                # "0 newly written" framing that could misread as "nothing
+                # happened") is deliberate — see this block's own comment above
+                # on why a before/after diff, not a change to
+                # `record_chain_ancestry_waiver`'s signature, was used to learn
+                # this.
+                _mint_note = (
+                    f"chain_ancestry_waivers: no NEW waivers minted for chain "
+                    f"{closing_session_id!r} — all {len(_after_waived)} uncovered "
+                    f"commit(s) already carried a waiver under {_waiver_dir}/"
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort mint, never fatal
+            # `record_chain_ancestry_waiver` itself already swallows OSError
+            # internally (its own docstring's best-effort contract); this
+            # outer guard exists only for the note-emission plumbing around
+            # it (the before/after diff, staging), so that adding operator
+            # visibility here can never turn a degrade-to-uncredited mint
+            # into a blocked ceremony (this task's hard constraint).
+            _logger.warning(
+                "chain_ancestry_waivers: mint note emission failed for chain "
+                "%r (%s) — the read side may not credit uncovered commit(s) "
+                "for this chain without a waiver file under %s/",
+                closing_session_id, exc, _waiver_dir,
+            )
+            _mint_note = (
+                f"chain_ancestry_waivers: mint attempted for chain "
+                f"{closing_session_id!r} but could not be confirmed ({exc}) — "
+                f"check {_waiver_dir}/ directly"
+            )
+        result.notes.append(_mint_note)
+    elif mint_chain_waivers:
+        # mint_chain_waivers=True but the mint precondition (see the block
+        # above) was false — state which leg, in the operator's terms, so
+        # silence is never mistaken for "minted." Mirrors this op's own
+        # notes idiom (appended here, rendered to stderr by the veneer)
+        # rather than a bare log line nobody watching stdout/stderr sees.
+        if not from_handoff:
+            result.notes.append(
+                "chain_ancestry_waivers: mint requested but skipped — no "
+                "from_handoff (not a DAG-mode/ceremony-close call)"
+            )
+        elif not result.uncovered_shas:
+            result.notes.append(
+                "chain_ancestry_waivers: mint requested but skipped — "
+                "uncovered_shas is empty (nothing owed for this chain)"
+            )
 
     # Surface diagnostic notes.
     # Uncovered SHAs are included as notes (mirrors "uncovered: <sha>" to stderr in
@@ -641,7 +760,7 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
         "planning_shas": list(result.planning_shas),
         "notes": notes,
     }
-    generated_at = _git_head_timestamp(repo_root_path)
+    generated_at = await asyncio.to_thread(_git_head_timestamp, repo_root_path)
     if generated_at is not None:
         artifact["generated_at"] = generated_at
 

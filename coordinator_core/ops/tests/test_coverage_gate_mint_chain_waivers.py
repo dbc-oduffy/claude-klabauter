@@ -36,7 +36,12 @@ Coverage:
                              lookup — not by hand-building the on-disk path).
     (b) default-off       — mint_chain_waivers omitted (default False) -> DAG-mode
                              UNCOVERED mints NOTHING.
-    (c) covered-no-mint   — mint_chain_waivers=True but verdict COVERED -> no mint.
+    (c) empty-no-mint     — mint_chain_waivers=True but result.uncovered_shas empty ->
+                             no mint (fabrication-hazard guard). Also covers the
+                             2026-08-07 fix's positive case: mint_chain_waivers=True with
+                             a COVERED verdict AND non-empty uncovered_shas (the
+                             all-planning-uncovered chain) DOES mint -- the guard no
+                             longer keys on result.verdict at all.
     (d) AC5 chokepoint    — an indeterminate `_derive_dag_chain_set` derivation
                              yields empty `node_attribution` and (transitively) zero
                              mints, pinned via >=2 of that function's own early-return
@@ -193,11 +198,22 @@ def test_default_false_mints_nothing_on_dag_uncovered(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# (c) mint_chain_waivers=True but verdict COVERED -> no mint
+# (c) mint_chain_waivers=True but uncovered_shas empty -> no mint (fabrication
+# hazard guard). 2026-08-07 fix (state/audits/2026-08-07-review-gate-scoping-
+# predecessor-and-planning-artifacts.md): the mint's gate no longer keys on
+# `result.verdict` at all -- COVERED with a non-empty uncovered_shas now DOES
+# mint (see test_mint_fires_on_covered_verdict_with_all_planning_uncovered
+# below), so this case is renamed/re-scoped to what actually guards the
+# fabrication hazard: an empty uncovered_shas, regardless of verdict.
 # ---------------------------------------------------------------------------
 
 
-def test_no_mint_on_covered_even_with_param_true(tmp_path: Path) -> None:
+def test_no_mint_when_uncovered_shas_empty_even_with_param_true(tmp_path: Path) -> None:
+    """The fabrication-hazard guard: minting when there is genuinely nothing
+    uncovered would fabricate coverage evidence for commits nobody reviewed.
+    This is now enforced by the `result.uncovered_shas` leg alone (the
+    `result.verdict` leg was dropped -- see coverage_gate.py's mint
+    call site comment)."""
     fake = _make_result("COVERED", [])
     _run_op(
         tmp_path,
@@ -209,6 +225,29 @@ def test_no_mint_on_covered_even_with_param_true(tmp_path: Path) -> None:
         },
     )
     assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset()
+
+
+def test_mint_fires_on_covered_verdict_with_all_planning_uncovered(tmp_path: Path) -> None:
+    """Regression for the dead-end this fix closes: a chain whose only
+    uncovered commits are planning artifacts nets `coverage_ratio == 1.0` /
+    verdict=COVERED (run_coverage_gate subtracts planning_shas from both
+    ratio terms), yet the foreign-session-narrowing obligation
+    (`result.uncovered_shas` still non-empty -- a planning commit stays
+    uncovered until a plan review credits it) is real and must still mint.
+    Coupling the mint to `result.verdict` made this reachable only via a PM
+    vouch or /handoff; this proves the mint now reaches it directly."""
+    shas = ["6666666666666666666666666666666666666f"]
+    fake = _make_result("COVERED", shas)
+    _run_op(
+        tmp_path,
+        fake,
+        params={
+            "from_handoff": "/tmp/some-closing-handoff.md",
+            "closing_session_id": _CHAIN_ID,
+            "mint_chain_waivers": True,
+        },
+    )
+    assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset(shas)
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +440,95 @@ def test_minted_waiver_states_it_does_not_certify_review(tmp_path) -> None:
     assert "NOT a record that anyone reviewed" in written["reader_note"]
 
 
+# ---------------------------------------------------------------------------
+# Operator-facing mint note (this incident): exit 0 must never be silent
+# about whether a mint fired -- an EM misdiagnosing silence as "minted, all
+# 16 SHAs" when zero waiver files existed is what this note fixes.
+# ---------------------------------------------------------------------------
+
+
+def test_mint_note_names_count_and_chain_id(tmp_path: Path) -> None:
+    shas = ["7777777777777777777777777777777777777a", "8888888888888888888888888888888888888b"]
+    fake = _make_result("WARN", shas)
+    result = _run_op(
+        tmp_path,
+        fake,
+        params={
+            "from_handoff": "/tmp/some-closing-handoff.md",
+            "closing_session_id": _CHAIN_ID,
+            "mint_chain_waivers": True,
+        },
+    )
+    mint_notes = [n for n in result["notes"] if "chain_ancestry_waivers: minted" in n]
+    assert len(mint_notes) == 1
+    assert "2" in mint_notes[0]
+    assert _CHAIN_ID in mint_notes[0]
+
+
+def test_mint_skipped_note_when_uncovered_shas_empty(tmp_path: Path) -> None:
+    fake = _make_result("COVERED", [])
+    result = _run_op(
+        tmp_path,
+        fake,
+        params={
+            "from_handoff": "/tmp/some-closing-handoff.md",
+            "closing_session_id": _CHAIN_ID,
+            "mint_chain_waivers": True,
+        },
+    )
+    skip_notes = [n for n in result["notes"] if "chain_ancestry_waivers" in n]
+    assert len(skip_notes) == 1
+    assert "skipped" in skip_notes[0]
+    assert "uncovered_shas is empty" in skip_notes[0]
+    assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset()
+
+
+def test_mint_note_never_raises_on_underlying_write_failure(tmp_path: Path) -> None:
+    """Simulate the OSError path around the mint call (a defensive outer guard
+    around the note-emission plumbing, not `record_chain_ancestry_waiver`
+    itself, which already swallows OSError internally per its own best-effort
+    contract) -- the ceremony must still complete: the op returns normally,
+    with a note that says the mint could not be confirmed rather than
+    raising past the caller."""
+    shas = ["9999999999999999999999999999999999999c"]
+    fake = _make_result("WARN", shas)
+    with patch(
+        "coordinator_core.ops.coverage_gate.record_chain_ancestry_waiver",
+        side_effect=OSError("simulated disk failure"),
+    ):
+        result = _run_op(
+            tmp_path,
+            fake,
+            params={
+                "from_handoff": "/tmp/some-closing-handoff.md",
+                "closing_session_id": _CHAIN_ID,
+                "mint_chain_waivers": True,
+            },
+        )
+    # No waiver landed, but the ceremony still completed with a note instead
+    # of raising -- this is the hard constraint (mint must never become fatal).
+    assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset()
+    assert result["exit_code"] == fake.exit_code
+    failure_notes = [n for n in result["notes"] if "could not be confirmed" in n]
+    assert len(failure_notes) == 1
+    assert _CHAIN_ID in failure_notes[0]
+
+    # A second, real (unpatched) run against the same tmp_path completes
+    # cleanly and reports the mint -- the note path itself introduced no
+    # lingering state or failure mode.
+    result2 = _run_op(
+        tmp_path,
+        fake,
+        params={
+            "from_handoff": "/tmp/some-closing-handoff.md",
+            "closing_session_id": _CHAIN_ID,
+            "mint_chain_waivers": True,
+        },
+    )
+    assert result2["exit_code"] == fake.exit_code
+    assert any("chain_ancestry_waivers: minted" in n for n in result2["notes"])
+
+
 def test_minted_waiver_records_a_supplied_em_disposition(tmp_path) -> None:
     """A disposition supplied by the ceremony-close caller reaches the artifact."""
     import json
@@ -422,3 +550,173 @@ def test_minted_waiver_records_a_supplied_em_disposition(tmp_path) -> None:
     )
     assert written["em_disposition"] == "ancestry not reviewed by this close"
     assert written["certifies_review"] is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-07 doc-consistency fix -- the mint condition does not consult
+# `result.verdict` at all (see state/audits/2026-08-07-review-gate-scoping-
+# predecessor-and-planning-artifacts.md); three docs and two committed-
+# artifact strings previously still claimed the old rule.
+# ---------------------------------------------------------------------------
+
+
+def test_doc_consistency_no_stale_verdict_only_mint_claim() -> None:
+    """Discharge-test shape: an artifact enforcing the claim, not an operator
+    remembering it. The stale claim's exact phrase must not reappear in
+    either CLI's help text/docstrings, and the committed waiver-basis
+    strings must not claim minting is gated on an UNCOVERED verdict."""
+    review_gate_src = (_BIN_DIR / "review-coverage-gate.py").read_text(encoding="utf-8")
+    runner_src = (_BIN_DIR / "wsc-coverage-gate-runner.py").read_text(encoding="utf-8")
+    assert "no-op on COVERED" not in review_gate_src
+    assert "no-op on COVERED" not in runner_src
+
+    from coordinator_core import chain_ancestry_waivers
+
+    assert "UNCOVERED verdict" not in chain_ancestry_waivers._MINT_BASIS
+    assert "UNCOVERED verdict" not in chain_ancestry_waivers._READER_NOTE
+
+
+def test_minted_record_carries_new_mint_basis(tmp_path) -> None:
+    """Record-shape test for the B fix: a newly minted record carries the
+    corrected `_MINT_BASIS` literal (dropping the false verdict claim)."""
+    import json
+
+    from coordinator_core.chain_ancestry_waivers import (
+        _MINT_BASIS,
+        chain_waiver_dir,
+        record_chain_ancestry_waiver,
+    )
+
+    chain_id = "11112222-3333-4444-8888-999900001111"
+    sha = "2222222222222222222222222222222222222222"
+    record_chain_ancestry_waiver(str(tmp_path), frozenset({sha}), chain_id, "state/handoffs/x.md")
+
+    written = json.loads(
+        (chain_waiver_dir(str(tmp_path), chain_id) / ("%s.json" % sha)).read_text()
+    )
+    assert written["basis"] == _MINT_BASIS
+    assert _MINT_BASIS == "dag-mode-uncovered-shas-at-chain-terminal-close"
+
+
+# ---------------------------------------------------------------------------
+# C -- --no-mint ergonomic flag on wsc-coverage-gate-runner.py's
+# coverage-gate/brightline-gate subcommands.
+# ---------------------------------------------------------------------------
+
+
+def _load_runner_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "wsc_coverage_gate_runner_under_test", str(_BIN_DIR / "wsc-coverage-gate-runner.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["wsc_coverage_gate_runner_under_test"] = module
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def test_no_mint_flag_omits_mint_chain_waivers_flag() -> None:
+    """`--no-mint` must reach `_run_review_coverage_gate` as
+    `mint_chain_waivers=False`, which omits `--mint-chain-waivers` from the
+    subprocess argv it builds -- its absence (default) must be unchanged."""
+    module = _load_runner_module()
+
+    captured_cmds: list[list[str]] = []
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "range=dag:x.md chain_commits=0 covered=0 uncovered=0 VERDICT=COVERED\n"
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        return _FakeProc()
+
+    with patch.object(module.subprocess, "run", side_effect=_fake_run):
+        args_no_mint = module._build_parser().parse_args(
+            ["coverage-gate", "--from-handoff", "/tmp/some.md", "--no-mint"]
+        )
+        assert module.cmd_coverage_gate(args_no_mint) == 0
+
+        args_default = module._build_parser().parse_args(
+            ["coverage-gate", "--from-handoff", "/tmp/some.md"]
+        )
+        assert module.cmd_coverage_gate(args_default) == 0
+
+    review_gate_cmds = [c for c in captured_cmds if any("review-coverage-gate.py" in str(a) for a in c)]
+    assert len(review_gate_cmds) == 2
+    assert "--mint-chain-waivers" not in review_gate_cmds[0]
+    assert "--mint-chain-waivers" in review_gate_cmds[1]
+
+
+def test_no_mint_flag_produces_zero_waiver_files_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end through the real CLI argv parser and the real `coverage.gate`
+    op (mirrors `test_close_path_flag_reaches_minting_op`'s reachability
+    shape): `--no-mint` produces zero waiver files; its absence still mints,
+    proving default behaviour is unchanged."""
+    import cc_invoke  # noqa: E402 (sys.path already carries lib/ from module scope above)
+
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=tmp_path,
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    closing_handoff = tmp_path / "closing.md"
+    closing_handoff.write_text("dummy handoff\n", encoding="utf-8")
+
+    shas = ["6363636363636363636363636363636363636d"]
+    fake = _make_result("WARN", shas)
+
+    def _fake_route(op, params, repo_root, legacy_fn, **_kwargs):
+        assert op == "coverage.gate"
+        with patch(
+            "coordinator_core.ops.coverage_gate.run_coverage_gate",
+            return_value=fake,
+        ):
+            return asyncio.run(_coverage_gate(params, repo_root=Path(repo_root)))
+
+    review_gate_module = _load_review_gate_module()
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _CHAIN_ID)
+    monkeypatch.chdir(tmp_path)
+
+    runner_module = _load_runner_module()
+
+    with patch.object(cc_invoke, "route", side_effect=_fake_route), patch.object(
+        runner_module,
+        "_run_review_coverage_gate",
+        side_effect=lambda from_handoff, mint_chain_waivers=True: (
+            review_gate_module.main(
+                ["--from-handoff", from_handoff]
+                + (["--mint-chain-waivers"] if mint_chain_waivers else [])
+            ),
+            "",
+            "",
+        ),
+    ):
+        rc_no_mint = runner_module.main(
+            ["coverage-gate", "--from-handoff", str(closing_handoff), "--no-mint"]
+        )
+        assert rc_no_mint == 0
+        assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset()
+
+        rc_default = runner_module.main(
+            ["coverage-gate", "--from-handoff", str(closing_handoff)]
+        )
+        assert rc_default == 0
+        assert chain_ancestry_waived_shas(str(tmp_path), _CHAIN_ID) == frozenset(shas)
+
+
+def _load_review_gate_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "review_coverage_gate_under_test_c", str(_BIN_DIR / "review-coverage-gate.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["review_coverage_gate_under_test_c"] = module
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module

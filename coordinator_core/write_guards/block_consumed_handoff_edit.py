@@ -143,9 +143,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -195,26 +197,27 @@ def _collapse_slashes(value: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel`` (reference hook line 107). Fails open."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            # Windows console-popup suppression; no-op on POSIX.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    """``git rev-parse --show-toplevel`` (reference hook line 107). Fails open.
+
+    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
+    delegates to the shared, process-lifetime-memoized
+    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
+    own spawn — same fail-open-to-``None`` contract as the prior inline
+    ``subprocess.run``, so no verdict changes. The prior inline spawn also
+    logged a forensic diagnostic on ``OSError`` ("treating as no git root");
+    the shared resolver swallows all failures silently (never raises), so
+    that diagnostic is restored here explicitly rather than lost -- verdict
+    is still unaffected either way (``_normalize_and_gate`` already treats
+    ``None`` the same as any other unresolved git root).
+    """
+    result = resolve_repo_root(cwd)
+    if result is None:
+        print(
+            f"block_consumed_handoff_edit: no git root resolved for cwd="
+            f"{cwd!r}, treating as no git root (decision unaffected)",
+            file=sys.stderr,
         )
-    except OSError as exc:
-        print(f"block_consumed_handoff_edit: git rev-parse spawn failed, "
-              f"treating as no git root: {exc}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return result
 
 
 def _basename(path: str) -> str:
@@ -264,7 +267,11 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
         if cn.startswith("/") or re.match(r"^[A-Za-z]:", cn):
             abs_cn = cn
         else:
-            abs_cn = git_root.rstrip("/") + "/" + cn
+            # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH
+            # (e.g. a drive-root `git_root` of `X:\`) survives the latter and
+            # composes a double-slash prefix below (see the matching note on
+            # `expected_prefix`).
+            abs_cn = git_root.rstrip("/\\") + "/" + cn
         try:
             abs_cn_canon = casefold_path(str(Path(abs_cn).resolve(strict=False)))
         except OSError as exc:
@@ -275,7 +282,9 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
         # is real on-disk casing, but the candidate segment appended onto it
         # is caller-supplied and may differ only in case on a case-insensitive
         # filesystem — comparing un-folded would silently miss that bypass.
-        expected_prefix = casefold_path(git_root.rstrip("/") + "/state/handoffs/")
+        # `rstrip("/\\")`, never `rstrip("/")` -- see block_memo_status_hand_edit.py's
+        # `_normalize_and_gate` for the drive-root double-slash-inertness this avoids.
+        expected_prefix = casefold_path(git_root.rstrip("/\\") + "/state/handoffs/")
         if not abs_cn_canon.startswith(expected_prefix):
             return None
 
@@ -469,7 +478,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # is well under the ~138ms `pickup_assemble`/`coordinator_core.
             # ops` cost this guard's hot-path budget was written to avoid —
             # see that module's own import-cost comment above.
+            # Ledger-first: a desynced baton (live ledger claim, reverted/
+            # empty frontmatter mirror) must not silently read as "no
+            # holder" -- that used to let this guard stay silent on an
+            # in-place edit to a claimed predecessor (the exact negative-
+            # spec the pickup skill states). `resolve_claim_state` is the
+            # one shared accessor (docs/plans/2026-08-07-claim-state-
+            # ledger-first-authoritative-read.md, C1); a dead ledger holder
+            # already degrades `source` to "mirror"/"none" inside it, so
+            # this guard need not special-case liveness itself. Falls back
+            # to the pre-migration mirror-only read (`_extract_fm_field`)
+            # on any resolution failure -- never regresses below what this
+            # guard already had.
             claimed_by = _extract_fm_field(text, "claimed_by")
+            try:
+                state = resolve_claim_state(disk_path, repo_root=git_root)
+            except Exception:
+                pass
+            else:
+                if state.holder is not None:
+                    claimed_by = state.holder
             session_id = ""
             for var in SESSION_ENV_PRECEDENCE:
                 session_id = os.environ.get(var, "")

@@ -291,6 +291,7 @@ Negative-spec:
 from __future__ import annotations
 import sys
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -1431,7 +1432,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # childless/heir classification unsafe (module docstring negative-spec).
     # dag_incomplete short-circuits both preview and act to fail closed.
     dag_scan_errors: List[str] = []
-    dag_index = _collect_all_handoff_paths(worktree, scan_errors=dag_scan_errors)
+    dag_index = await asyncio.to_thread(
+        _collect_all_handoff_paths, worktree, scan_errors=dag_scan_errors
+    )
     dag_incomplete = bool(dag_scan_errors)
 
     if dry_run:

@@ -79,7 +79,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 try:
     import psutil
@@ -164,7 +164,9 @@ def _platform() -> str:
 def _run(cmd: List[str]) -> Optional[str]:
     """Run cmd, return raw stdout on success, None on any failure."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, **no_console_creationflags()
+        )
     except OSError:
         print(f"skip: _run: result = subprocess.run(cmd, capture_output=True, text=True, check=Fal failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
@@ -389,6 +391,7 @@ def _ml_set(ml_bin: str, key: str, value: str) -> int:
         result = subprocess.run(
             [ml_bin, "set", "--concern", "hardware", key, value],
             check=False,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _ml_set: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

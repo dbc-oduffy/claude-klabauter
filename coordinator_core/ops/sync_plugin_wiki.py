@@ -66,6 +66,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List
 
@@ -146,7 +147,11 @@ def _home_dir() -> str:
     user profile instead of the intended override. Reading ``HOME`` first
     matches the bash oracle's literal ``$HOME`` semantics on every platform.
     """
-    return os.environ.get("HOME") or os.path.expanduser("~")
+    return (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
 
 
 def _resolve_plugin_root() -> str:
@@ -232,7 +237,7 @@ def _stat_mtime(path: str) -> str:
                 capture_output=True,
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT_SECS,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **no_console_creationflags(),
             )
             if proc.returncode == 0:
                 return (proc.stdout or "").strip()

@@ -302,7 +302,16 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
     if target.startswith("-"):
         return None
 
-    qt = '"%s"' % target if re.search(r"\s", target) else target
+    # Always shell-quote `target`, not only when it contains whitespace --
+    # an unquoted Windows path with backslashes (e.g. `C:\Users\x\tmp`) is
+    # de-escaped by the shell that later runs this suggestion (backslash is
+    # an escape character to POSIX bash, which is what git-bash's `bash.exe`
+    # is), silently collapsing to `C:Usersxtmp` and producing a confusing
+    # "cannot change to" error that names a path the operator never typed.
+    # `shlex.quote` leaves an already-safe token (no whitespace, no
+    # backslash, no other shell-special character) completely unquoted, so
+    # every existing plain-path suggestion is byte-identical to before.
+    qt = shlex.quote(target)
 
     # `git_body`/`followers` stay on `_offer_awk_parse` deliberately --
     # `find_git_segment`'s separator set (`;`/`&`/`|`, any run) is wider

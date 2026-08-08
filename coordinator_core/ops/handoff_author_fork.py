@@ -13,7 +13,13 @@ reachable over the UDS whose caller is responsible for any gate-checking.
 Auto-fill from live session state
 ----------------------------------
 - ``origin_session``  — resolved via ``session_context.resolve_current_session_id`` (the
-  canonical CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID → .current-session-id chain).
+  canonical CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID chain; the former
+  ``.current-session-id`` sentinel tier was removed KS-2 2026-08-07 — see
+  ``session_context.py`` for the unsound-under-concurrency + deleted-writer rationale).
+  On resolution failure this is ``None`` and the fork lands with an honest null-stamped
+  ``origin_session`` (and consequently ``origin_handoff``, since
+  ``_resolve_origin_handoff`` cannot match a claim against a null id) rather than a
+  falsely-populated dead-sentinel value or a crash.
 - ``origin_handoff``  — the ``state/handoffs/*.md`` file whose ``claimed_by`` (or legacy
   ``consumed_by``) frontmatter equals the resolved session id; ``null`` when none matches
   (graceful-absent).
@@ -112,6 +118,7 @@ from coordinator_core.frontmatter.primitives import (
     serialize_yaml_scalar,
     split_frontmatter,
 )
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.handoff_creation_guard import (
     HandoffArchivedTwinError,
     assert_no_archived_twin,
@@ -135,7 +142,6 @@ from coordinator_core.ops.match_core import (
 )
 from coordinator_core.ops.plan_match import _collect_plans
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.session import claims
 
 _LOG = logging.getLogger(__name__)
 
@@ -359,19 +365,27 @@ def _stamp_fork_provenance(fm_text: str, provenance: Dict[str, object]) -> str:
 
 
 def _resolve_origin_handoff(
-    handoffs_dir: Path, session_id: Optional[str]
+    handoffs_dir: Path,
+    session_id: Optional[str],
+    *,
+    repo_root: Optional[Path] = None,
 ) -> "tuple[Optional[str], Optional[str]]":
-    """Find the handoff in ``state/handoffs/*.md`` whose ``claimed_by`` (or legacy
-    ``consumed_by``) == session_id.
+    """Find the handoff in ``state/handoffs/*.md`` whose LEDGER-FIRST claim
+    holder (``coordinator_core.claim_state.resolve_claim_state``) == session_id.
 
-    The claimed_by/consumed_by dual-read routes through the single shared
-    DR-084 accessor (``coordinator_core.session.claims.handoff_lifecycle()``
-    → ``coordinator/bin/lib/handoff_lifecycle.py``'s ``claim_holder``) rather
-    than a local raw frontmatter read — the same accessor
-    ``resolve_chain_terminal_disposition._claim_holder`` uses, so a future
-    lifecycle-vocabulary rename has one edit site, not two. This function's
-    own search semantics (non-recursive ``iterdir()`` over ``state/handoffs/``
-    only, first match wins) are unchanged; only the field read is shared.
+    C6a (ledger-first authoritative read): a desynced baton — claimed on the
+    branch-independent claim ledger but reverted on the tracked-frontmatter
+    mirror by a branch switch (the incident ``claim_state.py``'s module
+    docstring names) — used to resolve to no match here, silently authoring
+    the fork with ``origin_handoff`` null: permanent, invisible provenance
+    loss. Routing through the single ledger-first accessor instead of a raw
+    mirror-only ``claimed_by``/``consumed_by`` read means this site now finds
+    the origin baton even when only the ledger still holds the claim. This
+    function's own search semantics (non-recursive ``iterdir()`` over
+    ``state/handoffs/`` only, first match wins) are unchanged; only the claim
+    read is delegated. A dead ledger holder degrades to the mirror (or
+    "none") per ``resolve_claim_state``'s own contract — never surfaced as
+    ``source == "ledger"`` for a dead session.
 
     Returns ``(origin_handoff, origin_handoff_id)``:
       - ``origin_handoff``    — the repo-relative path ``state/handoffs/<basename>``
@@ -413,29 +427,45 @@ def _resolve_origin_handoff(
         return None, None
     md_files = sorted(p for p in handoffs_dir.iterdir() if p.suffix == ".md" and p.is_file())
     for hfile in md_files:
-        try:
-            text = hfile.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            # Review: code-reviewer (Finding 2) -- route through the module
-            # logger instead of a raw print, matching the discipline used
-            # elsewhere in this file for per-item skip-and-continue failures.
+        # Review: code-reviewer (Finding 1) -- before routing the claim read
+        # through resolve_claim_state, EVERY unreadable candidate file was
+        # read unconditionally here (via hfile.read_text()) and logged on
+        # OSError. resolve_claim_state's own mirror read now swallows an
+        # unreadable file's OSError silently (claim_state._read_mirror_claim),
+        # so a candidate that is unreadable AND does not match session_id
+        # (the common case) skipped with zero diagnostic -- a corrupted
+        # handoff corpus became invisible during fork-origin resolution. A
+        # cheap os.access() probe restores the lost signal without
+        # reintroducing an unconditional full-file read of every candidate;
+        # resolution still proceeds through resolve_claim_state exactly as
+        # before (degrades to "no claim" for this file, matching prior
+        # semantics for an unreadable/non-matching candidate).
+        if not os.access(hfile, os.R_OK):
             _LOG.warning(
-                "handoff.author_fork: skipping unreadable candidate file %s: %s",
-                hfile, sys.exc_info()[1],
+                "handoff.author_fork: candidate file %s is unreadable "
+                "(permission denied) -- skipping for origin_handoff resolution",
+                hfile,
             )
-            continue
-        # Each vocabulary is materialized separately and neither is consulted
-        # here: the precedence decision belongs to claim_holder() below, which
-        # is the whole point of the DR-084 single accessor. One token per line
-        # so each `# dr084:` reason justifies exactly the token beside it.
-        new_vocab = extract_frontmatter_scalar(text, "claimed_by")  # dr084: INPUT for claim_holder(), not a precedence read
-        old_vocab = extract_frontmatter_scalar(text, "consumed_by")  # dr084: INPUT for claim_holder(), not a precedence read
-        fm_dict = {
-            "claimed_by": new_vocab,  # dr084: accessor input-dict key, not a read
-            "consumed_by": old_vocab,  # dr084: accessor input-dict key, not a read
-        }
-        claimed_by = claims.handoff_lifecycle().claim_holder(fm_dict)
+        # Ledger-first: resolve_claim_state consults the branch-independent
+        # claim ledger before the tracked-frontmatter mirror (POSTURE: ledger
+        # authoritative). repo_root is threaded through so git_common_dir
+        # resolves against the caller's worktree rather than hfile's own
+        # parent; git_common_dir is lru_cache'd, so per-file resolution here
+        # costs a cached-dict lookup, not a subprocess spawn.
+        claim_state = resolve_claim_state(hfile, repo_root=repo_root)
+        claimed_by = claim_state.holder
         if claimed_by and claimed_by == session_id:
+            try:
+                text = hfile.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                # Review: code-reviewer (Finding 2) -- route through the module
+                # logger instead of a raw print, matching the discipline used
+                # elsewhere in this file for per-item skip-and-continue failures.
+                _LOG.warning(
+                    "handoff.author_fork: skipping unreadable candidate file %s: %s",
+                    hfile, sys.exc_info()[1],
+                )
+                continue
             # C2: origin_handoff_id is derived from THIS SAME file/text — never a
             # separate lookup — so it can never disagree with origin_handoff.
             handoff_id = extract_frontmatter_scalar(text, "handoff_id") or None
@@ -610,7 +640,7 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
     if not origin_handoff:
         try:
             origin_handoff, resolved_handoff_id = await asyncio.to_thread(
-                _resolve_origin_handoff, handoffs_dir, origin_session
+                _resolve_origin_handoff, handoffs_dir, origin_session, repo_root=worktree_root
             )
         except OSError as exc:
             return _err(f"cannot enumerate {handoffs_dir} to resolve origin_handoff: {exc}")
@@ -859,7 +889,7 @@ async def _handler(
     handoffs_dir = worktree_root / "state" / "handoffs"
     try:
         origin_handoff, origin_handoff_id = await asyncio.to_thread(
-            _resolve_origin_handoff, handoffs_dir, origin_session
+            _resolve_origin_handoff, handoffs_dir, origin_session, repo_root=worktree_root
         )
     except OSError as exc:
         # Fail loud (provenance-critical) — see _resolve_origin_handoff docstring.

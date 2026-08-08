@@ -32,9 +32,12 @@ from coordinator_core.ops.fleet.memo_list_outbox import (
 )
 
 
-def _run(coro):
-    """Run async coroutine synchronously — no pytest-asyncio dependency."""
-    return asyncio.run(coro)
+def _run(result):
+    """Run async coroutine synchronously, or pass a plain result through
+    unchanged (some handlers this file exercises are now plain `def`)."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:

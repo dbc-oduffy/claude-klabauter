@@ -66,7 +66,7 @@ from coordinator_core.ops._workflow_contract import run_checks, Severity
 
 
 @register_op("workflow.validate")
-async def _workflow_validate(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _workflow_validate(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.validate" handler.
 
     Args (via params):

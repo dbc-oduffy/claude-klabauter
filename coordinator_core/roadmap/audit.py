@@ -120,6 +120,7 @@ from coordinator_core._settings_home import machine_local_dir, settings_home
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
+from coordinator_core.win_portability import same_path
 
 # `kind in (...)` term covering the canonical `roadmap-baton` value plus any
 # still-live retired pre-rename spelling(s) — derived at import time from
@@ -216,7 +217,13 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
+    samefile-then-fallback semantics: broader (junction-aware) equality is
+    correct here since this call site only checks "is repo_root the meta-repo
+    home", where a junction-aliased home must compare equal."""
+    return same_path(a, b)
 
 
 def _state_root(repo_root: Path) -> Path:
@@ -227,14 +234,14 @@ def _state_root(repo_root: Path) -> Path:
     is unresolvable.
     """
     if _same_path(str(repo_root), _claude_home()):
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             raise RuntimeError(
                 "audit-roadmap: repo_root is the meta-repo but CLAUDE_KLABAUTER_ROOT is "
                 "unresolvable (no CLAUDE_KLABAUTER_ROOT env, no repos.claude_klabauter "
                 "machine-local entry)"
             )
-        return Path(claude-klabauter) / "state"
+        return Path(claude_klabauter_root) / "state"
     return repo_root / "state"
 
 

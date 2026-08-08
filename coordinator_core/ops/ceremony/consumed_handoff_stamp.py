@@ -14,11 +14,15 @@ module was written; since DEC-3's jettison it runs UNLOCKED — see the
 DEC-3 note below and `redrive_consumed_set`.)
 
 ONE call site, driven by the C9 orchestrator (not built by this chunk):
-`post_commit_stamp_and_ship()` — runs AFTER the main ceremony commit lands
-and AFTER `run_commit_pipeline`'s own internal `ceremony_lock` has already
-released (wsc-tail-sub-2s-invoke-budget DEC-3, PM-jettisoned 2026-07-22 —
-this function has never acquired the lock itself; its caller no longer holds
-one either, by design; see Negative-spec). Re-derives the
+`post_commit_stamp_and_ship()` — runs AFTER the main ceremony commit lands.
+At the time this module was written, `run_commit_pipeline` held an internal
+`ceremony_lock` that had already released by this point
+(wsc-tail-sub-2s-invoke-budget DEC-3, PM-jettisoned 2026-07-22 — this
+function has never acquired the lock itself; its caller no longer held one
+either, by design; see Negative-spec). The 2026-08-07 PM ruling removed
+`ceremony_lock` from the commit path entirely (see
+`docs/plans/2026-08-07-excise-the-ceremony-lock.md`), so today there is no
+lock of any kind for this function's caller to hold or release. Re-derives the
 consumed-handoff set fresh against current disk (R1/AC6 cross-session
 liveness re-check — the closes-the-race step), applies R3's future-dated
 rejection, applies the R4(a) live-children guard, and — for each eligible
@@ -116,11 +120,14 @@ Negative-spec (hard-won):
     handoff dated on/after 2026-05-29 — reversing the order reintroduces the
     schema-validation hard-fail this module's design deviation exists to
     avoid (see module docstring "DEVIATION" paragraph above).
-  - Does NOT acquire `ceremony_lock` itself, and its caller no longer holds
-    one either as of wsc-tail-sub-2s-invoke-budget DEC-3 (PM ruling
-    2026-07-22, jettisoning `wsc_tail`'s outer lock hold): `post_commit_
+  - Does NOT acquire a ceremony-wide lock itself, and its caller does not
+    hold one either — first true as of wsc-tail-sub-2s-invoke-budget DEC-3
+    (PM ruling 2026-07-22, jettisoning `wsc_tail`'s outer lock hold), and
+    unconditionally true since the 2026-08-07 PM ruling removed
+    `ceremony_lock` from the commit path entirely (see
+    `docs/plans/2026-08-07-excise-the-ceremony-lock.md`): `post_commit_
     stamp_and_ship()` runs UNLOCKED by design, post-commit, after `run_
-    commit_pipeline`'s own internal lock has already released. The AC6
+    commit_pipeline` finishes. The AC6
     liveness re-check (`redrive_consumed_set()`) still re-derives fresh
     against current disk immediately before the stamp write — it was never
     a cache of the initial resolve — but no longer runs inside a
@@ -145,9 +152,10 @@ Negative-spec (hard-won):
     `git push` via C1's `git_native.push()` and reports the outcome
     (`follow_up_pushed`); a future integration point for the orchestrator to
     route this follow-up push through C4's shared retry pipeline once C4
-    lands is intentionally left open (AC17 only requires the follow-up
-    commit's push to happen inside `ceremony_lock` via C1's Windows-safe
-    helper — it does not require the full retry pipeline for this small
+    lands is intentionally left open (AC17 only required the follow-up
+    commit's push to happen via C1's Windows-safe helper — historically
+    inside `ceremony_lock`, now with no lock at all since its 2026-08-07
+    removal — it does not require the full retry pipeline for this small
     single-file mutation).
   - Does NOT stamp non-chain-terminal sessions — `chain_terminal=False`
     short-circuits both entry points to a no-op outcome.
@@ -706,8 +714,9 @@ async def post_commit_stamp_and_ship(
     push_mode: str = PUSH_MODE_SYNC,
 ) -> StampOutcome:
     """R1-R4 post-commit pass. Runs UNLOCKED (see module docstring Negative-
-    spec — this function has never acquired `ceremony_lock` itself, and as of
-    DEC-3 its caller no longer holds one either).
+    spec — this function has never acquired a ceremony-wide lock itself, and
+    its caller does not hold one either, since DEC-3 and unconditionally
+    since `ceremony_lock`'s 2026-08-07 removal).
 
     No-op (empty result, `empty_consumed_set=False`) when ``chain_terminal``
     is False.

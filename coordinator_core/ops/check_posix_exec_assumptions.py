@@ -408,6 +408,10 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_NO_WINDOW = no_console_creationflags()
 
 # Blocking classes: ratcheted against the frozen baseline, gate the build.
 #
@@ -933,6 +937,19 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/ops/probe_onboarding_currency.py": _REASON_CANON_STRING,
             "coordinator_core/test_resolve_validation_cmd.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
         },
+        REPO_EXAMPLE_DOCTRINE_REPO: {
+            # Compares a COMMAND-LINE ARGUMENT against a path-shaped substring to decide whether
+            # to strip it. The token may not be a path at all (`-q`, `--no-header`), so
+            # PureWindowsPath is the wrong tool here: it would reinterpret a non-path argument as
+            # one. Textual comparison, never a filesystem decision.
+            "coordinator/bin/stable-suite-run.py": _REASON_NOT_A_PATH,
+            # Builds the POSIX-form `$HOME`/`_cc_root` the guard under test reads -- bash's $HOME
+            # is POSIX-shaped even under Git Bash, so forward slashes are the CORRECT value, not a
+            # portability slip. PureWindowsPath was tried and is actively wrong here: it maps ""
+            # to ".", and this file's test_t10_fail_open_zero_stderr_empty_root exercises an EMPTY
+            # root, so the swap changed what the guard was handed and broke the test.
+            "coordinator/tests/test_cc_root_source_guard.py": _REASON_CANON_STRING,
+        },
     },
     "posix_mode_bits": {
         REPO_CLAUDE_KLABAUTER: {
@@ -1104,7 +1121,6 @@ def is_prefix_excluded(relpath: str, repo_key: str, root=None) -> bool:
     return bool(prefixes) and relpath.startswith(prefixes)
 
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(root, args: List[str]) -> str:
@@ -1113,7 +1129,7 @@ def _git(root, args: List[str]) -> str:
         capture_output=True,
         text=True,
         check=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     return proc.stdout
 
@@ -1865,7 +1881,7 @@ def _baseline_anchor_sha(root, baseline_relpath, current: Dict) -> "str | None":
         ],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     if proc.returncode != 0:
         return None
@@ -1924,7 +1940,7 @@ def assert_baseline_not_grown(root, baseline_relpath) -> Tuple[bool, str]:
         ["git", "-C", str(root), "show", f"{anchor_sha}:{baseline_relpath}"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     if proc.returncode != 0:
         return True, (
@@ -2029,7 +2045,7 @@ def _default_root() -> str:
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
     root = proc.stdout.strip()
     return root or os.getcwd()

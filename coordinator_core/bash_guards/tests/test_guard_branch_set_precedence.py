@@ -312,6 +312,31 @@ class TestNeverDeniesOnNewSwitchShapes:
             assert out["hookSpecificOutput"].get("permissionDecision") != "deny"
 
 
+class TestPowerShellIdiomDialectNeutral:
+    """C4a (guard-dialect-coverage.md row 4): this guard gates on
+    `token_matches_binary(tokens[0], "git")` -- the external `git` exe,
+    byte-identical in both shell dialects. No `_dialect.py` import exists
+    in this module (confirmed by grep), so a PowerShell-idiom surrounding
+    shape (`;` chain instead of `&&`) reaches the SAME tokenizer and must
+    reach the SAME verdict.
+
+    Spec backlink: docs/reference/guard-dialect-coverage.md row 4 (C4a).
+    """
+
+    def test_semicolon_chained_powershell_style_still_fires(self, monkeypatch):
+        recent_epoch = _FIXED_NOW - 3600
+        provider = lambda: [("work/machine-b/2026-07-31", recent_epoch)]
+        monkeypatch.setattr(guard, "_ahead_of_main", lambda branch, cwd=None: 12)
+        monkeypatch.setattr(guard, "should_prompt_rename", lambda *a, **k: False)
+
+        out = guard.check(
+            _payload("Get-Location; git checkout -b work/machine-b/2026-08-03"),
+            branch_set_provider=provider,
+        )
+        ctx = _ctx(out)
+        assert "work/machine-b/2026-07-31" in ctx
+
+
 class TestEnvelopeShape:
     def test_allow_advisory_shape(self, monkeypatch):
         recent_epoch = _FIXED_NOW - 60

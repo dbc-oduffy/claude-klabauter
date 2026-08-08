@@ -25,9 +25,9 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
+from coordinator_core.win_portability import no_console_creationflags
 
 _SID = "12121212-1212-4121-8121-121212121212"
-_CNW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(args, cwd) -> None:
@@ -190,7 +190,7 @@ def test_ops_registry_survives_commit_trailers_import():
         cwd=str(Path(__file__).resolve().parents[2]),
         capture_output=True,
         text=True,
-        creationflags=_CNW,
+        **no_console_creationflags(),
     )
     assert cp.returncode == 0, f"stdout={cp.stdout!r} stderr={cp.stderr!r}"
     assert "OK" in cp.stdout
@@ -288,3 +288,96 @@ def test_artifact_tier_raises_on_genuinely_divergent_multi_artifact_commit(
         compute_missing_trailer_args(
             msg, repo, paths=["state/handoffs/a.md", "state/handoffs/b.md"]
         )
+
+
+# ---------------------------------------------------------------------------
+# Sentinel tier REMOVED (KS-1, 2026-08-07): a `.current-session-id` sentinel,
+# live or stale/well-formed, must now be ignored entirely -- resolution
+# returns "" and NO trailers are stamped when neither env tier is set. Env
+# tiers 1/2 are unaffected and still win outright.
+# ---------------------------------------------------------------------------
+
+_SENTINEL_SID = "99887766-1122-4334-8ee5-aabbccddeeff"
+
+
+def _write_sentinel(repo: Path, sid: str) -> None:
+    sentinel_dir = repo / ".git" / "coordinator-sessions"
+    sentinel_dir.mkdir(parents=True, exist_ok=True)
+    (sentinel_dir / ".current-session-id").write_text(sid, encoding="utf-8")
+
+
+def _write_session_meta(repo: Path, sid: str, meta: dict) -> None:
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_sentinel_stale_session_ignored_no_trailers(tmp_path, monkeypatch):
+    """A sentinel naming a session whose last_activity is far in the past
+    (stale) is ignored entirely -- no Session-Id, no Deliverable-Id."""
+    import datetime as _dt
+
+    repo = _init_repo(tmp_path)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    _write_sentinel(repo, _SENTINEL_SID)
+    stale_dt = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=2)
+    stale_iso = stale_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_session_meta(
+        repo, _SENTINEL_SID, {"pid": "999999", "last_activity": stale_iso}
+    )
+    _write_shape(repo, _SENTINEL_SID, {"pickup": {"deliverable_id": "dlv-stale"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    assert args == []
+
+
+def test_sentinel_live_session_still_ignored_no_trailers(tmp_path, monkeypatch):
+    """A sentinel naming a session with RECENT (live-looking) last_activity
+    is STILL ignored -- the tier is gone, not merely liveness-gated."""
+    import datetime as _dt
+
+    repo = _init_repo(tmp_path)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    _write_sentinel(repo, _SENTINEL_SID)
+    fresh_iso = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_session_meta(
+        repo, _SENTINEL_SID, {"pid": "999999", "last_activity": fresh_iso}
+    )
+    _write_shape(repo, _SENTINEL_SID, {"pickup": {"deliverable_id": "dlv-live"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    assert args == []
+
+
+def test_sentinel_no_session_dir_no_trailers(tmp_path, monkeypatch):
+    """A sentinel naming a session with NO session directory at all (never
+    initialized, or already reaped) is also ignored -- "" throughout."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    _write_sentinel(repo, _SENTINEL_SID)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    assert args == []
+
+
+def test_env_var_tiers_win_regardless_of_sentinel(tmp_path, monkeypatch):
+    """$CLAUDE_SESSION_ID / $CLAUDE_CODE_SESSION_ID win outright regardless
+    of whether a sentinel file or session directory exists at all."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
+    # No session dir, no meta.json, no session-shape.json for _SID at all.
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert f"Session-Id: {_SID}" in joined

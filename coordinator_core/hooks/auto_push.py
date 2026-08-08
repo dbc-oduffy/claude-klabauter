@@ -56,6 +56,7 @@ from pathlib import Path
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _subprocess():
@@ -282,7 +283,7 @@ def _run_git(repo_root: str | None, args: list[str]) -> str | None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except Exception as exc:
         print(f"coordinator-auto-push: git {' '.join(args)} failed to spawn: {exc}", file=sys.stderr)
@@ -324,8 +325,12 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     """Return (should_push, skip_message).
 
     `work/*` -> proceed (True, None). `migration/*|release/*|feature/*` ->
-    skip with a stderr message (False, message). Anything else -> silent
-    skip (False, None).
+    skip with a stderr message (False, message). Anything else (including
+    `main`) -> skip with a stderr message naming the branch and the work/*-only
+    doctrine (False, message) -- this is the canonical/unrecognized catch-all,
+    not a recognized long-lived workstream shape, so it must not be silent:
+    a branch sitting unpushed here with no visible signal is exactly the
+    failure mode this arm exists to prevent.
 
     Case-sensitivity note (the Staff Engineer R1 F7 + 2026-05-07 HTTPS-autopush spinoff):
     the prefix check accepts both `work/MACHINE-A/...` and
@@ -347,7 +352,11 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
             "workstream shape; doctrine: work/* only). Push manually if intended."
         )
         return False, msg
-    return False, None
+    msg = (
+        f"coordinator-auto-push: skipping {branch} (not a work/* branch; "
+        "doctrine: work/* only). Push manually if intended."
+    )
+    return False, msg
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +405,7 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except Exception as exc:
         return False, str(exc)
@@ -557,7 +566,7 @@ def _is_ancestor(repo_root: str, candidate_sha: str, ref: str) -> bool:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except Exception:
         return False
@@ -692,7 +701,7 @@ def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except Exception as exc:
         print(

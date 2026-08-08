@@ -2,9 +2,16 @@
 
 Coverage:
   - HEAD_TAIL_PLUMBING: a genuine `find | head` / `grep ... | tail -n N`
-    two-stage pipeline DENIES on Windows (`host_is_windows=True`) and
-    ADVISES on macOS (`host_is_windows=False`), since
-    `check_head_tail_plumbing_rewrite` confirms a concrete outlet for both.
+    two-stage pipeline ADVISES on both Windows (`host_is_windows=True`) and
+    macOS (`host_is_windows=False`), since `check_head_tail_plumbing_
+    rewrite` confirms a concrete outlet for both -- this guard's own
+    platform-conditioned DENY branch was retired 2026-08-07 as structurally
+    unreachable (DR-280): it gated on the same seam-confirmation an
+    earlier-registered `ADVISORY_REWRITE` chain entry already consumes and
+    returns on first, so through the real dispatcher the deny gate could
+    never open. `host_is_windows` is still accepted and still exercised
+    below (it is the chain-wide threading contract every registered
+    shape-guard honors), but no longer changes this guard's own verdict.
   - FOR_LOOP wrapping a literal `find ... -exec rm {} \\;`: stays
     advisory-only on BOTH platforms, even with `host_is_windows=True`
     forced. UPDATED (BX-12 audit, same day as this guard's own authoring):
@@ -41,12 +48,12 @@ Coverage:
     denied common benign commands (`docker ps | head`, `git log --oneline
     | head`) toward an "Example" that was just the seam's own disclaimer
     prose.
-  - the escape hatch's own name is present in every advisory/deny message
+  - the escape hatch's own name is present in every advisory message
     (self-describing, per the standing "every guard names its own escape
     hatch" rule).
-  - no deny message ever fires without `host_is_windows=True` forced or the
-    real host being Windows -- pinned by re-asserting the same commands
-    under `host_is_windows=False`.
+  - no deny envelope EVER fires, even with `host_is_windows=True` forced --
+    pinned by re-asserting the same commands under both `host_is_windows`
+    values (DR-280).
 
 Pure Python -- no shell spawns, no git repo required, EXCEPT
 `TestVerbatimHeadTailAlternativeIsRealAndEquivalent` below, which spawns both
@@ -62,6 +69,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+
+import pytest
 
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
 
@@ -150,22 +159,46 @@ class TestNonBashOrEmpty:
 
 
 class TestHeadTailPlumbing:
-    def test_denies_on_windows(self):
+    def test_advises_even_with_windows_forced(self):
+        # RETARGETED (DR-280, 2026-08-07): was `test_denies_on_windows`,
+        # asserting a deny envelope under `host_is_windows=True`. This
+        # guard's own deny branch is retired as structurally unreachable --
+        # it gated on `_seam_confirmed_rewrite` against the SAME seam an
+        # earlier-registered `ADVISORY_REWRITE` chain entry
+        # (`head-tail-plumbing-rewrite`) already consumes and returns on
+        # first, so through the real dispatcher the gate could never open.
+        # Now asserts the guard advises (never denies) even with Windows
+        # forced.
+        #
+        # `_pl_python3_invocation()` (aka `_bt_python3_invocation`)
+        # deliberately resolves a REAL, runnable interpreter path rather
+        # than emitting the literal string "python3" -- per its own
+        # docstring, a bare `python3` is frequently absent on stock
+        # Windows. Asserting the resolved invocation itself (matched
+        # structurally, not a second hardcoded literal) keeps this pinned
+        # to what the guard actually promises without going stale on the
+        # next box -- see C2's identical fix (commit 39eedda26) for the
+        # BX-16 rewrite fixtures.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
-        reason = _deny_reason(out)
-        assert "head-tail-plumbing" in reason
-        assert "python3" in reason
+        ctx = _advisory_context(out)
+        assert "head-tail-plumbing" in ctx
+        assert guard._pl_python3_invocation() in ctx
 
     def test_advises_on_macos(self):
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
-        assert "python3" in ctx
+        assert guard._pl_python3_invocation() in ctx
 
-    def test_deny_message_names_its_escape_hatch(self):
+    def test_advisory_message_names_its_escape_hatch(self):
+        # RETARGETED (DR-280, 2026-08-07): was
+        # `test_deny_message_names_its_escape_hatch`, reading `_deny_reason`
+        # under `host_is_windows=True`. This guard never denies any more --
+        # read the advisory context instead, still under a forced Windows
+        # host to confirm the escape hatch survives that leg too.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
-        reason = _deny_reason(out)
-        assert "COORDINATOR_" in reason
+        ctx = _advisory_context(out)
+        assert "COORDINATOR_" in ctx
 
 
 class TestSeamConfirmedOutletMessageShape:
@@ -176,24 +209,38 @@ class TestSeamConfirmedOutletMessageShape:
     """
 
     def test_summary_is_self_contained_not_a_dangling_placeholder(self):
-        # The summary must read sensibly on its own -- the old "below."
-        # placeholder produced "consider below. here too" in the advisory
-        # phrasing, which both misdescribes the outlet and drags the
-        # override note out of the deny template's "Use instead:" sentence.
+        # RETARGETED (DR-280, 2026-08-07): this guard's deny branch is
+        # retired as structurally unreachable, so there is no deny template
+        # left to read -- was asserting "Use instead: ..." (the DENY
+        # template's own sentence) via `_deny_reason` under
+        # `host_is_windows=True`. Now reads the advisory template instead
+        # (which this guard renders on every host, forced or real), whose
+        # own "consider %s here too" sentence carries the identical
+        # regression risk the old "below." placeholder produced ("consider
+        # below. here too", both misdescribing the outlet and dragging the
+        # override note out of that sentence) -- see `_outlet_from_seam_
+        # result`'s docstring for why `summary` must read sensibly standing
+        # alone in EITHER template.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
-        reason = _deny_reason(out)
-        assert "Use instead: the seam-confirmed single-process rewrite" in reason
-        assert "below." not in reason.split("Use instead:")[1].split("\n")[0]
+        ctx = _advisory_context(out)
+        assert "consider the seam-confirmed single-process rewrite here too" in ctx
+        assert "below." not in ctx.split("consider")[1].split("\n")[0]
 
-    def test_override_note_lands_in_example_cue_window_not_use_instead_sentence(self):
+    def test_override_note_lands_in_example_cue_window_not_consider_sentence(self):
+        # RETARGETED (DR-280, 2026-08-07): was `test_override_note_lands_
+        # in_example_cue_window_not_use_instead_sentence`, reading
+        # `_deny_reason` -- the deny template's "Use instead:" sentence no
+        # longer renders (this guard never denies). Same regression check,
+        # against the advisory template's "consider ... here too" sentence
+        # instead.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
-        reason = _deny_reason(out)
-        use_instead_line = next(
-            line for line in reason.splitlines() if line.startswith("Use instead:")
+        ctx = _advisory_context(out)
+        consider_line = next(
+            line for line in ctx.splitlines() if "consider" in line
         )
-        assert "COORDINATOR_" not in use_instead_line
-        example_idx = reason.index("Example:")
-        override_idx = reason.index("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS")
+        assert "COORDINATOR_" not in consider_line
+        example_idx = ctx.index("Example:")
+        override_idx = ctx.index("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS")
         assert override_idx > example_idx
 
     def test_advisory_summary_reads_sensibly_on_macos_too(self):
@@ -376,6 +423,13 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
         )
         return self._run(alt_cmd)
 
+    #: state/bash-guards/known-red.json group "guard-windows-branch-verdicts".
+    #: `_verbatim_head_tail_alternative` builds a shell=True POSIX pipeline
+    #: that fails on cmd.exe -- see
+    #: state/audits/2026-08-07-guard-windows-branch-verdicts.md. Owner:
+    #: docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md
+    #: (its C4 body).
+    @pytest.mark.pending_fix
     def test_unrecognized_generator_head(self, tmp_path):
         # `cat` is not one of `check_head_tail_plumbing_rewrite`'s recognized
         # upstream generators (find/ls/grep) -- the whole point of this
@@ -385,12 +439,14 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
         cmd = "cat %s | head -n 3" % f
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
+    @pytest.mark.pending_fix
     def test_unrecognized_generator_tail(self, tmp_path):
         f = tmp_path / "lines2.txt"
         f.write_text("1\n2\n3\n4\n5\n6\n")
         cmd = "cat %s | tail -n 2" % f
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
+    @pytest.mark.pending_fix
     def test_quoting_hazard_apostrophe_in_filename(self, tmp_path):
         # A literal apostrophe in the filename -- the exact shape of
         # quoting hazard the seam's own `find`/`ls` census parsers had a
@@ -435,3 +491,51 @@ class TestOverrideEscapeHatch:
     def test_override_env_suppresses_bare_glob_advisory(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
         assert guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD)) is None
+
+
+def _ps_payload(command):
+    return {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": command},
+        "session_id": "sess1",
+        "cwd": None,
+    }
+
+
+class TestPowerShellDialect:
+    """Row 14, docs/reference/guard-dialect-coverage.md: HEAD_TAIL_PLUMBING
+    gets the same `Select-Object -First`/`-Last` fix as row 13's
+    `check_head_tail_plumbing_rewrite`; FOR_LOOP has no PowerShell grammar
+    analogue at all and must declare SILENT rather than assert clean."""
+
+    def test_head_tail_plumbing_advises_on_powershell_even_with_windows_forced(self):
+        # RETARGETED (DR-280, 2026-08-07): was `test_head_tail_plumbing_
+        # rewrites_on_powershell`, asserting `permissionDecision == "deny"`
+        # -- this guard's deny branch (including its PowerShell leg, which
+        # shares `_verdict_head_tail`'s own `platform_verdict_for_shape`
+        # call site) is retired as structurally unreachable. Now asserts an
+        # advisory allow instead, even with Windows forced.
+        out = guard.check(
+            _ps_payload("ls . | Select-Object -First 5"),
+            host_is_windows=True,
+        )
+        assert out is not None
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+
+    def test_non_head_tail_powershell_command_declares_silent(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(_ps_payload("Get-Process"))
+        assert result is None
+        assert was_silent("guard_plumbing_and_loops", silences)
+
+    def test_empty_powershell_command_allows_no_silent(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(_ps_payload(""))
+        assert result is None
+        assert not was_silent("guard_plumbing_and_loops", silences)

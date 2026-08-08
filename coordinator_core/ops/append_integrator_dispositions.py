@@ -91,6 +91,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
 
 #: The disposition buckets, in the canonical emission order. The FIRST FIVE
 #: match `agents/review-integrator.md` § Sidecar Disposition Annotation's
@@ -209,6 +210,7 @@ def _resolve_git_root(cwd: Optional[str] = None) -> str:
             ["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError as exc:
         raise DispositionsError(f"cannot resolve git repo root: {exc}") from exc

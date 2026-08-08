@@ -30,11 +30,33 @@ import pytest
 from coordinator_core.ops.review_trail_write import (
     _build_json_record,
     _compute_timestamp,
+    _reject_empty_sha_range,
     _review_trail_write_handler,
     _scan_workstream,
     _validate,
     write_review_trail_entry,
 )
+
+
+def _init_git_repo_with_one_commit(worktree: Path) -> str:
+    """Create a minimal real git repo at ``worktree`` with one commit;
+    return that commit's full SHA. Needed by the empty-sha_range regression
+    tests below — `_reject_empty_sha_range` only engages against a real
+    ``git rev-parse --is-inside-work-tree`` repo (test-isolation no-op
+    contract mirrored from `_resolve_symbolic_range`)."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    kwargs = dict(cwd=str(worktree), capture_output=True, text=True, **no_console_creationflags())
+    subprocess.run(["git", "init", "-q"], **kwargs, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], **kwargs, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], **kwargs, check=True)
+    (worktree / "f.txt").write_text("hello", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], **kwargs, check=True)
+    proc = subprocess.run(["git", "rev-parse", "HEAD"], **kwargs, check=True)
+    return proc.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +376,76 @@ def test_write_review_trail_entry_requires_resolvable_session_id(
             diff_loc=1,
             caller_worktree=worktree,
         )
+
+
+# ---------------------------------------------------------------------------
+# _reject_empty_sha_range (2026-08-08 cmd-exe caret-eating shim defect —
+# state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-
+# 6679bf76eb8a.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_reject_empty_sha_range_raises_on_zero_commit_range(tmp_path: Path) -> None:
+    """The exact shape the caret-eating cmd.exe shim produced: a per-commit
+    `<sha>^..<sha>` request arriving with the caret stripped becomes
+    `<sha>..<sha>` — git resolves this to zero commits. Must raise loudly,
+    not silently persist a discharging-nothing record."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    sha = _init_git_repo_with_one_commit(worktree)
+    with pytest.raises(ValueError, match="resolves to ZERO commits"):
+        _reject_empty_sha_range(f"{sha}..{sha}", worktree)
+
+
+def test_reject_empty_sha_range_allows_nonempty_range(tmp_path: Path) -> None:
+    """A genuine parent..child range (>=1 commit) must not be rejected."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    first_sha = _init_git_repo_with_one_commit(worktree)
+    kwargs = dict(cwd=str(worktree), capture_output=True, text=True, **no_console_creationflags())
+    (worktree / "f.txt").write_text("hello again", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "second"], **kwargs, check=True)
+    second_proc = subprocess.run(["git", "rev-parse", "HEAD"], **kwargs, check=True)
+    second_sha = second_proc.stdout.strip()
+    _reject_empty_sha_range(f"{first_sha}..{second_sha}", worktree)  # must not raise
+
+
+def test_reject_empty_sha_range_noop_outside_git_repo(tmp_path: Path) -> None:
+    """Test-isolation contract: a non-git-repo caller_worktree (synthetic
+    SHAs, as every other characterization test in this file uses) is a
+    no-op, matching `_resolve_symbolic_range`'s own carve-out — this must
+    NOT regress `test_write_review_trail_entry_creates_file` et al."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _reject_empty_sha_range("aaa1111..bbb2222", worktree)  # must not raise
+
+
+def test_write_review_trail_entry_rejects_empty_sha_range(tmp_path: Path) -> None:
+    """End-to-end: write_review_trail_entry itself refuses an empty range
+    rather than persisting a record and exiting cleanly."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    sha = _init_git_repo_with_one_commit(worktree)
+    with pytest.raises(ValueError, match="resolves to ZERO commits"):
+        write_review_trail_entry(
+            sha_range=f"{sha}..{sha}",
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            session_id="sess1234abcd",
+            caller_worktree=worktree,
+            workstream="",
+        )
+    trail_dir = worktree / "state" / "review-trail"
+    assert not trail_dir.is_dir() or not list(trail_dir.glob("*.json")), (
+        "an empty-range write must not persist any record"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -518,8 +518,17 @@ class TestPassThrough:
         Path.resolve(strict=False) does not case-normalise a non-existent
         path, so a candidate typed with different casing must still pass the
         path-shape and containment gates or the guard is silently bypassed
-        by casing alone (the actual write still lands on the real memo)."""
-        git_root = "/repo"
+        by casing alone (the actual write still lands on the real memo).
+
+        The root is resolved rather than written as the POSIX literal
+        ``/repo``: on Windows a leading slash is drive-RELATIVE, so
+        ``Path.resolve`` anchors the candidate onto the current drive
+        (``X:\\repo\\...``) while a literal root stays ``/repo`` and the
+        containment prefix can never match -- which made this test fail for
+        a reason that has nothing to do with the casing it exists to check.
+        Resolving both through the same anchoring keeps the subject intact
+        and is a no-op on POSIX."""
+        git_root = str(Path("/repo").resolve())
 
         gated = guard._normalize_and_gate("Cross-Repo/Inbox/2026-07-26-x.md", git_root)
         assert gated is not None

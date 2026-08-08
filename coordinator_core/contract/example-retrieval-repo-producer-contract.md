@@ -419,7 +419,7 @@ conditional (not treat `ref` as freely optional or freely required).
 ```json
 "provenance": {
   "source_kind": "github_rest",
-  "repo": "dbc-example-operator/example-retrieval-repo",
+  "repo": "dbc-oduffy/example-retrieval-repo",
   "ref": { "branch": "main", "sha": "a1b2c3d4e5f6…" },
   "path": "state/handoffs/2026-07-01_120000_abcdef.md",
   "observed_at": "2026-07-03T12:18:48Z",
@@ -431,7 +431,7 @@ conditional (not treat `ref` as freely optional or freely required).
 ```json
 "provenance": {
   "source_kind": "local_fs",
-  "repo": "dbc-example-operator/.example-doctrine-mirror-repo",
+  "repo": "dbc-oduffy/.example-doctrine-mirror-repo",
   "ref": null,
   "path": "state/handoffs/2026-06-30_021546_12e715f3.md",
   "observed_at": "2026-07-03T12:18:48Z",

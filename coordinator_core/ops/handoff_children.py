@@ -133,6 +133,7 @@ Negative-spec (`blocked_by_dependents`):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -369,7 +370,7 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
     if not os.path.isfile(candidate_abs):
         return _indeterminate(f"candidate not found on disk: {candidate}")
 
-    live_paths, scan_errors = _collect_handoff_paths(worktree_root)
+    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
 
     # --- Tier 2 (behaviour change -- PM sign-off required) ---
     # Fail-closed on an unscannable subtree — a live child could be sitting
@@ -640,7 +641,7 @@ def blocked_by_dependents(
 
 
 @register_op("handoff.blocked_by_dependents")
-async def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.blocked_by_dependents" handler.
 
     Thin op-registration wrapper around `blocked_by_dependents` (PIN-1) — see

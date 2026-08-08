@@ -36,10 +36,17 @@ NEGATIVE-SPEC -- what this module deliberately does NOT do
   cp, dd, tee, `sed -i`, or a `>`/`>>` redirect, or a `python3 -c` script
   whose source calls one of those) is NEVER run to completion -- liveness
   is proven by resolving the interpreter/executable and confirming it
-  IMPORTS/PARSES/RECOGNIZES the invocation (`--help`, or a syntax-only
+  IMPORTS/PARSES/RECOGNIZES the invocation (`-h`, or a syntax-only
   `compile()` pass over a `-c` script body), never by letting the
   destructive half execute. This is the load-bearing carve-out for
   ``check_destructive_rm``'s `git stash push` alternative and similar.
+- Never asks a probed CLI for BROWSER-RENDERED help. `git <verb> --help`
+  on Git for Windows finds no ``man.exe``, resolves ``help.format`` to
+  ``web``, and hands off to ``git-web--browse``, which launches the
+  operator's default browser at a local ``git-<verb>.html`` -- a detached
+  GUI process ``capture_output=True`` cannot contain. Every probe here
+  therefore uses the terminal-only short form and runs under
+  ``_probe_env()``'s no-op browser triple; see that function.
 - Never mutates the real repo. Every probe that DOES execute something for
   real (a read-only informational command) runs inside a throwaway
   ``tempfile.mkdtemp()`` cwd with a subprocess timeout, never this
@@ -210,6 +217,44 @@ def classify_band(guard: str) -> GuardBand:
 #: CREATE_NO_WINDOW on Windows and 0 on macOS/Linux, where the attribute
 #: does not exist.  # popup-safe-env-suppressed
 _NO_WINDOW: Dict[str, Any] = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+#: Git's own no-op help-browser triple, injected per-probe via `GIT_CONFIG_*`
+#: rather than read from `~/.gitconfig`. Env injection is the only form that
+#: survives this suite's own home quarantine: `coordinator_core/conftest.py`'s
+#: autouse `_quarantine_real_home` repoints HOME/USERPROFILE at a tmpdir and
+#: deletes HOMEDRIVE/HOMEPATH, so the operator's global mitigation is INVISIBLE
+#: to every git subprocess spawned under pytest -- measured directly: with the
+#: quarantine applied, `git config --get web.browser` answers empty/rc=1 on a
+#: box where the global triple is set. `browser.noop.cmd` is `eval`-ed by
+#: `git-web--browse`, so the value stays free of shell metacharacters (a
+#: parenthesis is a hard syntax error there).
+_BROWSER_SUPPRESSION_CONFIG: Tuple[Tuple[str, str], ...] = (
+    ("help.format", "web"),
+    ("web.browser", "noop"),
+    ("browser.noop.cmd", "echo not-opening-browser-for:"),
+)
+
+
+def _probe_env() -> Dict[str, str]:
+    """This module's environment for every probe subprocess: the ambient
+    environment plus a no-op help-browser triple, so no probed CLI can hand a
+    help request off to a GUI browser.
+
+    Belt to `-h`'s braces. The `-h` short form in `probe_command` is the fix
+    for the ONE shape known to launch a browser (`git <verb> --help`); this
+    env is the standing guarantee for every OTHER probe here -- notably
+    `probe_flag`, which runs `--help` against an arbitrary agent-named CLI and
+    is otherwise one browser-launching CLI away from the same defect.
+
+    Computed per call, never frozen at import: the ambient environment this
+    reads is monkeypatched per-test by the quarantine fixture above."""
+    env = dict(os.environ)
+    env["GIT_CONFIG_COUNT"] = str(len(_BROWSER_SUPPRESSION_CONFIG))
+    for i, (key, value) in enumerate(_BROWSER_SUPPRESSION_CONFIG):
+        env["GIT_CONFIG_KEY_%d" % i] = key
+        env["GIT_CONFIG_VALUE_%d" % i] = value
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +942,37 @@ _MUTATING_GIT_SUBCOMMANDS = frozenset(
 )
 
 
+def _split_alternative_text(text: str) -> List[str]:
+    """Tokenize an alternative string this module extracted from a guard's own
+    message, preserving Windows path separators.
+
+    `shlex.split(text, posix=True)` treats a backslash as an ESCAPE, so
+    ``git -C X:\\claude-klabauter\\coordinator_core status`` tokenizes its path as
+    ``X:claude_klabautercoordinator_core`` -- a path that cannot exist, which
+    made the alternative execute, fail with "cannot change to", and grade DEAD.
+    Disabling `escape` keeps POSIX quote handling (a quoted multi-word argument
+    is still one token) while leaving backslashes literal; verified
+    byte-identical to the previous behavior on every non-backslash shape this
+    module encounters.
+
+    NEGATIVE-SPEC: deliberately NOT routed through the shared
+    `_command_tokenizer`. That module parses the CALLER's original command under
+    this package's own quote-handling contract and carries the SAME posix-escape
+    defect for its own reasons; converging them is a change to every
+    fail-closed guard's tokenization, which is owned elsewhere (see
+    `state/audits/2026-08-07-bash-guard-tokenizer-eats-windows-path-separators.md`).
+    This helper's scope is the throwaway alternative strings extracted here."""
+    if _exceeds_tokenizable_ceiling(text):
+        return text.split()
+    lex = shlex.shlex(text, posix=True)
+    lex.whitespace_split = True
+    lex.escape = ""
+    try:
+        return list(lex)
+    except ValueError:
+        return text.split()
+
+
 def _classify_backtick_span(span: str) -> Optional[Alternative]:
     text = span.strip()
     if not text:
@@ -918,14 +994,8 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
         return Alternative(AlternativeKind.HARNESS_CAPABILITY, span, text)
     # DoS bound inherited from `_command_tokenizer`, not a local tuning knob:
     # past the ceiling take the same whitespace fallback an unterminated quote
-    # already takes.
-    if _exceeds_tokenizable_ceiling(text):
-        argv = text.split()
-    else:
-        try:
-            argv = shlex.split(text, posix=True)
-        except ValueError:
-            argv = text.split()
+    # already takes. Both branches live in `_split_alternative_text`.
+    argv = _split_alternative_text(text)
     if not argv:
         return None
     if argv[0] in _SHAPE_NAME_TOKENS:
@@ -987,14 +1057,9 @@ def extract_alternatives(hso: Dict[str, Any]) -> List[Alternative]:
     if isinstance(updated, dict) and updated.get("command"):
         cmd = updated["command"]
         # DoS bound inherited from `_command_tokenizer`, not a local tuning
-        # knob -- same whitespace fallback as an unparseable rewrite.
-        if _exceeds_tokenizable_ceiling(cmd):
-            argv = cmd.split()
-        else:
-            try:
-                argv = shlex.split(cmd, posix=True)
-            except ValueError:
-                argv = cmd.split()
+        # knob -- same whitespace fallback as an unparseable rewrite. Both
+        # branches live in `_split_alternative_text`.
+        argv = _split_alternative_text(cmd)
         if argv:
             alts.append(Alternative(AlternativeKind.COMMAND, cmd, argv))
 
@@ -1303,19 +1368,43 @@ def probe_command(alt: Alternative) -> Verdict:
                 "(never executed for real, --help skipped: not all POSIX utilities support "
                 "it consistently, e.g. BSD rm/mv/cp)" % (argv, resolved),
             )
-        help_argv = [resolved, argv[1]] + ["--help"]
+        # `-h`, never `--help`. Git for Windows ships no `man.exe`, so
+        # `git <verb> --help` resolves `help.format` to `web` and hands off to
+        # `git-web--browse`, which launches the operator's default browser at a
+        # local `git-<verb>.html`. That browser is a detached GUI process, so
+        # neither `capture_output=True` nor `_NO_WINDOW` contains it, and this
+        # branch fires on every guard advisory naming a mutating git
+        # alternative -- observed as dozens of tabs a minute during a suite run.
+        # `-h` prints usage to the terminal and never reaches `git-web--browse`.
+        help_argv = [resolved, argv[1], "-h"]
         try:
-            proc = subprocess.run(help_argv, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
+            proc = subprocess.run(
+                help_argv,
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SEC,
+                env=_probe_env(),
+                **_NO_WINDOW,
+            )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            return Verdict(VerdictStatus.DEAD, "--help invocation failed: %s" % exc)
-        if proc.returncode not in (0, 1):
+            return Verdict(VerdictStatus.DEAD, "-h invocation failed: %s" % exc)
+        # Measured on Git for Windows 2.x: every subcommand in
+        # `_MUTATING_GIT_SUBCOMMANDS` exits 129 under `-h` with its usage block
+        # on STDOUT, while an unrecognized subcommand exits 1 with "is not a
+        # git command" on stderr. Accepting {0, 129} rather than the previous
+        # {0, 1} is therefore a STRICTER gate, not a looser one: a hallucinated
+        # subcommand used to grade LIVE on its rc=1 and now correctly grades
+        # DEAD, which is the discrimination this probe exists to provide.
+        if proc.returncode not in (0, 129):
             return Verdict(
                 VerdictStatus.DEAD,
-                "mutating verb %r resolved but --help exited %d:\n%s" % (argv, proc.returncode, proc.stderr[-500:]),
+                "mutating verb %r resolved but -h exited %d (expected 0 or 129; rc=1 means "
+                "git did not recognize the subcommand):\n%s"
+                % (argv, proc.returncode, (proc.stdout + proc.stderr)[-500:]),
             )
         return Verdict(
             VerdictStatus.LIVE,
-            "mutating shape %r -- proven live via --help only (never executed for real), exit %d" % (argv, proc.returncode),
+            "mutating shape %r -- proven live via -h only (never executed for real), exit %d" % (argv, proc.returncode),
         )
 
     safe_argv = [resolved] + [_dummy_substitute(t) for t in argv[1:]]
@@ -1373,7 +1462,20 @@ def probe_flag(alt: Alternative) -> Verdict:
     if not resolved:
         return Verdict(VerdictStatus.DEAD, "CLI %r (owner of flag %r) does not resolve" % (cli_name, flag))
     try:
-        proc = subprocess.run([resolved, "--help"], capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
+        # `--help` is correct here -- this probe must read the CLI's own help
+        # TEXT to assert the flag appears in it, which `-h` does not reliably
+        # render for every CLI. The browser hazard is closed by `_probe_env()`
+        # instead: `cli_name` is agent-supplied, so this is the one probe that
+        # can invoke an ARBITRARY binary's `--help`, and the no-op browser
+        # triple is what keeps a browser-launching one from opening a window.
+        proc = subprocess.run(
+            [resolved, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+            env=_probe_env(),
+            **_NO_WINDOW,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return Verdict(VerdictStatus.DEAD, "--help invocation failed: %s" % exc)
     haystack = proc.stdout + proc.stderr

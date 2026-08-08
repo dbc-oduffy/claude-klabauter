@@ -105,14 +105,16 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _GIT_TIMEOUT_SECS = 30
 _DIVERGENCE_TIMEOUT_SECS = 120
 _COMMIT_TIMEOUT_SECS = 300  # a pre-commit hook may run linters/tests; generous but bounded
 _MACHINE_LOCAL_TIMEOUT_SECS = 15
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _HELP_TEXT = """
 Purpose: non-destructive, fully git-revertible pipeline that brings one target
@@ -174,7 +176,12 @@ def _claude_home() -> str:
     set, overrides $HOME (not the full .claude path). Matches the identically-
     named helper in coordinator_core.ops.learn_lessons_roots (copied, not
     imported, per that module's own local-copy convention)."""
-    base = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    base = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(base, ".claude")
 
 
@@ -198,7 +205,7 @@ def _content_root_rungs_2_to_4(claude_home: str) -> str:
                 text=True,
                 timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             candidate = (proc.stdout or "").strip()
             if proc.returncode == 0 and candidate and os.path.isdir(candidate):
@@ -281,7 +288,7 @@ def _git(
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
-        creationflags=_CREATIONFLAGS,
+        **_CREATIONFLAGS,
     )
 
 
@@ -550,7 +557,7 @@ def main(argv: List[str]) -> int:
                 ],
                 timeout=_DIVERGENCE_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             conflict_exit = proc.returncode
         except subprocess.TimeoutExpired:
@@ -648,7 +655,7 @@ def main(argv: List[str]) -> int:
             env=env,
             timeout=_COMMIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired:
         _print("bootstrap-repo: git commit timed out", file=sys.stderr)
@@ -680,7 +687,7 @@ def _which_git() -> Optional[str]:
             text=True,
             timeout=_GIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _which_git: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -769,7 +776,7 @@ def _validate_target_root_is_git_repo(target_root: str) -> dict:
 
 
 @register_op("repo_setup.validate_target_root")
-async def _validate_target_root_op(params: dict, repo_root=None) -> dict:
+def _validate_target_root_op(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'repo_setup.validate_target_root' handler.
 
     Params:

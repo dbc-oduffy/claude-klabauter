@@ -27,23 +27,26 @@ exact boundary violation this module exists to prevent. A future caller that
 wants a disposition decision belongs on example-doctrine-repo's side of the fence, reading this
 module's output as one input among several.
 
-DR-084 dual-read (transitional, C7): a handoff's claimer is recorded under
-``claimed_by`` (canonical) or the retired ``consumed_by`` (still present in
-un-migrated corpora). This is a VALUE read (whose claim is it), not a presence
-check, so first-match-wins regex alternation would be WRONG here (see
-``coordinator_core.coverage._parse_handoff_consumed_by``'s own docstring for
-why) — ``claimed_by`` is read explicitly first and ``consumed_by`` is
-consulted only when ``claimed_by`` is absent/empty.
+Claimer resolution is ledger-first (C5, 2026-08-07) via
+``coordinator_core.claim_state.resolve_claim_state`` — the ledger
+(``<common_dir>/coordinator-sessions/handoff-claims/``, branch-independent)
+wins over the tracked-frontmatter mirror whenever it holds a live claim, so a
+handoff whose mirror reverted to ``status: open`` on a branch switch (while
+the ledger still holds the claim) is no longer silently excluded from this
+enumerator's output. ``resolve_claim_state`` itself stays DR-084 dual-tolerant
+on the mirror side (``claimed_by`` canonical, ``consumed_by`` legacy fallback,
+``claimed_by``-wins-on-both-present) — see that module's own docstring.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-klabauter-em-wsc-step0-fails-open-crash-recovery.md
+Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ops.fleet._common import collect_live_handoff_paths
-from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.session.liveness import session_live
 
 
@@ -60,20 +63,23 @@ class StaleClaimHandoff(NamedTuple):
     claimer_sid: str
 
 
-def _claimer_sid(handoff_path: str) -> str:
-    """Read the recorded claimer session id off ``handoff_path``'s frontmatter.
+def _claimer_sid(handoff_path: str, repo_root: Optional[str] = None) -> str:
+    """Resolve the recorded claimer session id for ``handoff_path``,
+    ledger-first via ``coordinator_core.claim_state.resolve_claim_state``.
 
-    ``claimed_by`` wins when a record carries both names (DR-084 dual-read,
-    C7) — this is a VALUE read, so ``claimed_by`` is tried FIRST and
-    ``consumed_by`` is only consulted on a miss; see module docstring for why
-    alternation-order would be wrong here. Returns ``""`` for an unclaimed
-    (open) handoff or an unreadable file — ``read_frontmatter_field`` never
-    raises (see that module's own contract).
+    The ledger wins whenever it holds a live claim, regardless of what the
+    tracked-frontmatter mirror (``claimed_by``/DR-084 ``consumed_by``) says —
+    see ``resolve_claim_state``'s own docstring for the desync incident this
+    generalizes a fix for. A handoff claimed on a branch the shared worktree
+    has since left reverts its mirror to ``status: open`` with no claim
+    fields, but the branch-independent ledger still holds the claim; reading
+    the mirror alone (this function's prior behavior) silently dropped such a
+    handoff from the stale-claim listing. Returns ``""`` when neither source
+    has a claim (``ClaimState.source == "none"``) — an unclaimed (open)
+    handoff or an unreadable file, mirroring the prior contract.
     """
-    value = read_frontmatter_field(handoff_path, "claimed_by")
-    if value:
-        return value
-    return read_frontmatter_field(handoff_path, "consumed_by")
+    state = resolve_claim_state(handoff_path, repo_root=repo_root)
+    return state.holder or ""
 
 
 def list_stale_claim_handoffs(repo_root: Optional[str] = None) -> List[StaleClaimHandoff]:
@@ -105,7 +111,7 @@ def list_stale_claim_handoffs(repo_root: Optional[str] = None) -> List[StaleClai
         return stale
 
     for p in handoff_paths:
-        sid = _claimer_sid(str(p))
+        sid = _claimer_sid(str(p), repo_root=cwd_str)
         if not sid:
             continue
         if not session_live(sid, cwd_str):

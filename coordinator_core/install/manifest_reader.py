@@ -59,8 +59,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Union
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NO_CONSOLE = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
+from coordinator_core.win_portability import no_console_creationflags
 
 _VERSION_CHECK = "import sys; sys.exit(0 if sys.version_info[:2] >= (3,11) else 1)"
 _PROBE_TIMEOUT_SECS = 10.0
@@ -104,7 +103,7 @@ def _probe_candidate(executable: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=_PROBE_TIMEOUT_SECS,
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return False
@@ -137,7 +136,7 @@ def _resolve_py_launcher_candidate(version_flag: str) -> Optional[str]:
             timeout=_PROBE_TIMEOUT_SECS,
             encoding="utf-8",
             errors="replace",
-            **_NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return None

@@ -103,7 +103,7 @@ def probe_fresh_repo(repo_root: Path) -> Tuple[bool, List[str]]:
 
 
 @register_op("update_docs.probe_fresh_repo_noop")
-async def _probe_fresh_repo_noop(params: dict, repo_root=None) -> dict:
+def _probe_fresh_repo_noop(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'update_docs.probe_fresh_repo_noop' handler.
 
     Params: {} (no inputs consumed).

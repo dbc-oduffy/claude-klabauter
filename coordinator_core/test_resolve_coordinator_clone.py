@@ -104,6 +104,30 @@ def test_mode_dev_marker_present_resolves_dev_even_with_oss(isolated_home, monke
     assert rcc._resolve_source_mode("git-ops") == "dev"
 
 
+def test_mode_flat_layout_unmarked_no_manifest_resolves_dev(isolated_home):
+    """Falsifying case for the codename-free defect: registry unreachable,
+    pointer empty, and the flat `~/.claude/plugins/coordinator-claude`
+    layout present WITHOUT a `.claude-plugin/plugin.json` marketplace
+    manifest (e.g. a raw git checkout dropped at the flat path) and WITHOUT
+    a `.coordinator-dev-repo` dev marker. Previously this fell through every
+    rung and raised "no coordinator source found" even though a perfectly
+    good coordinator root sat right there. Must now resolve instead of
+    raising."""
+    flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
+    flat.mkdir(parents=True)
+    assert rcc._resolve_source_mode("git-ops") == "dev"
+
+
+def test_clone_root_flat_unmarked_no_manifest_resolves(isolated_home):
+    """Same defect, exercised end-to-end through resolve_clone_root(): an
+    OSS box with no registry, no pointer, no dev marker, and a flat clone
+    with `.git` but no marketplace manifest now resolves the flat clone
+    instead of raising "no coordinator source found"."""
+    flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
+    (flat / ".git").mkdir(parents=True)
+    assert rcc.resolve_clone_root() == str(flat)
+
+
 def test_mode_registry_ranks_above_pointer_file(isolated_home, monkeypatch, tmp_path):
     """DR-071: registry `repos.example_doctrine_repo` must be tried BEFORE the `.doe-root`
     pointer file in the marker auto-discovery candidate ladder (inverted

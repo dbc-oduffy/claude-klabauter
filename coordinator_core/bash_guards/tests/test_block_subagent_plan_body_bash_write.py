@@ -26,6 +26,7 @@ is monkeypatched directly onto the guard module object.
 
 from __future__ import annotations
 
+from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write as guard
 
 
@@ -134,3 +135,47 @@ def test_non_write_command_allows_even_with_unresolved_kind(monkeypatch):
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="")
     payload = _payload("cat docs/plans/2026-07-30-x.md")
     assert guard.check(payload) is None
+
+
+def _ps_payload(command, **kw):
+    p = _payload(command, **kw)
+    p["tool_name"] = "PowerShell"
+    return p
+
+
+def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
+    """`>`/`>>` is the SAME operator in PowerShell as POSIX -- idiom (1)
+    needs no PowerShell-specific matcher and keeps ruling correctly, still
+    as the ADVISORY_REWRITE allow+additionalContext shape.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
+    payload = _ps_payload('"in progress" >> docs/plans/2026-07-30-x.md')
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
+    """A PowerShell cmdlet write this guard has no verb table for
+    (`Set-Content`) must not read as a confirmed clean verdict -- it records
+    SILENT on the out-of-band channel while still returning `None` (the
+    fail-open default), per AC1/AC3.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
+    payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
+    with _verdict.collecting() as silences:
+        result = guard.check(payload)
+    assert result is None
+    assert _verdict.was_silent("block_subagent_plan_body_bash_write", silences)
+
+
+def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch):
+    """Identity axis still gates first: a non-executor kind never reaches
+    the PowerShell target-detection leg at all, so no SILENT is recorded.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
+    payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
+    with _verdict.collecting() as silences:
+        result = guard.check(payload)
+    assert result is None
+    assert silences == []

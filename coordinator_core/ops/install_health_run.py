@@ -370,7 +370,9 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
         # between a "prefix" shape and a "complete argv" shape is needed.
         launch_argv = resolve_by_shebang(script)
         try:
-            rc = subprocess.call(launch_argv)
+            from coordinator_core.win_portability import no_console_creationflags
+
+            rc = subprocess.call(launch_argv, **no_console_creationflags())
         except OSError as exc:
             # Review: code-reviewer (Finding 1) — a resolved-but-nonexistent
             # interpreter (e.g. a shebang naming a version-pinned Python or

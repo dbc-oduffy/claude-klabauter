@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Timeout (seconds) `commit_scoped()` gives each `diverging_paths()` `git
 #: diff` call. Wider than Check 13's `2.0s` advisory default (see
@@ -186,7 +187,7 @@ def _git(
             cwd=str(cwd),
             text=True,
             timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
             env=env,
             **run_kwargs,
             **stdin_kwargs,
@@ -223,8 +224,13 @@ def _git(
 
 
 def status_porcelain(cwd: Union[str, Path]) -> GitResult:
-    """`git status --porcelain` — dirty-tree gate classification (C3)."""
-    return _git(["status", "--porcelain"], cwd=cwd)
+    """`git status --porcelain` — dirty-tree gate classification (C3).
+
+    `--no-optional-locks` (pre-subcommand, per `git`'s placement rule)
+    suppresses the opportunistic stat-cache write-back a bare `git status`
+    takes `.git/index.lock` for — contention noise on this shared worktree.
+    Read-only call; never applied to a writing invocation."""
+    return _git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd)
 
 
 def diff_cached_name_status(
@@ -283,10 +289,104 @@ def diff_quiet(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> 
     "diff present" contract result (see the exit-code-semantics discipline in this
     module's callers' own docstrings).
     """
+    # DELIBERATELY NOT `--no-optional-locks`, unlike `status_porcelain` and
+    # every other read wrapper in this module. Suppressing the optional lock
+    # makes git compute the stat-cache refresh in memory and discard it, so a
+    # lock-suppressed read can never CLEAR phantom-dirty state -- only a real
+    # lock-taking write does. This wrapper's sole production caller is
+    # `commit_gates`' EOL-phantom filter, which exists precisely to absorb
+    # phantom-dirty entries; the flag would leave every phantom permanently
+    # dirty and re-filtered on each ceremony (the flapping-count symptom in
+    # example-doctrine-repo's bash-on-windows-gotchas.md § 11). The contention win here is
+    # small anyway -- this is a narrow per-path diff, not the whole-tree status
+    # scan the adoption pass targets.
     args = ["diff", "--quiet"]
     if paths:
         args.extend(["--", *paths])
     return _git(args, cwd=cwd)
+
+
+def cat_file_batch(repo_root: Union[str, Path], ref: str, rel_paths: Sequence[str]) -> Dict[str, Optional[str]]:
+    """Resolve `rel_paths` at `ref` to blob text via ONE `git cat-file --batch`
+    feed instead of one `git show <ref>:<path>` spawn per file. Deliberately
+    `--batch`, NOT `--batch-check`: this helper reads blob CONTENT, and
+    `--batch-check` returns metadata only -- a caller that only needs
+    existence/size/type must not route through this helper (shipping
+    `--batch-check`'s shape here would silently return None for every
+    resolvable entry, since this parser expects a content body after each
+    header line).
+
+    Promoted (2026-08) from `coordinator_core.reconcile.ac27_differential_oracle
+    ._git_cat_file_batch` (authored there, C5, because this module belonged to
+    no chunk in that wave) into this module -- the house home for the repo's
+    other native git read-wrappers -- so a second N+1-git-spawn site does not
+    grow its own independent copy. Behaviour is preserved byte-for-byte from
+    the original; this is a promotion, not a rewrite.
+
+    Bypasses `_git()` deliberately (like `_hash_object_stdin_bytes` above) --
+    `_git()`'s `text=True` leg would mis-decode a batch feed whose per-record
+    boundaries are computed from byte-length `size` fields, not text lines,
+    so this helper drives `subprocess.run` directly in bytes mode.
+
+    `cat-file --batch` resolves each stdin line INDEPENDENTLY (unlike a
+    multi-range `rev-list`/`log` feed, which computes one combined
+    reachability set across all inputs) -- so batching the object list here
+    carries none of the set-algebra hazard that forbids batching a range list.
+
+    Reconciliation: a batched feed can silently drop or misalign entries if
+    stdout is short or malformed, so every requested `rel_path` is bound to
+    an explicit slot in the returned dict by walking the SAME `rel_paths`
+    order the input was written in -- resolved -> blob text, missing/
+    truncated/malformed -> `None`. Absence from git's output is never read
+    as "resolved"; the caller decides what `None` means.
+
+    Returns `{}` immediately for an empty `rel_paths`, spawning no
+    subprocess.
+    """
+    if not rel_paths:
+        return {}
+    objects = [f"{ref}:{rel_path}" for rel_path in rel_paths]
+    stdin_bytes = ("\n".join(objects) + "\n").encode("utf-8")
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "cat-file", "--batch"],
+        input=stdin_bytes,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
+    stdout = proc.stdout
+    results: Dict[str, Optional[str]] = {}
+    pos = 0
+    for rel_path in rel_paths:
+        nl = stdout.find(b"\n", pos)
+        if nl == -1:
+            # stdout ran out relative to the requested set -- every remaining
+            # path is unresolved; never guess at a partial record.
+            results[rel_path] = None
+            continue
+        header = stdout[pos:nl]
+        pos = nl + 1
+        if header.endswith(b" missing"):
+            results[rel_path] = None
+            continue
+        parts = header.split(b" ")
+        if len(parts) != 3:
+            results[rel_path] = None
+            continue
+        _sha, _type, size_field = parts
+        try:
+            size = int(size_field)
+        except ValueError:
+            results[rel_path] = None
+            continue
+        content = stdout[pos:pos + size]
+        pos += size
+        if stdout[pos:pos + 1] == b"\n":
+            pos += 1
+        try:
+            results[rel_path] = content.decode("utf-8")
+        except UnicodeDecodeError:
+            results[rel_path] = content.decode("utf-8", errors="replace")
+    return results
 
 
 def add_paths(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
@@ -734,28 +834,31 @@ def commit_scoped(
 
     `known_checked`/`known_diverged` -- OPTIONAL dedup seam (docs/plans/
     2026-07-27-computed-commit-mechanism-selection.md § dedup). When both
-    are given, `known_checked` is the exact path set a caller (today:
-    `commit_pipeline.explicit_stage()`, via `commit_pipeline.commit()`)
-    already ran `diverging_paths()` over EARLIER IN THIS SAME LOCKED
-    CRITICAL SECTION, and `known_diverged` is the diverged subset of it.
-    This function trusts that answer for `path in known_checked` and only
-    spawns a fresh (pathspec-scoped) `diverging_paths()` call for the "gap"
-    -- paths in `path_list` NOT in `known_checked` (e.g. a swept-rename
-    destination `explicit_stage()` discovered but never passed through its
-    own `diverging_paths()` pathspec). In the common case (no swept renames,
-    `paths == known_checked`) the gap is empty and this function spawns ZERO
-    `git diff` subprocesses of its own. When either argument is omitted
-    (the default -- every OTHER caller, e.g. `ceremony.scoped_git_commit`
-    and `coordinator/bin/coordinator-safe-commit`), this function computes
-    divergence for the FULL `paths` itself, exactly as before -- correctness
-    for a caller with no precomputed answer is unchanged.
+    are given, `known_checked` is the exact path set a caller already ran
+    `diverging_paths()` over, and `known_diverged` is the diverged subset of
+    it. This function trusts that answer for `path in known_checked` and
+    only spawns a fresh (pathspec-scoped) `diverging_paths()` call for the
+    "gap" -- paths in `path_list` NOT in `known_checked` (e.g. a
+    swept-rename destination discovered but never passed through the
+    caller's own `diverging_paths()` pathspec). In the common case (no
+    swept renames, `paths == known_checked`) the gap is empty and this
+    function spawns ZERO `git diff` subprocesses of its own. As of
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md § C10,
+    `commit_pipeline.commit()` no longer passes this pair at all -- there is
+    no `ceremony_lock` left to bound its soundness -- so every caller today
+    (`commit_pipeline.commit()` included) hits the fresh-computation path;
+    the parameters remain on this function for any FUTURE caller that can
+    supply a genuinely current answer under the precondition below, never as
+    a general-purpose cache.
 
-    This is a same-lock-hold optimisation ONLY -- never cache this result
-    or reuse it across a pass or across concurrent invocations. The shared
-    working tree can be mutated by a peer session the instant the lock
-    releases; a `known_checked`/`known_diverged` pair computed outside the
-    SAME critical section as this call would be answering a question that
-    is no longer live.
+    Precondition (corrected 2026-08-07 -- there is no lock): sound ONLY when
+    NOTHING can have changed the worktree/index between the caller's own
+    `diverging_paths()` call and THIS call -- i.e. no intervening steps of
+    any kind (gate checks, spawns, other I/O) sit between the two. It is NOT
+    "same lock hold" (no caller holds one), and it is never a cache -- a
+    `known_checked`/`known_diverged` pair computed even one step earlier,
+    let alone across a pass or across concurrent invocations, is answering a
+    question that may no longer be live.
 
     Returns a `GitResult`; on success (`ok is True`) `stdout` carries the
     new commit SHA in the private-index branch (the agree branch's `stdout`
@@ -763,12 +866,15 @@ def commit_scoped(
     existing contract -- callers needing the SHA there already call
     `rev_parse_head()`, unchanged).
 
-    Calling this WITHOUT `ceremony_lock` held -- confirmed safe (code review
-    2026-07-27 structural note). `wsc_tail`/`commit_pipeline`'s call path
-    always holds `ceremony_lock(name="wsc-commit")`; `coordinator-safe-
-    commit`'s `do_scoped` calls this function directly with no lock at all.
-    Both are fine BY CONSTRUCTION, for two different reasons depending on
-    which branch a given call takes:
+    This function requires NO external lock -- confirmed safe (code review
+    2026-07-27 structural note), and lock-free is now the only way it is
+    ever called (corrected 2026-08-07,
+    docs/plans/2026-08-07-excise-the-ceremony-lock.md § C6: the
+    `ceremony_lock` mutex was deleted outright by that plan's § C7, so no
+    caller can hold one even in principle). Neither
+    `wsc_tail`/`commit_pipeline`'s call path nor `coordinator-safe-commit`'s
+    `do_scoped` takes any lock, and both are fine BY CONSTRUCTION, for two
+    different reasons depending on which branch a given call takes:
       - AGREE branch: safety against absorbing a peer's own staged content
         outside `path_list` comes from the explicit trailing pathspec on
         both `git add` and `git commit` (pre-existing SC-DR-008 protection,
@@ -783,10 +889,6 @@ def commit_scoped(
         against a REAL concurrent commit by
         `test_cas_failure_on_concurrent_head_move_fails_loud`). The CAS
         itself is the concurrency guard here, not an external lock.
-    A caller may still want `ceremony_lock` for reasons OUTSIDE this
-    function's own safety (e.g. a broader multi-step invariant spanning more
-    than just this one commit) -- but omitting it around a bare
-    `commit_scoped()` call is not, by itself, a hazard.
     """
     path_list = list(paths)
     if not path_list:
@@ -944,7 +1046,7 @@ def _hash_object_stdin_bytes(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired as exc:
         return GitResult(

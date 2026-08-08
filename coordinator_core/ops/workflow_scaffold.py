@@ -148,7 +148,7 @@ def _compose_script(name: str, description: str, phases: list, pattern: str) -> 
 
 
 @register_op("workflow.scaffold")
-async def _workflow_scaffold(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _workflow_scaffold(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.scaffold" handler.
 
     Args (via params):

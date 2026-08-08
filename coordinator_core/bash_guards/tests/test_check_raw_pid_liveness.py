@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import check_raw_pid_liveness as guard
 
 
@@ -156,3 +157,29 @@ class TestNotIdentityGated:
     def test_advises_with_agent_id(self):
         out = guard.check(_payload("ps -p $pid", agent_id="a0123456789abcdef"))
         _reason(out)
+
+
+class TestPowerShellDialectRecordsSilent:
+    """Row 19, `docs/reference/guard-dialect-coverage.md` -- no PowerShell
+    liveness idiom is recognized at all, so a PowerShell command must never
+    read as a confirmed clean; it records SILENT instead."""
+
+    def test_powershell_command_returns_none_but_records_silent(self):
+        payload = _payload("Get-Process -Id $pid")
+        payload["tool_name"] = "PowerShell"
+        with _verdict.collecting() as silences:
+            result = guard.check(payload)
+        assert result is None
+        assert _verdict.was_silent("check_raw_pid_liveness", silences)
+
+    def test_powershell_dialect_does_not_scan_command_text(self):
+        # Even a command text that WOULD match the POSIX forms verbatim
+        # must not be scanned once the dialect is PowerShell -- the
+        # splitter/detection forms are POSIX-only and re-using them would
+        # be exactly the guess the plan forbids.
+        payload = _payload("ps -p $pid")
+        payload["tool_name"] = "PowerShell"
+        with _verdict.collecting() as silences:
+            result = guard.check(payload)
+        assert result is None
+        assert _verdict.was_silent("check_raw_pid_liveness", silences)

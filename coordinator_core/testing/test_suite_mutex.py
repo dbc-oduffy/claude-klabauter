@@ -65,9 +65,11 @@ def _dead_pid() -> int:
     import subprocess
     import sys
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     proc = subprocess.Popen(
         [sys.executable, "-c", "pass"],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     proc.wait()
     return proc.pid

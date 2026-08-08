@@ -79,6 +79,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
 
 PROG = "edit-live-hook.sh"  # literal program-name prefix — matches bash oracle
 
@@ -234,7 +235,7 @@ def cmd_commit(argv: List[str]) -> int:
         stdin=subprocess.DEVNULL,
         # Review: code-reviewer -- A4 Windows console-flash suppression, matching
         # the pattern already used in generate_exec_summary.py (same slice).
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         print(

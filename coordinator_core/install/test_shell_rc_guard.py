@@ -1,6 +1,7 @@
 """Tests for coordinator_core.install.shell_rc_guard.
 
-Covers rc-path resolution (zsh/bash/default), sentinel-guarded append,
+Covers rc-path resolution (zsh/bash/default, plus Git-Bash/MSYS `bash.exe`
+and `MSYSTEM` precedence), sentinel-guarded append,
 check-only (no mutation), double-invocation idempotency (AC7), the
 native-Windows no-op branch, and the `install.write_shell_rc_guard_block`
 JSON-RPC handler's params/response contract.
@@ -37,11 +38,43 @@ from coordinator_core.install.write_surface import (
 )
 
 
+class _OSNameProxy:
+    """Delegates every attribute to the real ``os`` module except ``name``,
+    which this module's own tests need to pin independently of the host
+    interpreter's actual platform.
+
+    Rebinding ``mod.os`` to this proxy (rather than flipping the real
+    ``os.name`` global) is deliberate: `pathlib.Path` itself branches on
+    `os.name` (via its own, unproxied import of the real `os` module) to
+    decide `WindowsPath` vs `PosixPath` -- flipping the real global breaks
+    every `Path` construction for the rest of the process, including the
+    `tmp_path` fixture's own `WindowsPath` instances mid-test. Proxying only
+    `shell_rc_guard.py`'s local `os` reference exercises its `os.name ==
+    "nt"` branch without touching pathlib's platform selection.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
 @pytest.fixture(autouse=True)
 def _fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("SHELL", raising=False)
+    # A real Git-Bash/MSYS pytest invocation exports MSYSTEM; left in place it
+    # forces every rc-path resolution in this module to `.bashrc` and the
+    # zsh/default expectations below become host-dependent.
+    monkeypatch.delenv("MSYSTEM", raising=False)
     monkeypatch.setattr(mod, "coordinator_claude_klabauter_root", lambda: "/resolved/claude-klabauter/clone")
+    # This module's mutation-path tests exercise the cross-platform rc-file
+    # write/append/idempotency/escaping logic itself, not the native-Windows
+    # no-op branch (that branch has its own dedicated tests, which
+    # `monkeypatch.setattr(mod.os, "name", "nt")` on top of this default --
+    # see `_OSNameProxy` for why a real `os.name` flip isn't used here).
+    monkeypatch.setattr(mod, "os", _OSNameProxy("posix"))
     # The suite-wide `COORDINATOR_DISABLE_MACHINE_MUTATION=1` belt-and-braces
     # opt-out (coordinator_core/conftest.py::_quarantine_real_home) would
     # otherwise refuse every real write this module's tests exercise inside
@@ -62,6 +95,32 @@ def test_resolve_rc_path_bash(monkeypatch, tmp_path):
 
 
 def test_resolve_rc_path_default_unset(tmp_path):
+    assert _resolve_rc_path() == tmp_path / ".zshrc"
+
+
+def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch, tmp_path):
+    """Git-Bash/MSYS `$SHELL` carries a `.exe` suffix — the pre-fix
+    exact-match against `"bash"` missed it and returned `.zshrc`, a file
+    that shell never sources."""
+    monkeypatch.setenv("SHELL", "C:/Program Files/Git/usr/bin/bash.exe")  # abs-path-ok: verbatim Git-for-Windows $SHELL value under test, not a path this repo resolves
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
+
+
+def test_resolve_rc_path_msystem_wins_over_unset_shell(monkeypatch, tmp_path):
+    """Under MSYS `$SHELL` is frequently unset entirely; `MSYSTEM` is the
+    reliable signal and takes precedence."""
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
+
+
+def test_resolve_rc_path_msystem_wins_over_zsh_shell(monkeypatch, tmp_path):
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
+
+
+def test_resolve_rc_path_zsh_exe_suffix(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHELL", "C:/tools/zsh.exe")  # abs-path-ok: synthetic $SHELL value under test, not a path this repo resolves
     assert _resolve_rc_path() == tmp_path / ".zshrc"
 
 

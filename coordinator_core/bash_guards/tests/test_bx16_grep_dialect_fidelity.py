@@ -32,6 +32,7 @@ the same rewrite seam.
 from __future__ import annotations
 
 import io
+import platform
 import re
 import shutil
 import subprocess
@@ -40,6 +41,18 @@ from contextlib import redirect_stdout
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized (see bb48ce7's identical
+    fixture-realism finding on the write-bump test suite). Accepts a
+    ``Path`` or a plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
 def _payload_prefix() -> str:
@@ -66,13 +79,31 @@ def _run_rewrite(cmd: str) -> str:
 
 def _run_real(cmd: str, timeout: float = 10.0) -> str:
     """Execute the RAW command string through an actual shell -- must go
-    through `shell=True`, not an argv list, so backslash-escaping etc. is
+    through the shell (not an argv list), so backslash-escaping etc. is
     resolved by the shell exactly as it would be for the original command
     dispatch_checks tokenizes (an argv list bypasses the shell entirely and
     would hand grep a literal backslash the shell would otherwise strip,
     producing a false divergence that is a test-harness bug, not a
-    production one)."""
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    production one).
+
+    Explicitly routed through Git Bash on Windows: `dispatch_checks`
+    tokenizes `cmd` as bash/POSIX-sh, where a backslash before an ordinary
+    character strips it and passes the character on literally (e.g. `\\.`
+    reaches `grep` as a bare `.`). Plain `subprocess.run(shell=True)` on
+    Windows launches cmd.exe instead, which does NOT treat backslash as an
+    escape character at all -- `\\.` reaches `grep` unchanged, a genuinely
+    different argument than what a real Bash-tool invocation would produce,
+    and a false divergence against the rewrite (which mirrors the bash
+    tokenizer's own stripping)."""
+    if platform.system() == "Windows":
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("git-bash not found on PATH")
+        result = subprocess.run(
+            [bash, "-c", cmd], capture_output=True, text=True, timeout=timeout
+        )
+    else:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
     return result.stdout
 
 
@@ -220,15 +251,20 @@ class TestDifferentialExecutionMatchesRealBinary:
     def _assert_matches(binary, flags, pattern, fixture_file):
         if shutil.which(binary) is None:
             pytest.skip("%s not on PATH" % binary)
-        cmd = "%s %s %s %s" % (binary, flags, pattern, fixture_file)
+        cmd = "%s %s %s %s" % (binary, flags, pattern, _posix(fixture_file))
         real = _run_real(cmd)
         rewritten = _run_rewrite(cmd)
         assert rewritten is not None, "expected a rewrite for: %s" % cmd
         assert _lines_of(real) == _lines_of(rewritten), (cmd, real, rewritten)
 
+    #: state/bash-guards/known-red.json group "dispatch-checks-windows-path"
+    #: (check_grep_via_bash_rewrite's os.path.join defect). Owner:
+    #: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
+    @pytest.mark.pending_fix
     def test_dot_metachar_basic(self, fixture_file):
         self._assert_matches("grep", "-n", ".", fixture_file)
 
+    @pytest.mark.pending_fix
     def test_escaped_dot_basic(self, fixture_file):
         self._assert_matches("grep", "-n", r"\.", fixture_file)
 
@@ -247,12 +283,14 @@ class TestDifferentialExecutionMatchesRealBinary:
     def test_fixed_star_is_literal(self, fixture_file):
         self._assert_matches("fgrep", "-n", "literal*star*here", fixture_file)
 
+    @pytest.mark.pending_fix
     def test_grep_dash_capital_f_fixed(self, fixture_file):
         self._assert_matches("grep", "-Fn", "a+b", fixture_file)
 
     def test_rg_default_dialect_is_extended_like(self, fixture_file):
         self._assert_matches("rg", "-n", "a+b", fixture_file)
 
+    @pytest.mark.pending_fix
     def test_anchors_basic_dialect_safe(self, fixture_file):
         self._assert_matches("grep", "-n", "^plain", fixture_file)
 

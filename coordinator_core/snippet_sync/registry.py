@@ -463,12 +463,15 @@ def _ml_get(key: str, machine_local_bin: Optional[str]) -> str:
     if not machine_local_bin:
         return ""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             [machine_local_bin, "get", key],
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
+            **no_console_creationflags(),
         )
         if result.returncode != 0:
             return ""

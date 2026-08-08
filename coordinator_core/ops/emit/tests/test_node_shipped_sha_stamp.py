@@ -49,7 +49,7 @@ def _make_node(shipped_sha: "str | None" = None) -> dict:
     key — RoadmapDagNode has no such field (D4 F3).
     """
     return {
-        "repo": "dbc-example-operator/claude-klabauter",
+        "repo": "dbc-oduffy/claude-klabauter",
         "coordinator_root_path": ".",
         "roadmap_id": "test-roadmap",
         "stub_id": "test-stub",
@@ -59,7 +59,7 @@ def _make_node(shipped_sha: "str | None" = None) -> dict:
         "shipped_sha": shipped_sha,
         "provenance": {
             "source_kind": "local_fs",
-            "repo": "dbc-example-operator/claude-klabauter",
+            "repo": "dbc-oduffy/claude-klabauter",
             "ref": None,
             "path": "",
             "observed_at": "2026-07-06T00:00:00Z",

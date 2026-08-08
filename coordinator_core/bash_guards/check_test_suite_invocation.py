@@ -49,22 +49,41 @@ told so before it is ever told to wait for the machine:
      non-subagent path (the identity leg above already denies every subagent
      Tier-U/F command outright) and only once the command has already been
      established as suite-shaped, since tiering re-resolves the repo's
-     configured commands. A live grant is either the implicit one example-doctrine-repo's
-     ceremonies (``/workday-complete``, ``/workweek-complete``,
-     ``/merging-to-main``) write at ceremony open, or an explicit PM grant
-     written via ``tier-u-grant-cli grant pm``. This is an AUTHORITY control
-     -- who may ask -- distinct from the mutex below, which is a RESOURCE
-     control -- how many may run at once; see ``grant.py``'s module
-     docstring for the same distinction from the writer/reader side.
+     configured commands. A live grant is either the implicit one a example-doctrine-repo
+     ceremony writes at ceremony open, or an explicit PM grant written via
+     ``tier-u-grant-cli grant pm``. ``/workday-complete``,
+     ``/workweek-complete`` and ``/merging-to-main`` each write the implicit
+     one. This is an AUTHORITY control -- who may ask -- distinct from the
+     mutex below, which is a RESOURCE control -- how many may run at once;
+     see ``grant.py``'s module docstring for the same distinction from the
+     writer/reader side.
 
      No-implicit-grant ceremonies (Review: coordinator:code-reviewer --
      restoring content the `_GRANT_DETAIL_POINTER` cut silently dropped
      rather than relocated): ``/bug-blitz``, ``/bug-sweep``,
      ``/mise-en-place``, and ``/finishing-a-development-branch`` do NOT
      carry an implicit Tier-U grant -- ask the PM explicitly before running
-     Tier U under any of them. Only the three ceremonies named above
-     (``/workday-complete``, ``/workweek-complete``, ``/merging-to-main``)
-     write the implicit grant at ceremony open.
+     Tier U under any of them.
+
+     Ownership split, and why this file cannot close a grant-writer gap on
+     its own if one reopens: the WRITER lives in example-doctrine-repo's tree --
+     ``coordinator/commands/<ceremony>.md`` OR
+     ``coordinator/skills/<ceremony>/SKILL.md``, and both shapes are in live
+     use, which is precisely what an earlier verification missed by grepping
+     only the skills tree -- while the claim that a writer exists lives
+     here. The two sides can silently diverge again (this list was wrong in
+     both directions on 2026-08-07, within one day), so do not restate which
+     ceremonies write the implicit grant here without re-verifying against
+     example-doctrine-repo's tree first.
+
+     Negative spec -- the override is NOT a substitute for the explicit
+     grant. A session that meets this deny with no live grant may find
+     ``COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION=1`` the cheapest way out;
+     it is not the honest path -- ``tier-u-grant-cli grant pm`` is -- and the
+     override disables the identity and mutex legs along with this one. An
+     authority control whose honest path looks harder than its bypass trains
+     users onto the bypass; the answer is always the explicit grant, never
+     the env var.
 
      A grant is session-scoped and liveness-gated: one PM ask covers THIS
      session for its lifetime, but a grant left behind by a dead session
@@ -299,12 +318,28 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command as _tokenize_full_command,
     segments_from_tokens_simple as _segments_from_tokens_simple,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect as _Dialect,
+    dialect_from_tool_name as _dialect_from_tool_name,
+    resolve_segments_for_dialect as _resolve_segments_for_dialect,
+)
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
 )
 
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: Widened (DR-088 ladder layers 3/5/6 PowerShell-bypass fix) from the
+#: former ``["Bash"]`` literal to the package's shared command-tool-name
+#: universe: this guard's three legs (identity, grant, mutex) were keyed on
+#: the literal string ``"Bash"`` at three independent sites, so a suite
+#: command issued through the harness's ``PowerShell`` tool sailed through
+#: unclassified on a PowerShell-primary fleet. A direct reference to
+#: ``COMMAND_TOOL_NAMES`` (C2 declaration-form conversion) -- never a copy
+#: or re-wrap -- rather than a second hardcoded ``["Bash", "PowerShell"]``
+#: (or ``list(...)``/``tuple(...)``) copy that could drift from it, or that
+#: would break identity (``is``) with the shared constant.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 45
 
 #: Escape-hatch env var. Read INLINE inside ``check()`` (never hoisted to
@@ -323,9 +358,14 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION"
 #: every Bash call in the session, which is the wrong trade for a guard on the
 #: spawn-per-call hot path; adding the runner to this set is the cheap fix
 #: when such a repo appears.
+#: ``invoke-pester`` is matched case-insensitively (via the inline ``(?i:...)``
+#: group, scoped to that one alternative only) because PowerShell cmdlet
+#: names are case-insensitive by language design and are conventionally
+#: written mixed-case (``Invoke-Pester``) unlike every other runner in this
+#: set, which are lowercase-only shell command names by Unix convention.
 _RUNNER_PREFILTER_RE = re.compile(
     r"\b(pytest|py\.test|unittest|nose2|npm|pnpm|yarn|bun|npx|jest|vitest|"
-    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox)\b"
+    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|(?i:invoke-pester))\b"
 )
 
 #: Command-prefix words that wrap the real runner without changing what it is.
@@ -435,7 +475,7 @@ def _tokens(segment: str) -> List[str]:
         return segment.split()
 
 
-def _segment_argvs(cmd: str) -> List[List[str]]:
+def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[str]]:
     """Split ``cmd`` into command-separator-bounded segments and return each
     segment's argv, QUOTE-AWARE -- a ``;``/``&``/``|`` character sitting
     inside a quoted string (a commit message, an echoed doc line, a ``-m``
@@ -477,8 +517,31 @@ def _segment_argvs(cmd: str) -> List[List[str]]:
     run through ``_strip_heredoc_bodies`` (the same helper
     ``block_worktree_creation.check()`` already relies on) before
     tokenizing, so a heredoc's body never reaches this classifier at all.
+
+    ``dialect`` (Start-Process argv-reconstruction fix, 2026-08-07): when
+    ``_Dialect.POWERSHELL``, segmentation is routed through
+    ``_dialect.resolve_segments_for_dialect`` INSTEAD OF the bash-only
+    ``tokenize_full_command`` leg below -- see that seam's own docstring
+    for why: a bare ``shlex`` pass over PowerShell text fuses a quoted,
+    comma-separated ``-ArgumentList`` array (``'-m','pytest'``) into ONE
+    opaque token (``-m,pytest``), so `Start-Process python -ArgumentList
+    '-m','pytest'` never exposed `pytest` as its own argv token to this
+    classifier at all -- confirmed live: this shape ALLOWED for a resolved
+    subagent while the byte-identical un-wrapped `python -m pytest` denied.
+    Falls back to the SAME bash-shlex leg below when dialect resolution
+    itself returns ``None`` (a genuine PowerShell parse failure -- already
+    recorded SILENT by ``_dialect``'s own tokenizer), so a malformed
+    PowerShell command still gets a best-effort classification rather than
+    reporting zero segments. ``None``/``_Dialect.BASH`` (every pre-existing
+    caller) takes the ORIGINAL bash-only path below, BYTE-IDENTICAL to
+    before this parameter existed (AC4 -- zero behavior change on the bash
+    leg).
     """
     cmd = _strip_heredoc_bodies(cmd)
+    if dialect is _Dialect.POWERSHELL:
+        segments = _resolve_segments_for_dialect(cmd, dialect, guard_name="check_test_suite_invocation")
+        if segments is not None:
+            return [seg for seg, _pipe_before in segments if seg]
     tokens = _tokenize_full_command(cmd)
     if tokens is not None:
         return [seg for seg in _segments_from_tokens_simple(tokens) if seg]
@@ -1109,6 +1172,106 @@ def _classify_tox_nox(base: str, args: Sequence[str]) -> str:
     return base
 
 
+#: ``Invoke-Pester`` parameters that narrow the run below the whole
+#: configured test surface -- a name/tag filter (Tier T by the same logic
+#: ``_JS_SCOPING_FLAGS`` uses: it narrows by NAME, not by path) or an
+#: explicit ``-Path``/``-Script`` target. Matched case-insensitively
+#: (PowerShell parameter binding is case-insensitive), same as the runner
+#: name itself in ``_RUNNER_PREFILTER_RE``.
+_PESTER_SCOPING_FLAGS = frozenset({
+    "-testname", "-fullnamefilter", "-tag", "-tagfilter",
+})
+_PESTER_PATH_FLAGS = frozenset({"-path", "-script"})
+
+
+def _pester_path_values(args: Sequence[str]) -> List[str]:
+    """Values bound to ``-Path``/``-Script`` across ``args``, comma-split.
+
+    Both the colon-bound form (``-Path:foo,bar``) and the separate-token
+    form (``-Path foo,bar``) are PowerShell-legal parameter binding for a
+    ``[string[]]``-typed parameter, and Pester's own ``-Path`` is exactly
+    that type -- both a comma-separated list AND repeated ``-Path``
+    occurrences accumulate, mirroring how PowerShell itself binds a
+    string-array parameter from the command line. Every occurrence is
+    collected, not just the first, so ``-Path a -Path b`` and
+    ``-Path a,b`` classify identically."""
+    values: List[str] = []
+    i = 0
+    n = len(args)
+    while i < n:
+        arg = args[i]
+        if ":" in arg:
+            name, _, val = arg.partition(":")
+            if name.lower() in _PESTER_PATH_FLAGS and val:
+                values.extend(v for v in val.split(",") if v)
+            i += 1
+            continue
+        if arg.lower() in _PESTER_PATH_FLAGS:
+            if i + 1 < n:
+                values.extend(v for v in args[i + 1].split(",") if v)
+                i += 2
+                continue
+        i += 1
+    return values
+
+
+def _classify_pester(args: Sequence[str], cwd: Optional[str]) -> Optional[str]:
+    """``Invoke-Pester`` with no target runs every ``*.tests.ps1`` Pester
+    discovers under the current directory -- the PowerShell-native
+    equivalent of a bare ``pytest``. A name/tag filter (``-TestName``,
+    ``-FullNameFilter``, ``-Tag``, ``-TagFilter``) narrows the run and is
+    Tier T unconditionally, same as ``_classify_js_runner``'s own scoping
+    flags: presence of the flag is what matters, Pester resolves the name
+    match itself.
+
+    ``-Path``/``-Script`` is different: unlike a name filter, a bare
+    PRESENCE check cannot tell a genuinely scoped file target apart from a
+    directory target that reaches the same breadth as no ``-Path`` at all --
+    Pester has no ``testpaths``-equivalent this classifier can read the way
+    ``_is_real_scope`` reads pytest's, so there is no ancestor test available
+    to credit a directory as a bounded partial scope the way pytest's own
+    directory positionals are credited. Reuses the SAME directory-on-disk
+    primitive DR-088 R9's pytest leg (``_pytest_directory_args``) already
+    established (``_norm_path`` + ``os.path.isdir``) rather than forking a
+    second directory-detection rule: a ``-Path``/``-Script`` value naming a
+    directory on disk is treated as NOT a real scope and this returns
+    ``"Invoke-Pester"`` (suite-shaped) exactly as the no-target case does,
+    which is what lets ``check()``'s ordinary identity/grant legs deny it for
+    both a subagent (identity leg) and an ungranted top-level EM (Tier U via
+    ``_classify_command_core``) without a Pester-specific R9 precision leg --
+    see the module-docstring R9 note on why this leg is deliberately scoped
+    to the pytest family and not widened here. A value naming a FILE, or a
+    value this can't resolve (no ``cwd``, or nothing on disk at that path),
+    fails open and is credited as scope, mirroring
+    ``_pytest_directory_args``'s own no-``cwd`` fail-open discipline and
+    ``_is_real_scope``'s no-disk-check-needed treatment of file positionals."""
+    i = 0
+    n = len(args)
+    while i < n:
+        arg = args[i]
+        name = arg.split(":", 1)[0].lower()
+        if name in _PESTER_SCOPING_FLAGS:
+            return None
+        i += 1
+
+    path_values = _pester_path_values(args)
+    if not path_values:
+        return "Invoke-Pester"
+    if not cwd:
+        return None
+
+    for raw in path_values:
+        norm = _norm_path(raw.replace("\\", "/"))
+        if not norm:
+            continue
+        try:
+            if os.path.isdir(os.path.join(cwd, norm)):
+                return "Invoke-Pester"
+        except OSError:
+            continue
+    return None
+
+
 def _classify_tokens(tokens: Sequence[str], testpaths: Sequence[str],
                      cwd: Optional[str]) -> Optional[str]:
     """Classify one already-prefix-stripped argv. Returns a runner label when
@@ -1134,6 +1297,8 @@ def _classify_tokens(tokens: Sequence[str], testpaths: Sequence[str],
         return _classify_make(args)
     if base in _TOX_NOX_BASES:
         return _classify_tox_nox(base, args)
+    if base.lower() == "invoke-pester":
+        return _classify_pester(args, cwd)
     return None
 
 
@@ -2215,7 +2380,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
-    if payload.get("tool_name") != "Bash":
+    # Widened alongside ``MATCHERS`` (see that constant's comment): a
+    # PowerShell-tool payload is classified exactly as a Bash-tool one is --
+    # both dialects carry their command text in the same ``tool_input.
+    # command`` key (confirmed against the sibling multi-tool guards
+    # ``block_approval_sentinel_creation.check`` and
+    # ``block_reviewer_bash_outside_allowlist.check``), so no separate
+    # extraction path is needed here.
+    if payload.get("tool_name") not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input")
@@ -2248,7 +2420,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # above.
     configured: Optional[List[ConfiguredCmd]] = None
     segments_argv: List[List[str]] = []
-    for raw_argv in _segment_argvs(cmd):
+    dialect = _dialect_from_tool_name(payload.get("tool_name"))
+    for raw_argv in _segment_argvs(cmd, dialect):
         argv = _strip_command_prefix(raw_argv)
         if not argv:
             continue
@@ -2293,7 +2466,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if configured is None:
         configured = _configured_test_cmds(repo_root)
-    matched_tiers = _matched_tiers(cmd, cwd, testpaths, configured)
+    # `_matched_tiers` -> `_classify_command_core` re-tokenizes `cmd` itself
+    # via its own quote-blind `_segments_with_spans`/`_tokens` walk (that
+    # core is ALSO the public, payload/tool_name-free `classify_command`/
+    # `classify_text` API -- see that function's own negative spec -- so it
+    # cannot be widened to accept a `dialect` parameter without changing a
+    # cross-repo-consumed public contract, out of this fix's scope). For a
+    # PowerShell-dialect invocation this would silently re-introduce the
+    # SAME `Start-Process -ArgumentList` blindness the identity leg above
+    # was just fixed for, on the EM/grant leg. Feeding it the ALREADY
+    # dialect-resolved `segments_argv` (computed above via `_segment_argvs`,
+    # which already ran the Start-Process expansion for this dialect)
+    # instead of the raw `cmd` string closes that gap without touching the
+    # public API's signature: the reconstructed text carries the launched
+    # command's own argv in command position, exactly as the identity leg
+    # above already sees it.
+    cmd_for_tiering = (
+        " ; ".join(" ".join(seg) for seg in segments_argv)
+        if dialect is _Dialect.POWERSHELL and segments_argv
+        else cmd
+    )
+    matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
     if matched_tiers & {"U", "F"}:
         # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
         # tier legitimately unscoped (``coordinator_core.session.

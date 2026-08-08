@@ -120,13 +120,15 @@ from coordinator_core.ops.review_coverage_core import (
     _FatalError as _CoverageFatalError,
     collect_segments,
 )
+from coordinator_core.win_portability import no_console_creationflags
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _GIT_LOG_TIMEOUT_SECS = 30
 
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _WEEK_START_RE = re.compile(r"^\*\*Week starting:\*\*\s+(\d{4}-\d{2}-\d{2})")
 
@@ -244,7 +246,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             timeout=_GIT_LOG_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
             check=False,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(

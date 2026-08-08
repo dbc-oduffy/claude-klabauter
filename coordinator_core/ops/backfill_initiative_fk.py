@@ -111,7 +111,10 @@ import subprocess
 import sys
 import tempfile
 from typing import IO, Iterable, List, Optional, Tuple
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "backfill-initiative-fk"  # literal program-name prefix, matches the bash oracle's messages
 _LOCK_BASENAME = "backfill-initiative-fk.lock"
@@ -119,7 +122,6 @@ _LOCK_BASENAME = "backfill-initiative-fk.lock"
 # porter addendum §2 (subprocess timeout rule): a loop over an externally-authored
 # TSV set must not let one hung child block the whole batch.
 _ATTACH_TIMEOUT_SECS = 60
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _lock_path() -> str:
@@ -303,7 +305,7 @@ def _process_pairs(
                 [sys.executable, coordinator_initiative_path, "attach", artifact_path, initiative_id],
                 stdin=subprocess.DEVNULL,
                 timeout=_ATTACH_TIMEOUT_SECS,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             rc = result.returncode
         except subprocess.TimeoutExpired:

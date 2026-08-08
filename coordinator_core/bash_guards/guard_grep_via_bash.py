@@ -227,6 +227,9 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core._hook_envelope import allow_advisory
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards import _dialect
+from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 #: Review: code-reviewer -- Finding 5 (nit): these attributes are
 #: vestigial in `bash_guards` -- `dispatch.py` imports `check` explicitly
@@ -241,7 +244,7 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 #: guard moved to ADVISORY_REWRITE on 2026-07-30 (H11(a)) and nothing in
 #: the repo ever read the `"hard-deny"` string, which had gone stale and
 #: actively contradicted this module's own "Does NOT deny" negative-spec.
-MATCHERS = ["Bash"]
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
 #: This guard's OWN escape hatch -- distinct from BX-16's
@@ -253,11 +256,26 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD"
 
 _SHAPE_NAME = "grep-via-bash"
 
+#: PowerShell has no true alias for the grep family (`Select-String`/`sls`
+#: is a different VERB, not an alias collision -- see docs/reference/
+#: guard-dialect-coverage.md row 12). This guard's rewrite payload
+#: (`_grep_python_rewrite`, imported verbatim from BX-16 above) is shaped
+#: for POSIX grep's own SHORT-flag surface, not Select-String's
+#: (`-Pattern`, `-Context N,N`, `-SimpleMatch`, `-CaseSensitive`, ...) --
+#: the same "second, parallel flag grammar" problem
+#: `guard-dialect-coverage.md`'s row 21 (`guard_inprocess_search`) names for
+#: an identical rewrite dependency. Recognizing a Select-String/sls
+#: invocation here would let this guard SEE the shape without being able to
+#: safely translate it, so this module declares SILENT rather than guess a
+#: rewrite it cannot honestly offer (row 12's own instruction: "prefer
+#: SILENT to a guess").
+_POWERSHELL_GREP_FAMILY_BINARIES = ("Select-String", "sls")
+
 
 def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
     """Return the CRLF-normalized ``command`` string for a Bash PreToolUse
     payload, or ``None`` if this payload is not a non-empty Bash call."""
-    if (payload.get("tool_name") or "") != "Bash":
+    if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
@@ -581,6 +599,47 @@ def _composed_advisory(
     )
 
 
+def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """PowerShell-dialect leg (row 12, docs/reference/guard-dialect-
+    coverage.md): declares SILENT for a Select-String/sls invocation this
+    guard can SEE but cannot safely translate (see
+    `_POWERSHELL_GREP_FAMILY_BINARIES`'s own comment) -- never a bare clean
+    for input this guard actually recognized. Returns a genuine `None` (no
+    SILENT) for any PowerShell command that is not grep-family-shaped at
+    all -- that is a true clean, not a decline, mirroring how the Bash leg
+    below returns bare `None` for a non-GREP_VIA_BASH command.
+    """
+    tool_input = payload.get("tool_input") or {}
+    cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
+    if not cmd:
+        return None
+    cmd = cmd.replace("\r", "")
+    if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
+        return None
+
+    tokens = _dialect.tokenize_command(
+        cmd, _dialect.Dialect.POWERSHELL, guard_name="guard_grep_via_bash"
+    )
+    if tokens is None:
+        return None  # SILENT already recorded by `_dialect` for the parse failure
+
+    for seg_tokens, _pipe_before in _segments_from_tokens_with_pipe_flag(tokens):
+        if seg_tokens and any(
+            _token_matches_binary(seg_tokens[0], b)
+            for b in _POWERSHELL_GREP_FAMILY_BINARIES
+        ):
+            record_silent(
+                "guard_grep_via_bash",
+                "PowerShell Select-String/sls invocation recognized, but "
+                "this guard's rewrite payload (_bt_grep_python_rewrite) is "
+                "shaped for POSIX grep's own short-flag surface and cannot "
+                "translate Select-String's flag surface cleanly -- see "
+                "docs/reference/guard-dialect-coverage.md row 12.",
+            )
+            return None
+    return None
+
+
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
@@ -596,7 +655,13 @@ def check(
     ``host_is_windows`` stays on this signature for call-site compatibility
     with `dispatch.py`'s existing keyword-forwarding; this guard no longer
     branches on it (H11(a), 2026-07-30 -- see the module docstring).
+
+    PowerShell dialect (`payload["tool_name"] == "PowerShell"`) routes to
+    `_check_powershell` -- see that function's own docstring (row 12, C4c).
     """
+    if _dialect.dialect_from_tool_name(payload.get("tool_name") or "") is _dialect.Dialect.POWERSHELL:
+        return _check_powershell(payload)
+
     cmd = _extract_command(payload)
     if not cmd:
         return None

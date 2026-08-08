@@ -400,19 +400,19 @@ def test_write_disposal_manifest_write_confined_to_own_run_id(tmp_path: Path):
 
 def test_handler_raises_on_repo_root_none():
     with pytest.raises(ValueError, match="_origin_worktree"):
-        _run(_handler({"run_id": "2026-07-23-01h00", "candidates": []}, repo_root=None))
+        _handler({"run_id": "2026-07-23-01h00", "candidates": []}, repo_root=None)
 
 
 def test_handler_raises_on_missing_run_id(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="run_id"):
-        _run(_handler({"candidates": []}, repo_root=tmp_path / ".git"))
+        _handler({"candidates": []}, repo_root=tmp_path / ".git")
 
 
 def test_handler_raises_on_missing_candidates(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="candidates"):
-        _run(_handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git"))
+        _handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git")
 
 
 @_requires_rg

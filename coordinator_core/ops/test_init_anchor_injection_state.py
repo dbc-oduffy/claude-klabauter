@@ -11,7 +11,6 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 
 import pytest
@@ -19,14 +18,10 @@ import pytest
 from coordinator_core.ops import init_anchor_injection_state as mod
 
 
-def _run(coro):
-    return asyncio.run(coro)
-
-
 def test_happy_path(monkeypatch):
     monkeypatch.setattr(mod, "coordinator_doe_root", lambda: "/fake/doe-root")
 
-    result = _run(mod._handler({}))
+    result = mod._handler({})
 
     assert result["doe_root"] == "/fake/doe-root"
     assert result["today"] == datetime.date.today().isoformat()
@@ -37,8 +32,8 @@ def test_happy_path(monkeypatch):
 def test_double_invocation_is_idempotent(monkeypatch):
     monkeypatch.setattr(mod, "coordinator_doe_root", lambda: "/fake/doe-root")
 
-    first = _run(mod._handler({}))
-    second = _run(mod._handler({}))
+    first = mod._handler({})
+    second = mod._handler({})
 
     assert first == second
     # Distinct list objects, no shared/mutated accumulator between calls.
@@ -50,12 +45,12 @@ def test_unresolvable_doe_root_fails_loud(monkeypatch):
     monkeypatch.setattr(mod, "coordinator_doe_root", lambda: None)
 
     with pytest.raises(RuntimeError, match="cannot resolve the example-doctrine-repo repo root"):
-        _run(mod._handler({}))
+        mod._handler({})
 
 
 def test_params_argument_ignored(monkeypatch):
     monkeypatch.setattr(mod, "coordinator_doe_root", lambda: "/fake/doe-root")
 
-    result = _run(mod._handler({"unexpected": "value"}))
+    result = mod._handler({"unexpected": "value"})
 
     assert result["doe_root"] == "/fake/doe-root"

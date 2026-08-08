@@ -120,7 +120,12 @@ def _run(cmd, timeout: float) -> Optional["subprocess.CompletedProcess[str]"]:
     bash `|| ...=""` / `|| return 1` error-tolerance chain built on `_rc_timeout_cmd`
     (cs_timeout)."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            **no_console_creationflags(),
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
 

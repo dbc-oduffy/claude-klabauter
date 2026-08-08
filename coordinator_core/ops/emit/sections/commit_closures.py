@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 
 from coordinator_core.ops.emit.closure_trailer import parse_closure_trailers
 from coordinator_core.ops.emit.context import EmitContext
@@ -99,7 +100,7 @@ def _extract_closure_commits(ctx: EmitContext) -> tuple[list[tuple[str, list[str
             check=False,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return [], []

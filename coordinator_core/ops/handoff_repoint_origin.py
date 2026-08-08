@@ -155,7 +155,7 @@ def _normalize_current_origin(raw: Optional[str]) -> Optional[str]:
 
 
 @register_op("handoff.repoint_origin")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.repoint_origin" handler.
 
     The sanctioned writer for repointing/nulling ``origin_handoff`` on one or

@@ -131,10 +131,10 @@ def _doe_state() -> str:
 def _claude_klabauter_state() -> str:
     """Rule 2/4 helper: claude-klabauter engine state root. Raises StateRootError on failure."""
     try:
-        claude-klabauter = coordinator_claude_klabauter_root()
+        claude_klabauter_root = coordinator_claude_klabauter_root()
     except RuntimeError as exc:
         raise StateRootError(str(exc)) from exc
-    return _state_of(claude-klabauter)
+    return _state_of(claude_klabauter_root)
 
 
 def _resolve_git_root(git_root: Optional[str] = None) -> str:
@@ -274,8 +274,8 @@ def print_map() -> str:
 
     # Engine root. On failure: null + one stderr WARN line, continue.
     try:
-        claude-klabauter = coordinator_claude_klabauter_root()
-        subjects["engine"] = _state_of(claude-klabauter)
+        engine_root = coordinator_claude_klabauter_root()
+        subjects["engine"] = _state_of(engine_root)
     except RuntimeError:
         sys.stderr.write(
             "coordinator_state_root --print-map: engine root unresolvable — "

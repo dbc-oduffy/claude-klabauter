@@ -1,7 +1,8 @@
 """Tests for coordinator_core.hooks.nudge_unrouted_sizing.
 
 Covers the incident replay (a resolved, unblocked sizing route the EM narrated but never
-entered), both hard judgment-halt exemptions (fork non-null, pm-decision/xl_exit-null),
+entered), both hard judgment-halt exemptions (an OPEN appetite fork —
+`appetite_exceeded` in detents with `fork` still null — and pm-decision/xl_exit-null),
 room-invocation suppression for both room shapes (Skill invocation for plan/spec-dispatch,
 dispatched-agents.txt for dispatch), and the never-raise invariant across every failure path.
 
@@ -78,7 +79,12 @@ def _write_sizing(repo, rel_path, yaml_text):
     full.write_text(yaml_text, encoding="utf-8")
 
 
-def _sizing_yaml(route="plan", status="sized", fork="null", xl_exit="null"):
+def _sizing_yaml(route="plan", status="sized", fork="null", xl_exit="null", detents=()):
+    detents_block = (
+        "detents: []\n"
+        if not detents
+        else "detents:\n" + "".join(f"  - {d}\n" for d in detents)
+    )
     return (
         "schema: sizing-object\n"
         "intent: test intent\n"
@@ -87,8 +93,8 @@ def _sizing_yaml(route="plan", status="sized", fork="null", xl_exit="null"):
         "  tshirt: M\n"
         "  provisional: true\n"
         f"route: {route}\n"
-        "detents: []\n"
-        f"fork: {fork}\n"
+        + detents_block
+        + f"fork: {fork}\n"
         f"xl_exit: {xl_exit}\n"
         f"status: {status}\n"
         "scout_evidence: []\n"
@@ -221,13 +227,116 @@ def test_incident_replay_fires(repo):
 # ---------------------------------------------------------------------------
 
 
-def test_fork_appetite_exceeded_does_not_fire(repo):
-    session_id = "sess-fork"
+def test_open_appetite_fork_does_not_fire(repo):
+    """The regression this seam's exemption exists for.
+
+    An UNRESOLVED appetite fork is `appetite_exceeded` in `detents` with `fork`
+    still null — `sizing_assemble.route()` emits exactly that and never fills
+    `fork`. The prior criteria function required `fork is None` to fire, so this
+    shape (every appetite fork before the PM answers) fired every time. Reading
+    `detents` is what fixes it; a null `fork` alone proves nothing.
+
+    Route is `plan` deliberately: appetite `medium` + estimate `L`, or `small` +
+    `M`, both land `appetite_exceeded` on a route INSIDE `_ROUTABLE_ROUTES`, so
+    this is a live path, not a hypothetical one.
+    """
+    session_id = "sess-fork-open"
     rel = "state/sizings/x.yaml"
-    _write_sizing(repo, rel, _sizing_yaml(fork="appetite_exceeded"))
+    _write_sizing(
+        repo, rel, _sizing_yaml(route="plan", fork="null", detents=("appetite_exceeded",))
+    )
     _write_touched(repo, session_id, rel)
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
+
+
+def test_resolved_appetite_fork_does_not_fire(repo):
+    """`fork` non-null (the PM HAS picked) stays silent — deliberate asymmetry.
+
+    The halt is closed, so a fire would be defensible; silence keeps the
+    criteria change purely false-positive-removing and costs only a missed
+    nudge. Pinned so a later edit flipping it is a deliberate act, not a drift.
+    """
+    session_id = "sess-fork-resolved"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(
+        repo,
+        rel,
+        _sizing_yaml(route="plan", fork="raise_appetite", detents=("appetite_exceeded",)),
+    )
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is None
+
+
+def test_appetite_conform_detent_still_fires(repo):
+    """The exemption must not swallow the normal case: `appetite_conform` means
+    no divergence was ever recorded, so a null `fork` there is genuinely 'no
+    halt', and the incident shape must still be caught."""
+    session_id = "sess-conform"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(
+        repo, rel, _sizing_yaml(route="plan", fork="null", detents=("appetite_conform",))
+    )
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is not None
+
+
+def test_malformed_detents_does_not_fire(repo):
+    """A non-list `detents` cannot prove no fork is open -> silence, matching
+    every other hard-exemption read's fail-toward-silence posture."""
+    session_id = "sess-detents-malformed"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(
+        repo,
+        rel,
+        _sizing_yaml(route="plan").replace("detents: []", "detents: not-a-list"),
+    )
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# AC12 — the post-size, M+ open-appetite-question halt (sibling to the
+# appetite-fork exemption above, keyed on `post_size_prompt_pending` instead
+# of `appetite_exceeded`).
+# ---------------------------------------------------------------------------
+
+
+def test_open_post_size_prompt_does_not_fire(repo):
+    """A sized M+ object carrying `post_size_prompt_pending` with `fork: null`
+    is a genuine open PM question, not an unentered route -- stays silent.
+    """
+    session_id = "sess-post-size-prompt-open"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(
+        repo,
+        rel,
+        _sizing_yaml(route="plan", fork="null", detents=("post_size_prompt_pending",)),
+    )
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is None
+
+
+def test_missing_post_size_prompt_detent_still_fires(repo):
+    """An otherwise-identical object LACKING the detent has no halt open at
+    all -- the ordinary unentered-route incident, and this op must still
+    catch it. Pins that the new exemption is keyed on the positive detent,
+    never on `appetite` (or anything else) being absent.
+    """
+    session_id = "sess-post-size-prompt-absent"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(
+        repo,
+        rel,
+        _sizing_yaml(route="plan", fork="null", detents=()),
+    )
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is not None
 
 
 def test_pm_decision_xl_exit_null_does_not_fire(repo):
@@ -846,6 +955,20 @@ def test_runtime_threshold_minutes_env_overridable(monkeypatch):
 
 def test_execute_plan_is_never_a_routable_route():
     assert "execute-plan" not in m._ROUTABLE_ROUTES
+
+
+def test_goal_setting_is_never_a_routable_route():
+    # AC8 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan,
+    # C3/C5): `goal-setting` is the sixth notch's terminal room, and it is
+    # deliberately excluded from `_ROUTABLE_ROUTES` -- `coordinator:goal-
+    # setting` is PM-GATED (example-doctrine-repo coordinator/skills/goal-setting/
+    # SKILL.md frontmatter `description: "PM-GATED. ..."`), so nudging an EM
+    # to invoke it unilaterally would nudge them toward something they
+    # cannot do without the PM -- the same reason `pm-decision` and `shape`
+    # are excluded. A bare assertion without this reason would read as
+    # arbitrary and invite a later "fix" widening `_ROUTABLE_ROUTES` to
+    # include it.
+    assert "goal-setting" not in m._ROUTABLE_ROUTES
 
 
 # ---------------------------------------------------------------------------

@@ -137,10 +137,11 @@ import sys
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional, TypedDict
+from typing import List, Literal, Optional, Sequence, TypedDict
 
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.session.claims import my_agent_touched
 from coordinator_core.session import scope as scope_module
 from coordinator_core.session.scope import compute_scope
@@ -375,7 +376,7 @@ def _dirty_files_under(dir_path: str, cwd: Optional[str]) -> List[str]:
                 capture_output=True,
                 text=True,
                 cwd=cwd,
-                **core._NO_CONSOLE,
+                **no_console_creationflags(),
             )
         except OSError:
             continue
@@ -385,18 +386,121 @@ def _dirty_files_under(dir_path: str, cwd: Optional[str]) -> List[str]:
     return out
 
 
+def _dirty_files_under_batch(
+    dir_paths: Sequence[str], cwd: Optional[str]
+) -> "OrderedDict[str, List[str]]":
+    """Batched sibling of `_dirty_files_under` — ONE `git diff` + ONE
+    `git ls-files` pathspec-batched over every ``dir_paths`` entry, instead
+    of that same pair of spawns once per directory entry (the N+1 shape this
+    chunk exists to retire; see
+    `_resolve_agent_touched_candidates`, its sole caller in this module).
+
+    § Anti-scope 1/2/4: this is OBJECT/PATHSPEC batching, not range
+    batching — `git status`/`git diff` over multiple pathspecs resolves each
+    pathspec independently server-side, so handing git N directory
+    pathspecs in one call is safe in a way collapsing N independent
+    reachability RANGES into one expression is not (see this module's other
+    git calls, which never do the latter).
+
+    Same worktree-dirtiness read as `_dirty_files_under`
+    (`git diff --name-only HEAD` ∪ `git ls-files --others
+    --exclude-standard`) and the same deliberate omission of
+    `--no-optional-locks` — C1's `dirty_tree_gate` batching (commit
+    `9e3084df78e5`, `commit_gates.py`) made the identical choice for the
+    identical reason (§ Anti-scope 14): suppressing the lock can leave
+    phantom-dirty state permanently unresolved, which is worse than paying
+    the lock cost here.
+
+    Returns an `OrderedDict` keyed by EVERY entry of ``dir_paths``, in the
+    order first seen, duplicates collapsed onto their first occurrence —
+    never a subset. § Anti-scope 25 (absence must never silently read as
+    "clean"): a directory entry present in the input is ALWAYS present as a
+    key in the output, with an EMPTY list value meaning "queried, found
+    nothing dirty under it" — this function never uses key-absence to mean
+    either "clean" or "not asked"; a key is absent from the return value
+    only when it was never in ``dir_paths`` to begin with. Mirrors
+    `emit/sections/handoffs.py`'s `_resolve_shipped_in_dates` shape (a
+    pre-seeded map plus prefix-match against the batched query output),
+    cited per this chunk's brief rather than re-derived.
+
+    A file may be reported under more than one ``dir_paths`` entry if the
+    entries themselves nest (e.g. ``"a/"`` and ``"a/b/"`` both present) —
+    each pathspec resolves independently per the anti-scope note above, so
+    each entry's own membership test is answered on its own terms.
+
+    Fails closed (every value empty) on any git error, same as
+    `_dirty_files_under` — a git hiccup must never widen a caller's
+    candidate set.
+    """
+    result: "OrderedDict[str, List[str]]" = OrderedDict()
+    for d in dir_paths:
+        result.setdefault(d, [])
+    if not result:
+        return result
+
+    unique_dirs = list(result.keys())
+    raw_files: List[str] = []
+    for args in (
+        ["-c", "core.quotepath=false", "diff", "--name-only", "HEAD", "--", *unique_dirs],
+        [
+            "-c",
+            "core.quotepath=false",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            *unique_dirs,
+        ],
+    ):
+        try:
+            proc = subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                **no_console_creationflags(),
+            )
+        except OSError:
+            continue
+        if proc.returncode != 0:
+            continue
+        raw_files.extend(line for line in proc.stdout.splitlines() if line)
+
+    seen_files: set = set()
+    for f in raw_files:
+        if f in seen_files:
+            continue
+        seen_files.add(f)
+        for d in unique_dirs:
+            if f.startswith(d):
+                result[d].append(f)
+    return result
+
+
 def _resolve_agent_touched_candidates(session_id: str, cwd: Optional[str]) -> List[str]:
     """Repo-relative, de-duplicated, order-preserving candidate list from
     this session's own dispatched sub-agent fan-out (`"exact"` mode only —
-    see module docstring)."""
+    see module docstring).
+
+    Directory entries (trailing ``/``) are expanded via ONE batched
+    `_dirty_files_under_batch` call over every directory entry this
+    session's fan-out named, rather than one `_dirty_files_under` spawn
+    pair per entry — the N+1 shape this chunk (C16) retires. Per-entry
+    order is preserved: a directory entry's expanded files are spliced in
+    at that entry's own position, identically to the pre-batch per-call
+    behaviour, only the git spawn count changes.
+    """
     raw = my_agent_touched(session_id, "exact", cwd)
+    normalized: List[Optional[str]] = [_normalize_agent_touched_entry(e) for e in raw]
+    dir_entries = [n for n in normalized if n is not None and n.endswith("/")]
+    dirty_by_dir = _dirty_files_under_batch(dir_entries, cwd)
+
     resolved: List[str] = []
-    for entry in raw:
-        norm = _normalize_agent_touched_entry(entry)
+    for norm in normalized:
         if norm is None:
             continue
         if norm.endswith("/"):
-            resolved.extend(_dirty_files_under(norm, cwd))
+            resolved.extend(dirty_by_dir.get(norm, []))
         else:
             resolved.append(norm)
 
@@ -475,7 +579,12 @@ def _compute_ownership(
 # ---------------------------------------------------------------------------
 
 
-def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer:
+def compute_offer(
+    session_id: str,
+    cwd: Optional[str] = None,
+    *,
+    extra_candidates: Optional[Sequence[str]] = None,
+) -> SafeCommitOffer:
     """Compute this session's safe pathspec and the excluded-path narration.
 
     ``safe_paths`` — this session's claimed dirty paths (touched.txt ∪
@@ -559,11 +668,53 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     ``_compute_ownership`` for the derivation. Extends, does not replace,
     ``excluded``/``orphans`` above or ``AutoCommitReport.residue`` (C3).
 
+    ``extra_candidates`` — THE CLASSIFICATION SEAM (2026-08-07, scoped-commit
+    ownership-gate misclassification). Keyword-only, defaulting to ``None``,
+    which reproduces this function's pre-existing behaviour byte-for-byte:
+    the candidate set stays this session's ``touched.txt`` union its own
+    dispatched sub-agent fan-out. A caller that passes its own pathspec here
+    is asking ONE question — "who holds these paths?" — and gets an answer
+    only ``excluded``/``ownership`` can carry. It is asking that because a
+    path NOBODY in this call's candidate set ever touched is invisible to
+    ``compute_scope`` Step 3/Step 4 entirely: it never becomes a candidate,
+    so it gets no ``skipped`` entry naming its peer holder, and Step 5 routes
+    it away from ``orphans`` too (``other_owner`` has it). It is therefore
+    absent from every key of this dict, and a consumer narrating a denial has
+    nothing to name. Passing the pathspec as ``extra_candidates`` puts those
+    paths through Step 1 adoption so Step 3/3b's peer-claim read is actually
+    consulted for them.
+
+    That is also exactly why the RESULT IS NOT AN ALLOW-LIST FOR THE CALLER
+    THAT NAMED THE PATHS. Step 1 adoption is unconditional: a named path that
+    no peer claims and no ``other_owner`` entry covers is adopted into
+    ``my_scope``, and lands in this call's ``safe_paths`` — by construction,
+    because the caller named it, not because the caller owns it. Reading
+    ``safe_paths``/``orphans`` off such a call as a membership test would let
+    any caller own any dirty path in the tree by putting it in its own
+    pathspec — the same unsound shape
+    ``coordinator_core.ops.session.scope_report``'s module docstring records
+    under "REVERTED 2026-08-03", reached by a different route.
+
+    NEGATIVE SPEC: never pass a caller-supplied pathspec to the
+    ``compute_offer`` call whose ``safe_paths``/``orphans`` gate a commit. A
+    consumer that wants both answers computes TWO offers — the primary one
+    (no ``extra_candidates``) for the verdict, a second one for wording only
+    — and never merges them. See
+    ``coordinator_core.ops.session.scope_report.assert_paths_in_session_scope``
+    for the one in-tree consumer of this parameter and the invariant test
+    that pins the split.
+
     Read-only: makes no git or ``touched.txt`` mutation. Raises
     ``ValueError`` if ``session_id`` is empty.
     """
-    extra_candidates = _resolve_agent_touched_candidates(session_id, cwd)
-    result = compute_scope(session_id, cwd, extra_candidates=extra_candidates)
+    candidates = _resolve_agent_touched_candidates(session_id, cwd)
+    if extra_candidates:
+        seen = set(candidates)
+        for path in extra_candidates:
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path)
+                candidates.append(path)
+    result = compute_scope(session_id, cwd, extra_candidates=candidates)
 
     # A candidate withheld via `unreadable_other_sessions` (compute_scope
     # Step 4) lands in BOTH `result.skipped` (owner "unknown (claims
@@ -720,7 +871,7 @@ def _current_dirty_paths(cwd: Optional[str]) -> List[str]:
             capture_output=True,
             text=True,
             cwd=cwd,
-            **core._NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except OSError:
         return []
@@ -864,7 +1015,16 @@ async def _commit_group(
         # shape). The op ignores this key on any build that predates its
         # sink-side scope gate.
         params["session_id"] = session_id
-    result = await handler(params)
+    # `ceremony.scoped_git_commit`'s handler is a PLAIN SYNC `def` as of
+    # `3241c7c95` (see that commit for the dispatch-timeout rationale).
+    #
+    # Called plainly rather than via an await-if-awaitable adapter: handler
+    # sync-vs-async is a per-op fact, not a per-call-site unknown — the one
+    # place that legitimately branches on it is `ipc.dispatch_message`, which
+    # must serve every registered op. A composer resolving ONE named op knows
+    # that op's shape, and tolerating both here would hide the same drift a
+    # second time instead of failing on it.
+    result = handler(params)
     committed = bool(result.get("committed"))
     commit_failed = bool(result.get("commit_failed")) if not committed else False
     error = result.get("error")
@@ -1131,7 +1291,7 @@ def _commit_changed_count(sha: Optional[str], worktree_root: Optional[str]) -> O
             capture_output=True,
             text=True,
             cwd=worktree_root,
-            **core._NO_CONSOLE,
+            **no_console_creationflags(),
         )
     except OSError:
         return None

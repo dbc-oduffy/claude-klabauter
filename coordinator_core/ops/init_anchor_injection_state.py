@@ -47,7 +47,7 @@ from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 
 @register_op("ceremony.init_anchor_injection_state")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "ceremony.init_anchor_injection_state" handler.
 
     Params: none (params: {} per manifest contract; the argument is accepted

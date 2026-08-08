@@ -42,10 +42,23 @@ Negative-spec:
     if (and only if) it is actually dirty.
   - Does NOT retry a non-lock git failure (e.g. a genuine `git commit` config/
     permissions error) -- that is a terminal failure, recorded once immediately.
-  - Does NOT hold any process-level lock of its own (no `ceremony_lock`) -- a
-    detached render is explicitly OUTSIDE the ceremony's own lock/commit critical
-    section; contention is expected and absorbed here via the git-level retry,
-    not via a higher-level mutex.
+  - Does NOT hold any process-level lock of its own -- there is no
+    ceremony-wide lock anywhere in the commit path to be inside or outside of
+    (`ceremony_lock` was removed as a live mechanism by PM ruling
+    2026-08-07, see `docs/plans/2026-08-07-excise-the-ceremony-lock.md`);
+    contention is expected and absorbed here via the git-level retry, not via
+    any mutex.
+  - Does NOT carry its own copy of the lock-contention predicate or backoff
+    schedule -- both are consumed from `coordinator_core.git_lock_retry`, the
+    ONE shared retry helper every ceremony commit seam now composes
+    (`contract/apply_base.py::scoped_commit`,
+    `backlog_grind_assemble/apply.py::_commit_one` are the other two
+    consumers). This module's own retry loop still re-runs the WHOLE
+    add-diff-commit sequence per attempt (not a per-git-call retry) --
+    deliberate, see the module contract above: a detached render's
+    add/commit pair is small enough that re-running both on lock
+    contention is cheap, and doing so keeps `commit_own_artifact`'s own
+    four-outcome contract (True/False x commit-landed/no-op) unchanged.
 
 Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C5 (Artifact
 disposition residue)
@@ -58,30 +71,15 @@ import time
 from pathlib import Path
 from typing import Union
 
-from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
-
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-#: Bounded retry policy for `.git/index.lock` contention: 1 initial attempt + 3
-#: retries (4 total), fixed backoff schedule (seconds, slept BEFORE attempts
-#: 2/3/4) tuned for the sub-second lock-hold window a single-path `git add` +
-#: `git commit` normally clears in -- C2's sibling archive-sweep children are
-#: themselves quick, single-path commits, not long-held locks. Never spins
-#: indefinitely: the schedule is fixed-length, not open-ended.
-_MAX_ATTEMPTS = 4
-_BACKOFF_SCHEDULE_S = (0.1, 0.3, 0.7)
-
-#: Substrings that identify a `.git/index.lock` contention failure in git's own
-#: stderr -- the ONLY class of failure this helper retries. Any other stderr
-#: (permissions, hook rejection, bad config, etc.) is terminal on first sight.
-_LOCK_CONTENTION_SIGNATURES = (
-    "index.lock",
-    "Another git process seems to be running",
+from coordinator_core.git_lock_retry import (
+    DEFAULT_BACKOFF_SCHEDULE_S as _BACKOFF_SCHEDULE_S,
 )
+from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS as _MAX_ATTEMPTS
+from coordinator_core.git_lock_retry import is_lock_contention as _is_lock_contention
+from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
+from coordinator_core.win_portability import no_console_creationflags
 
-
-def _is_lock_contention(stderr: str) -> bool:
-    return any(sig in stderr for sig in _LOCK_CONTENTION_SIGNATURES)
+_NO_WINDOW = no_console_creationflags()
 
 
 def _run_git(args, cwd: Path) -> subprocess.CompletedProcess:
@@ -90,7 +88,7 @@ def _run_git(args, cwd: Path) -> subprocess.CompletedProcess:
         cwd=str(cwd),
         capture_output=True,
         text=True,
-        creationflags=_NO_WINDOW,
+        **_NO_WINDOW,
     )
 
 

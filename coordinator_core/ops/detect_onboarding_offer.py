@@ -67,13 +67,14 @@ import sys
 from typing import List, Optional
 
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
-from coordinator_core.win_portability import is_executable
+from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.ops.probe_onboarding_currency import (
     _strip_one_trailing_slash,
     coordinator_currency_probe,
 )
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_CREATIONFLAGS = no_console_creationflags()
+
 
 _SESSION_DIR_PATTERNS = ("tasks", "archive", "state/handoffs")
 
@@ -214,7 +215,7 @@ def _resolve_repo_root(explicit: str) -> str:
             text=True,
             timeout=10,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         # Review: code-reviewer (Finding 1) — replaced a stringified fragment

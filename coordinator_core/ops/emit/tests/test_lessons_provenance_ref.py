@@ -46,7 +46,7 @@ def _make_ctx() -> EmitContext:
         git_sha_short="aaaaaaaa",
         observed_at="2026-07-06T15:54:47Z",
         hostname="fixture.local",
-        repo_name="dbc-example-operator/.example-doctrine-mirror-repo",
+        repo_name="dbc-oduffy/.example-doctrine-mirror-repo",
         subprocess_root=fixture_root,
     )
 

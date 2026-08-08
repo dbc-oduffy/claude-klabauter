@@ -15,7 +15,10 @@ import sys
 
 import pytest
 
-from coordinator_core.ops.check_machine_local_regeneratability import main
+from coordinator_core.ops.check_machine_local_regeneratability import (
+    _key_matches_regen_entry,
+    main,
+)
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
@@ -158,6 +161,7 @@ schema = 1
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.example_cockpit_repo"         = "idempotent-regeneratable"
 "repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.claude_klabauter"        = "idempotent-regeneratable"
 """
     )
 
@@ -351,6 +355,7 @@ schema = 1
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.example_cockpit_repo"         = "idempotent-regeneratable"
 "repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.claude_klabauter"        = "idempotent-regeneratable"
 """
     )
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -371,3 +376,85 @@ def test_help_flag_prints_usage(capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert "usage:" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# AC8 (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md, chunk C6b):
+# repos.claude_klabauter joins COORDINATOR_OWNED_KEYS + the family-prefix arm.
+# ---------------------------------------------------------------------------
+def test_claude_klabauter_classified_no_warning(tmp_path, capsys, monkeypatch):
+    claude_dir, ml_dir = _make_claude_dir(tmp_path)
+    (ml_dir / "registry.toml").write_text(
+        """
+schema = 1
+
+[regeneratability]
+"coordinator.python"           = "idempotent-regeneratable"
+"plugin.mirrors"                = "idempotent-regeneratable"
+"publish.targets"               = "idempotent-regeneratable"
+"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.example_retrieval_repo"             = "idempotent-regeneratable"
+"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
+"repos.example_repo"              = "idempotent-regeneratable"
+"repos.example_stats_repo"              = "idempotent-regeneratable"
+"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.experiments"             = "idempotent-regeneratable"
+"repos.example_cockpit_repo"         = "idempotent-regeneratable"
+"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.claude_klabauter"        = "idempotent-regeneratable"
+"""
+    )
+
+    rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
+
+    assert rc == 0
+    assert "absent from [regeneratability]" not in err
+
+
+def test_claude_klabauter_unclassified_warns(tmp_path, capsys, monkeypatch):
+    claude_dir, ml_dir = _make_claude_dir(tmp_path)
+    (ml_dir / "registry.toml").write_text(
+        """
+schema = 1
+
+[regeneratability]
+"coordinator.python"           = "idempotent-regeneratable"
+"plugin.mirrors"                = "idempotent-regeneratable"
+"publish.targets"               = "idempotent-regeneratable"
+"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.example_retrieval_repo"             = "idempotent-regeneratable"
+"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
+"repos.example_repo"              = "idempotent-regeneratable"
+"repos.example_stats_repo"              = "idempotent-regeneratable"
+"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.experiments"             = "idempotent-regeneratable"
+"repos.example_cockpit_repo"         = "idempotent-regeneratable"
+"repos.example-os-repo"                = "idempotent-regeneratable"
+# repos.claude_klabauter intentionally omitted
+"""
+    )
+
+    rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
+
+    assert rc == 0
+    assert "absent from [regeneratability]" in err
+    assert "repos.claude_klabauter" in err
+
+
+def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
+    assert _key_matches_regen_entry("engine.working_repos.example_doctrine_repo", "engine.working_repos")
+
+
+def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():
+    # "engine.working_repositories" shares the leading substring "engine.working_repos"
+    # but is not "engine.working_repos" plus a dotted segment — must NOT match. Guards
+    # against a sloppy str.startswith() implementation of the family-prefix arm.
+    assert not _key_matches_regen_entry("engine.working_repositories", "engine.working_repos")
+    assert not _key_matches_regen_entry("engine.working_repos", "engine.working_repositories")
+
+
+def test_plugin_mirrors_family_prefix_arm_still_works_via_helper():
+    assert _key_matches_regen_entry("plugin.mirrors", "plugin.mirrors.coordinator-claude")
+    assert not _key_matches_regen_entry("plugin.mirrors", "plugin.mirrorsx")

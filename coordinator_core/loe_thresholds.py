@@ -37,15 +37,23 @@ import yaml
 # map insertion order and the bash TSHIRT_TABLE array order. "Any-criterion"
 # semantics: a session qualifies for a tier if ANY of its three metrics meets or
 # exceeds that tier's threshold; the first (highest) qualifying tier wins.
-_TIER_ORDER = ["XL", "L", "M", "S", "XS"]
+_TIER_ORDER = ["XXL", "XL", "L", "M", "S", "XS"]
 
 # Fallback table — verbatim copy of coordinator/config/loe-thresholds.yaml's values
-# as of 2026-07-15 (post dogfood-fix: S.opus_dispatches=1, M.opus_dispatches=2).
+# as of 2026-08-07 (adds XXL; previously 2026-07-15 post dogfood-fix:
+# S.opus_dispatches=1, M.opus_dispatches=2).
+#
+# XXL exists because `chain_loe.tshirt` SATURATED without it: aggregate_chain_loe
+# recomputes the tier from summed dispatches/tokens, so a chain that had just crossed
+# 50 dispatches and a chain at 400 both reported XL. A sixth notch is where a summed
+# aggregate carries information; the ladder's own SSOT (coordinator/config/
+# loe-thresholds.yaml in the consuming repo) added it first, and this mirror follows.
 # Used only when a caller does not supply thresholds (or the file at the supplied
 # path is unreadable/malformed) — an explicit, documented degrade, not a silent
 # divergence risk: callers that care about staying in sync with the live config
 # should always pass a resolved thresholds_path through to load_thresholds().
 DEFAULT_THRESHOLDS: List[Dict[str, Any]] = [
+    {"tier": "XXL", "agent_dispatches": 90, "opus_dispatches": 12, "em_tokens": 2000000},
     {"tier": "XL", "agent_dispatches": 50, "opus_dispatches": 6, "em_tokens": 1000000},
     {"tier": "L", "agent_dispatches": 30, "opus_dispatches": 3, "em_tokens": 600000},
     {"tier": "M", "agent_dispatches": 15, "opus_dispatches": 2, "em_tokens": 300000},

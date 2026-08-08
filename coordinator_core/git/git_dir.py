@@ -26,6 +26,7 @@ repo, matching `git_common_dir` keying already used throughout
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Union
 
@@ -79,7 +80,15 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
 
     private_gitdir = Path(pointer)
     if not private_gitdir.is_absolute():
-        private_gitdir = repo_root / private_gitdir
+        # A relative `gitdir:` pointer (the submodule form) can itself
+        # contain `..` traversal segments -- `Path.__truediv__` joins
+        # lexically and does NOT collapse them, so a bare join can leave a
+        # dangling `..` in the result. `os.path.normpath` collapses it with
+        # no filesystem I/O, no symlink resolution -- see
+        # `resolve_git_common_dir`'s identical join below, where the same
+        # unresolved-`..` shape was reproduced live (a linked worktree's
+        # `commondir` file content is always relative).
+        private_gitdir = Path(os.path.normpath(repo_root / private_gitdir))
 
     return private_gitdir
 
@@ -123,7 +132,29 @@ def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
             if common_pointer:
                 common_dir = Path(common_pointer)
                 if not common_dir.is_absolute():
-                    common_dir = private_gitdir / common_dir
+                    # A linked worktree's `commondir` file content is
+                    # ALWAYS relative (git's own convention -- typically
+                    # `../..`) and joining it lexically leaves that `..`
+                    # unresolved in the returned path. Downstream callers
+                    # (e.g. `lifecycle.main_worktree_root`'s bare `.parent`,
+                    # which assumes a lexically clean absolute path) then
+                    # silently mis-resolve the main worktree root by one or
+                    # more directory levels. `os.path.normpath` collapses
+                    # the traversal with no filesystem I/O or symlink
+                    # resolution, unlike `Path.resolve()`.
+                    #
+                    # Accepted limitation, stated rather than implied:
+                    # lexical collapse and the kernel disagree whenever ANY
+                    # symlinked path segment is collapsed past — `<x>/link/..`
+                    # normalizes to `<x>`, while the OS would land in the
+                    # link target's parent. That segment need not be `.git`
+                    # itself: a symlinked intermediate directory, or a
+                    # symlinked linked-worktree directory, collapses just as
+                    # wrongly. Taken deliberately: `.resolve()` is forbidden
+                    # here (see this function's rationale), and the
+                    # un-collapsed form was wrong for EVERY `.parent`
+                    # consumer, symlink or not.
+                    common_dir = Path(os.path.normpath(private_gitdir / common_dir))
                 return common_dir
     except OSError:
         return dot_git

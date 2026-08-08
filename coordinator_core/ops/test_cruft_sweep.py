@@ -32,6 +32,11 @@ import pytest
 
 from coordinator_core.ops import cruft_sweep
 
+# _init_git_repo below spawns real `git` via an aliased subprocess import
+# (`import subprocess as _subprocess`) -- SPAWN-RATCHET Rule 2 declaration,
+# not a baseline entry: see coordinator_core/tests/test_no_new_spawning_tests.py.
+pytestmark = [pytest.mark.spawns_process]
+
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

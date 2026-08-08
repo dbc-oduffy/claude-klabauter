@@ -10,11 +10,12 @@ raise fake assertion failures against constants HEAD already defines
 correctly, and a test opening a large native-backed store while another
 session holds its write lock aborts the pytest process outright.
 
-Design (mirrors the atomic-mkdir shape of
+Design (mirrors the atomic-mkdir shape formerly used by
 ``coordinator_core/ops/ceremony/ceremony_lock.py`` — cite, not import; that
-lock is keyed on a git worktree and delegates its liveness verdict to the
-session registry, neither of which is meaningful for a machine-wide,
-repo-agnostic lock whose holder is a bare test-runner process):
+now-removed commit-path lock was keyed on a git worktree and delegated its
+liveness verdict to the session registry, neither of which is meaningful for
+a machine-wide, repo-agnostic lock whose holder is a bare test-runner
+process):
 
   - Lock directory: ``<settings-home>/claude-klabauter/test-suite-mutex.lock/``.
     ``os.mkdir`` is atomic on POSIX and on Windows — exactly one racing
@@ -52,9 +53,10 @@ Negative-spec — what this lock is NOT:
     - NOT a general-purpose task lock. Do not reuse it to serialize
       ceremonies, commits, pipeline writes, or embedding jobs — a
       long-running unrelated holder would block the very test runs this
-      exists to admit one-at-a-time. Ceremony critical sections use
-      ``coordinator_core/ops/ceremony/ceremony_lock.py``; single-file RMW
-      uses ``coordinator_core/locked_write.py``.
+      exists to admit one-at-a-time. The commit pipeline no longer holds a
+      ceremony-wide mutex (``ceremony_lock.py`` was removed as a live
+      mechanism, PM ruling 2026-08-07); single-file RMW uses
+      ``coordinator_core/locked_write.py``.
     - NOT an authorization check. It answers "may this run start *now*",
       never "is this caller entitled to run a suite at all" — tier/grant
       enforcement is the ``bash_guards`` layer's job.
@@ -103,6 +105,21 @@ _META_GRACE_SECS: float = 30.0
 _LOCK_DIRNAME = "test-suite-mutex.lock"
 _META_FILENAME = "meta.json"
 
+# DR-088 layer 6 take-side wait bound, shared by every real acquirer in this
+# repo (`full_runner`, `validate-fast-and-packageability.py` `fast`,
+# `workday-complete-step1-validate.py`). Originally established in
+# `full_runner.py` (R10, 2026-07-28) and copy-pasted into a
+# `coordinator/bin/lib/` shim for the two later bin/ call sites; folded onto
+# this one shared copy since a `coordinator_core` package module importing
+# from a `coordinator/bin/lib/` shim would have been the wrong dependency
+# direction. A full suite in this repo runs ~10 minutes; the slowest
+# consumer-repo suites are a few times that. 600s is well past that budget —
+# long enough that no honest run is ever reclaimed out from under itself,
+# short enough that a genuinely wedged holder does not stall a caller
+# indefinitely; a timed-out acquire proceeds unserialized (fail OPEN) rather
+# than refusing, matching this module's own read-path fail-open posture.
+MUTEX_WAIT_SECS: float = 600.0
+
 _POLL_INITIAL_SECS = 0.1
 _POLL_MAX_SECS = 5.0
 _POLL_BACKOFF = 1.5
@@ -112,6 +129,25 @@ _UNKNOWN_OWNER = "<unknown>"
 # Cap on immediate mkdir retries after `holder()` reports the lock free — see
 # the guarded branch in `acquire()`.
 _RECLAIM_RETRY_LIMIT = 3
+
+
+def mutex_owner(prefix: str) -> str:
+    """Mutex owner id for the calling process.
+
+    Prefers the coordinator session id so the guard's deny text names
+    something an operator can act on ("held by <session>"), falling back to
+    a ``<prefix>-pid-<pid>`` string when no session is in scope — an
+    anonymous owner still serializes correctly, it just reads less well in
+    the deny. ``prefix`` names the caller (e.g. ``"full_runner"``,
+    ``"suite-mutex"``) so `holder()` output distinguishes which take-side
+    path is holding the lock when no session id was available; callers MUST
+    NOT collapse this to a single shared prefix.
+    """
+    for var in ("CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    return "%s-pid-%d" % (prefix, os.getpid())
 
 
 def lock_path() -> Path:

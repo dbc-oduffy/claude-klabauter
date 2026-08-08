@@ -91,6 +91,7 @@ import hashlib
 import json
 import os
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -120,7 +121,7 @@ def _run_git(repo_root: Path, *args: str) -> Optional[subprocess.CompletedProces
             capture_output=True,
             text=True,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return None

@@ -764,10 +764,14 @@ _FLIPPED_TO_ADVISORY_REWRITE = {
     "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
 }
-assert {name for name, _ in CONFINEMENT_GUARDS} - _FLIPPED_TO_ADVISORY_REWRITE <= {
-    row.guard for row in CONFINEMENT_ROWS
-}
-assert set(GUARD_NAMES) - _FLIPPED_TO_ADVISORY_REWRITE <= {row.guard for row in CONFINEMENT_ROWS}
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- an import-time
+#: bare `assert` here turned one missing registration into an import
+#: failure for every test module that imports this corpus, masking whatever
+#: was broken behind it. The computation these two invariants depend on
+#: (`_FLIPPED_TO_ADVISORY_REWRITE`, `CONFINEMENT_GUARDS`, `GUARD_NAMES`,
+#: `CONFINEMENT_ROWS`) stays here; only the assertions moved.
 
 
 # ---------------------------------------------------------------------------
@@ -1017,6 +1021,37 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        # Mechanical leg of the fleet-wide `.git/index.lock` contention
+        # campaign -- see guard_no_optional_locks.py's own module docstring.
+        "git-no-optional-locks",
+        "git-no-optional-locks-fire",
+        "git status",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "git-no-optional-locks",
+        "git-no-optional-locks-control",
+        "git diff --cached",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        # Self-heal leg of the same campaign -- always returns None (side-
+        # effect-only guard, see guard_reap_stale_git_lock.py's own module
+        # docstring), so a single non-firing control row is the correct
+        # shape here, same lighter-path precedent as
+        # `block-dev-repo-sentinel-removal-advisory`'s siblings above.
+        "reap-stale-git-lock",
+        "reap-stale-git-lock-control",
+        "git status",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
         "validate-commit",
         "validate-commit-fire",
         'git commit -m "tweak plan"',
@@ -1080,6 +1115,22 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         _REWRITE,
         False,
+    ),
+    # C5 (row 20, `docs/reference/guard-dialect-coverage.md`,
+    # docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
+    # silent.md): this guard's heredoc/process-substitution/redirect scan is
+    # POSIX-only, so a PowerShell-dialect command records SILENT and stays
+    # non-speaking (envelope `None`) rather than a guessed clean -- pinned
+    # here as a non-firing cell so a future regression that made this guard
+    # start guessing on PowerShell input would flip `expected_speaker`.
+    CorpusRow(
+        "block-illegal-filename",
+        "block-illegal-filename-powershell-silent",
+        "echo x > bad?name.txt",
+        False,
+        _REWRITE,
+        False,
+        setup=lambda scratch_dir, mp: {"tool_name": "PowerShell"},
     ),
     CorpusRow(
         "find-exec-rewrite",
@@ -1222,6 +1273,23 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "grep-via-bash-guard",
         "grep-via-bash-guard-control",
         "grep -rn TODO src/",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "powershell-via-bash-guard",
+        "powershell-via-bash-guard-fire",
+        'powershell.exe -NoProfile -Command "$p=Get-Process -Id 44448 -EA '
+        'SilentlyContinue; if($p){\\"ALIVE $($p.ProcessName)\\"}else{\'DEAD\'}; ..."',
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "powershell-via-bash-guard",
+        "powershell-via-bash-guard-control-single-quoted",
+        "pwsh -Command 'Write-Host $HOME'",
         False,
         _REWRITE,
         False,
@@ -1445,12 +1513,11 @@ _LIVE_CHAIN_FOR_SANITY = dispatch._build_guard_chain(
     policy_file=None,
     host_is_windows=False,
 )
-assert {e.name for e in _LIVE_CHAIN_FOR_SANITY if e.band == _REWRITE} == {
-    row.guard for row in ADVISORY_REWRITE_ROWS
-}
-assert {e.name for e in _LIVE_CHAIN_FOR_SANITY if e.band == _PLATFORM} == {
-    row.guard for row in PLATFORM_CONDITIONED_ROWS
-}
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- same rationale
+#: as `_FLIPPED_TO_ADVISORY_REWRITE` above. `_LIVE_CHAIN_FOR_SANITY` stays
+#: here as the shared computation both moved assertions depend on.
 
 
 # ---------------------------------------------------------------------------
@@ -1621,8 +1688,14 @@ def _wg_cutover_phase_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[st
 
 
 def _wg_derived_global_doctrine_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    #: Set both HOME and USERPROFILE (not delenv USERPROFILE) so the
+    #: redirect actually resolves on win32 too -- `Path.home()` there reads
+    #: USERPROFILE (falling back to HOMEDRIVE/HOMEPATH), never HOME; a bare
+    #: `delenv("USERPROFILE")` left `Path.home()` nothing to resolve and it
+    #: raised `RuntimeError: Could not determine home directory.` (F13d,
+    #: docs/plans/2026-08-07-install-dogfood-mechanical-residue.md, C3).
     mp.setenv("HOME", str(scratch_dir))
-    mp.delenv("USERPROFILE", raising=False)
+    mp.setenv("USERPROFILE", str(scratch_dir))
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(scratch_dir / ".claude" / "CLAUDE.md"), "content": "x"},
@@ -1819,8 +1892,10 @@ def _wg_worktree_sentinel_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dic
 def _wg_check_claude_md_size_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     from coordinator_core.claude_md_budget import HARD_LIMIT_BYTES
 
+    #: See `_wg_derived_global_doctrine_fire` above for why USERPROFILE is
+    #: set, not deleted (F13d, C3).
     mp.setenv("HOME", str(scratch_dir))
-    mp.delenv("USERPROFILE", raising=False)
+    mp.setenv("USERPROFILE", str(scratch_dir))
     content = "x" * (HARD_LIMIT_BYTES + 5000)
     return {
         "tool_name": "Write",
@@ -1988,6 +2063,64 @@ def _wg_windows_subprocess_popup_fire(
     }
 
 
+def _wg_shell_shaped_spawn_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """`shell=True` is the canonical shell-shaped spawn `spawn_policy.
+    sites_in_source` detects. The `.py` suffix is load-bearing -- the guard
+    reconstructs a whole-file Python buffer before walking it, so a
+    non-Python path is never scanned (which is also why `_wg_benign`'s
+    `.txt` write is a valid non-firing control for this guard)."""
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "run.py",
+            "content": 'import subprocess\nsubprocess.run("ls -la", shell=True)\n',
+        },
+    }
+
+
+def _wg_outbox_draft_frontmatter_shape_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """`status: open` -- a hand-authored draft copying the shape of a
+    *received* memo, the exact incident this guard exists for (module
+    docstring: "closes the... gap"). `validate_outbox_frontmatter` rejects
+    `status: open` (only `draft`/`sent` are valid pre-send), so this fires."""
+    content = (
+        "---\n"
+        "title: \"a memo\"\n"
+        "from: \"claude-klabauter-em\"\n"
+        "to: \"some-em\"\n"
+        "created: 2026-08-07\n"
+        "status: open\n"
+        "delivery_mode: receiver-repo\n"
+        "summary: \"a summary\"\n"
+        "---\n"
+        "body\n"
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "state/memo-outbox/foo.md", "content": content},
+        "cwd": str(scratch_dir),
+    }
+
+
+def _wg_private_git_fact_resolver_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """FIRE-SET membership (module docstring): a hand-rolled `git rev-parse
+    --show-toplevel` spawn inside a hot-path module (`write_guards/`) --
+    `coordinator_core.git.repo_root.show_toplevel` is the offered
+    non-spawning seam."""
+    content = (
+        "import subprocess\n"
+        "subprocess.run(['git', 'rev-parse', '--show-toplevel'])\n"
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "write_guards/private_resolver.py", "content": content},
+    }
+
+
 WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_completion_monolith_write", "fire", True, _wg_completion_monolith_fire),
     WriteGuardRow("block_completion_monolith_write", "control", False, _wg_benign),
@@ -2076,9 +2209,20 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("nudge_new_sh_file_naked_python", "fire", True, _wg_new_sh_file_fire),
     WriteGuardRow("nudge_new_sh_file_naked_python", "control", False, _wg_benign),
     WriteGuardRow(
+        "nudge_outbox_draft_frontmatter_shape",
+        "fire",
+        True,
+        _wg_outbox_draft_frontmatter_shape_fire,
+    ),
+    WriteGuardRow("nudge_outbox_draft_frontmatter_shape", "control", False, _wg_benign),
+    WriteGuardRow(
         "nudge_plan_sidecar_family_split", "fire", True, _wg_plan_sidecar_family_split_fire
     ),
     WriteGuardRow("nudge_plan_sidecar_family_split", "control", False, _wg_benign),
+    WriteGuardRow(
+        "nudge_private_git_fact_resolver", "fire", True, _wg_private_git_fact_resolver_fire
+    ),
+    WriteGuardRow("nudge_private_git_fact_resolver", "control", False, _wg_benign),
     WriteGuardRow("nudge_prose_queue_append", "fire", True, _wg_prose_queue_append_fire),
     WriteGuardRow("nudge_prose_queue_append", "control", False, _wg_benign),
     WriteGuardRow("nudge_prose_queue_creation", "fire", True, _wg_prose_queue_creation_fire),
@@ -2094,6 +2238,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "nudge_tasks_state_folder_split", "fire", True, _wg_tasks_state_folder_split_fire
     ),
     WriteGuardRow("nudge_tasks_state_folder_split", "control", False, _wg_benign),
+    WriteGuardRow("nudge_shell_shaped_spawn", "fire", True, _wg_shell_shaped_spawn_fire),
+    WriteGuardRow("nudge_shell_shaped_spawn", "control", False, _wg_benign),
     WriteGuardRow("nudge_terminal_artifact_edit", "fire", True, _wg_terminal_artifact_edit_fire),
     WriteGuardRow("nudge_terminal_artifact_edit", "control", False, _wg_benign),
     WriteGuardRow(
@@ -2129,8 +2275,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
 #: Sanity invariant this module itself relies on -- every guard `write_guards.
 #: engine.discover_guard_names()` reports has at least one row above.
 _WG_NAMES, _WG_IMPORT_FAILED = write_guards_engine.discover_guard_names()
-assert not _WG_IMPORT_FAILED, "write_guards import failure(s): %s" % _WG_IMPORT_FAILED
-assert set(_WG_NAMES) == {row.guard for row in WRITE_GUARD_ROWS}
+#: Moved out of module scope into
+#: `test_guard_corpus_registration_invariants.py` (docs/plans/2026-08-07-
+#: install-dogfood-mechanical-residue.md, chunk C3, F13a) -- same rationale
+#: as `_FLIPPED_TO_ADVISORY_REWRITE` above. `_WG_NAMES`/`_WG_IMPORT_FAILED`
+#: stay here as the shared computation the moved assertions depend on; a
+#: real import failure among the discovered write guards must still surface
+#: loudly, now as a failing test rather than a collection error.
 
 
 # ---------------------------------------------------------------------------

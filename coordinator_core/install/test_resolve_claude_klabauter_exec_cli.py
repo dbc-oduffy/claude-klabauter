@@ -69,6 +69,8 @@ from typing import List, Optional
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
 )
@@ -82,15 +84,72 @@ _spec.loader.exec_module(resolve_claude_klabauter)
 _FIXTURE_TARGET_NAME = "fixture-cli"
 
 
+class _OSNameProxy:
+    """Substitutes for ``resolve_claude_klabauter``'s module-level ``os`` name so a
+    test can flip the ``os.name`` branch ``exec_cli``/``_is_executable``
+    read without mutating the real, process-global ``os`` module.
+
+    ``resolve_claude_klabauter.os`` IS the real ``os`` module object (a plain
+    ``import os``, not a copy) — the module docstring for this test file
+    calls out that ``monkeypatch.setattr(resolve_claude_klabauter.os, "name", ...)``
+    corrupts ``pathlib``'s platform dispatch for the rest of the test
+    process, surfacing as ``PosixPath cannot instantiate on your system``
+    on a later, unrelated test. Patching the NAME ``resolve_claude_klabauter.os``
+    itself (via ``monkeypatch.setattr(resolve_claude_klabauter, "os", proxy)``)
+    instead of an attribute on the shared module object gives ``exec_cli``
+    a `.name` it reads directly while every other attribute access
+    (``os.path``, ``os.stat``, ``os.environ``, ``os.execv`` once a test
+    monkeypatches that too, ...) transparently forwards to the real
+    module — restored automatically by ``monkeypatch``'s teardown, and
+    never touching the real ``os`` module at all.
+    """
+
+    def __init__(self, name: str) -> None:
+        object.__setattr__(self, "name", name)
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def _patch_os_name(monkeypatch, name: str) -> "_OSNameProxy":
+    proxy = _OSNameProxy(name)
+    monkeypatch.setattr(resolve_claude_klabauter, "os", proxy)
+    return proxy
+
+
+def _patch_root_resolution(monkeypatch, bin_dir: Path) -> None:
+    """Point ``exec_cli``'s post-C4b root resolution at *bin_dir* directly,
+    bypassing ``resolve_claude_klabauter_root_with_class()``'s registry-then-sentinel
+    ladder and ``_validate_bin_dir()``'s on-disk sentinel probe.
+
+    Mirrors the pre-C4b convention (monkeypatching ``resolve_claude_klabauter_bin_dir``
+    wholesale) for the two calls ``exec_cli`` makes today:
+    ``resolve_claude_klabauter_root_with_class()`` (root + resolution class) then
+    ``_validate_bin_dir(root)`` (dir + sentinel validation). Patching only
+    ``resolve_claude_klabauter_bin_dir`` (as the pre-C4b tests did) intercepts
+    nothing post-C4b — ``exec_cli`` no longer calls it on the primary path
+    — which is exactly why these 9 tests silently fell through to this
+    operator's real, unconfigured settings home and blew up on
+    ``ClaudeKlabauterResolutionError``.
+    """
+    monkeypatch.setattr(
+        resolve_claude_klabauter,
+        "resolve_claude_klabauter_root_with_class",
+        lambda: (str(bin_dir), resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE),
+    )
+    monkeypatch.setattr(resolve_claude_klabauter, "_validate_bin_dir", lambda root: root)
+    monkeypatch.setattr(resolve_claude_klabauter, "resolve_claude_klabauter_bin_dir", lambda: str(bin_dir))
+
+
 def _stub_bin_dir(monkeypatch, bin_dir: Path, target_name: str, *, body: str = "", create_target: bool = True) -> str:
-    """Point ``resolve_claude_klabauter_bin_dir`` at *bin_dir* and optionally create an
+    """Point exec_cli's root resolution at *bin_dir* and optionally create an
     on-disk *target_name* file inside it (with *body*, defaulting to a bare
     shebang line), returning the expected ``target_path`` string
     ``exec_cli`` will compose."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     if create_target:
         (bin_dir / target_name).write_text(body or "#!/usr/bin/env python3\n", encoding="utf-8")
-    monkeypatch.setattr(resolve_claude_klabauter, "resolve_claude_klabauter_bin_dir", lambda: str(bin_dir))
+    _patch_root_resolution(monkeypatch, bin_dir)
     return str(bin_dir) + "/" + target_name
 
 
@@ -106,6 +165,12 @@ def _write_sentinel(coord_bin: Path) -> None:
     sentinel = coord_bin / "archive-stamp-cli"
     sentinel.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     sentinel.chmod(0o755)
+    if os.name == "nt":
+        # `_resolve_claude_klabauter.py`'s Windows-side executability probe is
+        # PATHEXT-based, not stat-mode-based (NTFS has no exec bit for
+        # os.chmod to set) — mirror the real on-disk archive-stamp-cli's
+        # `.cmd` companion, matching test_forwarder_trust_guard.py's fixture.
+        (coord_bin / "archive-stamp-cli.cmd").write_text("@echo SENTINEL\r\n", encoding="utf-8")
 
 
 def _write_forwarder(bin_dir: Path, forwarder_name: str, target: str) -> Path:
@@ -161,8 +226,15 @@ def _invoke_posix_subprocess(
             target_path = coord_bin / _FIXTURE_TARGET_NAME
             target_path.write_text(target_body, encoding="utf-8")
             target_path.chmod(target_mode)
+        # TOML literal string (single quotes) — claude_klabauter_root is a raw
+        # filesystem path and on Windows carries backslashes (e.g.
+        # `C:\Users\...`); a TOML basic string (double quotes) interprets
+        # backslash escape sequences, so `\U...` etc. would raise a TOML
+        # parse error there. A literal string performs no escape
+        # processing at all — matches the convention already used by the
+        # companion test_resolve_claude_klabauter.py.
         (ml_dir / "registry.local.toml").write_text(
-            f'[repos]\nclaude_klabauter = "{claude_klabauter_root}"\n', encoding="utf-8"
+            f"[repos]\nclaude_klabauter = '{claude_klabauter_root}'\n", encoding="utf-8"
         )
     # else: leave machine-local/ empty -> _resolve_claude_klabauter_root raises
     # ClaudeKlabauterResolutionError inside the forwarder's own process.
@@ -176,7 +248,7 @@ def _invoke_posix_subprocess(
         capture_output=True,
         text=True,
         timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     return _ExecResult(result.returncode, result.stdout, result.stderr)
 
@@ -197,16 +269,16 @@ def _invoke_nt_inprocess(
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     if resolution_ok:
-        monkeypatch.setattr(resolve_claude_klabauter, "resolve_claude_klabauter_bin_dir", lambda: str(bin_dir))
+        _patch_root_resolution(monkeypatch, bin_dir)
         if target_body is not None:
             (bin_dir / _FIXTURE_TARGET_NAME).write_text(target_body, encoding="utf-8")
     else:
         def _raise() -> str:
             raise resolve_claude_klabauter.ClaudeKlabauterResolutionError("ERROR: boom\n")
 
-        monkeypatch.setattr(resolve_claude_klabauter, "resolve_claude_klabauter_bin_dir", _raise)
+        monkeypatch.setattr(resolve_claude_klabauter, "resolve_claude_klabauter_root_with_class", _raise)
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "name", "nt")
+    _patch_os_name(monkeypatch, "nt")
 
     original_argv = list(sys.argv)
     with pytest.raises(SystemExit) as excinfo:
@@ -273,6 +345,14 @@ def test_posix_forwarder_execs_no_shebang_no_exec_bit_target_via_real_subprocess
     assert result.stdout.strip() == "ran:a b c"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="os.chmod(path, 0o000) cannot deny the owner read access on "
+    "NTFS -- os.access(path, os.R_OK) still reports True for one's own "
+    "file regardless of the mode bits passed (verified empirically), so "
+    "there is no way to construct an actually-unreadable-to-self target "
+    "on Windows for this falsifier to exercise",
+)
 def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
     """Review: code-reviewer F1's falsifier — a real generated forwarder,
     invoked as a genuinely separate process, against a fixture CLI that
@@ -365,6 +445,73 @@ def test_resolution_failure_exits_1(os_name, tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# sys.path regression -- `_run_target_in_process` must put the claude-klabauter root
+# on sys.path for the forwarded target, or any target that imports
+# `coordinator_core` at module top dies with ModuleNotFoundError before
+# running a line of its own logic (2026-08-07 cross-repo memo:
+# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-settings-home-forwarder-drops-
+# coordinator-core-from-syspath.md).
+#
+# The prior coverage in this module could not catch this class: every other
+# NT-leg test above runs the target INSIDE the pytest process, where
+# `coordinator_core` is already importable regardless of what
+# `_run_target_in_process` does to `sys.path` — a fixture that merely added
+# the import would go green whether or not the insert existed. Worse, on
+# THIS box `coordinator_core` is pip-installed in editable mode
+# (`site-packages/__editable__.coordinator_core-0.0.0.pth`), so even a naive
+# real-subprocess test would pass regardless of the fix, because the
+# interpreter's own `site.py` machinery makes the package importable
+# ambient to every subprocess launched with this interpreter. `-S` (skip
+# `site.py`/`.pth` processing) is the one flag that genuinely defeats that
+# ambient importability, producing a process where `coordinator_core` is
+# NOT on `sys.path` unless something inserts it — verified empirically:
+# `python -S` against this driver raises `ModuleNotFoundError` pre-fix and
+# succeeds post-fix. Single subprocess spawn, no loop.
+# ---------------------------------------------------------------------------
+
+
+def test_run_target_in_process_puts_claude_klabauter_root_on_sys_path(tmp_path):
+    real_claude_klabauter_root = _MODULE_PATH.resolve().parents[3]
+    assert (real_claude_klabauter_root / "coordinator_core" / "__init__.py").is_file(), (
+        "sanity: this test relies on the real on-disk claude-klabauter root actually "
+        "containing the coordinator_core package"
+    )
+
+    target = tmp_path / "target_imports_coordinator_core.py"
+    target.write_text(
+        "import coordinator_core\nprint('imported-ok')\n", encoding="utf-8"
+    )
+
+    driver = tmp_path / "driver.py"
+    driver.write_text(
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('_r', {str(_MODULE_PATH)!r})\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "sys.modules[spec.name] = m\n"
+        "spec.loader.exec_module(m)\n"
+        f"code = m._run_target_in_process({str(target)!r}, [], {str(real_claude_klabauter_root)!r})\n"
+        "sys.exit(code)\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-S", str(driver)],
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        **no_console_creationflags(),
+    )
+
+    assert result.returncode == 0, (
+        f"target import failed under a process without the claude-klabauter root "
+        f"ambient on sys.path -- stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "imported-ok" in result.stdout
+
+
+# ---------------------------------------------------------------------------
 # Windows-specific pre-flight -- the in-process runpy mechanism itself,
 # not expressible as an externally-observable outcome the POSIX leg shares.
 # ---------------------------------------------------------------------------
@@ -372,12 +519,12 @@ def test_resolution_failure_exits_1(os_name, tmp_path, monkeypatch, capsys):
 
 def test_windows_branch_never_calls_os_execv(tmp_path, monkeypatch):
     _stub_bin_dir(monkeypatch, tmp_path / "coordinator" / "bin", "archive-stamp-cli", body="x = 1\n")
-    monkeypatch.setattr(resolve_claude_klabauter.os, "name", "nt")
+    proxy = _patch_os_name(monkeypatch, "nt")
 
     def _fail_execv(*_a, **_k):
         raise AssertionError("os.execv must not be called on the Windows branch")
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "execv", _fail_execv)
+    monkeypatch.setattr(proxy, "execv", _fail_execv)
 
     with pytest.raises(SystemExit) as excinfo:
         resolve_claude_klabauter.exec_cli("archive-stamp-cli", argv=[])
@@ -394,7 +541,7 @@ def test_windows_branch_never_calls_os_execv(tmp_path, monkeypatch):
 def test_posix_branch_execs_via_sys_executable_with_target_path_and_argv(tmp_path, monkeypatch):
     target_path = _stub_bin_dir(monkeypatch, tmp_path / "coordinator" / "bin", "archive-stamp-cli")
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "name", "posix")
+    proxy = _patch_os_name(monkeypatch, "posix")
 
     captured: dict = {}
 
@@ -405,7 +552,7 @@ def test_posix_branch_execs_via_sys_executable_with_target_path_and_argv(tmp_pat
         # actually replacing the test process image.
         raise SystemExit(0)
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "execv", _fake_execv)
+    monkeypatch.setattr(proxy, "execv", _fake_execv)
 
     with pytest.raises(SystemExit):
         resolve_claude_klabauter.exec_cli("archive-stamp-cli", argv=["--foo"])
@@ -426,12 +573,12 @@ def test_posix_branch_execv_oserror_of_any_cause_still_exits_127(tmp_path, monke
     below for the genuine unreadable-target falsifier."""
     _stub_bin_dir(monkeypatch, tmp_path / "coordinator" / "bin", "archive-stamp-cli")
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "name", "posix")
+    proxy = _patch_os_name(monkeypatch, "posix")
 
     def _fake_execv(path: str, argv: List[str]):
         raise OSError(13, "Permission denied")
 
-    monkeypatch.setattr(resolve_claude_klabauter.os, "execv", _fake_execv)
+    monkeypatch.setattr(proxy, "execv", _fake_execv)
 
     with pytest.raises(SystemExit) as excinfo:
         resolve_claude_klabauter.exec_cli("archive-stamp-cli")

@@ -187,7 +187,7 @@ def validate_workflow_input(payload: dict[str, Any]) -> list[str]:
 
 
 @register_op("distill.workflow_input")
-async def _handler(params: dict, repo_root: Any = None) -> dict:
+def _handler(params: dict, repo_root: Any = None) -> dict:
     """distill.workflow_input handler.
 
     Params:

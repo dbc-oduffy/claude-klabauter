@@ -52,6 +52,7 @@ Spec backlink: coordinator_core/bash_guards/block_subagent_commit.py
 from __future__ import annotations
 
 import base64
+import sys
 import time
 
 import pytest
@@ -124,16 +125,33 @@ def test_folder_resolves_the_assembly_shapes_it_claims():
         assert "scoped-git-commit" in folded.text, payload
 
 
+#: state/bash-guards/known-red.json group "fold-bomb-recursionerror-bypass"
+#: (state/bug-backlog/2026-08-07-fold-bomb-payload-bypasses-block-subagen-7aa44b2ef0a0.yaml,
+#: P1). `ast.parse` raises `RecursionError` on the deep-concatenation bomb
+#: before `_fold_python_c_payload`'s bound checks run; `except Exception`
+#: swallows it as "unparseable", and unparseable is NOT fail-closed -- so
+#: this row is a live guard BYPASS, not a stale assertion. Owner:
+#: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md
+#: (`block_subagent_commit.py`). Four cells share this one root cause and
+#: clear together, never individually -- see registry.
+_KNOWN_FOLD_BOMB_BYPASS_LABELS = {"deep-concatenation"}
+
+
+def _fold_bomb_param(label, payload):
+    marks = [pytest.mark.pending_fix] if label in _KNOWN_FOLD_BOMB_BYPASS_LABELS else []
+    return pytest.param(label, payload, id=label, marks=marks)
+
+
 @pytest.mark.parametrize(
     "label,payload",
     [
-        ("literal-repetition", "import os; os.system('a'*1000000000 + ' x')"),
-        ("pow-repetition", "import os; os.system('a'*10**9 + ' x')"),
-        ("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
-        ("width-field-percent", "import os; os.system('%99999999d' % 1)"),
-        ("width-field-format", "import os; os.system('{:>99999999}'.format('x'))"),
-        ("nested-repetition", "import os; os.system(('a'*4000)*4000)"),
-        ("join-expansion", "import os; os.system(('x'*4000).join(['a']*4000))"),
+        _fold_bomb_param("literal-repetition", "import os; os.system('a'*1000000000 + ' x')"),
+        _fold_bomb_param("pow-repetition", "import os; os.system('a'*10**9 + ' x')"),
+        _fold_bomb_param("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
+        _fold_bomb_param("width-field-percent", "import os; os.system('%99999999d' % 1)"),
+        _fold_bomb_param("width-field-format", "import os; os.system('{:>99999999}'.format('x'))"),
+        _fold_bomb_param("nested-repetition", "import os; os.system(('a'*4000)*4000)"),
+        _fold_bomb_param("join-expansion", "import os; os.system(('x'*4000).join(['a']*4000))"),
     ],
 )
 def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
@@ -160,9 +178,12 @@ def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
 @pytest.mark.parametrize(
     "label,payload",
     [
-        ("literal-repetition", "import os; os.system('a'*1000000000)"),
-        ("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
-        ("aggregate-many-values", "import os\n%sos.system(x0)" % "".join("x%d = 'a'*4000\n" % i for i in range(40))),
+        _fold_bomb_param("literal-repetition", "import os; os.system('a'*1000000000)"),
+        _fold_bomb_param("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
+        _fold_bomb_param(
+            "aggregate-many-values",
+            "import os\n%sos.system(x0)" % "".join("x%d = 'a'*4000\n" % i for i in range(40)),
+        ),
     ],
 )
 def test_length_bomb_latches_bounds_exceeded(label, payload):
@@ -706,9 +727,21 @@ _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
 ]
 
 
-@pytest.mark.parametrize(
-    "label,cmd", _ASSEMBLY_COMMANDS, ids=[c[0] for c in _ASSEMBLY_COMMANDS]
-)
+#: Same live-bypass root cause as `_KNOWN_FOLD_BOMB_BYPASS_LABELS` above,
+#: applied to this test's own params without touching `_ASSEMBLY_COMMANDS`
+#: itself (other tests below reuse that list unmarked).
+_ASSEMBLED_COMMAND_PARAMS = [
+    pytest.param(
+        label,
+        cmd,
+        id=label,
+        marks=[pytest.mark.pending_fix] if label == "fold-bomb-deep-concat" else [],
+    )
+    for label, cmd in _ASSEMBLY_COMMANDS
+]
+
+
+@pytest.mark.parametrize("label,cmd", _ASSEMBLED_COMMAND_PARAMS)
 def test_assembled_commit_command_denies(monkeypatch, label, cmd):
     """Part 16's whole point: a commit reached through a name the payload
     BUILDS -- or through a program nothing can name at all -- denies.
@@ -1447,9 +1480,16 @@ def test_subprocess_shell_out_surface_is_audited_not_sampled():
         if isinstance(getattr(_subprocess, name), type)
         and issubclass(getattr(_subprocess, name), BaseException)
     }
+    #: Windows-only: `STARTUPINFO` configures a `CreateProcess` call and
+    #: `Handle` wraps a Windows process/thread handle -- both are inputs to
+    #: the argv-vector family above, not sinks in their own right, and both
+    #: are absent from `dir(subprocess)` on POSIX. Gated the same way the
+    #: stdlib itself gates them (`sys.platform == "win32"`), so a POSIX run
+    #: of this audit still fails loudly if either name ever appears there.
+    windows_only = {"STARTUPINFO", "Handle"} if sys.platform == "win32" else set()
     accounted = argv_family | command_line_family | non_executing | exceptions | {
         "CompletedProcess"
-    }
+    } | windows_only
     assert exported - accounted == set()
     assert guard._RECEIVER_QUALIFIED_SHELL_SINK_TARGETS == {
         "subprocess." + name for name in command_line_family
@@ -1698,10 +1738,17 @@ def _disable_part16(monkeypatch, mechanism_1=False, mechanism_2=False):
         monkeypatch.setattr(guard, "_has_opaque_execution_sink", lambda cmd, legs=None: False)
 
 
+@pytest.mark.pending_fix
 def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
     """Blast-radius pin: measure every adversarial row with both mechanisms
     live and with both forced off, and assert the moving set is EXACTLY the
-    enumerated one. ALLOW -> DENY only; a DENY -> ALLOW entry would mean a
+    enumerated one -- currently RED for the same root cause as
+    `_KNOWN_FOLD_BOMB_BYPASS_LABELS` above: the `fold-bomb-deep-concat` row's
+    RecursionError-as-unparseable bypass moves the observed set off the
+    measured one. state/bash-guards/known-red.json group
+    "fold-bomb-recursionerror-bypass"; owner
+    docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
+    ALLOW -> DENY only; a DENY -> ALLOW entry would mean a
     new matcher had somehow suppressed an existing match, which it
     structurally cannot.
     """

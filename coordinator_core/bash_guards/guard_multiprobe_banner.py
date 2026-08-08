@@ -14,10 +14,11 @@ re-probe facts the session already holds, repeatedly, within one session.
 
 Detection is entirely delegated to `_shape_classifier.classify_command`
 (tokenizer-based, never regex-over-raw-command-text -- this module
-contains no command-shape regex of its own). Platform conditioning is
-delegated to `_platform_verdict.platform_verdict_for_shape` -- deny on
-Windows, advise elsewhere, via its `host_is_windows` kwarg (defaults to
-tracking the real host; overridable for tests).
+contains no command-shape regex of its own). Rendering is delegated to
+`_platform_verdict.platform_verdict_for_shape`, called with a fixed
+``host_is_windows=False`` (DR-280, 2026-08-07: this guard's own Windows
+deny leg retired as structurally unreachable -- see `check()`'s own
+docstring) -- this guard now only ever advises, never denies.
 
 REWRITE TARGET -- gate re-checked at authoring time, and it now EXISTS
 ------------------------------------------------------------------------
@@ -173,7 +174,23 @@ from coordinator_core.bash_guards._platform_verdict import platform_verdict_for_
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
-from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+)
+from coordinator_core.bash_guards._shape_classifier import (
+    SHAPE_PRECEDENCE,
+    Shape,
+    ShapeClassification,
+    classify_command,
+)
+from coordinator_core.bash_guards._shape_classifier import (
+    _detect_find_exec_xargs,
+    _detect_grep_via_bash,
+    _detect_head_tail_plumbing,
+    _detect_multi_probe_banner,
+)
 from coordinator_core.bash_guards.dispatch_checks import check_multiprobe_banner_rewrite
 from coordinator_core.bash_guards._helpers import operator_override_note, resolve_git_root
 from coordinator_core.bash_guards._write_bump_message import (
@@ -181,13 +198,92 @@ from coordinator_core.bash_guards._write_bump_message import (
     resolve_agent_class,
 )
 
+_GUARD_NAME = "guard_multiprobe_banner"
+
+
+def _classify_for_dialect(cmd: str, dialect: Optional[Dialect]) -> ShapeClassification:
+    """Dialect-aware analogue of `_shape_classifier.classify_command` (row 9,
+    `docs/reference/guard-dialect-coverage.md`). BASH is delegated UNCHANGED
+    to `classify_command` -- zero behaviour change on the bash leg (AC4).
+
+    POWERSHELL routes its tokenize call through `_dialect.
+    resolve_segments_for_dialect` (the C2 wiring seam) instead of
+    `classify_command`'s own `tokenize_full_command` call, then reuses the
+    SAME per-shape detector functions `classify_command` itself calls, in
+    the SAME `SHAPE_PRECEDENCE` order -- no new verb/flag table, per the
+    triage row's own finding that detection here is structural
+    (separator-count), not verb-specific.
+
+    `Shape.FOR_LOOP` is skipped (never matches) on the POWERSHELL branch:
+    its detector (`_detect_for_loop`) keys on the bash `for ... ; do ...
+    done` structural grammar, which has no PowerShell analogue
+    (`foreach ($x in ...) {...}` is a different statement grammar, not a
+    verb/flag variant) -- guessing here is exactly what this guard's own
+    dialect seam exists to avoid; guessing wrong risks a false clean on a
+    shape this guard does not detect for PowerShell, not the multi-probe
+    banner shape this row actually owns. `guard_multiprobe_banner` never
+    reads `Shape.FOR_LOOP` itself (only `Shape.MULTI_PROBE_BANNER`'s
+    precedence position relative to `Shape.GREP_VIA_BASH`, both above it in
+    `SHAPE_PRECEDENCE`, matters here), so this omission cannot change this
+    guard's own verdict either way.
+    """
+    if dialect is Dialect.BASH:
+        return classify_command(cmd)
+
+    segments = resolve_segments_for_dialect(cmd, dialect, guard_name=_GUARD_NAME)
+    if segments is None:
+        return ShapeClassification(tokens=None, matches=())
+
+    matches = []
+    for shape in SHAPE_PRECEDENCE:
+        match = None
+        if shape is Shape.GREP_VIA_BASH:
+            match = _detect_grep_via_bash(segments)
+        elif shape is Shape.MULTI_PROBE_BANNER:
+            match = _detect_multi_probe_banner(segments)
+        elif shape is Shape.HEAD_TAIL_PLUMBING:
+            match = _detect_head_tail_plumbing(segments)
+        elif shape is Shape.FOR_LOOP:
+            match = None
+        elif shape is Shape.FIND_EXEC_XARGS:
+            match = _detect_find_exec_xargs(segments)
+        if match is not None:
+            matches.append(match)
+
+    tokens = [tok for seg_tokens, _pipe in segments for tok in seg_tokens]
+    return ShapeClassification(tokens=tokens, matches=tuple(matches))
+
 #: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
 #: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing (it is not unique
 #: either -- `block_worktree_creation` reuses `41`).
 CLASS = "hard-deny"
-MATCHERS = ["Bash"]
+#: HELD at Bash-only (C4, docs/plans/2026-08-07-command-guards-fire-under-
+#: both-tool-names.md). CORRECTED 2026-08-07 -- the wave-map's original
+#: reason for this hold (a fail-closed free-text tokenizer fallback that
+#: misreads unparseable PowerShell input) does not apply to this file:
+#: `_evaluate_legacy` does not appear here. That mechanism belongs to a
+#: DIFFERENT guard family (the stash/worktree/subagent-destructive/suite-
+#: invocation cohort), not this one. This guard's capability objection is
+#: substantially discharged: `_dialect.py` already wires a real, lazily-
+#: imported `tree-sitter-pwsh` parser, with `record_silent` on parse
+#: failure or `has_error`, and `_classify_for_dialect` above already
+#: dispatches on it -- this file already has a working PowerShell shape
+#: match, not a guess.
+#:
+#: What actually holds this file: SEQUENCING, not capability. (1) A
+#: concurrent workstream (DR-280, 2026-08-07) is mid-rewrite on this exact
+#: file right now, retiring its Windows deny leg to advisory-only (two
+#: `host_is_windows=False` call sites as of this writing) -- widening
+#: `MATCHERS` while that rewrite is in flight risks landing a widening
+#: onto a half-changed verdict shape. (2) Two known-red cells are open
+#: against this file's own test suite under this plan's ownership
+#: (`TestSubagentOutlet`, a native-vs-POSIX path-separator defect in
+#: `_sandbox_script_hint`) -- widening a guard whose own tests are red is
+#: a coverage claim, not a coverage gain. Next step here is re-evaluating
+#: once DR-280 lands and the red cells clear, not a capability fix.
+MATCHERS = ("Bash",)
 PRIORITY = 41
 
 #: Escape hatch, read inline at `check()` call time only (F2 discipline --
@@ -344,11 +440,20 @@ def _outlet_from_seam_result(
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
-    """Evaluate the multi-probe-banner deny/advisory against a PreToolUse
-    payload. Returns `None` (allow), a hard-deny envelope on Windows, or
-    an `allow_advisory` envelope elsewhere. An unrecognized payload shape
-    or unparseable command degrades to `None` via the explicit checks
-    below -- this function does NOT catch-all internally (Review:
+    """Evaluate the multi-probe-banner advisory against a PreToolUse
+    payload. Returns `None` (allow) or an `allow_advisory` envelope --
+    never a deny (DR-280, 2026-08-07: the platform-conditioned deny branch
+    was retired as structurally unreachable -- it gated on
+    `_seam_confirmed_rewrite`, the same seam the earlier-registered
+    `"multiprobe-banner-rewrite"` chain entry already consumes and returns
+    on, so this guard's own deny leg could never be reached through the
+    real dispatcher; see DR-280's Negative-spec for why the guard itself
+    and its advisory leg stay). `host_is_windows` is still accepted (the
+    chain-wide threading contract `dispatch.evaluate_payload_json` uses for
+    every registered shape-guard) but no longer changes this guard's own
+    verdict -- see the platform-verdict call at the end of this function.
+    An unrecognized payload shape or unparseable command degrades to `None`
+    via the explicit checks below -- this function does NOT catch-all internally (Review:
     code-reviewer -- Finding 3: this guard is registered in `dispatch.py`'s
     `guard_chain` with `fail_closed=True`, whose whole contract is that an
     internal bug propagates to `dispatch._crash_deny` rather than being
@@ -356,21 +461,21 @@ def check(
     here would defeat that registration exactly as it would for
     `guard_grep_via_bash`, which carries no such wrapper).
 
-    ``host_is_windows``: platform override, threaded straight through to
-    `_platform_verdict.platform_verdict_for_shape` -- see this package's
-    pinned threading contract (`_platform_verdict.py` module docstring)
-    and the sibling C3/C5 guards (`guard_grep_via_bash.check`,
-    `guard_plumbing_and_loops.check`), which accept and forward the same
-    keyword for the same reason: `dispatch.evaluate_payload_json` must be
-    able to drive both platform legs of every shape-guard from one process
-    without any guard falling back to `os.name` monkeypatching in its own
-    tests (AC-9/AC-11 discharged together).
+    ``host_is_windows``: accepted for the chain-wide threading contract
+    every registered shape-guard honors (`_platform_verdict.py` module
+    docstring; `dispatch.evaluate_payload_json` calls every entry with this
+    same keyword regardless of whether the guard's own verdict still varies
+    by platform) -- kept in this signature so `dispatch.py`'s registration
+    lambda does not need a guard-specific special case, but this guard's
+    own verdict no longer branches on it (DR-280: see this function's own
+    docstring above).
     """
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
 
     tool_name = payload.get("tool_name") or ""
-    if tool_name != "Bash":
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is None:
         return None
 
     tool_input = payload.get("tool_input") or {}
@@ -382,7 +487,7 @@ def check(
         return None
     cmd = cmd.replace("\r", "")
 
-    classification = classify_command(cmd)
+    classification = _classify_for_dialect(cmd, dialect)
     if classification.tokens is None:
         return None
 
@@ -432,10 +537,15 @@ def check(
     # reaches here). `platform_verdict_for_shape` already truncates its
     # `matched_cmd` argument to 200 chars, so passing the full `cmd` here
     # costs nothing extra for a pathological input.
+    # DR-280: the deny leg is retired -- always render the advisory
+    # envelope (never deny), regardless of the real or overridden host.
+    # `platform_verdict_for_shape` is still the shared template so this
+    # guard's message reads as one family with its still-live siblings;
+    # only the platform BRANCH is forced here, not the rendering.
     return platform_verdict_for_shape(
         _SHAPE_NAME,
         cmd,
         summary,
         example,
-        host_is_windows=host_is_windows,
+        host_is_windows=False,
     )

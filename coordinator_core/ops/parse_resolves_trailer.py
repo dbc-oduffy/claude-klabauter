@@ -44,6 +44,7 @@ Negative-spec (do NOT "fix" mid-port):
 from __future__ import annotations
 
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List
 
@@ -55,7 +56,7 @@ def _run_git(args: List[str], cwd: str | None = None) -> subprocess.CompletedPro
         ["git"] + args,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
 
 
@@ -86,7 +87,7 @@ def _fallback_trailers(commit: str) -> List[str]:
         input=body,
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_creationflags(),
     )
     interpreted = interp_r.stdout
 

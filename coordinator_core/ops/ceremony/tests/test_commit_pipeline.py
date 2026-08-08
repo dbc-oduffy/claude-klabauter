@@ -31,6 +31,7 @@ Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C4 (AC5)
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 import uuid
 from pathlib import Path
@@ -823,9 +824,369 @@ def test_commit_trailer_output_byte_identical_across_agree_and_diverged_branches
     assert diverged_outcome.exit_code == 0
     agree_head_message = _commit_message_at_head(agree_repo)
     diverged_head_message = _commit_message_at_head(diverged_repo)
-    assert agree_head_message == diverged_head_message
+    # W1 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md): each
+    # call mints its OWN `Commit-Nonce:` trailer, so the two landed messages
+    # can never be byte-identical including that line -- strip it from both
+    # before the parity comparison, but assert each message got its own
+    # (distinct) nonce line, proving the mechanism ran on both branches.
+    agree_nonce_lines = [ln for ln in agree_head_message.splitlines() if ln.startswith("Commit-Nonce: ")]
+    diverged_nonce_lines = [ln for ln in diverged_head_message.splitlines() if ln.startswith("Commit-Nonce: ")]
+    assert len(agree_nonce_lines) == 1
+    assert len(diverged_nonce_lines) == 1
+    assert agree_nonce_lines != diverged_nonce_lines
+    # Non-blank line SET/ORDER-independent comparison (not full byte
+    # identity) once the nonce line is excluded: the two branches insert
+    # their (distinct) `Commit-Nonce:` trailer at different points relative
+    # to the AC18 hook's own Session-Id trailer replay -- the agree branch's
+    # hook replay runs BEFORE `commit()` mints and appends the nonce, the
+    # diverged branch's private-index hook replay runs AFTER -- so exact
+    # blank-line placement around that boundary is expected to differ; the
+    # CONTENT set is what AC7 parity is actually about.
+    agree_lines_no_nonce = [ln for ln in agree_head_message.splitlines() if ln and ln not in agree_nonce_lines]
+    diverged_lines_no_nonce = [ln for ln in diverged_head_message.splitlines() if ln and ln not in diverged_nonce_lines]
+    assert agree_lines_no_nonce == diverged_lines_no_nonce
     assert "Session-Id: 22222222-2222-2222-2222-222222222222" in agree_head_message
     assert "Plan-Id: pln-00000000000000000000000000000000" in agree_head_message
+
+
+# ---------------------------------------------------------------------------
+# C10/C11 (docs/plans/2026-08-07-excise-the-ceremony-lock.md) --
+# `commit()`'s call into `commit_scoped()` no longer threads a precomputed
+# divergence pair (AC7), and `committed_sha` is never a blind post-commit
+# `git rev-parse HEAD` (AC8).
+# ---------------------------------------------------------------------------
+
+
+def test_commit_ac7_passes_no_known_checked_diverged_pair_to_commit_scoped(
+    tmp_path, monkeypatch
+):
+    """AC7: `commit()`'s call into `git_native.commit_scoped()` must pass no
+    `known_checked`/`known_diverged` pair at all -- C1 removes the locked
+    critical section that pair's soundness rested on, so `commit_scoped()`
+    must always derive divergence fresh for every path in `commit_paths`."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "README.md", "changed")
+
+    real_commit_scoped = git_native.commit_scoped
+    captured_kwargs = {}
+
+    def _spy_commit_scoped(paths, msg_file, cwd, **kwargs):
+        captured_kwargs.update(kwargs)
+        return real_commit_scoped(paths, msg_file, cwd, **kwargs)
+
+    monkeypatch.setattr(git_native, "commit_scoped", _spy_commit_scoped)
+    try:
+        outcome = commit(repo, message="chore: ac7\n", commit_paths=["README.md"])
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert outcome.exit_code == 0
+    # S1 Finding 7: assert the KEYS are absent, not merely that they resolve
+    # to None -- AC7 says "passes no pair", and `.get(...) is None` would
+    # pass identically if `commit()` explicitly threaded `known_checked=None`.
+    assert "known_checked" not in captured_kwargs
+    assert "known_diverged" not in captured_kwargs
+
+
+def test_commit_ac8_private_index_branch_sha_is_commit_scoped_stdout_verbatim(tmp_path, monkeypatch):
+    """AC8: on the private-index branch, `committed_sha` is `commit_scoped()`'s
+    own CAS-verified `stdout` -- verified against a SPY-CAPTURED stdout, not
+    merely against `rev-parse HEAD` (S1 Finding 2: the prior form of this
+    test compared to `rev-parse HEAD` only, which passes identically even if
+    `commit()` re-derived the sha some other way -- it never proved the
+    docstring's actual claim)."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/diverged.md", "seed\n")
+    _git(["add", "--", "docs/diverged.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "docs/diverged.md", "STAGED HUNK\n")
+    _git(["add", "--", "docs/diverged.md"], repo)
+    _seed_file(repo, "docs/diverged.md", "LATER EDIT\n")
+
+    real_commit_scoped = git_native.commit_scoped
+    captured: dict = {}
+
+    def _spy_commit_scoped(paths, msg_file, cwd, **kwargs):
+        result = real_commit_scoped(paths, msg_file, cwd, **kwargs)
+        captured["stdout"] = result.stdout.strip()
+        return result
+
+    monkeypatch.setattr(git_native, "commit_scoped", _spy_commit_scoped)
+    try:
+        outcome = commit(repo, message="chore: ac8 diverged\n", commit_paths=["docs/diverged.md"])
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert outcome.exit_code == 0
+    assert captured.get("stdout"), "spy never captured commit_scoped()'s stdout"
+    assert outcome.committed_sha == captured["stdout"]
+
+
+def test_commit_ac8_agree_branch_sha_resolved_via_bounded_message_match(tmp_path, monkeypatch):
+    """AC8 (S1 Finding 2, rewritten): `committed_sha` is resolved by matching
+    this call's own message against a `pre_sha..HEAD` range even when a REAL
+    peer commit lands in the window BETWEEN this call's own commit landing
+    and `commit()`'s post-commit verification -- the exact window a blind
+    `git rev-parse HEAD` would misread. The prior form of this test landed
+    its peer commit only AFTER `commit()` had already returned, so it passed
+    identically against the pre-C11 blind-rev-parse implementation and proved
+    nothing about the window; this spies on `git_native.commit_scoped` to
+    land the peer commit from inside the real call, before `commit()`'s own
+    verification runs."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "seed")
+    _seed_file(repo, "b.txt", "seed")
+    _git(["add", "--", "a.txt", "b.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "a.txt", "changed")
+
+    real_commit_scoped = git_native.commit_scoped
+
+    def _spy_commit_scoped(paths, msg_file, cwd, **kwargs):
+        result = real_commit_scoped(paths, msg_file, cwd, **kwargs)
+        # A REAL peer commit, landed inside the window between this call's
+        # own commit landing and `commit()`'s post-commit sha verification.
+        _seed_file(repo, "b.txt", "peer changed")
+        _git(["add", "--", "b.txt"], repo)
+        _git(["commit", "-q", "-m", "peer commit landed inside the window"], repo)
+        return result
+
+    monkeypatch.setattr(git_native, "commit_scoped", _spy_commit_scoped)
+    try:
+        outcome = commit(repo, message="chore: ac8 agree\n", commit_paths=["a.txt"])
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert outcome.exit_code == 0
+
+    # HEAD is now the PEER's commit -- a blind `git rev-parse HEAD` taken at
+    # this point would misreport the peer's sha as this call's own.
+    peer_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert outcome.committed_sha != peer_sha
+
+    this_call_sha = subprocess.run(
+        ["git", "log", "--format=%H", "--", "a.txt"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.splitlines()[0]
+    assert outcome.committed_sha == this_call_sha
+
+
+def test_commit_ac4_real_peer_containing_this_calls_subject_is_not_ambiguous(
+    tmp_path, monkeypatch
+):
+    """W1/AC4 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
+    a REAL peer commit whose message merely *contains* this call's own
+    subject verbatim -- landed inside `pre_sha..HEAD`, touching a path
+    inside this call's own `commit_paths`, INSIDE the verification window
+    (spying on `git_native.commit_scoped`, never after `commit()` returns) --
+    must NOT produce a second candidate now that the match target is the
+    minted `Commit-Nonce:` trailer rather than a subject substring. This is
+    exactly the shape that used to collide (see the deleted
+    `..._identical_subject_peer_is_ambiguous` test this replaces) -- proving
+    this goes red against the reverted subject-match code is the point:
+    reverting the nonce-match back to a subject-substring `git log --grep`
+    reproduces the exact 2-candidate ambiguity this test asserts against."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "seed")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    subject = "chore: identical subject collision"
+    _seed_file(repo, "a.txt", "this call's own change")
+
+    real_commit_scoped = git_native.commit_scoped
+
+    def _spy_commit_scoped(paths, msg_file, cwd, **kwargs):
+        result = real_commit_scoped(paths, msg_file, cwd, **kwargs)
+        # A REAL peer commit sharing this call's own subject verbatim,
+        # touching the same path (inside this call's own `commit_paths`),
+        # landed BEFORE `commit()`'s own post-commit verification runs.
+        _seed_file(repo, "a.txt", "peer content overwrite")
+        _git(["add", "--", "a.txt"], repo)
+        _git(["commit", "-q", "-m", subject], repo)
+        return result
+
+    monkeypatch.setattr(git_native, "commit_scoped", _spy_commit_scoped)
+    try:
+        outcome = commit(repo, message=f"{subject}\n", commit_paths=["a.txt"])
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert outcome.exit_code == 0
+    assert outcome.committed_sha is not None
+    assert outcome.landed is True
+
+    # Newest-first log: the peer's own commit landed AFTER this call's own
+    # commit (see `_spy_commit_scoped` above), so it is line [0] and this
+    # call's own commit is line [1].
+    log_lines = subprocess.run(
+        ["git", "log", "--format=%H", "--", "a.txt"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    peer_sha, this_call_sha = log_lines[0], log_lines[1]
+    assert outcome.committed_sha != peer_sha
+    assert outcome.committed_sha == this_call_sha
+
+
+def test_commit_nonce_appears_exactly_once_in_landed_commit_message(tmp_path):
+    """W1: the minted `Commit-Nonce:` trailer appears exactly once in the
+    landed commit's message -- proves the trailer is actually written to the
+    committed message, not merely used as an in-memory match target."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "README.md", "changed")
+
+    outcome = commit(repo, message="chore: nonce trailer\n", commit_paths=["README.md"])
+
+    assert outcome.exit_code == 0
+    head_message = _commit_message_at_head(repo)
+    assert head_message.count("Commit-Nonce: ") == 1
+
+
+def test_commit_landed_true_on_head_unresolvable_verification_failure(tmp_path, monkeypatch):
+    """W1: the unborn-branch HEAD-unresolvable verification-failure path
+    sets `landed=True` with `committed_sha=None` -- the commit genuinely
+    landed, only its sha could not be confirmed."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+
+    real_rev_parse_head = git_native.rev_parse_head
+    calls = {"n": 0}
+
+    def _fake_rev_parse_head(root):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Pre-commit HEAD probe -- genuinely unborn.
+            return real_rev_parse_head(root)
+        # Post-commit HEAD probe (unborn-branch fast path) -- forced
+        # unresolvable to exercise the verification-failure branch even
+        # though `git commit` genuinely created the root commit.
+        return git_native.GitResult(returncode=1, stdout="", stderr="fatal: forced")
+
+    monkeypatch.setattr(git_native, "rev_parse_head", _fake_rev_parse_head)
+    try:
+        outcome = commit(repo, message="chore: root commit\n", commit_paths=["README.md"])
+    finally:
+        monkeypatch.setattr(git_native, "rev_parse_head", real_rev_parse_head)
+
+    assert outcome.exit_code != 0
+    assert outcome.committed_sha is None
+    assert outcome.landed is True
+    # The commit genuinely landed -- HEAD moved even though this call
+    # could not confirm it via the (forced-failing) probe.
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head_sha != ""
+
+
+def test_commit_ac8_agree_branch_fails_loud_when_no_message_match_found(tmp_path, monkeypatch):
+    """AC8 fail-loud path: when the bounded `git rev-list`/`--grep` search
+    finds NO commit matching this call's own message in `pre_sha..HEAD`
+    (simulated here via a monkeypatched `git_native.log_grep`), `commit()`
+    must return a non-zero `exit_code` and `committed_sha=None` -- never
+    fall back to a bare `rev-parse HEAD` that could report an unrelated
+    commit as this call's own."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "README.md", "changed")
+
+    monkeypatch.setattr(
+        git_native,
+        "log_grep",
+        lambda *a, **kw: git_native.GitResult(returncode=0, stdout="", stderr=""),
+    )
+
+    outcome = commit(repo, message="chore: ac8 no-match\n", commit_paths=["README.md"])
+
+    assert outcome.exit_code != 0
+    assert outcome.committed_sha is None
+    assert outcome.landed is True
+    # The commit genuinely landed (verification failure, not a commit
+    # failure) -- HEAD moved even though this call could not confirm it.
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head_sha != ""
+
+
+def test_commit_ac8_agree_branch_fails_loud_on_ambiguous_message_match(tmp_path, monkeypatch):
+    """AC8 fail-loud path, ambiguous variant: more than one candidate in
+    `pre_sha..HEAD` matching this call's message is also refused rather than
+    guessing which one is this call's own commit."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "README.md", "changed")
+
+    monkeypatch.setattr(
+        git_native,
+        "log_grep",
+        lambda *a, **kw: git_native.GitResult(
+            returncode=0, stdout="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", stderr=""
+        ),
+    )
+
+    outcome = commit(repo, message="chore: ac8 ambiguous\n", commit_paths=["README.md"])
+
+    assert outcome.exit_code != 0
+    assert outcome.committed_sha is None
+    assert outcome.landed is True
+
+
+def test_commit_landed_false_on_ordinary_empty_commit_set_noop(tmp_path):
+    """W1/AC3: the ordinary "nothing to commit" empty-commit-set exit 1 --
+    `commit_paths` names a file with no actual staged/worktree change --
+    must keep `landed=False`. Getting this backwards converts a harmless
+    no-op into a phantom "commit landed" report; this is the single
+    discrimination the whole plan turns on."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    pre_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    # No change to README.md since the seed commit -- `commit_scoped()`'s
+    # underlying `git commit` genuinely has nothing to commit.
+    outcome = commit(repo, message="chore: nothing changed\n", commit_paths=["README.md"])
+
+    assert outcome.exit_code != 0
+    assert outcome.committed_sha is None
+    assert outcome.landed is False
+
+    post_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert post_head == pre_head
 
 
 # ---------------------------------------------------------------------------
@@ -998,7 +1359,126 @@ def test_pipeline_empty_commit_set_noop_rolls_back_quietly(tmp_path):
     assert result.commit is not None
     assert result.commit.stderr == "exit_code=1"
     assert result.diagnostics == ["exit_code=1"]
+    assert result.sha_unverified is False
     assert _porcelain(repo) == []
+
+
+# ---------------------------------------------------------------------------
+# W2 -- run_commit_pipeline honours the third state: `landed=True` with a
+# non-zero exit_code (sha verification failed, but `git commit` really did
+# create a commit). docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md
+# ---------------------------------------------------------------------------
+
+
+def _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit):
+    """Wrap the real `commit()` so it actually lands a commit (real history
+    change), then reports the outcome as `landed=True`/`exit_code=1`/
+    `committed_sha=None` -- exactly the shape `commit()`'s own
+    verification-failure returns produce, without needing to fabricate a
+    genuinely ambiguous nonce match. Proves the pipeline-level branch, not
+    `commit()`'s own discriminator (W1 already covers that)."""
+
+    def _wrapped(*args, **kwargs):
+        outcome = real_commit(*args, **kwargs)
+        assert outcome.exit_code == 0 and outcome.committed_sha is not None, (
+            "test fixture assumption broken: the real commit() call must "
+            "succeed cleanly before this wrapper re-reports it as unverified"
+        )
+        return dataclasses.replace(
+            outcome,
+            committed_sha=None,
+            exit_code=1,
+            landed=True,
+            stderr="simulated: sha verification failed",
+        )
+
+    monkeypatch.setattr(commit_pipeline_mod, "commit", _wrapped)
+
+
+def test_pipeline_landed_but_unverified_reports_not_failed_and_pushes(tmp_path, monkeypatch):
+    """AC1: a commit that lands with an unresolvable sha returns
+    `commit_failed=False`, `sha_unverified=True`, `committed_sha=None`, and
+    the push step still runs (here: the no-remote skip path, since this
+    fixture never configures a remote -- `push` is not None, proving
+    `push_with_retry()` was actually invoked rather than skipped).
+
+    Red proof: reverting the `commit_outcome.landed` split in
+    `run_commit_pipeline` (treating every non-zero `exit_code` as a plain
+    failure, as before W2) makes this assert `commit_failed is True` and
+    `push is None` instead -- this test goes red against that reversion."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    on_committed_calls = []
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: unverified landing",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+        on_committed=on_committed_calls.append,
+    )
+
+    assert result.commit_failed is False
+    assert result.committed_sha is None
+    assert result.sha_unverified is True
+    assert result.integrity_breach is False
+    assert result.push is not None
+    assert on_committed_calls == []
+    # The commit really did land (real history changed via the wrapped
+    # real `commit()` call), so the working tree must now be clean --
+    # proving the `finally` rollback did NOT run.
+    assert _porcelain(repo) == []
+    assert "tasks/feature/todo.md" in _committed_files_at_head(repo)
+
+
+def test_pipeline_landed_but_unverified_skips_rollback_not_by_coincidence(
+    tmp_path, monkeypatch
+):
+    """AC2: the `finally` rollback does not run on the landed-but-unverified
+    path. Proven by asserting the working tree is clean AND that the commit
+    that landed is really at HEAD -- if the rollback ran, `git reset` would
+    have reverted `staged_this_call` back to a state that, on this path
+    (unlike the ordinary empty-commit-set no-op), does NOT already match
+    HEAD, since HEAD moved. Reverting `landed = True` on this branch (so the
+    `finally` treats it like an ordinary failure) makes the second assertion
+    below fail: the file would still be tracked in history from the wrapped
+    real commit, but a reset call would additionally be issued -- covered
+    directly by spying on `git_native.reset_paths`."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    reset_calls = []
+    real_reset_paths = commit_pipeline_mod.git_native.reset_paths
+
+    def _spy_reset_paths(*args, **kwargs):
+        reset_calls.append((args, kwargs))
+        return real_reset_paths(*args, **kwargs)
+
+    monkeypatch.setattr(commit_pipeline_mod.git_native, "reset_paths", _spy_reset_paths)
+
+    run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: unverified landing rollback check",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert reset_calls == []
 
 
 def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
@@ -1233,6 +1713,100 @@ def test_pipeline_directory_pathspec_leaves_index_completely_clean(tmp_path):
     status_lines = _porcelain(repo)
     assert not any(line.startswith("A") for line in status_lines)
     assert status_lines == ["?? notes/"]
+
+
+# ---------------------------------------------------------------------------
+# _is_push_reject -- 2026-08-07 fix: converge onto auto_push.classify_error()
+# instead of a bare-substring marker tuple, so a GH013 push-protection
+# refusal (which still contains "failed to push some refs") is never
+# misclassified as a rebase-recoverable non-fast-forward reject.
+# ---------------------------------------------------------------------------
+
+
+def test_is_push_reject_gh013_push_protection_is_not_retried():
+    """A GitHub push-protection / branch-protection refusal must NOT drive
+    the fetch+rebase+re-push cycle -- no rebase can ever fix it."""
+    stderr_text = (
+        "remote: error: GH013: Repository rule violations found for refs/heads/work/x.\n"
+        "remote: - Push cannot contain secrets\n"
+        "! [remote rejected] work/x -> work/x (push declined due to repository rule violations)\n"
+        "error: failed to push some refs to 'origin'\n"
+    )
+    assert commit_pipeline_mod._is_push_reject(stderr_text) is False
+
+
+def test_is_push_reject_genuine_non_fast_forward_is_retried():
+    """A genuine non-fast-forward reject IS rebase-recoverable and must
+    still drive the fetch+rebase+re-push cycle."""
+    stderr_text = (
+        "! [rejected] work/x -> work/x (non-fast-forward)\n"
+        "error: failed to push some refs to 'origin'\n"
+        "hint: Updates were rejected because the tip of your current branch is behind\n"
+    )
+    assert commit_pipeline_mod._is_push_reject(stderr_text) is True
+
+
+def test_push_with_retry_gh013_fails_loud_without_fetch_or_rebase(tmp_path, monkeypatch):
+    """End-to-end: `push_with_retry` must surface a GH013 rejection as a
+    hard failure on the FIRST attempt, never spinning the fetch+rebase
+    cycle (asserted by the fetch/rebase spies never being called)."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    gh013_stderr = (
+        "remote: error: GH013: Repository rule violations found.\n"
+        "! [remote rejected] work/x -> work/x (push declined due to repository rule violations)\n"
+        "error: failed to push some refs to 'origin'\n"
+    )
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: GitResult(returncode=1, stdout="", stderr=gh013_stderr)
+    )
+
+    fetch_calls = []
+    monkeypatch.setattr(git_native, "fetch", lambda *a, **kw: fetch_calls.append(a) or GitResult(returncode=0, stdout="", stderr=""))
+    rebase_calls = []
+    monkeypatch.setattr(
+        commit_pipeline_mod, "_rebase_onto_fetched_ref",
+        lambda *a, **kw: rebase_calls.append(a) or (0, ""),
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code != 0
+    assert fetch_calls == []
+    assert rebase_calls == []
+
+
+# ---------------------------------------------------------------------------
+# _rebase_onto_fetched_ref -- 2026-08-07 fix: a dirty worktree must surface
+# a distinctly-diagnosable reason, not an opaque `git rebase: <raw stderr>`.
+# `git rebase --onto` refuses outright on a dirty worktree, and on a
+# shared-fleet box the worktree is essentially never clean.
+# ---------------------------------------------------------------------------
+
+
+def test_rebase_onto_fetched_ref_dirty_worktree_names_the_real_cause(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # Dirty the worktree -- an uncommitted, unstaged change.
+    _seed_file(repo, "README.md", "dirty change, never staged")
+
+    exit_code, reason = commit_pipeline_mod._rebase_onto_fetched_ref(repo, "HEAD")
+
+    assert exit_code != 0
+    assert "uncommitted changes" in reason
+    assert "git rebase:" not in reason
 
 
 def test_pipeline_mixed_file_and_directory_pathspec_stages_neither(tmp_path):

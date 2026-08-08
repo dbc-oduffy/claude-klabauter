@@ -86,7 +86,11 @@ def _home() -> str:
     (bash's bare ``$HOME`` has no such fallback, but an unset HOME is a
     degenerate environment this module must not crash on; this is a
     defensive addition, not a behavior port)."""
-    return os.environ.get("HOME") or os.path.expanduser("~")
+    return (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
 
 
 def _claude_home() -> str:

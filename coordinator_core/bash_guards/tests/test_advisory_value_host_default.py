@@ -31,6 +31,7 @@ Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -239,8 +240,22 @@ def _isolated_tempdir(tmp_path, monkeypatch):
     # tmp_path) since the guards under test are static string parsers that
     # never execute the command -- write the same content there too so a
     # guard that DOES stat the path (inprocess-search) finds it.
-    with open("/tmp/h6-somefile.txt", "w", encoding="utf-8") as fh:
-        fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
+    # negative-spec: this leg is BEST-EFFORT and must stay so. `/tmp` does not
+    # exist on Windows, where the path resolves drive-relative to `<cwd-drive>:\tmp`
+    # and may be uncreatable. An unguarded write here raises inside the fixture,
+    # which is a SETUP error, not a test failure -- it took out all 43 cells in this
+    # module at once while reporting nothing about the guards under test. Every
+    # guard exercised here is a static string parser that never opens the path; only
+    # an inprocess-search guard would stat it, so a platform where this write cannot
+    # land should surface as that one cell failing, never as the module erroring out.
+    with contextlib.suppress(OSError):
+        # The makedirs is load-bearing on Windows, not defensive padding: without
+        # it `inprocess-search` -- the one guard here that really does stat the
+        # path -- loses its file and 2 further cells go red. Verified by running
+        # both variants: suppress-only gives 3 failed/40 passed, this gives 1/42.
+        os.makedirs(os.path.dirname("/tmp/h6-somefile.txt"), exist_ok=True)
+        with open("/tmp/h6-somefile.txt", "w", encoding="utf-8") as fh:
+            fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
     yield
 
 
@@ -365,9 +380,46 @@ class _FakeOs:
         self.name = name
 
 
+class _FakeSys:
+    """Stands in for `_platform_verdict`'s `sys` global, exposing only the
+    one attribute `_sniff_host_is_windows` consults. Faking `os.name` alone
+    (the original, incomplete fake -- state/audits/2026-08-07-advisory-host-
+    default-posix-true-diagnosis.md) leaves this module's OWN real
+    `sys.platform` read live: on an actual Windows-hosted run,
+    `sys.platform == "win32"` overrides the faked `os.name == "posix"` in
+    `_sniff_host_is_windows`'s `or` chain, so `_resolve_host_is_windows`
+    resolves True regardless of the fake and the "expect suppressed" cell
+    fails -- not a product defect, an incomplete test isolation. Faking
+    `os.name` to `"nt"` implies a Windows host, so its paired `sys.platform`
+    fake is `"win32"`; faking `os.name` to `"posix"` implies a non-Windows,
+    non-Cygwin/MSYS2 host, so its paired `sys.platform` fake is a
+    plain-POSIX value (`"linux"`) that `_sniff_host_is_windows`'s
+    `("win32", "cygwin", "msys")` membership check correctly rejects."""
+
+    def __init__(self, platform):
+        self.platform = platform
+
+
+#: One `(os.name, sys.platform)` pair per `os_name` parametrisation value,
+#: keeping the fake for BOTH host signals `_resolve_host_is_windows`
+#: consults total rather than partial -- see `_FakeSys`'s docstring.
+_PAIRED_SYS_PLATFORM = {"nt": "win32", "posix": "linux"}
+
+
 @pytest.mark.parametrize("os_name,expect_suppressed", [("nt", False), ("posix", True)])
 def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch, capsys):
+    # Review: EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
+    # in THREE steps: (1) the `host_is_windows` kwarg (omitted here, the point of
+    # this test), (2) a declared value in the machine-local registry
+    # (`_declared_host_is_windows`, `_REGISTRY_KEY = "coordinator.host_is_windows"`),
+    # (3) `_sniff_host_is_windows()`. The `_FakeOs`/`_FakeSys` monkeypatches below
+    # neutralise step (3) only -- on any machine where an operator has declared the
+    # registry escape hatch, step (2) resolves first and bypasses the fake entirely,
+    # making this a host-dependent test (the exact defect class this file exists to
+    # fix). Neutralise step (2) too so the fake is total across all three steps.
+    monkeypatch.setattr(_platform_verdict, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(_platform_verdict, "os", _FakeOs(os_name))
+    monkeypatch.setattr(_platform_verdict, "sys", _FakeSys(_PAIRED_SYS_PLATFORM[os_name]))
     cmd = _TRIGGERS["find-exec-rewrite"]
     session_id = "h6-none-path-%s" % os_name
     payload = _payload(cmd, session_id=session_id)

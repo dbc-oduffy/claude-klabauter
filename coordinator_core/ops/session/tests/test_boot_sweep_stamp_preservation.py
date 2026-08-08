@@ -83,12 +83,25 @@ import coordinator_core.ops.session.boot_sweep  # noqa: F401 — registers sessi
 
 from coordinator_core.ops.session.boot_sweep import _handler, _handle_act_handoffs
 
-# Reuse the sibling reproduction's scratch-git-repo primitives — same shape,
-# same reasoning for why they exist (see that module's own docstring).
-from coordinator_core.ops.fleet.tests.test_index_residue_reproduction import (
-    _git,
-    _init_scratch_repo,
-)
+# Declared rather than grandfathered: this module was not in the spawn ratchet's
+# frozen _BASELINE (it reached git through an imported helper, which the AST
+# detector cannot see), so the inlining below makes its real-process spawn
+# visible for the first time. Rule 2 wants that declared explicitly.
+pytestmark = [pytest.mark.spawns_process]
+
+
+# Inlined 2026-08-07: this previously imported `_git`/`_init_scratch_repo` from
+# coordinator_core.ops.fleet.tests.test_index_residue_reproduction, which was
+# deleted in the spawn-heavy test cull (1d4e686a9). Recovered verbatim from
+# `git show 6f0e89044:coordinator_core/ops/fleet/tests/test_index_residue_reproduction.py`.
+# `_init_scratch_repo` was imported but never called here, so it is not carried
+# over. The assertions below read real index/worktree state, which is the case
+# test_real_git_fixture_boundary.py argues a mock cannot exhibit — hence a real
+# spawn rather than a stub.
+def _git(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True, env=env,
+    )
 
 # Reuse this package's own BootRepo fixture helper — the real end-to-end
 # consumed-handoff sweep path (seed_handoff, _default_caller_session_id) is

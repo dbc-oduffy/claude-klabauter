@@ -66,7 +66,11 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     main_worktree_root,
 )
-from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.ops.fleet._memo_summary import (
+    SUMMARY_PLACEHOLDER,
+    _SUMMARY_MAX_CHARS,
+    validate_explicit_summary,
+)
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
@@ -114,8 +118,10 @@ _OUTBOX_DIRNAME = ("state", "memo-outbox")
 _BODY_PLACEHOLDER = (
     "<!-- Compose your memo body here (memo.compose), then deliver it via "
     "memo.send. -->\n"
-    f"<!-- summary: one line, <= {_SUMMARY_MAX_CHARS} chars — memo.send "
-    f"refuses an explicitly-authored summary over the cap; a summary "
+    f"<!-- summary: one line, <= {_SUMMARY_MAX_CHARS} chars — memo.draft "
+    f"WARNS (advisory, still writes) on an explicitly-authored summary over "
+    f"the cap and keeps it out of summary: (recoverable here in the body "
+    f"instead); memo.compose and memo.send still hard-REFUSE one. A summary "
     f"derived from your body at memo.compose time self-truncates instead. "
     f"-->\n"
     "<!-- Claims about the receiver's tree — their repo is co-located and "
@@ -390,12 +396,20 @@ def _validate_draft_params(params: dict):
     memo_send._validate_supersedes_param).
 
     Returns (dry_run, topic, to, title, summary, kind, scoped_to,
-    classify_receiver, in_reply_to, space, supersedes) on success, or an
-    exit_code:1 setup-error envelope dict on any validation failure. These
-    are plain param-validation failures, NOT receiver-classification
-    rejections — the envelope this function returns NEVER carries a
-    `rejection_class` field (see _classify_receiver_for_draft /
-    _memo_draft's Returns section for that invariant).
+    classify_receiver, in_reply_to, space, supersedes, summary_cap_advisory)
+    on success, or an exit_code:1 setup-error envelope dict on any
+    validation failure. These are plain param-validation failures, NOT
+    receiver-classification rejections — the envelope this function returns
+    NEVER carries a `rejection_class` field (see _classify_receiver_for_draft
+    / _memo_draft's Returns section for that invariant).
+
+    `summary_cap_advisory` (str | None) is the message from
+    `_memo_summary.validate_explicit_summary("draft", summary)` — None when
+    summary is absent or within cap, else the over-cap message. An over-cap
+    explicit summary no longer fails this function loud (2026-08-07 warn-at-
+    draft split) — the caller (`_memo_draft`) decides how to surface the
+    advisory and keep the original text recoverable without writing it into
+    `summary:` (AC1, AC2).
     """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
@@ -430,20 +444,17 @@ def _validate_draft_params(params: dict):
         )
 
     summary: Optional[str] = params.get("summary") or None
-    if summary is not None and len(summary) > _SUMMARY_MAX_CHARS:
-        # Fail loud on an over-cap EXPLICITLY authored summary rather than
-        # silently truncating it (2026-07-26 draft-time-discoverability fix
-        # — same defect class/fix shape as memo_compose.py's
-        # _validate_compose_params, 2026-07-22 body-drop verdict memo). A
-        # DERIVED summary doesn't exist yet at draft time (no body); the
-        # truncation `compose_draft_frontmatter` still performs is
-        # defense-in-depth only, never reachable via this validated path.
-        return build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.draft: summary is {len(summary)} chars, cap is "
-            f"{_SUMMARY_MAX_CHARS} — shorten it or omit summary and let "
-            f"memo.compose derive one from the body instead",
-        )
+    # 2026-08-07 warn-at-draft split (docs/plans/2026-08-07-memo-summary-cap-
+    # warn-at-draft.md § C2): an over-cap EXPLICITLY authored summary no
+    # longer fails the draft loud — memo.compose/memo.send still hard-refuse
+    # (unchanged, Anti-scope), but memo.draft is a staging step the author
+    # can still edit before delivery, so it advises instead. The advisory
+    # message (None when summary is absent or in-cap) is carried through to
+    # the handler via this tuple's last element; the ORIGINAL summary text
+    # is also returned unchanged here — the handler, not this function,
+    # decides how to keep it out of `summary:` while still writing it
+    # somewhere recoverable (AC1, AC2).
+    summary_cap_advisory = validate_explicit_summary("draft", summary)
 
     kind: Optional[str] = params.get("kind") or None
     if kind is not None and kind not in _VALID_KINDS:
@@ -497,7 +508,7 @@ def _validate_draft_params(params: dict):
 
     return (
         dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-        in_reply_to, space, supersedes,
+        in_reply_to, space, supersedes, summary_cap_advisory,
     )
 
 
@@ -522,9 +533,15 @@ def compose_draft_frontmatter(
 
     status is always "draft" (never "open" — this is a local, undelivered
     staging file; memo.send is what promotes it to a delivered "open" memo).
-    summary's KEY is always present but MAY be an empty string — a draft's
-    summary is filled in (or re-derived) later at memo.compose time, once the
-    body exists (footgun #4).
+    summary's KEY is always present. When `summary` is None (no usable
+    summary resolves — nothing supplied, or the caller deliberately withheld
+    an over-cap one to keep it out of this field), the VALUE written is
+    `_memo_summary.SUMMARY_PLACEHOLDER` — the self-measuring ruler, not `""`
+    (2026-08-07 AC3; previously an empty string) — so a fresh draft's
+    `summary:` line prompts the author with the cap inline rather than
+    looking like a filled-in blank. `memo.compose`/`memo.send` treat the
+    placeholder as absent and fall through to body-derivation (C3), so it
+    can never reach a delivered memo.
 
     scoped_to (2026-07-21 fix — memo.draft was silently dropping this block;
     same defect class memo.send's C9/A11 fix closed for unknown params):
@@ -562,7 +579,7 @@ def compose_draft_frontmatter(
     Mirrors example-doctrine-repo cross-repo-memo._compose_outbox_frontmatter. topic lives in
     the filename, NOT in frontmatter (same convention as _compose_memo).
     """
-    resolved_summary = summary if summary is not None else ""
+    resolved_summary = summary if summary is not None else SUMMARY_PLACEHOLDER
     if len(resolved_summary) > _SUMMARY_MAX_CHARS:
         resolved_summary = resolved_summary[: _SUMMARY_MAX_CHARS - 1] + "…"
 
@@ -619,7 +636,7 @@ def _write_draft_file(target_path: Path, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 @register_op("memo.draft")
-async def _memo_draft(params: dict, repo_root=None) -> dict:
+def _memo_draft(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.draft' UDS op handler.
 
     Stage a NEW schema-valid draft memo into the CALLING repo's own
@@ -693,6 +710,15 @@ async def _memo_draft(params: dict, repo_root=None) -> dict:
                                     RECEIVER's tree, which this op cannot read.
 
     Returns:
+        Both the dry_run preview candidate and the act-path acted item carry
+        an additive `summary_cap_advisory` field (str | None, 2026-08-07
+        warn-at-draft split) — None on a clean/absent summary, else the
+        `_memo_summary.validate_explicit_summary("draft", ...)` message when
+        the explicit `summary` param is over `_SUMMARY_MAX_CHARS`. This NEVER
+        blocks the draft (memo.compose/memo.send still hard-refuse — see
+        their own C3 handling); the over-cap text is kept out of `summary:`
+        and preserved verbatim in the draft body instead (AC1, AC2).
+
         On a classify_receiver:true rejection, the exit_code:1 setup-error
         envelope carries an ADDITIONAL `rejection_class` wire field (str,
         2026-07-21 addition — example-doctrine-repo claude-central-em consult: their CLI
@@ -742,7 +768,7 @@ async def _memo_draft(params: dict, repo_root=None) -> dict:
         return validated  # exit_code:1 setup-error envelope
 
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-     in_reply_to, space, supersedes) = validated
+     in_reply_to, space, supersedes, summary_cap_advisory) = validated
 
     if classify_receiver:
         classification = _classify_receiver_for_draft(to, dry_run)
@@ -786,6 +812,12 @@ async def _memo_draft(params: dict, repo_root=None) -> dict:
                 "use memo.compose to edit it."
                 if collision_exists else None
             ),
+            # Additive, non-fatal notice (2026-08-07 warn-at-draft split —
+            # mirrors _classify_receiver_for_draft's rejection_class additive
+            # field): present iff the explicit `summary` param is over cap.
+            # Never blocks the draft — see `summary_cap_advisory` below for
+            # the act-path handling of the same condition.
+            "summary_cap_advisory": summary_cap_advisory,
         }])
 
     # ── act path ──────────────────────────────────────────────────────────
@@ -799,11 +831,34 @@ async def _memo_draft(params: dict, repo_root=None) -> dict:
             ),
         }])
 
+    # 2026-08-07 warn-at-draft split (AC1, AC2): an over-cap explicit summary
+    # is NEVER written into `summary:` (that would be the silent truncation
+    # this surface exists to prevent) — it is withheld from
+    # compose_draft_frontmatter (which then writes SUMMARY_PLACEHOLDER, same
+    # as the no-summary-supplied case) and instead preserved verbatim in the
+    # draft BODY, ahead of the usual placeholder, so the author can recover
+    # and shorten it at memo.compose time. summary_cap_advisory (already
+    # computed by _validate_draft_params) rides the acted-item envelope
+    # unchanged either way.
+    frontmatter_summary = summary if summary_cap_advisory is None else None
+    body_prefix = ""
+    if summary_cap_advisory is not None:
+        body_prefix = (
+            "<!-- memo.draft: your summary was "
+            f"{len(summary)} chars (cap {_SUMMARY_MAX_CHARS}) — it was NOT "
+            "written into summary: above (that would silently truncate it); "
+            "your original text is preserved below for you to shorten and "
+            "move back at memo.compose time.\n"
+            f"original over-cap summary: {summary}\n"
+            "-->\n"
+        )
+
     content = compose_draft_frontmatter(
-        from_id=from_id, to=to, title=title, today=today, summary=summary, kind=kind,
+        from_id=from_id, to=to, title=title, today=today,
+        summary=frontmatter_summary, kind=kind,
         scoped_to=scoped_to, in_reply_to=in_reply_to, space=space,
         supersedes=supersedes,
-    ) + "\n" + _BODY_PLACEHOLDER
+    ) + "\n" + body_prefix + _BODY_PLACEHOLDER
 
     try:
         _write_draft_file(target_path, content)
@@ -823,7 +878,14 @@ async def _memo_draft(params: dict, repo_root=None) -> dict:
 
     result = build_act_result(
         _MODE,
-        [{"id": str(target_path), "written": True, "topic": topic, "to": to}],
+        [{
+            "id": str(target_path), "written": True, "topic": topic, "to": to,
+            # Additive, non-fatal notice (2026-08-07 warn-at-draft split) —
+            # present iff the explicit `summary` param was over cap; the
+            # draft was still written (see body_prefix above for where the
+            # original text landed). Never present on a clean draft.
+            "summary_cap_advisory": summary_cap_advisory,
+        }],
         [],
         [],
     )

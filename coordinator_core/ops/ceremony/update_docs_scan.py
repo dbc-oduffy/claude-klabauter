@@ -56,6 +56,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field, split_frontma
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import SPEC_SKIP_STATUSES
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.win_portability import no_console_creationflags
 
 SCHEMA_VERSION = 1
 """First key of the returned manifest (C9 schema_version convention). No shared
@@ -184,9 +185,7 @@ def _phase1_git_log_window(worktree_root: Path, *, now: _dt.datetime) -> dict[st
     is a diagnostic signal, not a correctness gate, so a fixture tree lacking
     a .git dir is a legitimate state, never an error."""
     since = (now - _dt.timedelta(days=GIT_LOG_WINDOW_DAYS)).strftime("%Y-%m-%d")
-    kwargs: dict[str, Any] = {}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    kwargs: dict[str, Any] = no_console_creationflags()
     try:
         proc = subprocess.run(
             ["git", "log", f"--since={since}", "--name-only", "--pretty=format:%H"],
@@ -450,7 +449,7 @@ def _phase_tracker_reconcile(worktree_root: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 @register_op("ceremony.update_docs_scan")
-async def _ceremony_update_docs_scan(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _ceremony_update_docs_scan(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "ceremony.update_docs_scan" handler (C17; AC8).
 
     Params: none required/consumed today — reserved for future scoping (e.g.

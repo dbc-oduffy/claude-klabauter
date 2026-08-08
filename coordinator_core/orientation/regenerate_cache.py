@@ -181,6 +181,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
+from coordinator_core.win_portability import same_path
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ARCHIVE_SWEEPS,
     REMEDY_COMMANDS,
@@ -253,7 +254,13 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
+    samefile-then-fallback semantics: broader (junction-aware) equality is
+    correct here since this call site only checks "is repo_root the meta-repo
+    home", where a junction-aliased home must compare equal."""
+    return same_path(a, b)
 
 
 def _state_root(repo_root: Path) -> Path:
@@ -264,13 +271,13 @@ def _state_root(repo_root: Path) -> Path:
     unresolvable — mirrors the bash seam's ``|| return 1`` fail-loud posture.
     """
     if _same_path(str(repo_root), _claude_home()):
-        claude-klabauter = _claude_klabauter_root()
-        if claude-klabauter is None:
+        claude_klabauter_root = _claude_klabauter_root()
+        if claude_klabauter_root is None:
             raise RuntimeError(
                 "coordinator_state_root: repo_root is the meta-repo but CLAUDE_KLABAUTER_ROOT is "
                 "unresolvable (no CLAUDE_KLABAUTER_ROOT env, no repos.claude_klabauter machine-local entry)"
             )
-        return Path(claude-klabauter) / "state"
+        return Path(claude_klabauter_root) / "state"
     return repo_root / "state"
 
 
@@ -337,7 +344,12 @@ def _find_uproject(repo_root: Path, exclude_node_modules_and_git: bool) -> str:
     if exclude_node_modules_and_git:
         args += ["-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"]
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        result = subprocess.run(
+            args, capture_output=True, text=True, check=False,
+            **no_console_creationflags(),
+        )
     except OSError:
         return ""
     out = result.stdout.strip()

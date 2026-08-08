@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -151,7 +152,7 @@ def _run_pre_ci_hooks(params: dict, repo_root: Optional[Path] = None) -> dict:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
         if proc.returncode != 0:
             logger.error(

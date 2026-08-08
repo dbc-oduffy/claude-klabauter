@@ -466,11 +466,19 @@ distinct exit code (2) for this class."""
 #
 # Note: the timeout is only effective if the handler is either:
 #   (a) an async handler that yields control (e.g. awaits I/O or asyncio.sleep), OR
-#   (b) a sync handler offloaded via asyncio.to_thread — the thread is cancelled
-#       when the Future is abandoned, allowing the caller to unblock.
+#   (b) a sync handler offloaded via asyncio.to_thread — asyncio.wait_for cancels the
+#       AWAIT, not the thread. Python has no thread-cancellation primitive: the worker
+#       thread keeps running inside the handler after the timeout fires and the caller
+#       unblocks. (2026-08-07 ceremony-lock-leak audit,
+#       state/audits/2026-08-07-ceremony-lock-leak-root-cause.md — this comment
+#       previously claimed the thread WAS cancelled, which is false and was directly
+#       contradicted by invoke/__main__.py's own comments on the same path; a handler
+#       thread holding a cross-process lock across this timeout keeps holding it until
+#       invoke/__main__.py's own os._exit() tears down the whole process.)
 # Blocking-sync handlers NOT wrapped in asyncio.to_thread cannot be interrupted by
 # asyncio.wait_for — the event loop stalls for the full blocking duration.
-# C3 wraps all sync handlers via asyncio.to_thread to ensure the timeout is effective.
+# C3 wraps all sync handlers via asyncio.to_thread to ensure the AWAIT (not the
+# thread) can time out, so the caller unblocks even though the thread runs on.
 #
 # DEC-2 (docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md): this guard is a
 # RUNAWAY guard, not a performance budget — it exists to unblock a caller stuck

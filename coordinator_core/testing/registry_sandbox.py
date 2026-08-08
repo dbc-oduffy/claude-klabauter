@@ -91,7 +91,12 @@ def live_registry_dir() -> Path:
     """
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if not settings_home:
-        home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+        home = (
+            os.environ.get("CLAUDE_HOME")
+            or os.environ.get("HOME")
+            or os.environ.get("USERPROFILE")
+            or os.path.expanduser("~")
+        )
         settings_home = os.path.join(home, ".coordinator-claude-settings")
     return Path(settings_home) / "machine-local"
 

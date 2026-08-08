@@ -328,7 +328,12 @@ def _rename_fm_key(fm_text: str, old_key: str, new_key: str) -> str:
     on a precondition the caller was responsible for checking).
     """
     pattern = _key_line_re(old_key)
-    new_text, count = pattern.subn(new_key + ":", fm_text, count=1)
+    # negative-spec: the replacement MUST stay a callable. `re` processes backslash
+    # escapes in a replacement TEMPLATE, so a template built from a runtime value is a
+    # latent crash (`\U`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\<digit>`) and a
+    # latent mis-group against any backreference. Enforced by
+    # coordinator_core/tests/test_re_sub_replacement_template_is_literal_or_callable.py.
+    new_text, count = pattern.subn(lambda _m: new_key + ":", fm_text, count=1)
     if count == 0:
         raise ValueError(f"_rename_fm_key: {old_key!r} not found in frontmatter")
     return new_text

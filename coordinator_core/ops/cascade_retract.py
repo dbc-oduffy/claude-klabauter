@@ -112,6 +112,7 @@ from coordinator_core.execute_plan_assemble.row_spans import (
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.win_portability import no_console_creationflags
 
 _SUBPROCESS_TIMEOUT_SEC = 15
 
@@ -155,6 +156,7 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         timeout=_SUBPROCESS_TIMEOUT_SEC,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -377,7 +379,7 @@ def _retract_one(
 
 
 @register_op("deliverable.cascade_retract")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "deliverable.cascade_retract" handler — AC6f's retraction entrypoint.
 
     Required params:
@@ -440,7 +442,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     for path in live_candidates:
         try:
-            path_rel = str(path.relative_to(worktree_root))
+            path_rel = path.relative_to(worktree_root).as_posix()
         except ValueError:
             refused.append(
                 {"handoff_path": str(path), "reason": "candidate path escapes the worktree root"}

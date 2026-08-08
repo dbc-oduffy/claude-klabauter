@@ -46,6 +46,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
@@ -64,7 +65,13 @@ def _registry_get(key: str) -> str:
     if ml_bin is None:
         return ""
     try:
-        result = subprocess.run([ml_bin, "get", key], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            [ml_bin, "get", key],
+            capture_output=True,
+            text=True,
+            check=False,
+            **no_console_creationflags(),
+        )
     except OSError:
         return ""
     if result.returncode != 0:
@@ -142,7 +149,7 @@ def main(argv: List[str]) -> int:
     try:
         rc = subprocess.call(
             ["git", "clone", url, doe_clone],
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError as exc:
         print(f"{_PROG}: git clone raised: {exc}", file=sys.stderr)

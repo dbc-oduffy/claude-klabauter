@@ -28,7 +28,11 @@ concern.
 from __future__ import annotations
 
 import inspect
+import json
 
+import pytest
+
+from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards.dispatch import _crash_deny, evaluate_payload_json
 
 
@@ -141,3 +145,44 @@ class TestEvaluatePayloadJsonFeatureDetection:
         omitted = evaluate_payload_json(payload)
         explicit_none = evaluate_payload_json(payload, resolution_class=None)
         assert omitted == explicit_none
+
+
+class TestSilentSentinelNeverReachesDispatch:
+    """C1 (docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-
+    stay-silent.md): `_verdict.SILENT` rides an out-of-band collector
+    channel alongside a guard's ordinary `Optional[Dict]` return, never as
+    the return value itself, and this chunk makes ZERO edits to
+    `dispatch.py`. This class pins the allow-shape equivalence that
+    absence of an edit implies: `_verdict` is inert on the real production
+    dispatch path, and its sentinel can never surface inside a hook
+    envelope -- including the ONE envelope shape this file's other classes
+    already own, `_crash_deny`'s own crash-deny dict.
+    """
+
+    def test_record_silent_is_a_no_op_on_the_real_production_path(self):
+        # dispatch.py never opens a `_verdict.collecting()` block (this
+        # chunk's own Anti-scope forbids editing dispatch.py's chain loop
+        # at all), so on every real dispatch a guard's `record_silent` call
+        # runs with no collection open -- and must be a true no-op: no
+        # exception, no return value, nothing observable to the caller.
+        assert _verdict.record_silent("some-guard", "declined: unparsed PowerShell") is None
+
+    def test_silent_sentinel_is_not_dict_shaped(self):
+        # A hook envelope is always a dict carrying `hookSpecificOutput` --
+        # SILENT must never be mistaken for, or coerced into, one.
+        assert not isinstance(_verdict.SILENT, dict)
+        assert not hasattr(_verdict.SILENT, "keys")
+
+    def test_silent_sentinel_is_not_json_serializable(self):
+        # A guard chain's output eventually reaches `json.dumps` on the way
+        # to stdout; a sentinel that serialized cleanly could ship as a
+        # malformed envelope fragment without raising anywhere on the way.
+        with pytest.raises(TypeError):
+            json.dumps(_verdict.SILENT)
+
+    def test_crash_deny_envelope_never_mentions_silent(self):
+        # Even a crashing guard's own deny envelope -- the one dict this
+        # dispatcher unconditionally returns on this file's other test
+        # class -- must never surface the sentinel's repr or name.
+        reason = _reason(_crash_deny("no-verify", ValueError("boom")))
+        assert "SILENT" not in reason

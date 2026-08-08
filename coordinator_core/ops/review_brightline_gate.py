@@ -101,12 +101,18 @@ from typing import Dict, List, Mapping, Optional, Set, Tuple
 
 import yaml
 
-from coordinator_core.coverage import _DagChainResult, _derive_dag_chain_set
+from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.coverage import (
+    _DagChainResult,
+    _derive_dag_chain_set,
+    _is_planning_artifact_path,
+    _PLANNING_ARTIFACT_PATH_PREFIXES,
+)
 from coordinator_core.ops import ownership_index
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-from coordinator_core.session import claims
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 from coordinator_core._settings_home import home_dir as _resolve_claude_home_root
+from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "review-brightline-gate.sh"  # literal program-name prefix — matches bash oracle stderr
 
@@ -192,33 +198,19 @@ _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 # scaled by `_PLANNING_LOC_WEIGHT`, so a large plan still nudges the
 # recommendation upward without being read as if it were code.
 #
-# This is a LOCAL prefix tuple, deliberately NOT imported from
-# `coordinator_core.coverage._PLANNING_ARTIFACT_PATH_PREFIXES` — C2 lands
-# that constant this same wave and importing across the two modules
-# mid-wave would couple the brightline gate's reviewer-count heuristic to
-# the coverage gate's crediting classifier before either has landed. The
-# two tuples are intentionally duplicated; a shared constant is a
-# reasonable follow-up once both chunks are on disk, not a requirement of
-# this one.
+# `_PLANNING_ARTIFACT_PATH_PREFIXES` and `_is_planning_artifact_path` are
+# imported from `coordinator_core.coverage` (both C2 and this module's own
+# chain_oracle now on disk) — a single source for the prefix list so the
+# brightline gate's reviewer-count heuristic and the coverage gate's
+# crediting classifier cannot disagree about which paths are planning
+# artifacts. `_PLANNING_LOC_WEIGHT` below stays LOCAL: it is brightline's
+# own de-weighting heuristic, not part of the shared classification.
 #
-# Do NOT wire this into `_is_noise_path` — a planning-artifact commit is
-# not noise (AC9: the gate stays non-vacuous; a planning artifact still
-# owes a review), it is merely cheaper-per-line than code.
+# Do NOT wire the shared predicate into `_is_noise_path` — a planning-artifact
+# commit is not noise (AC9: the gate stays non-vacuous; a planning artifact
+# still owes a review), it is merely cheaper-per-line than code.
 # Spec backlink: docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C7, AC8
-_PLANNING_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
-    "docs/plans/",
-    "docs/research/",
-    "docs/problems/",
-    "state/plan-sidecars/",
-)
 _PLANNING_LOC_WEIGHT = 0.2  # 1 planning-artifact LOC counts as 0.2 chain_loc
-
-
-def _is_planning_artifact_path(path: str) -> bool:
-    """True iff `path` falls under a planning-artifact prefix (see
-    `_PLANNING_ARTIFACT_PATH_PREFIXES`) — used ONLY to de-weight chain_oracle
-    LOC (C7); NOT a noise classification (see `_is_noise_path`)."""
-    return any(path.startswith(prefix) for prefix in _PLANNING_ARTIFACT_PATH_PREFIXES)
 
 
 _CHAIN_SHOW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -244,6 +236,7 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> Tuple[str, int]:
             capture_output=True,
             text=True,
             cwd=cwd,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _run_git: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -422,19 +415,28 @@ def _load_plan_file(path: Path) -> Tuple[dict, List[dict]]:
 
 def _resolve_closing_session_id(repo_root: Path, from_handoff: str) -> str:
     """Closing session id resolution — mirrors review-coverage-gate.py's D3 case 3
-    env-first convention, falling back to the seed baton's own claimed_by/
-    consumed_by holder (the seed IS the closing session's own handoff),
-    resolved through the DR-084 single accessor
-    (``coordinator_core.session.claims.handoff_lifecycle().claim_holder()``)
-    rather than a raw ``claimed_by`` read — a seed baton recorded under the
-    legacy ``consumed_by`` vocabulary would otherwise silently resolve to ""."""
+    env-first convention, falling back to the seed baton's own claim holder
+    (the seed IS the closing session's own handoff), resolved LEDGER-FIRST
+    through ``coordinator_core.claim_state.resolve_claim_state`` (C1) rather
+    than the tracked-frontmatter mirror alone — a seed baton whose claim was
+    stamped on a branch the shared worktree has since switched away from
+    would otherwise silently resolve to "" (source: this plan's own Problem
+    section incident) and hard-exit the gate below with no claim to run
+    against.
+
+    Widening what this resolves must not soften the empty-string failure
+    case: a baton with no live claim on EITHER the ledger or the mirror
+    still returns "" here, and the caller (main()) still fails loudly on
+    that — this only widens which desynced-but-real claims resolve.
+    """
     env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if env_sid:
         return env_sid
     seed_path = Path(from_handoff)
     if not seed_path.is_absolute():
         seed_path = repo_root / from_handoff
-    return claims.handoff_lifecycle().claim_holder(_read_frontmatter(seed_path))
+    claim_state = resolve_claim_state(seed_path, repo_root=repo_root)
+    return claim_state.holder or ""
 
 
 def _enumerate_owned_batons(

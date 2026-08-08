@@ -83,8 +83,10 @@ from coordinator_core.orientation.regenerate_cache import (
     WORKSTREAM_BODY_CAP,
     WORKSTREAM_MAX,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_CREATIONFLAGS = no_console_creationflags()
+
 _SUBPROCESS_TIMEOUT_SECS = 10
 
 # Must stay in sync with what `orientation.regenerate_cache`'s `_render_cache` actually
@@ -309,7 +311,7 @@ def _git_ls_files_uproject(repo_root: str) -> Optional[str]:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _git_ls_files_uproject: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -368,7 +370,7 @@ def _has_git_worktree(repo_root: str) -> bool:
             text=True,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _has_git_worktree: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

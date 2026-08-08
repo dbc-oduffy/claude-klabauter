@@ -154,10 +154,13 @@ def _git_toplevel(target: str) -> Optional[str]:
     --show-toplevel`. Returns None on any git failure (not a git repo, git
     missing, etc.)."""
     try:
+        from coordinator_core.win_portability import no_console_creationflags
+
         result = subprocess.run(
             ["git", "-C", target, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: _git_toplevel: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)

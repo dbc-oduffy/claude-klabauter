@@ -59,6 +59,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "nudge_em_code_dispatch",
         "nudge_improvement_queue_write",
         "nudge_new_sh_file_naked_python",
+        "nudge_outbox_draft_frontmatter_shape",
         "nudge_plan_sidecar_family_split",
         "nudge_prose_queue_append",
         "nudge_prose_queue_creation",

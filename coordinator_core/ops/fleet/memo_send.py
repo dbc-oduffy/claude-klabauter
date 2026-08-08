@@ -93,15 +93,23 @@ Negative-spec:
   - Does NOT silently truncate an EXPLICITLY authored `summary` over
     `_SUMMARY_MAX_CHARS` (2026-07-22 fix, root-caused via cross-repo/inbox/
     2026-07-22-claude-central-em-snippet-sync-adoption-and-body-drop-
-    verdict.md) — `_validate_send_params` fails loud (exit_code:1) instead;
-    `_compose_memo` itself raises `ValueError` as a defense-in-depth backstop
-    for any direct caller that bypasses `_validate_send_params`. A DERIVED
-    summary (the `summary` param omitted) is untouched — `derive_prose_summary`
-    already self-caps. This is a DELIBERATE divergence from any clamp/truncate
-    behavior in example-doctrine-repo's mirror (`cross-repo-memo:1810-1830`'s parity note) —
-    the former silent `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is exactly the
-    defect the routed memo root-caused (a 120-char summary truncated mid-
-    sentence on a delivered memo, with no notice to the sender).
+    verdict.md). A DERIVED summary (the `summary` param omitted) is
+    untouched — `derive_prose_summary` already self-caps. This is a
+    DELIBERATE divergence from any clamp/truncate behavior in example-doctrine-repo's mirror
+    (`cross-repo-memo:1810-1830`'s parity note) — the former silent
+    `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is exactly the defect the routed
+    memo root-caused (a 120-char summary truncated mid-sentence on a
+    delivered memo, with no notice to the sender).
+    2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-memo-
+    summary-cap-warn-at-draft.md § C4): `_validate_send_params` no longer
+    fails loud on an over-cap explicit summary — it WARNS and SUBSTITUTES
+    the body-derived summary, echoing the author's original text back
+    verbatim on the result envelope (`summary_cap_advisory` /
+    `summary_over_cap_original`). Substitution is never truncation — the
+    invariant above survives unchanged, it is just enforced by substitution
+    now rather than refusal. `_compose_memo`'s `ValueError` backstop still
+    raises for a direct caller that bypasses `_validate_send_params` (no
+    envelope exists there to carry an advisory through).
   - Does NOT accept a missing/empty `summary` and silently derive one from
     `body` (DEC-1, 2026-07-24 memo-ownership-and-redesign plan) — kind AND
     summary are now UNCONDITIONALLY required at send time (present +
@@ -190,6 +198,8 @@ from coordinator_core.ops.fleet._memo_resolver import (
     canonical_receiver_id as _canonical_receiver_id,
     convention_repo_key as _convention_repo_key,
     read_central_receiver_ids as _read_central_receiver_ids,
+    publish_mirror_path_match as _publish_mirror_path_match,
+    read_publish_mirrors as _read_publish_mirrors,
     read_receiver_aliases as _read_receiver_aliases,
     read_registry_repos as _read_registry_repos,
     receiver_em_to_repo_key as _receiver_em_to_repo_key,
@@ -200,6 +210,8 @@ from coordinator_core.ops.fleet._memo_resolver import (
 from coordinator_core.ops.fleet._memo_summary import (
     _SUMMARY_MAX_CHARS,
     derive_prose_summary,
+    is_placeholder_summary,
+    validate_explicit_summary,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -458,6 +470,15 @@ class SendParams:
     campaign_id: Optional[str] = None
     in_reply_to: Optional[str] = None
     space: Optional[str] = None
+    # 2026-08-07 PM ruling (AC9, docs/plans/2026-08-07-memo-summary-cap-warn-
+    # at-draft.md § C4): warn-and-substitute additive fields. Both None on a
+    # clean/absent/placeholder summary. summary_cap_advisory carries the
+    # over-cap message when an explicit summary was substituted for a
+    # body-derived one; summary_over_cap_original carries the author's
+    # original text VERBATIM (never truncated — see the substitution note at
+    # the `summary` field's over-cap branch in _validate_send_params).
+    summary_cap_advisory: Optional[str] = None
+    summary_over_cap_original: Optional[str] = None
 
 
 def _validate_scoped_to(dry_run: bool, value: Any):
@@ -745,8 +766,8 @@ def _validate_send_params(params: dict):
     # explicit, non-empty summary. derive_prose_summary/_compose_memo's own
     # None-fallback stays as defense-in-depth for direct (non-op) callers of
     # _compose_memo, e.g. tests, which bypass this validator entirely.
-    summary = params.get("summary")
-    if not summary or not isinstance(summary, str):
+    summary_raw = params.get("summary")
+    if not summary_raw or not isinstance(summary_raw, str):
         return build_setup_error_result(
             _MODE, dry_run,
             "memo.send: summary is required (non-empty string, <= "
@@ -754,19 +775,50 @@ def _validate_send_params(params: dict):
             "required field alongside kind; omit-and-derive is no longer "
             "permitted through memo.send",
         )
-    if len(summary) > _SUMMARY_MAX_CHARS:
-        # Fail loud on an over-cap EXPLICITLY authored summary rather than
-        # silently truncating it mid-sentence (2026-07-22 body-drop verdict
-        # memo, cross-repo/inbox/2026-07-22-claude-central-em-snippet-sync-
-        # adoption-and-body-drop-verdict.md — root-caused the delivered
-        # hollow memo's exactly-120-char summary to _compose_memo's former
-        # silent `[:119] + "…"` clamp). Diverges deliberately from any example-doctrine-repo
-        # mirror clamp behavior.
-        return build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.send: summary is {len(summary)} chars, cap is "
-            f"{_SUMMARY_MAX_CHARS} — shorten it",
-        )
+    # A placeholder-valued summary (memo.draft's self-measuring ruler) is
+    # ABSENT, not an explicit value — sentinel to None so it reaches
+    # `_compose_memo`'s `if summary is None` derivation branch rather than
+    # the length-check/emit path (AC5, docs/plans/2026-08-07-memo-summary-
+    # cap-warn-at-draft.md § C3). The ruler can never reach a delivered memo.
+    summary_cap_advisory: Optional[str] = None
+    summary_over_cap_original: Optional[str] = None
+    if is_placeholder_summary(summary_raw):
+        summary: Optional[str] = None
+    else:
+        # 2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-
+        # memo-summary-cap-warn-at-draft.md § C4): an over-cap EXPLICITLY
+        # authored summary no longer refuses the send — it WARNS and
+        # SUBSTITUTES the body-derived summary in its place, echoing the
+        # author's original text back verbatim (never truncated — see
+        # Anti-scope: substitution is not truncation). The 2026-07-22
+        # body-drop invariant survives unchanged: `summary` below is set to
+        # None (never to a clamped/truncated value) so `_compose_memo`'s own
+        # `if summary is None` branch derives it from body, exactly as if the
+        # caller had omitted summary entirely.
+        #
+        # If the body has no derivable prose either, substitution has
+        # nothing to substitute — refuse rather than let an EMPTY summary
+        # reach `_compose_memo` (a naive substitution would: unlike
+        # memo.compose's DEC-1 gate, `_self_validate_frontmatter_fields`
+        # below checks `summary is None`, not `summary == ""`, so a derived
+        # empty string would otherwise sail through onto a DELIVERED memo —
+        # a new defect this chunk closes rather than introduces).
+        error = validate_explicit_summary("send", summary_raw)
+        if error:
+            derived = derive_prose_summary(body)
+            if not derived:
+                return build_setup_error_result(
+                    _MODE, dry_run,
+                    f"{error} — and the body has no derivable prose sentence "
+                    "to substitute in its place (DEC-1 requires a non-empty "
+                    "summary before a memo can be sent; over-cap + "
+                    "underivable-body cannot both be true and still deliver).",
+                )
+            summary_cap_advisory = error
+            summary_over_cap_original = summary_raw
+            summary = None  # substitute: _compose_memo derives from body
+        else:
+            summary = summary_raw
     # supersedes / space (2026-07-28) — shared validation, see
     # _validate_supersedes_param / _validate_space_param above.
     supersedes, supersedes_error = _validate_supersedes_param(
@@ -828,6 +880,8 @@ def _validate_send_params(params: dict):
         campaign_id=campaign_id,
         in_reply_to=in_reply_to,
         space=space,
+        summary_cap_advisory=summary_cap_advisory,
+        summary_over_cap_original=summary_over_cap_original,
     )
 
 
@@ -1168,9 +1222,17 @@ def _compose_memo(
     # first prose sentence, same derivation memo.compose uses, so the two
     # paths stay consistent (a body opening with a Markdown heading no
     # longer emits the literal `# Heading` line as the summary).
+    # A placeholder-valued summary reaching this defense-in-depth backstop
+    # (e.g. a direct caller of _compose_memo that bypasses
+    # _validate_send_params) is ABSENT, not an explicit value — sentinel to
+    # None so it falls into the `if summary is None` derivation branch below
+    # rather than the length-check one (AC5/AC7, docs/plans/2026-08-07-memo-
+    # summary-cap-warn-at-draft.md § C3).
+    if summary is not None and is_placeholder_summary(summary):
+        summary = None
     if summary is None:
         summary = derive_prose_summary(body)
-    elif len(summary) > _SUMMARY_MAX_CHARS:
+    else:
         # Fail loud, never truncate an EXPLICITLY authored summary (2026-07-22
         # body-drop verdict memo — see the module-level docstring backlink and
         # _validate_send_params, which is the primary gate a normal
@@ -1182,11 +1244,9 @@ def _compose_memo(
         # `summary[:_SUMMARY_MAX_CHARS - 1] + "…"` silent clamp, which is the
         # exact defect this memo root-caused (an explicitly-authored 120-char
         # summary silently clamped mid-sentence on the delivered memo).
-        raise ValueError(
-            f"memo.send: summary is {len(summary)} chars, cap is "
-            f"{_SUMMARY_MAX_CHARS} — shorten it or omit summary to derive one "
-            f"from the body instead"
-        )
+        error = validate_explicit_summary("send_backstop", summary)
+        if error:
+            raise ValueError(error)
 
     # Invariant b — self-validate before composing (defense-in-depth; the engine
     # bypasses the session-side PreToolUse Write hook, so nothing else checks this).
@@ -1327,6 +1387,124 @@ async def _git_check_ignore(receiver_repo_path: Path, rel_path: str) -> bool:
             exc,
         )
         return False
+
+
+# ---------------------------------------------------------------------------
+# scoped_to.sha resolvability gate (F14 fix — refuse BEFORE the receiver-tree
+# write, not after)
+#
+# Narrower than the shape check in `_validate_scoped_to` above: that function
+# only checks the triple is COMPLETE (artifact + exactly one of version/sha +
+# seam), never whether the pinned value is actually TRUE. This gate resolves
+# a supplied `sha` against the receiver's own clone and refuses the send when
+# it definitively does not resolve as a commit — the sender asserted a pin,
+# the assertion is false, and delivering it anyway would publish a claim the
+# receiver provably cannot resolve (state/audits/2026-08-07-claude-klabauter-install-
+# dogfood-friction.md § F14).
+#
+# Standing PM ruling (2026-08-03, see `_scoped_to_errors`/`_validate_scoped_to`
+# docstrings and cross-repo/inbox/2026-07-21-claude-central-em-debash-
+# directive-cites-guard-plus-scoped-to-q.md): scoped_to as a WHOLE stays
+# OPTIONAL, unconditionally — an absent `sha` is UNCHANGED by this gate and
+# never blocks. This function only ever fires when `sha` was supplied; it
+# does not reintroduce a presence gate and must never be widened to do so.
+#
+# Unreachable-vs-unresolvable (the judgment call named in this fix's dispatch
+# brief): a receiver clone this process cannot even query (git not
+# installed, the probe erroring, or an ambiguous non-0/non-1 exit) is an
+# ENVIRONMENT problem, not evidence the pin is wrong — blocking the send on
+# that would refuse a possibly-good memo because of a local git hiccup. Only
+# a DEFINITIVE "no" (git ran cleanly and returned exit 1, meaning it
+# positively could not find the sha as a commit) is treated as a false
+# assertion worth refusing over. This mirrors the tri-state discipline
+# `_git_premise_probe` (coordinator/bin/cross-repo-memo) already applies to
+# the post-hoc advisory this gate now runs ahead of.
+# ---------------------------------------------------------------------------
+
+async def _verify_scoped_to_sha_resolvable(
+    dry_run: bool, receiver_repo_path: Path, scoped_to: Optional[dict],
+) -> Optional[dict]:
+    """Refuse the send when `scoped_to.sha` is supplied but does not resolve
+    as a commit in the receiver's clone. Returns None on pass (including when
+    `scoped_to`/`sha` is absent, or the receiver's clone could not be
+    queried) — see the module-comment block above this function for the
+    unreachable-vs-unresolvable split and the standing 2026-08-03 ruling this
+    gate does NOT reintroduce a presence requirement on.
+
+    Must be called BEFORE `_write_memo_file`/`_commit_delivered_memo` — see
+    the `_memo_send` call site, placed alongside the other before-any-write
+    fail-loud gates (`_validate_in_reply_to_exists`, the own-inbox refusal).
+    """
+    if not scoped_to:
+        return None
+    sha = (scoped_to.get("sha") or "").strip()
+    if not sha:
+        return None
+
+    env = _make_git_env()
+
+    async def _rev_parse(rev: str) -> Optional[int]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(receiver_repo_path), "rev-parse",
+                "--verify", "--quiet", rev,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            await proc.communicate()
+            return proc.returncode
+        except OSError as exc:
+            _LOG.warning(
+                "memo.send: could not run git to verify scoped_to.sha %r "
+                "against receiver clone %s (%s) — degrading to advisory, "
+                "not blocking (an unreachable clone is an environment "
+                "problem, not a false pin).",
+                sha, receiver_repo_path, exc,
+            )
+            return None
+
+    commit_rc = await _rev_parse(f"{sha}^{{commit}}")
+    if commit_rc is None or commit_rc == 0:
+        # commit_rc is None: git could not even be run — advisory only, per
+        # the unreachable-vs-unresolvable split above. commit_rc == 0: the
+        # sha resolves as a commit — pin is good.
+        return None
+    if commit_rc != 1:
+        # Neither a clean "yes" (0) nor a clean, definitive "no" (1) — git
+        # ran but could not answer (e.g. GIT_DIR poisoning, a locked repo).
+        # Not a claim the sha is missing; degrade to advisory only.
+        _LOG.warning(
+            "memo.send: git rev-parse --verify against receiver clone %s "
+            "exited %d (neither 0 nor 1) verifying scoped_to.sha %r — could "
+            "not determine resolvability, degrading to advisory rather than "
+            "blocking a possibly-good send.",
+            receiver_repo_path, commit_rc, sha,
+        )
+        return None
+
+    # Definitive "no" — the sha does not resolve as a commit. Distinguish
+    # "not found at all" from "found, but as a blob" (the observed operator
+    # error this fix's dispatch brief names: a blob SHA supplied where a
+    # commit SHA was wanted) for a more actionable refusal message.
+    blob_hint = ""
+    blob_rc = await _rev_parse(f"{sha}^{{blob}}")
+    if blob_rc == 0:
+        blob_hint = (
+            f" {sha} IS present in their clone, but as a BLOB, not a commit "
+            f"— scoped_to.sha wants a commit SHA (what `git log` names), not "
+            f"a blob/file-content SHA (e.g. from `git hash-object` or a tree "
+            f"entry). Re-pin with the commit SHA that introduced or last "
+            f"touched the artifact."
+        )
+
+    return build_setup_error_result(
+        _MODE, dry_run,
+        f"memo.send: scoped_to.sha {sha!r} does not resolve as a commit in "
+        f"the receiver's clone ({receiver_repo_path}) — they cannot resolve "
+        f"this pin, so nothing was written to their tree.{blob_hint} Fix the "
+        f"sha (or use scoped_to.version instead) and re-send.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2220,11 +2398,14 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
     if isinstance(validated, dict):
         return validated  # exit_code:1 setup-error envelope
 
-    dry_run, topic, to, title, body, from_id, kind, summary, supersedes, scoped_to, campaign_id, in_reply_to, space = (
+    (dry_run, topic, to, title, body, from_id, kind, summary, supersedes,
+     scoped_to, campaign_id, in_reply_to, space, summary_cap_advisory,
+     summary_over_cap_original) = (
         validated.dry_run, validated.topic, validated.to, validated.title,
         validated.body, validated.from_id, validated.kind, validated.summary,
         validated.supersedes, validated.scoped_to, validated.campaign_id,
         validated.in_reply_to, validated.space,
+        validated.summary_cap_advisory, validated.summary_over_cap_original,
     )
 
     # ── Sender worktree derivation (ancillary; for future sender-id use) ─────
@@ -2297,6 +2478,34 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
             f"machine-local set {repo_key} <abs-path-to-repo>",
         )
 
+    # ── Publish-mirror path cross-check (2026-08-07 incident fix) ─────────────
+    # `resolve_receiver_inbox()` above resolves purely through `repos.*` — it
+    # never consults `publish.mirrors.*`, so a repo double-registered as BOTH
+    # an ordinary `repos.<key>` receiver AND a `publish.mirrors.<key>` OSS
+    # mirror (with or without `.owner` set) resolved and delivered here
+    # uncaught. `publish_mirror_path_match()` is path-based and
+    # OWNER-INDEPENDENT (fires on `.path` alone), unlike the CLI's
+    # `.owner`-gated `_is_publish_target_em` — closing exactly the gap that
+    # let two memos land in `claude-klabauter`'s `cross-repo/inbox/` before
+    # `publish.mirrors.claude_klabauter.owner` was ever set.
+    mirror_key = _publish_mirror_path_match(receiver_repo_path)
+    if mirror_key is not None:
+        mirror_owner = _read_publish_mirrors().get(mirror_key, {}).get("owner")
+        owner_clause = (
+            f" Its owning EM is {mirror_owner!r} — send there instead."
+            if mirror_owner
+            else " No owner is declared for it "
+            f"(publish.mirrors.{mirror_key}.owner is unset) — set that key, "
+            "then re-address the memo to the declared owner."
+        )
+        return build_setup_error_result(
+            _MODE, dry_run,
+            f"memo.send: receiver {to!r} resolves to {receiver_repo_path}, "
+            f"which is a declared publish mirror ({mirror_key!r}) — a "
+            f"publish DESTINATION, never a working tree. A memo delivered "
+            f"there sits unactioned; no EM reads it.{owner_clause}",
+        )
+
     # ── Canonicalize the receiver identity BEFORE it is stamped (addressee gate) ──
     # `to` resolved above via whatever central/redirect alias the caller typed
     # (identity.centralReceiverIds / identity.redirectAliases both fan in to
@@ -2339,6 +2548,21 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
                 f"receiver repo {receiver_repo_path} — a repo must not write into "
                 f"its own inbox.",
             )
+
+    # ── scoped_to.sha resolvability gate (F14 fix — BEFORE any receiver-tree
+    # write) ───────────────────────────────────────────────────────────────
+    # See `_verify_scoped_to_sha_resolvable`'s own docstring/module-comment
+    # block for the unreachable-vs-unresolvable split and the standing
+    # 2026-08-03 ruling this does NOT reintroduce (an absent scoped_to.sha
+    # still never blocks). Placed here — after receiver_repo_path is resolved,
+    # before target_path/_write_memo_file/_commit_delivered_memo — so a
+    # definitively-false pin is refused before anything is written into the
+    # receiver's tree, not merely before the success banner.
+    sha_resolve_error = await _verify_scoped_to_sha_resolvable(
+        dry_run, receiver_repo_path, scoped_to,
+    )
+    if sha_resolve_error is not None:
+        return sha_resolve_error
 
     # ── Derive target path ────────────────────────────────────────────────────
     # Review: code-reviewer F3 — single today() call; filename date and created: frontmatter
@@ -2442,6 +2666,13 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
                 "collision: would refuse on act (C1 D2 criterion 4 fail-loud, no clobber)"
                 if collision_exists else None
             ),
+            # Additive, non-fatal notice (2026-08-07 warn-and-substitute
+            # PM ruling, AC9) — present iff the explicit `summary` param was
+            # over cap; None on a clean/absent/placeholder summary. Never
+            # blocks the send — see `summary_over_cap_original` for the
+            # author's original text, echoed back verbatim.
+            "summary_cap_advisory": summary_cap_advisory,
+            "summary_over_cap_original": summary_over_cap_original,
         }])
 
     # ── act path ──────────────────────────────────────────────────────────────
@@ -2582,6 +2813,12 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
             "receiver": canonical_to,
             "topic": topic,
             "delivery_commit": delivery_commit,
+            # Additive, non-fatal notice (2026-08-07 warn-and-substitute
+            # PM ruling, AC9) — mirrors the dry_run candidate's own pair of
+            # fields above; present iff the explicit `summary` param was
+            # over cap on this delivered memo.
+            "summary_cap_advisory": summary_cap_advisory,
+            "summary_over_cap_original": summary_over_cap_original,
         }],
         [],
         [],

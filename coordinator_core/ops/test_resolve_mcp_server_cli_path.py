@@ -10,7 +10,6 @@ inputs is a no-op that yields byte-identical output).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 
 from coordinator_core.ops.resolve_mcp_server_cli_path import (
@@ -119,15 +118,13 @@ def test_handler_success_via_claude_json_path_override(tmp_path):
         {"example-retrieval-repo": {"args": ["/opt/pr/cli.py", "/repos/x"]}},
     )
 
-    result = asyncio.run(
-        _handler({"server_name": "example-retrieval-repo", "claude_json_path": str(path)})
-    )
+    result = _handler({"server_name": "example-retrieval-repo", "claude_json_path": str(path)})
 
     assert result == {"cli_path": "/opt/pr/cli.py", "project_root": "/repos/x"}
 
 
 def test_handler_missing_server_name_is_a_usage_error():
-    result = asyncio.run(_handler({}))
+    result = _handler({})
 
     assert result["cli_path"] is None
     assert "server_name" in result["error"]
@@ -140,7 +137,7 @@ def test_double_invocation_is_idempotent_no_op(tmp_path):
     )
     params = {"server_name": "example-retrieval-repo", "claude_json_path": str(path)}
 
-    first = asyncio.run(_handler(params))
-    second = asyncio.run(_handler(params))
+    first = _handler(params)
+    second = _handler(params)
 
     assert first == second == {"cli_path": "/opt/pr/cli.py", "project_root": "/repos/x"}

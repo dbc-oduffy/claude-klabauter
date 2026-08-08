@@ -22,7 +22,6 @@ Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C4
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import textwrap
 from datetime import date
@@ -297,7 +296,7 @@ def test_handler_direct_invocation_returns_ratified_envelope(tmp_path: Path) -> 
         """,
     )
 
-    result = asyncio.run(_handler({}, repo_root=tmp_path))
+    result = _handler({}, repo_root=tmp_path)
     assert result["status"] == "ok"
     assert len(result["entries"]) == 1
     entry = result["entries"][0]
@@ -307,7 +306,7 @@ def test_handler_direct_invocation_returns_ratified_envelope(tmp_path: Path) -> 
 
 
 def test_handler_missing_repo_root_returns_error(tmp_path: Path) -> None:
-    result = asyncio.run(_handler({}, repo_root=None))
+    result = _handler({}, repo_root=None)
     assert result.get("exit_code") == 1
     assert "error" in result
 
@@ -338,7 +337,7 @@ def test_handler_with_git_common_dir_finds_records(tmp_path: Path) -> None:
     common_dir = tmp_path / ".git"
     assert common_dir.is_dir()  # sanity: standard (non-worktree) layout
 
-    result = asyncio.run(_handler({}, repo_root=common_dir))
+    result = _handler({}, repo_root=common_dir)
     assert result["status"] == "ok"
     assert len(result["entries"]) == 1
     entry = result["entries"][0]

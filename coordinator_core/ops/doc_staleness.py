@@ -90,6 +90,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.win_portability import no_console_creationflags
+
 DEFAULT_SWEEP_FILES_THRESHOLD = 10  # K
 DEFAULT_SWEEP_LINES_THRESHOLD = 15  # L -- see module docstring, filter (b)
 
@@ -118,6 +120,7 @@ def _run_git(repo_root: Path, *args: str) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         # Review: code-reviewer -- Finding 5. Surface stderr on a genuine

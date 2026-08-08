@@ -24,6 +24,7 @@ Covers:
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -32,6 +33,30 @@ import pytest
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.session.core import session_dir
+
+
+
+def _msys_form(p) -> str:
+    """MSYS/MinGW drive-mount spelling (`/c/Users/...`) of an absolute
+    native path -- the shape Git-for-Windows' bash hands to tools as
+    argument expansion, and the exact shape `_write_bump_sink_shapes.
+    translate_msys_path`/`resolve_relative` exist to translate correctly."""
+    s = str(p)
+    drive, rest = os.path.splitdrive(s)
+    letter = drive.rstrip(":").lower()
+    rest_posix = rest.replace("\\", "/")
+    return f"/{letter}{rest_posix}"
+
+
+def _posix(p) -> str:
+    """POSIX-slash string form of a path for embedding in a bash
+    command-line string -- the tokenizer under test parses commands as
+    real bash/POSIX-sh syntax (backslash is an escape character), so a
+    native Windows ``str(Path)`` (backslash-separated) embedded directly
+    into a ``cmd`` string is not a realistic Bash-tool payload and
+    silently corrupts the path once tokenized. Accepts a ``Path`` or a
+    plain ``str``."""
+    return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
 def _git(root: str, *args: str) -> None:
@@ -102,7 +127,7 @@ def test_finding3_applicability_log_lands_under_anchor_not_foreign_repo(
     repos, monkeypatch, tmp_path
 ):
     _set_anchor_env(monkeypatch, repos, tmp_path)
-    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-f3", str(repos["anchor"]), {}
@@ -130,7 +155,7 @@ def test_finding3_applicability_log_lands_under_anchor_not_foreign_repo(
 
 def test_finding3_applicability_log_content_names_both_repos(repos, monkeypatch, tmp_path):
     _set_anchor_env(monkeypatch, repos, tmp_path)
-    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     guard.check_bump_foreign_repo_write(cmd, "sess-f3b", str(repos["anchor"]), {})
 
@@ -187,7 +212,7 @@ def test_finding4_no_repo_anchor_bumps_against_registered_target(tmp_path, monke
     _write_registry(reg_dir, target=str(target_repo))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-    cmd = f"git -C {target_repo} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(target_repo)} commit --allow-empty -m x"
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-f4", str(scratch_anchor), {}
     )
@@ -229,7 +254,7 @@ def test_finding4_no_repo_anchor_does_not_bump_against_unregistered_target(
     # nowhere, so `target_is_registered_repo` degrades to `[]`/`False`.
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-registry-here"))
 
-    cmd = f"git -C {unregistered_repo} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(unregistered_repo)} commit --allow-empty -m x"
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-f4b", str(scratch_anchor), {}
     )
@@ -254,7 +279,7 @@ def test_ac14_linked_worktree_of_anchor_repo_does_not_bump(repos, monkeypatch, t
         str(worktree_dir),
     )
 
-    cmd = f"git -C {worktree_dir} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(worktree_dir)} commit --allow-empty -m x"
 
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-ac14", str(repos["anchor"]), {}
@@ -272,10 +297,127 @@ def test_ac14_still_bumps_against_a_genuinely_different_repo(repos, monkeypatch,
     real cross-repo bumps -- a genuinely separate repo (not a worktree of
     the anchor) still bumps exactly as AC1 requires."""
     _set_anchor_env(monkeypatch, repos, tmp_path)
-    cmd = f"git -C {repos['foreign']} commit --allow-empty -m x"
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-ac14b", str(repos["anchor"]), {}
     )
 
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# C2 -- AC1: the guard-posix-path-rerooting defect, regression. On Windows,
+# an MSYS-spelled `-C <dir>` target naming the session's OWN anchor repo
+# must not be re-rooted onto the process's current drive and wrongly
+# classified as foreign.
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_msys_absolute_dash_c_target_same_repo_not_denied(repos, monkeypatch, tmp_path):
+    _set_anchor_env(monkeypatch, repos, tmp_path)
+    msys_anchor = _msys_form(repos["anchor"])
+    cmd = f"git -C {msys_anchor} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac1-foreign", str(repos["anchor"]), {}
+    )
+
+    assert result is None, (
+        "MSYS-spelled -C target naming the session's own anchor repo was "
+        "wrongly denied -- the guard-posix-path-rerooting defect"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C2 -- AC3: the fix must not turn a real bump into a permit. A genuinely
+# foreign repo, spelled in the same MSYS form, still bumps.
+# ---------------------------------------------------------------------------
+
+
+def test_ac3_msys_absolute_dash_c_target_genuinely_foreign_still_denies(
+    repos, monkeypatch, tmp_path
+):
+    _set_anchor_env(monkeypatch, repos, tmp_path)
+    msys_foreign = _msys_form(repos["foreign"])
+    cmd = f"git -C {msys_foreign} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac3-foreign", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# PowerShell `Set-Location` cwd-tracking parity fix (2026-08-08, backlog row
+# `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`). These
+# assert through `check_bump_foreign_repo_write`'s own real return value
+# (a deny envelope, or `None`) -- never by re-reading a constant the test
+# itself set -- so a revert of the `Set-Location` tracking fix flips these
+# from PASS to FAIL.
+# ---------------------------------------------------------------------------
+
+
+def _ps_payload() -> dict:
+    return {"tool_name": "PowerShell"}
+
+
+def test_set_location_into_foreign_repo_then_write_is_detected(repos, monkeypatch, tmp_path):
+    _set_anchor_env(monkeypatch, repos, tmp_path)
+    cmd = f'Set-Location {_posix(repos["foreign"])}; New-Item -Path file.txt -ItemType File'
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ps-setloc-foreign", str(repos["anchor"]), _ps_payload()
+    )
+
+    assert result is not None, (
+        "a New-Item write extracted AFTER a Set-Location into a foreign "
+        "git root must resolve against the CHANGED base and bump -- the "
+        "exact parity gap this fix closes"
+    )
+
+
+def test_set_location_into_own_anchor_repo_then_write_does_not_bump(
+    repos, monkeypatch, tmp_path
+):
+    _set_anchor_env(monkeypatch, repos, tmp_path)
+    cmd = f'Set-Location {_posix(repos["anchor"])}; New-Item -Path file.txt -ItemType File'
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ps-setloc-anchor", str(repos["anchor"]), _ps_payload()
+    )
+
+    assert result is None, (
+        "a Set-Location into the session's OWN anchor repo followed by a "
+        "write must not bump -- the tracking fix must not turn an in-repo "
+        "write into a false bump"
+    )
+
+
+def test_set_location_unresolvable_target_yields_silent_not_deny(
+    repos, monkeypatch, tmp_path
+):
+    """A `Set-Location` to a variable-valued (unresolvable) target must
+    never guess a base for the write that follows -- the leg goes SILENT
+    (via `_verdict.record_silent`) for the rest of the command, and
+    `check_bump_foreign_repo_write` itself still returns `None` (never a
+    manufactured deny off an untrusted cwd)."""
+    from coordinator_core.bash_guards import _verdict
+
+    _set_anchor_env(monkeypatch, repos, tmp_path)
+    cmd = 'Set-Location $SomeUnresolvedVar; New-Item -Path file.txt -ItemType File'
+
+    with _verdict.collecting() as silences:
+        result = guard.check_bump_foreign_repo_write(
+            cmd, "sess-ps-setloc-unresolvable", str(repos["anchor"]), _ps_payload()
+        )
+
+    assert result is None, (
+        "an unresolvable Set-Location target must never produce a "
+        "verdict off a guessed base"
+    )
+    assert any(
+        s.guard_name == "bump-foreign-repo-write" and "Set-Location" in s.reason
+        for s in silences
+    ), "the unresolvable Set-Location must be recorded SILENT, not merely swallowed"

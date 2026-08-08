@@ -406,7 +406,7 @@ def append_goal(
 # ---------------------------------------------------------------------------
 
 @register_op("goal.append")
-async def _goal_append(params: dict, repo_root=None) -> dict:
+def _goal_append(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'goal.append' handler — append a goal event to the per-machine JSONL log.
 
     MUTATING (writes the per-machine goals-log JSONL shard under per-repo state).

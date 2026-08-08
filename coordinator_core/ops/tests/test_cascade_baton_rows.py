@@ -233,6 +233,53 @@ class TestEvidenceJoinedRowResolution:
         assert [u["row_id"] for u in result["unresolved"]] == ["C1"]
         assert result["advanced"] == []
 
+    def test_batched_subject_resolution_covers_every_resolved_row(self, tmp_path):
+        """N+1 pin: with BOTH rows committed, both get a real, DISTINCT
+        `disposition_detail` from the one batched `git log` call -- not a
+        placeholder, and not the same subject cross-applied to the wrong
+        row. Guards `_batch_commit_subjects`'s prefix-match reconciliation
+        against the classic bug of only ever resolving the first sha."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_baton(repo, "baton5.md", "dlv-baton-555555")
+        _commit_chunk(repo, "marker1.txt", "C1", deliverable_id="dlv-baton-555555")
+        _commit_chunk(repo, "marker2.txt", "C2", deliverable_id="dlv-baton-555555")
+
+        result = resolve_baton_rows(hp, "dlv-baton-555555", "2026-08-04T00:00:00Z", repo)
+
+        assert sorted(a["row_id"] for a in result["advanced"]) == ["C1", "C2"]
+        assert result["unresolved"] == []
+
+        text = hp.read_text(encoding="utf-8")
+        c1, c2 = _row(text, "C1"), _row(text, "C2")
+        assert c1["disposition_detail"] == "C1: land chunk"
+        assert c2["disposition_detail"] == "C2: land chunk"
+        assert c1["disposition_detail"] != c2["disposition_detail"]
+        assert "subject unavailable" not in c1["disposition_detail"]
+        assert "subject unavailable" not in c2["disposition_detail"]
+
+    def test_batch_commit_subjects_falls_back_on_unresolvable_sha(self, tmp_path):
+        """Absence contract: `_batch_commit_subjects` must never silently
+        drop an unresolvable sha as if it resolved to an empty subject --
+        `resolve_baton_rows` must fall back to the same placeholder
+        `_commit_subject` used on a lookup failure."""
+        from coordinator_core.ops.cascade_baton_rows import _batch_commit_subjects
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        bogus_sha = "0" * 40
+        resolved = _batch_commit_subjects(repo, {bogus_sha})
+        assert resolved == {}
+
+        hp = _seed_baton(repo, "baton6.md", "dlv-baton-666666")
+        _commit_chunk(repo, "marker.txt", "C1", deliverable_id="dlv-baton-666666")
+        result = resolve_baton_rows(hp, "dlv-baton-666666", "2026-08-04T00:00:00Z", repo)
+        text = hp.read_text(encoding="utf-8")
+        c1 = _row(text, "C1")
+        assert "subject unavailable" not in c1["disposition_detail"]
+        assert result.get("error") is None
+
 
 class TestCascadeIntegration:
     """Wires the two chunks together the way `deliverable_cascade._handler` actually

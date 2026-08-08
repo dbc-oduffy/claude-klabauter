@@ -2,10 +2,17 @@
 
 Coverage:
   - a genuine multi-probe banner command whose EVERY probe segment is one
-    of `check_multiprobe_banner_rewrite`'s recognized forms DENIES on
-    Windows (naming the literal, real `python3 -c` rewrite the sibling
-    chain entry computed for THIS exact command) and ADVISES the same
-    literal rewrite elsewhere -- for a MAIN-LOOP caller (no `agent_id`).
+    of `check_multiprobe_banner_rewrite`'s recognized forms ADVISES the
+    literal, real `python3 -c` rewrite the sibling chain entry computed for
+    THIS exact command -- on every host, including Windows forced -- for a
+    MAIN-LOOP caller (no `agent_id`). This guard's own platform-conditioned
+    DENY branch was retired 2026-08-07 as structurally unreachable
+    (DR-280): it gated on the same seam-confirmation an earlier-registered
+    `ADVISORY_REWRITE` chain entry already consumes and returns on first,
+    so through the real dispatcher the deny gate could never open.
+    `host_is_windows` is still accepted and still exercised below (it is
+    the chain-wide threading contract every registered shape-guard
+    honors), but no longer changes this guard's own verdict.
   - the SAME confirmed command, called by a SUBAGENT (`agent_id` present),
     gets the scratch-script outlet instead: `python3 -c` is never named as
     something to RUN, and the message names `python3 <path>` plus the
@@ -52,7 +59,30 @@ Spec backlink: coordinator_core/bash_guards/guard_multiprobe_banner.py
 
 from __future__ import annotations
 
+import importlib.util
+
+import pytest
+
+from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_multiprobe_banner as guard
+from coordinator_core.bash_guards._dialect import Dialect
+
+#: Same bridge-to-C8 skip pattern as
+#: `test_command_tokenizer_length_ceiling.py`'s own `requires_powershell_
+#: grammar` -- the grammar package is not yet declared in
+#: `pyproject.toml` (C8), so a peer/clean-install run without it must not
+#: go red for a dependency no manifest asked them to have.
+_GRAMMAR_PRESENT = all(
+    importlib.util.find_spec(name) is not None
+    for name in ("tree_sitter", "tree_sitter_pwsh")
+)
+requires_powershell_grammar = pytest.mark.skipif(
+    not _GRAMMAR_PRESENT,
+    reason=(
+        "PowerShell grammar package not installed; C8 declares it in "
+        "pyproject.toml."
+    ),
+)
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -125,35 +155,54 @@ class TestNonBashOrEmpty:
 
 
 class TestMultiProbeBannerVerdict:
-    def test_banner_command_denies_on_windows(self):
-        # Driven via the host_is_windows kwarg -- the sanctioned mechanism
-        # (AC-8/AC-11), not os.name monkeypatching. Uses the ALL-RECOGNIZED
-        # fixture -- the sibling rewrite chain entry genuinely confirms an
-        # outlet for this exact command, so a deny toward it is a deny
-        # toward a real target, not a hazard.
+    def test_banner_command_advises_even_with_windows_forced(self):
+        # RETARGETED (DR-280, 2026-08-07): this guard's own deny branch was
+        # retired as structurally unreachable -- it gated on
+        # `_seam_confirmed_rewrite` against the SAME seam the
+        # earlier-registered `"multiprobe-banner-rewrite"` chain entry
+        # already consumes and returns on first, so through the real
+        # dispatcher the gate could never open. Was
+        # `test_banner_command_denies_on_windows`, asserting a deny envelope
+        # under `host_is_windows=True`; now asserts the guard advises
+        # (never denies) even with Windows forced, using the same
+        # ALL-RECOGNIZED fixture so the seam-confirmed-outlet content
+        # assertions below are unchanged.
         out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
-        reason = _reason(out)
-        assert "multi-probe-banner" in reason
+        ctx = _ctx(out)
+        assert "multi-probe-banner" in ctx
         # New (2026-07-29): the Example is the LITERAL rewritten command
         # BX-16 already computed for THIS command, not a fixed template --
-        # it always starts with a python3 -c invocation of the generated
-        # script.
-        assert "python3 -c" in reason
-        assert "COORDINATOR_OVERRIDE_MULTIPROBE_BANNER" in reason
+        # it starts with `_bt_python3_invocation()`'s RESOLVED, runnable
+        # interpreter path (never the bare literal "python3" -- see that
+        # function's own docstring: a bare `python3` is frequently absent
+        # on stock Windows), followed by ` -c `. Matched structurally
+        # against the same resolver the guard itself calls, per C2's
+        # identical fix (commit 39eedda26) rather than a second hardcoded
+        # literal.
+        assert dc._bt_python3_invocation() + " -c" in ctx
+        assert "COORDINATOR_OVERRIDE_MULTIPROBE_BANNER" in ctx
 
     def test_banner_command_advises_on_posix(self):
         out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
-        assert "python3 -c" in ctx
+        assert dc._bt_python3_invocation() + " -c" in ctx
 
-    def test_host_is_windows_default_tracks_real_host(self, monkeypatch):
+    def test_omitting_host_is_windows_still_advises_never_denies(self, monkeypatch):
         import os
 
-        # Omitting the kwarg must still track the real host (mirrors
-        # guard_grep_via_bash's own contract) -- this is the ONLY test in
-        # this module allowed to touch os.name, and it exists specifically
-        # to prove the default still works, not to drive the platform leg.
+        # RETARGETED (DR-280, 2026-08-07): this test used to be named
+        # `test_host_is_windows_default_tracks_real_host` and pinned that
+        # omitting the `host_is_windows` kwarg still resolved the real host
+        # and denied under a faked Windows `os.name` -- that was this
+        # guard's ONE test allowed to touch `os.name`, proving the default
+        # still worked, not driving the platform leg. Now that this guard's
+        # deny branch is retired (it always renders the advisory template,
+        # regardless of `host_is_windows`), there is no platform-tracking
+        # default left to pin for THIS guard specifically -- what remains
+        # worth pinning is that omitting the kwarg under a faked Windows
+        # `os.name` still advises rather than denying, i.e. the retirement
+        # holds even on the one path this test used to exercise.
         #
         # The sibling seam call (`check_multiprobe_banner_rewrite`) is
         # monkeypatched to a canned confirmed-rewrite result rather than
@@ -164,9 +213,7 @@ class TestMultiProbeBannerVerdict:
         # faked to "nt" on an actual POSIX interpreter (Python 3.14 refuses
         # to instantiate `WindowsPath` off a real Windows host) -- an
         # artifact of faking the OS this way, not a bug on a real Windows
-        # host, and not what `_resolve_host_is_windows`'s own default
-        # (which THIS module's `check()` calls unconditionally by omitting
-        # `host_is_windows`) is responsible for.
+        # host.
         monkeypatch.setattr(os, "name", "nt")
         monkeypatch.setattr(
             guard,
@@ -179,8 +226,8 @@ class TestMultiProbeBannerVerdict:
                 }
             },
         )
-        reason = _reason(guard.check(_payload(_BANNER_CMD_CONFIRMED)))
-        assert "multi-probe-banner" in reason
+        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED)))
+        assert "multi-probe-banner" in ctx
 
     def test_banner_with_unrecognized_segment_allows_silently(self):
         # 2026-08-06 (B2 friction fix): `_BANNER_CMD` carries `git diff
@@ -204,24 +251,41 @@ class TestMultiProbeBannerVerdict:
 
         expected = check_multiprobe_banner_rewrite(_BANNER_CMD_CONFIRMED, "sess1")
         expected_cmd = expected["hookSpecificOutput"]["updatedInput"]["command"]
-        reason = _reason(
-            guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
-        )
-        assert expected_cmd in reason
+        # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
+        # envelope) -- this guard never denies any more, but the advisory
+        # template's own Example field carries the identical rewritten
+        # command, so the byte-identity claim this test pins is unaffected.
+        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True))
+        assert expected_cmd in ctx
 
-    def test_deny_command_field_carries_full_command_not_bare_evidence(self):
-        # Review: code-reviewer -- Finding 1 (C19a): the "Command:" field in
-        # the deny message must render the caller's FULL command, not
-        # `primary.evidence` (only the matched banner-marker segment, e.g.
-        # the bare `echo "=== facts ==="`). Pin that a segment which is NOT
-        # part of the banner-marker echo (here, the trailing `git rev-parse
-        # HEAD`) shows up in the deny reason -- `primary.evidence` alone
-        # would never contain it.
-        reason = _reason(
-            guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
+    def test_advisory_example_carries_the_full_rewrite_not_bare_evidence(self):
+        # RETARGETED (DR-280, 2026-08-07): was `test_deny_command_field_
+        # carries_full_command_not_bare_evidence`, pinning that the deny
+        # template's "Command:" field rendered the caller's FULL command
+        # rather than `primary.evidence` (only the matched banner-marker
+        # segment) -- Review: code-reviewer, Finding 1, C19a. That field
+        # belongs to the deny template only; this guard's deny branch is
+        # retired (it never renders that template through `check()` any
+        # more), so there is no "Command:" field left to pin here.
+        #
+        # What survives from the original regression this test guarded
+        # against -- a message that names only the matched banner-marker
+        # segment, dropping the rest of the caller's command from the
+        # rewrite entirely -- is still checkable via the advisory's Example
+        # field: it must be the literal rewrite BX-16 computed for the
+        # WHOLE command (folding every recognized probe, including the
+        # trailing `git rev-parse HEAD` segment that is NOT part of the
+        # banner-marker echo, into one `git status --porcelain=v2 --branch`
+        # call per the module docstring), not a stand-in derived from the
+        # bare banner-marker evidence alone.
+        from coordinator_core.bash_guards.dispatch_checks import (
+            check_multiprobe_banner_rewrite,
         )
-        assert "  Command:  %s" % _BANNER_CMD_CONFIRMED in reason
-        assert "git rev-parse HEAD" in reason
+
+        expected = check_multiprobe_banner_rewrite(_BANNER_CMD_CONFIRMED, "sess1")
+        expected_cmd = expected["hookSpecificOutput"]["updatedInput"]["command"]
+        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True))
+        assert expected_cmd in ctx
 
     def test_below_min_segment_threshold_allows(self):
         # Only 2 segments -- a single labeled probe, not the N-unrelated-
@@ -317,18 +381,31 @@ class TestSubagentOutlet:
     present) gets the scratch-script form instead, and that a main-loop
     caller (no `agent_id`/`agent_type`) is unaffected."""
 
+    #: state/bash-guards/known-red.json group "guard-windows-branch-verdicts".
+    #: Verdict `degradation`: `_sandbox_script_hint` builds its path via
+    #: `str(Path(git_root) / ...)`, emitting native separators against a
+    #: POSIX-style expectation -- see
+    #: state/audits/2026-08-07-guard-windows-branch-verdicts.md. Owner:
+    #: docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md.
+    @pytest.mark.pending_fix
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_windows(self, monkeypatch):
+        # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
+        # envelope) under `host_is_windows=True` -- this guard never denies
+        # any more. Reads the advisory envelope instead; the pending_fix
+        # marker/known-red group above is unrelated to DR-280 and stays
+        # (native-separator degradation in `_sandbox_script_hint`).
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
         out = guard.check(
             _payload(_BANNER_CMD_CONFIRMED, agent_id="a" * 16),
             host_is_windows=True,
         )
-        reason = _reason(out)
-        assert "multi-probe-banner" in reason
-        assert "python3 /fake/root/state/subagent-share/sess1/multiprobe.py" in reason
-        assert "\"import os" not in reason
-        assert "'import os" not in reason
+        ctx = _ctx(out)
+        assert "multi-probe-banner" in ctx
+        assert "python3 /fake/root/state/subagent-share/sess1/multiprobe.py" in ctx
+        assert "\"import os" not in ctx
+        assert "'import os" not in ctx
 
+    @pytest.mark.pending_fix
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_posix(self, monkeypatch):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
         out = guard.check(
@@ -386,10 +463,13 @@ class TestSubagentOutlet:
             raise AssertionError("resolve_git_root must not be called for a main-loop caller")
 
         monkeypatch.setattr(guard, "resolve_git_root", _boom)
-        reason = _reason(
+        # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
+        # envelope) under `host_is_windows=True` -- this guard never denies
+        # any more.
+        ctx = _ctx(
             guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
         )
-        assert "python3 -c" in reason
+        assert dc._bt_python3_invocation() + " -c" in ctx
 
     def test_no_outlet_case_still_allows_silently_for_subagent(self, monkeypatch):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
@@ -422,6 +502,48 @@ class TestFalsePositives:
             )
             is None
         )
+
+
+class TestPowerShellDialectWiring:
+    """C4b (docs/reference/guard-dialect-coverage.md row 9) -- the one real
+    wiring edit in this cohort: `_classify_for_dialect` routes the
+    POWERSHELL branch's tokenize call through `_dialect.
+    resolve_segments_for_dialect` instead of `classify_command`'s own
+    bash-only `tokenize_full_command`, reusing the SAME per-shape detectors
+    `classify_command` itself calls -- no new verb/flag table needed.
+    """
+
+    @requires_powershell_grammar
+    def test_powershell_multiprobe_banner_reaches_same_primary_as_bash(self):
+        cmd = 'echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
+        bash_result = guard._classify_for_dialect(cmd, Dialect.BASH)
+        ps_result = guard._classify_for_dialect(cmd, Dialect.POWERSHELL)
+        assert bash_result.primary is not None
+        assert bash_result.primary.shape == guard.Shape.MULTI_PROBE_BANNER
+        assert ps_result.primary is not None
+        assert ps_result.primary.shape == bash_result.primary.shape
+
+    @requires_powershell_grammar
+    def test_powershell_grep_precedence_stays_silent_same_as_bash(self):
+        # AC-7 precedence: GREP_VIA_BASH outranks MULTI_PROBE_BANNER in
+        # SHAPE_PRECEDENCE on both dialects -- the PowerShell leg must not
+        # misdescribe this as a banner probe either.
+        cmd = 'echo "=== search ==="; grep -rn TODO src/; git status'
+        bash_result = guard._classify_for_dialect(cmd, Dialect.BASH)
+        ps_result = guard._classify_for_dialect(cmd, Dialect.POWERSHELL)
+        assert bash_result.primary.shape == guard.Shape.GREP_VIA_BASH
+        assert ps_result.primary.shape == bash_result.primary.shape
+
+    def test_powershell_tool_name_is_no_longer_a_bare_none_before_classification(self):
+        # Before this wiring, `tool_name != "Bash"` short-circuited to None
+        # regardless of shape -- a false clean indistinguishable from
+        # "cleared". Now a recognized PowerShell dialect reaches real
+        # classification (this assertion holds even without the grammar
+        # package: an unparseable/absent-grammar PowerShell command records
+        # SILENT via `_dialect.py`, not a bare classify-was-never-tried
+        # None from THIS guard's own gate).
+        assert guard.dialect_from_tool_name("PowerShell") is Dialect.POWERSHELL
+        assert guard.dialect_from_tool_name("Read") is None
 
 
 class TestCrashPropagatesForFailClosed:

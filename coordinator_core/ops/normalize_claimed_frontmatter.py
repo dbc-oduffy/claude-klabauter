@@ -126,6 +126,10 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.archive_stamp import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
+
+
+_CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "normalize-claimed-frontmatter"
 
@@ -133,7 +137,6 @@ _PROG = "normalize-claimed-frontmatter"
 # spawns for a subprocess.run child when the parent has no console of its
 # own (e.g. this op invoked from a GUI-launched context). No-op on POSIX
 # (getattr falls back to 0). Applied to both `git` subprocess.run calls below.
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # shipped_in shape guard: DR-096 (example-doctrine-repo 2026-07-26 ruling) retires this
 # module's own bespoke copy of the value grammar in favor of the single choke
@@ -204,7 +207,7 @@ def detect_root(specified: Optional[str]) -> str:
             timeout=10,
             stdin=subprocess.DEVNULL,
             check=True,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         return result.stdout.strip()
     except Exception:
@@ -357,7 +360,7 @@ def get_tracked_files(abs_dir: str, root: str) -> Optional[Set[str]]:
             stdin=subprocess.DEVNULL,
             cwd=root,
             check=True,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         out = result.stdout.strip()
         if not out:

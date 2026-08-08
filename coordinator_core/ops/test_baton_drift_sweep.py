@@ -360,6 +360,8 @@ def test_no_open_handoffs_dir_returns_zeroed_result(tmp_path: Path) -> None:
         "reconciled_no_successor_paths": [],
         "reaped_orphan": 0,
         "reaped_orphan_paths": [],
+        "desynced": 0,
+        "desynced_paths": [],
     }
 
 

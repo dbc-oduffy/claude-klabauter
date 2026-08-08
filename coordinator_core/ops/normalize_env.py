@@ -55,14 +55,12 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.install import prereq_probe
+from coordinator_core.win_portability import no_console_creationflags
 
 _PROBE_TIMEOUT_SECS = 30
 _MUTATION_TIMEOUT_SECS = 300
 
-if sys.platform == "win32":
-    _CREATIONFLAGS = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
-else:
-    _CREATIONFLAGS = 0
+_CREATIONFLAGS = no_console_creationflags()
 
 # Exit codes — preserved verbatim from the bash oracle (business-code parity).
 EXIT_OK = 0
@@ -92,7 +90,7 @@ def _ne_is_windows() -> bool:
             text=True,
             timeout=5,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _ne_is_windows: out = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -441,7 +439,7 @@ def _ne_verify_bash_profile_repair(timeout: int = 15) -> bool:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _ne_verify_bash_profile_repair: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -740,7 +738,7 @@ def _ne_write_backup_file(backup_path: Path, out) -> bool:
                 text=True,
                 timeout=15,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             py_target = proc.stdout.strip()
         except (OSError, subprocess.SubprocessError):
@@ -785,7 +783,7 @@ def _ne_step1_longpaths(runner: NeRunner, prereq_probe_path: str, probes_availab
                 text=True,
                 timeout=15,
                 stdin=subprocess.DEVNULL,
-                creationflags=_CREATIONFLAGS,
+                **_CREATIONFLAGS,
             )
             ok = proc.returncode == 0
         except (OSError, subprocess.SubprocessError):
@@ -852,7 +850,7 @@ def _ne_step2_uv(runner: NeRunner, prereq_probe_path: str, probes_available: boo
             text=True,
             timeout=_MUTATION_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         ok = proc.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -945,7 +943,7 @@ def _ne_step3_python(runner: NeRunner, prereq_probe_path: str, probes_available:
             text=True,
             timeout=_MUTATION_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         ok = proc.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -1013,7 +1011,7 @@ def _ne_step4_alias_disable(
             text=True,
             timeout=_MUTATION_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
         ok = proc.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -1182,7 +1180,7 @@ def _ne_uname_s() -> str:
             text=True,
             timeout=5,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         ).stdout.strip() or "unknown"
     except (OSError, subprocess.SubprocessError):
         print(f"skip: _ne_uname_s: return subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import sys
 
 import subprocess
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional
 
@@ -41,7 +42,7 @@ def git_root(cwd: Optional[Path] = None) -> Optional[str]:
             text=True,
             # Review: code-reviewer — Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **no_console_creationflags(),
         )
     except OSError:
         print(f"skip: git_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

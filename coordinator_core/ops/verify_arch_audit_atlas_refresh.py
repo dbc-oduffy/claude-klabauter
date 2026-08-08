@@ -65,8 +65,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_CREATIONFLAGS = no_console_creationflags()
+
 _GIT_TIMEOUT_SECS = 30
 
 _HUNK_HEADER_RE = re.compile(r"^@@ -[^ ]+ \+([0-9]+)(?:,([0-9]+))? @@")
@@ -89,7 +92,7 @@ def _run_git(args: List[str], cwd: str) -> Tuple[int, str]:
             text=True,
             timeout=_GIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
+            **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _run_git: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

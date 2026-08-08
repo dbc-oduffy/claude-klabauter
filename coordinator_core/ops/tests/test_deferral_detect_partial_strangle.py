@@ -17,7 +17,7 @@ Coverage (acceptance-mapped, design.md § Detector 1):
       notice (the only shape indeterminate fires post-2026-07-21-pivot).
   (d) Mixed multi-strangler arbitration (finding > indeterminate > clean).
   (e) Pure core exercised directly with injected callables.
-  (f) Registered handler (_handler) exercised directly via asyncio.run, including a
+  (f) Registered handler (_handler) exercised directly (plain sync call), including a
       real-tree smoke test against THIS repo's actual seeded DR-210 manifest, and a
       real-tree noise-regression test proving the ~25-review-sidecar / ~13-legacy-plan
       filename-glob wall this pivot closed does not recur.
@@ -27,7 +27,6 @@ Coverage (acceptance-mapped, design.md § Detector 1):
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from pathlib import Path
@@ -44,14 +43,6 @@ from coordinator_core.ops.deferral_detect_partial_strangle import (
     _scan_manifest_candidates,
     classify_partial_strangles,
 )
-
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency.
-
-    Convention matches ops/tests/test_engine_drift.py / ops/fleet/tests/test_memo_send.py.
-    """
-    return asyncio.run(coro)
 
 
 DR210_MANIFEST_ENTRY = {
@@ -651,19 +642,19 @@ class TestHandlerWiring:
     def test_handler_smoke_against_fixture_tree(self, tmp_path, monkeypatch):
         _seed_dr210_fixture(tmp_path)
         _seed_memo_tool_rebuild_plan(tmp_path)
-        result = _run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
         assert result["state"] == "clean"
 
     def test_handler_falls_back_to_cwd_when_repo_root_is_none(self, tmp_path, monkeypatch):
         _seed_dr210_fixture(tmp_path)
         _seed_memo_tool_rebuild_plan(tmp_path)
         monkeypatch.chdir(tmp_path)
-        result = _run(_handler({}, repo_root=None))
+        result = _handler({}, repo_root=None)
         assert result["state"] == "clean"
 
     def test_handler_flags_unplanned_without_plan(self, tmp_path):
         _seed_dr210_fixture(tmp_path)
-        result = _run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
         assert result["state"] == "partial_strangles_found"
         assert set(result["findings"][0]["unplanned"]) == {"list", "draft", "compose"}
 
@@ -674,7 +665,7 @@ class TestHandlerWiring:
         # the seeded manifest block (design.md § Detector 1's self-test requirement) is
         # actually parseable and the detector runs clean end-to-end against real disk.
         repo_root = Path(__file__).resolve().parents[3]
-        result = _run(_handler({}, repo_root=repo_root))
+        result = _handler({}, repo_root=repo_root)
         assert result["state"] in ("clean", "partial_strangles_found", "indeterminate")
         # DR-210's own manifest must be found and parseable (not swallowed as indeterminate
         # for THIS strangler specifically), and — since C1 (list/draft/compose) is planned
@@ -693,7 +684,7 @@ class TestHandlerWiring:
         # ZERO indeterminate notices on the real tree (no un-manifested doc is even a
         # candidate, so nothing here is "opted-in-but-broken" either).
         repo_root = Path(__file__).resolve().parents[3]
-        result = _run(_handler({}, repo_root=repo_root))
+        result = _handler({}, repo_root=repo_root)
 
         noisy_suffixes = (
             ".the Staff Engineer-review.md",
@@ -751,7 +742,7 @@ def test_handler_flags_scan_incomplete_on_unreadable_decisions_dir(tmp_path):
     original_mode = decisions_dir.stat().st_mode
     os.chmod(decisions_dir, 0o000)
     try:
-        result = _run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
     finally:
         os.chmod(decisions_dir, original_mode)
 
@@ -765,7 +756,7 @@ def test_handler_flags_scan_incomplete_on_unreadable_decisions_dir(tmp_path):
 
 
 def test_handler_scan_incomplete_false_on_clean_scan(tmp_path):
-    result = _run(_handler({}, repo_root=tmp_path))
+    result = _handler({}, repo_root=tmp_path)
     assert result["scan_incomplete"] is False
     assert result["scan_errors"] == []
 
@@ -816,7 +807,7 @@ def test_handler_flags_scan_incomplete_on_unreadable_plans_dir(tmp_path):
     original_mode = plans_dir.stat().st_mode
     os.chmod(plans_dir, 0o000)
     try:
-        result = _run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
     finally:
         os.chmod(plans_dir, original_mode)
 

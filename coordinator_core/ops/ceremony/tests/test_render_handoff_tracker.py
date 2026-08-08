@@ -25,7 +25,6 @@ Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b/C9
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -82,7 +81,7 @@ class TestOpHandler:
         repo.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "not-the-meta-repo"))
 
-        result = asyncio.run(rht._handler({"root": str(repo)}, repo_root=None))
+        result = rht._handler({"root": str(repo)}, repo_root=None)
 
         assert result["exit_code"] == 0
         assert result["mode"] == "repo"
@@ -91,7 +90,7 @@ class TestOpHandler:
         assert out_path.is_file()
 
     def test_missing_repo_root_and_no_override_errors(self):
-        result = asyncio.run(rht._handler({}, repo_root=None))
+        result = rht._handler({}, repo_root=None)
         assert result["exit_code"] == 1
         assert "repo_root arg is None" in result["error"]
 

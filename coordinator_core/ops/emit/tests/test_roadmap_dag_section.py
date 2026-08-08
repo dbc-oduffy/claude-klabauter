@@ -37,7 +37,7 @@ def _make_ctx(
     assembler_exc: roadmap_id -> exception to raise (takes priority over map).
     """
     ctx = MagicMock()
-    ctx.repo_name = "dbc-example-operator/.example-doctrine-mirror-repo"
+    ctx.repo_name = "dbc-oduffy/.example-doctrine-mirror-repo"
 
     def provenance(source_kind: str, path: str = "", derivation: str = "parsed") -> dict:
         return {
@@ -137,7 +137,7 @@ def test_multi_node_chain_emits_nodes_and_edges(mock_qr):
     assert alpha["sprint"] == "S1"
     assert alpha["wave"] == "W1"
     assert alpha["shipped_sha"] == "abc12345"
-    assert alpha["repo"] == "dbc-example-operator/.example-doctrine-mirror-repo"
+    assert alpha["repo"] == "dbc-oduffy/.example-doctrine-mirror-repo"
     assert alpha["coordinator_root_path"] == "."
     assert alpha["provenance"]["source_kind"] == "local_fs"
     assert alpha["provenance"]["derivation"] == "parsed"
