@@ -667,17 +667,61 @@ def test_rung_order_literal_tilde_terminal_is_reported(tmp_path):
     assert len(findings) == 1
 
 
-def test_rung_order_unguarded_expanduser_is_reported(tmp_path):
-    """Spike fixture table: an unguarded `expanduser` rung WARNs (reported
-    via this rule's single findings list, same mechanism as FAIL)."""
+def test_rung_order_unguarded_expanduser_is_a_warn_not_a_violation(tmp_path):
+    """C5d fix, per `example-doctrine-repo@coordinator/docs/wiki/portability-gates-spec.md`
+    spec_version 1.3.0, "Terminal rung": "An unguarded `expanduser` is a
+    **warn**." -- distinct from a literal `"~"` (still a violation). Must NOT
+    appear in `find_rung_order_violations`; must appear in the WARN-tier
+    `find_rung_order_warnings` accessor."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
         "def f():\n"
         "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME') or os.path.expanduser('~')\n",
     )
-    findings = engine.find_rung_order_violations()
-    assert len(findings) == 1
+    assert engine.find_rung_order_violations() == []
+    warnings = engine.find_rung_order_warnings()
+    assert len(warnings) == 1
+
+
+def test_rung_order_expanduser_with_transposed_rungs_stays_a_violation(tmp_path):
+    """A site that is ALSO a transposition (or a literal `"~"`) stays
+    reported via the violation channel even when it also carries an
+    `expanduser` rung -- `find_rung_order_warnings`'s contract is warn-only,
+    never a superset of the fail list, so this same site must NOT double-
+    report in both accessors."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return (\n"
+        "        os.environ.get('CLAUDE_HOME')\n"
+        "        or os.environ.get('USERPROFILE')\n"
+        "        or os.environ.get('HOME')\n"
+        "        or os.path.expanduser('~')\n"
+        "    )\n",
+    )
+    assert len(engine.find_rung_order_violations()) == 1
+    assert engine.find_rung_order_warnings() == []
+
+
+def test_rung_order_environ_or_chain_with_expanduser_terminal_is_warn_only(tmp_path):
+    """C5d regression-bar row 1: `CLAUDE_HOME or HOME or USERPROFILE or
+    os.path.expanduser("~")` -- correct rung order, expanduser terminal --
+    is NOT a violation (warn at most)."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return (\n"
+        "        os.environ.get('CLAUDE_HOME')\n"
+        "        or os.environ.get('HOME')\n"
+        "        or os.environ.get('USERPROFILE')\n"
+        "        or os.path.expanduser('~')\n"
+        "    )\n",
+    )
+    assert engine.find_rung_order_violations() == []
+    assert len(engine.find_rung_order_warnings()) == 1
 
 
 def test_rung_order_absent_rung_mid_ladder_passes(tmp_path):

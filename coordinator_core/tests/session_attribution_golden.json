@@ -1,0 +1,119 @@
+{
+  "cases": {
+    "all_own_trailered": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "9e2d60a7-aaaa-42cc-b688-bc117f35e25e",
+      "sha_range": "13e56253b48e5d0d70070998615ddf192c1604cc~1..c89c9d12f3b5dc93a698e435d733b926821c54f0",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "foreign_trailered_case1": {
+      "guard": {
+        "disposition": "refused",
+        "message": "review_trail.write: sha_range '13e56253b48e5d0d70070998615ddf192c1604cc~1..c89c9d12f3b5dc93a698e435d733b926821c54f0' contains commit(s) whose own Session-Id git trailer names a different session: 13e56253b48e5d0d70070998615ddf192c1604cc, c89c9d12f3b5dc93a698e435d733b926821c54f0 \u2014 refusing to write a record for them on that basis alone. This does not determine that the named commit(s) are unrelated to this session's chain, and it does not determine whether they were reviewed \u2014 neither was checked. Two readings are consistent with this refusal: (i) these are baton-ancestor commits this session is legitimately obliged to cover as a chain-terminal reviewer, or (ii) these are genuinely unrelated, concurrent peer work on a shared branch. Determine which case applies before proceeding. If (i) applies, do not narrow sha_range to shed chain coverage \u2014 partition the chain and write one per-slice record over this session's own commits in each slice instead; narrowing is the case-(ii) remedy only. This session cannot record a range naming another session's commits. Write per-slice records over this session's own commits instead, or narrow sha_range to exclude the foreign commit(s) named above \u2014 there is no vouch, grant, or override this session can invoke to make the named range recordable as-is."
+      },
+      "own_session_id": "b7d4bdbf-b68a-403e-be93-0bba4a90a225",
+      "sha_range": "13e56253b48e5d0d70070998615ddf192c1604cc~1..c89c9d12f3b5dc93a698e435d733b926821c54f0",
+      "trailer_foreign_shas": {
+        "foreign_shas": [
+          "13e56253b48e5d0d70070998615ddf192c1604cc",
+          "c89c9d12f3b5dc93a698e435d733b926821c54f0"
+        ],
+        "ok": true
+      }
+    },
+    "grep_atom_divergent": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "22d7c42e-f7cc-47d5-8f8e-24c5599a1fd1",
+      "sha_range": "d21d8b023a29d4ce5e9d64a874f5646e1cdcb43b~1..d21d8b023a29d4ce5e9d64a874f5646e1cdcb43b",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "merge_spanning": {
+      "guard": {
+        "disposition": "refused",
+        "message": "review_trail.write: sha_range '3cb008c4870a43767b212a40d3a43a988321ef18..f5952559b92e0283e73e056fecc5851555bf4bda' contains commit(s) whose own Session-Id git trailer names a different session: 57081ff94a1ebc3f58c8befe7c12b6bb7329095f \u2014 refusing to write a record for them on that basis alone. This does not determine that the named commit(s) are unrelated to this session's chain, and it does not determine whether they were reviewed \u2014 neither was checked. Two readings are consistent with this refusal: (i) these are baton-ancestor commits this session is legitimately obliged to cover as a chain-terminal reviewer, or (ii) these are genuinely unrelated, concurrent peer work on a shared branch. Determine which case applies before proceeding. If (i) applies, do not narrow sha_range to shed chain coverage \u2014 partition the chain and write one per-slice record over this session's own commits in each slice instead; narrowing is the case-(ii) remedy only. This session cannot record a range naming another session's commits. Write per-slice records over this session's own commits instead, or narrow sha_range to exclude the foreign commit(s) named above \u2014 there is no vouch, grant, or override this session can invoke to make the named range recordable as-is."
+      },
+      "own_session_id": "00000000-0000-0000-0000-000000000000",
+      "sha_range": "3cb008c4870a43767b212a40d3a43a988321ef18..f5952559b92e0283e73e056fecc5851555bf4bda",
+      "trailer_foreign_shas": {
+        "foreign_shas": [
+          "57081ff94a1ebc3f58c8befe7c12b6bb7329095f"
+        ],
+        "ok": true
+      }
+    },
+    "sc_dr_008_untrailered_0": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "4524bf7d-7d1e-4c5f-85ed-90f723b912a3",
+      "sha_range": "833fa291d43f8c8880435830e2c590c3f38746c9~1..833fa291d43f8c8880435830e2c590c3f38746c9",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "sc_dr_008_untrailered_1": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "4524bf7d-7d1e-4c5f-85ed-90f723b912a3",
+      "sha_range": "10a9a3461d1f0310e6286f1f9955f3790cfc82c6~1..10a9a3461d1f0310e6286f1f9955f3790cfc82c6",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "sc_dr_008_untrailered_2": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "4524bf7d-7d1e-4c5f-85ed-90f723b912a3",
+      "sha_range": "b1fedc5756014d5d33e8e3697519213f54c00f84~1..b1fedc5756014d5d33e8e3697519213f54c00f84",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "sc_dr_008_untrailered_3": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "4524bf7d-7d1e-4c5f-85ed-90f723b912a3",
+      "sha_range": "1761098fee0b87e9cfbda8beb23266821230acaf~1..1761098fee0b87e9cfbda8beb23266821230acaf",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    },
+    "sc_dr_008_untrailered_4": {
+      "guard": {
+        "disposition": "proceed",
+        "waived": []
+      },
+      "own_session_id": "4524bf7d-7d1e-4c5f-85ed-90f723b912a3",
+      "sha_range": "9ce3d77879e5b0b9199e70653f263e776f06257e~1..9ce3d77879e5b0b9199e70653f263e776f06257e",
+      "trailer_foreign_shas": {
+        "foreign_shas": [],
+        "ok": true
+      }
+    }
+  },
+  "generated_from": "unmodified session_attribution.trailer_foreign_shas + review_trail_write._guard_foreign_session_range",
+  "pinned_head_sha": "8e6ad1de8737f58a2d077c5ef84e9d2e222f4bc1"
+}

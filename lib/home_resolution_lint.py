@@ -130,10 +130,12 @@ RULE_REMEDIATION: dict[str, str] = {
         "the master order CLAUDE_HOME -> HOME -> USERPROFILE -> "
         "Path.home() -- skipping a rung is fine (CLAUDE_HOME -> USERPROFILE "
         "-> Path.home() is valid and Windows-correct), but a transposed "
-        "rung (e.g. USERPROFILE checked before HOME), a literal '~' rung, "
-        "or an unguarded os.path.expanduser(...) rung is not. Reorder the "
-        "ladder to the master order, or replace the '~'/expanduser rung "
-        "with the correct os.environ.get(...) / Path.home() call."
+        "rung (e.g. USERPROFILE checked before HOME) or a literal '~' rung "
+        "is a violation, and an unguarded os.path.expanduser(...) rung is "
+        "a warn (see HomeResolutionLintEngine.find_rung_order_warnings). "
+        "Reorder the ladder to the master order, or replace the "
+        "'~'/expanduser rung with the correct os.environ.get(...) / "
+        "Path.home() call."
     ),
 }
 
@@ -922,6 +924,49 @@ class HomeResolutionLintEngine:
             return "EXPANDUSER"
         return None
 
+    def _rung_order_sites(self) -> Iterable[tuple[Path, ast.AST, list[str | None]]]:
+        """Shared walk for `find_rung_order_violations` and
+        `find_rung_order_warnings`: yields `(path, node, kinds)` for every
+        `_iter_ladder_sites` site gated on the `bare_or` CLAUDE_HOME/HOME
+        `environ.get` presence check, with each rung already classified via
+        `_classify_rung`. Kept as one seam so the two accessors below can
+        never disagree about which sites are in scope or how a rung
+        classifies -- only how a classified site's kinds are judged."""
+        for path in self.iter_py_files():
+            tree, _lines = _parse(path)
+            if tree is None:
+                continue
+            for node, rungs in self._iter_ladder_sites(tree):
+                if not any(self._is_environ_get_home(rung) for rung in rungs):
+                    continue
+                yield path, node, [self._classify_rung(rung) for rung in rungs]
+
+    @classmethod
+    def _rung_order_is_violation(cls, kinds: list[str | None]) -> bool:
+        """A literal `"~"` terminal, or a transposed rung (a later-order
+        rung appearing before an earlier-order one), is a FAIL per spec
+        (`docs/wiki/portability-gates-spec.md` spec_version 1.3.0, "Terminal
+        rung": `"~"` -- violation; `Path.home()` -- correct). An unguarded
+        `expanduser` rung is deliberately NOT judged here -- see
+        `_rung_order_is_warn` -- the spec downgrades it to warn, a literal
+        `"~"` stays a hard violation."""
+        if any(kind == "TILDE" for kind in kinds):
+            return True
+        order_seq = [cls._RUNG_ORDER[kind] for kind in kinds if kind in cls._RUNG_ORDER]
+        return any(order_seq[i] >= order_seq[i + 1] for i in range(len(order_seq) - 1))
+
+    @classmethod
+    def _rung_order_is_warn(cls, kinds: list[str | None]) -> bool:
+        """An unguarded `os.path.expanduser(...)` rung is a WARN per spec
+        (same "Terminal rung" section), not a FAIL -- distinct from the
+        literal `"~"` rung, which stays a violation. A site already judged a
+        violation by `_rung_order_is_violation` (a literal `"~"`, or an
+        order transposition, co-occurring with an `expanduser` rung) is NOT
+        also surfaced here -- it is already reported via the violation
+        channel, and this accessor's contract is "warn-only, never a
+        superset of the fail list"."""
+        return any(kind == "EXPANDUSER" for kind in kinds) and not cls._rung_order_is_violation(kinds)
+
     def find_rung_order_violations(self) -> list[Finding]:
         """`_iter_ladder_sites`-driven, ladder-kind-agnostic (per the spec:
         the bootstrap ladder is the contents ladder minus its first rung, so
@@ -933,30 +978,44 @@ class HomeResolutionLintEngine:
         all). A skipped rung mid-ladder PASSES (`CLAUDE_HOME -> USERPROFILE
         -> Path.home()` is valid and Windows-correct) -- only a
         transposition (a later-order rung appearing before an
-        earlier-order one) is a violation, plus the two non-order
-        terminal-shape violations (a literal `"~"` rung, an unguarded
-        `expanduser` rung). Rung PRESENCE (whether a given key appears at
-        all) stays `bare_or`'s concern, not this rule's -- this rule only
-        scores the relative order of the rungs a site actually has."""
+        earlier-order one) is a violation, plus the one non-order
+        terminal-shape violation (a literal `"~"` rung). An unguarded
+        `expanduser` rung is a WARN, not a violation -- see
+        `find_rung_order_warnings` (spec: "Terminal rung", § Home-resolution
+        gate family). Rung PRESENCE (whether a given key appears at all)
+        stays `bare_or`'s concern, not this rule's -- this rule only scores
+        the relative order of the rungs a site actually has."""
         findings: list[Finding] = []
-        for path in self.iter_py_files():
-            tree, lines = _parse(path)
-            if tree is None:
-                continue
-            for node, rungs in self._iter_ladder_sites(tree):
-                if not any(self._is_environ_get_home(rung) for rung in rungs):
-                    continue
-                kinds = [self._classify_rung(rung) for rung in rungs]
-                violation = any(kind in ("TILDE", "EXPANDUSER") for kind in kinds)
-                if not violation:
-                    order_seq = [self._RUNG_ORDER[kind] for kind in kinds if kind in self._RUNG_ORDER]
-                    violation = any(
-                        order_seq[i] >= order_seq[i + 1] for i in range(len(order_seq) - 1)
-                    )
-                if violation:
-                    findings.append(
-                        Finding(_relpath(self.repo_root, path), node.lineno, _line_text(lines, node.lineno))
-                    )
+        for path, node, kinds in self._rung_order_sites():
+            if self._rung_order_is_violation(kinds):
+                _tree, lines = _parse(path)
+                findings.append(
+                    Finding(_relpath(self.repo_root, path), node.lineno, _line_text(lines, node.lineno))
+                )
+        return findings
+
+    def find_rung_order_warnings(self) -> list[Finding]:
+        """WARN-tier counterpart to `find_rung_order_violations` -- an
+        unguarded `os.path.expanduser(...)` terminal rung, per spec ("Terminal
+        rung": "An unguarded `expanduser` is a **warn**"), on a site that is
+        not ALSO a violation (a literal `"~"` or an order transposition,
+        judged by the shared `_rung_order_is_violation`). Deliberately a
+        SEPARATE accessor, not folded into `find_rung_order_violations`'s
+        list or `run_all_rules()`'s dict -- `run_all_rules()`'s keys are a
+        cross-repo contract example-doctrine-repo constructs against directly
+        (`coordinator/tests/test_home_resolution_lint.py:125-127`) and every
+        one of its per-rule lists is treated as gate-failing by both the
+        pytest shim and this module's own CLI (`main`'s ledger loop below);
+        a warn that is not gate-failing has no seat in either without
+        breaking that contract. Call this accessor explicitly for warn
+        visibility."""
+        findings: list[Finding] = []
+        for path, node, kinds in self._rung_order_sites():
+            if self._rung_order_is_warn(kinds):
+                _tree, lines = _parse(path)
+                findings.append(
+                    Finding(_relpath(self.repo_root, path), node.lineno, _line_text(lines, node.lineno))
+                )
         return findings
 
     def run_all_rules(self) -> dict[str, list[Finding]]:
