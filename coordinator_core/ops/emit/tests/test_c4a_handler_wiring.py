@@ -12,7 +12,6 @@ Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C4a
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, call
@@ -25,11 +24,6 @@ from coordinator_core.ops.emit.context import EmitContext
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency."""
-    return asyncio.run(coro)
-
 
 def _fake_ctx(tmp_path: Path, repo_name: str = "test-org/test-repo") -> MagicMock:
     """Build a minimal EmitContext-shaped mock rooted at tmp_path."""
@@ -52,14 +46,14 @@ class TestArtifactEmitFailLoudOnNone:
         from coordinator_core.ops.artifact_emit import _artifact_emit
 
         with pytest.raises(ValueError, match="_origin_worktree"):
-            _run(_artifact_emit({}, repo_root=None))
+            _artifact_emit({}, repo_root=None)
 
     def test_none_repo_root_error_mentions_ac5(self) -> None:
         """Error message must mention no silent fallback to meta-repo."""
         from coordinator_core.ops.artifact_emit import _artifact_emit
 
         with pytest.raises(ValueError, match="No silent fallback"):
-            _run(_artifact_emit({}, repo_root=None))
+            _artifact_emit({}, repo_root=None)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +81,7 @@ class TestArtifactEmitContextDerivation:
             "coordinator_core.ops.artifact_emit._envelope.emit",
             return_value=fake_emit_result,
         ):
-            result = _run(_artifact_emit({}, repo_root=common_dir))
+            result = _artifact_emit({}, repo_root=common_dir)
 
         # resolve_context must be called with the DERIVED root (common_dir.parent), not common_dir
         mock_resolve.assert_called_once_with(main_worktree)
@@ -109,7 +103,7 @@ class TestArtifactEmitContextDerivation:
             "coordinator_core.ops.artifact_emit._envelope.emit",
             return_value={"ok": True},
         ) as mock_emit:
-            _run(_artifact_emit({"out": out_path}, repo_root=common_dir))
+            _artifact_emit({"out": out_path}, repo_root=common_dir)
 
         mock_emit.assert_called_once_with(fake_ctx, out=out_path)
 
@@ -163,7 +157,7 @@ class TestArtifactEmitLinkedWorktreeFixture:
             "coordinator_core.ops.artifact_emit._envelope.emit",
             return_value={"ok": True, "records": 5},
         ):
-            _run(_artifact_emit({}, repo_root=common_dir))
+            _artifact_emit({}, repo_root=common_dir)
 
         assert len(captured_roots) == 1
         assert captured_roots[0] == main_worktree, (

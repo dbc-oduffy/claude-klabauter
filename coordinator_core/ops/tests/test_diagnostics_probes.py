@@ -16,8 +16,6 @@ Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 import coordinator_core.ops  # noqa: F401 -- import for side effect: registers every op
@@ -56,7 +54,7 @@ def test_probe_is_scoped_none(op_key: str) -> None:
 
 
 def test_always_succeeds_returns_trivial_result() -> None:
-    assert asyncio.run(_always_succeeds({}, repo_root=None)) == {
+    assert _always_succeeds({}, repo_root=None) == {
         "probe": "always_succeeds",
         "ok": True,
     }
@@ -65,14 +63,14 @@ def test_always_succeeds_returns_trivial_result() -> None:
 def test_always_refuses_raises_a_non_structural_error() -> None:
     """The rc=1 rung: an ordinary exception, so dispatch maps it to INTERNAL_ERROR."""
     with pytest.raises(DiagnosticsRefusal):
-        asyncio.run(_always_refuses({}, repo_root=None))
+        _always_refuses({}, repo_root=None)
     assert getattr(DiagnosticsRefusal, "structurally_wedged", False) is False
 
 
 def test_always_structural_pin_raises_a_structurally_wedged_error() -> None:
     """The rc=2 rung: the duck-type marker ipc._handler_exception_error reads."""
     with pytest.raises(DiagnosticsStructuralPin):
-        asyncio.run(_always_structural_pin({}, repo_root=None))
+        _always_structural_pin({}, repo_root=None)
     assert DiagnosticsStructuralPin.structurally_wedged is True
 
 
@@ -93,7 +91,7 @@ def test_probes_ignore_params_and_repo_root(op_key: str) -> None:
     handler = ipc.get_op_handler(op_key)
     hostile = {"path": "state/definitely-not-written.txt", "repo_root": "/nope"}
     if op_key == "diagnostics.always_succeeds":
-        assert asyncio.run(handler(hostile, repo_root=None))["ok"] is True
+        assert handler(hostile, repo_root=None)["ok"] is True
     else:
         with pytest.raises((DiagnosticsRefusal, DiagnosticsStructuralPin)):
-            asyncio.run(handler(hostile, repo_root=None))
+            handler(hostile, repo_root=None)

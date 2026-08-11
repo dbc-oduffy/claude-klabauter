@@ -126,6 +126,15 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     the outer function. Accepted per this module's stated false-negative-over-false-positive
     preference (a broader match here can only ADD candidate runners, and route e still requires
     the call site's own argv to look git-shaped before counting a violation).
+  - `_generic_runner_param` (route e) only recognizes a runner with EXACTLY ONE
+    positional-or-keyword parameter (`len(params) != 1: return None`). This repo's dominant
+    `GitRunner` idiom takes TWO (`argv`, `cwd`) -- e.g. `chain_attribution.GitRunner =
+    Callable[[List[str], Optional[str]], ...]`, `generate_session_attribution_golden._run(args,
+    cwd)`, `wsc-coverage-gate-runner._git_run_for_session_attribution(cmd, cwd=None)` -- so any
+    cross-module generic runner shaped like the codebase's own real convention is invisible to
+    route e, even though the module's own self-test only exercises the one-param shape. Accepted
+    per this module's stated false-negative bias; route e's parameter-count check is not widened
+    here (see G2's frozen `_KNOWN_SITES` inventory, the actual regrowth guard).
 """
 
 from __future__ import annotations
@@ -270,6 +279,43 @@ def _is_constant_literal_iterable(node: ast.expr, literal_names: set[str]) -> bo
 
 
 # --------------------------------------------------------------------------
+# Discriminator 4: chunking stride loops
+# --------------------------------------------------------------------------
+
+
+def _is_chunking_stride_iterable(node: ast.expr) -> bool:
+    """True for `range(<start>, <stop>, <step>)` where `step` is not the literal `1` --
+    the CHUNKING idiom (`for i in range(0, len(shas), CHUNK): chunk = shas[i:i+CHUNK]`),
+    which is the batched shape this collector's own remedy asks for, not the per-item
+    shape it names.
+
+    Why this is a discriminator and not a widened exemption: a 3-arg `range` with a
+    non-unit stride runs `ceil(n / step)` times, not `n` times, so a spawn in its body
+    is one call PER BATCH by construction. Without this, `coverage.py::
+    _filter_shas_by_scope_paths` -- explicitly documented as "batched in chunks of
+    _SCOPE_FILTER_CHUNK_SIZE SHAs fed over stdin per git invocation ... not one call per
+    SHA" -- was reported as an amplification site, i.e. the collector flagged the exact
+    fix it recommends. Measuring a property that contradicts the defect it names is what
+    this discriminator removes.
+
+    Deliberately narrow, matching this module's false-negative-over-false-positive
+    preference: a literal `1` step, a 1- or 2-arg `range`, and any non-`range` iterable
+    all still qualify as per-item loops. A step that is a Name (the ordinary
+    `_CHUNK_SIZE` constant shape) is taken at face value -- a module constant named as a
+    stride is not statically resolvable here, and the alternative is re-flagging every
+    correctly batched site.
+    """
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"):
+        return False
+    if len(node.args) != 3:
+        return False
+    step = node.args[2]
+    if isinstance(step, ast.Constant) and step.value == 1:
+        return False
+    return True
+
+
+# --------------------------------------------------------------------------
 # Repo-wide, one-hop function index (routes b/c/d/e)
 # --------------------------------------------------------------------------
 
@@ -291,6 +337,12 @@ class _FuncIndex:
     same_module_direct_git: dict[tuple[str, str], bool] = dataclasses.field(default_factory=dict)
     #: relpath -> set of names imported via `from X import name` in that file (route c's gate)
     imported_names_by_file: dict[str, set[str]] = dataclasses.field(default_factory=dict)
+    #: (relpath, func_name) -> the set of argv verbs that function actually SPAWNS for, when
+    #: every spawn in its body is dominated by an `if <param>[0] in <MODULE_SET>:` branch
+    #: (discriminator 5). Any other verb is served without a process.
+    verb_gated_spawn_verbs: dict[tuple[str, str], frozenset[str]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 def _generic_runner_param(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
@@ -310,6 +362,105 @@ def _generic_runner_param(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
             first = node.args[0]
             if isinstance(first, ast.Name) and first.id == only_param:
                 return only_param
+    return None
+
+
+def _module_level_str_set_members(tree: ast.Module) -> dict[str, frozenset[str]]:
+    """Names bound at module scope to a set/frozenset/tuple/list of STRING LITERALS, mapped to
+    those literals -- the allowlist half of discriminator 5."""
+    out: dict[str, frozenset[str]] = {}
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            if value.func.id not in {"set", "frozenset"} or not value.args:
+                continue
+            value = value.args[0]
+        if not isinstance(value, (ast.Set, ast.Tuple, ast.List)):
+            continue
+        members = [e.value for e in value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if members and len(members) == len(value.elts):
+            out[node.targets[0].id] = frozenset(members)
+    return out
+
+
+def _verb_gated_spawn_verbs(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    spawn_linenos: set[int],
+    set_members: dict[str, frozenset[str]],
+) -> frozenset[str] | None:
+    """Discriminator 5. Return the set of argv verbs `func_node` actually SPAWNS a process
+    for, when EVERY spawn site in its body is dominated by a single
+    `if <param>[0] in <MODULE_LEVEL_STRING_SET>:` branch -- otherwise `None`.
+
+    Why this is a discriminator and not an exemption: routes b/c resolve a callee by asking
+    "does this function's body contain a git spawn?", which is a property of the FUNCTION.
+    A verb-DISPATCHING chokepoint makes that the wrong question -- `pickup_assemble.
+    _run_git` spawns real git for `status`/`diff`/`add`/`commit` and serves every other verb
+    from an in-process read model, so `_run_git(["cat-file", "-e", sha], root)` in a loop
+    creates ZERO processes. Reporting it as git amplification is not a conservative
+    over-report; it is a claim about cost that is false, and its stated remedy ("batch it into
+    a single call") would replace a working in-process read with a `--batch` form that
+    chokepoint's read model does not serve.
+
+    The evidence is entirely static and local: the verb is a string literal at the call site,
+    the allowlist is a module-level literal set, and the branch dominating the spawn is an
+    `ast.If` whose body's line range contains every spawn lineno. Nothing is inferred about
+    runtime.
+
+    Deliberately narrow, in this module's false-negative-over-false-positive direction: a
+    chokepoint whose gate is not this exact shape, whose allowlist is not statically
+    resolvable, or which has even one spawn outside the gated branch, resolves to `None` and
+    is treated exactly as before.
+    """
+    if not spawn_linenos:
+        return None
+    params = [a.arg for a in func_node.args.args]
+    for node in ast.walk(func_node):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.In)
+            and isinstance(test.left, ast.Subscript)
+            and isinstance(test.left.value, ast.Name)
+            and test.left.value.id in params
+            and isinstance(test.left.slice, ast.Constant)
+            and test.left.slice.value == 0
+            and isinstance(test.comparators[0], ast.Name)
+        ):
+            continue
+        allowlist = set_members.get(test.comparators[0].id)
+        if allowlist is None:
+            continue
+        body_lines = {
+            lineno
+            for stmt in node.body
+            for lineno in range(stmt.lineno, (stmt.end_lineno or stmt.lineno) + 1)
+        }
+        if spawn_linenos <= body_lines:
+            return allowlist
+    return None
+
+
+def _call_literal_verb(call: ast.Call) -> str | None:
+    """The first argv element of `call`'s first positional argument, when that argument is a
+    list/tuple literal starting with a string literal (`_run_git(["cat-file", ...], root)` ->
+    `"cat-file"`). `None` for anything not statically decidable."""
+    if not call.args:
+        return None
+    arg = call.args[0]
+    if isinstance(arg, (ast.List, ast.Tuple)) and arg.elts:
+        first = arg.elts[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
     return None
 
 
@@ -379,6 +530,10 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
 
         git_enclosing = {s.enclosing for s in spawn_sites if s.argv0 == _GIT_ARGV0}
         any_enclosing = {s.enclosing for s in spawn_sites}
+        spawn_linenos_by_func: dict[str, set[int]] = {}
+        for site in spawn_sites:
+            spawn_linenos_by_func.setdefault(site.enclosing, set()).add(site.lineno)
+        set_members = _module_level_str_set_members(tree)
 
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -395,6 +550,11 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
             if name in git_enclosing:
                 index.direct_git_funcs.setdefault(name, []).append((relpath, name))
                 index.same_module_direct_git[(relpath, name)] = True
+                gated = _verb_gated_spawn_verbs(
+                    node, spawn_linenos_by_func.get(name, set()), set_members
+                )
+                if gated is not None:
+                    index.verb_gated_spawn_verbs[(relpath, name)] = gated
 
             if name in any_enclosing:
                 index.direct_any_spawn_funcs.setdefault(name, []).append((relpath, name))
@@ -470,9 +630,9 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
     def _visit_for(self, node: ast.For | ast.AsyncFor) -> None:
         # Discriminator 1: iter is evaluated outside any loop context this loop introduces.
         self.visit(node.iter)
-        if _is_constant_literal_iterable(node.iter, self._literal_names):
-            # Discriminator 2: excluded wholesale -- body still visited (a nested qualifying
-            # loop inside it may exist), but WITHOUT this loop's own context pushed.
+        if _is_constant_literal_iterable(node.iter, self._literal_names) or _is_chunking_stride_iterable(node.iter):
+            # Discriminators 2 and 4: excluded wholesale -- body still visited (a nested
+            # qualifying loop inside it may exist), but WITHOUT this loop's own context pushed.
             for stmt in node.body:
                 self.visit(stmt)
             return
@@ -649,7 +809,13 @@ def find_unbatched_per_item_git_spawns(
             if route is None and callee is not None:
                 # route b-local-helper: same-module function directly git-spawns.
                 if (relpath, callee) in index.same_module_direct_git:
-                    route = "b-local-helper"
+                    # Discriminator 5: a verb-dispatching chokepoint spawns only for the
+                    # verbs in its own statically-resolvable allowlist. This call site's
+                    # literal verb is not one, so it creates no process.
+                    gated = index.verb_gated_spawn_verbs.get((relpath, callee))
+                    verb = _call_literal_verb(node)
+                    if not (gated is not None and verb is not None and verb not in gated):
+                        route = "b-local-helper"
 
                 # route c-cross-module: imported name resolves (repo-wide, by name) to a
                 # function elsewhere that directly git-spawns.
@@ -732,6 +898,13 @@ class _EnclosingTracker(ast.NodeVisitor):
 #: kept (none of which this collector's by-name/single-hop resolution can currently see):
 #: `state/audits/2026-08-08-git-amplification-gate-known-sites.md`.
 #:
+#: Renamed since that run: `consolidate_assemble/__init__.py::brief -> inspect_commit` (site 32)
+#: is now `-> inspect_commits`, which batches every commit of a stale branch into ONE
+#: `git show --stat <sha>...`. The site stays frozen because it remains a call inside `brief`'s
+#: per-BRANCH loop -- structurally identical to its `unique_commits`/`tip_author` siblings; what
+#: went away is the inner per-COMMIT fan-out, which the collector's (path, enclosing, callee) key
+#: cannot express. Burning down the branch loop itself is the remaining work on this row.
+#:
 #: The standing assertion below is a SUBSET check, not a bare `violations == []` (blocked on this
 #: volume) -- it bites immediately on any NEW site outside this frozen set. Do NOT grow this
 #: constant to silence a new violation; fix the site, or route a genuine deliberate exception
@@ -787,7 +960,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("coordinator_core/bash_guards/dispatch_checks.py", "check_validate_commit", "_run_git"),
         ("coordinator_core/bash_guards/dispatch_checks.py", "check_validate_commit", "join"),
         ("coordinator_core/consolidate_assemble/__init__.py", "brief", "branch_reachable"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "inspect_commit"),
+        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "inspect_commits"),
         ("coordinator_core/consolidate_assemble/__init__.py", "brief", "tip_author"),
         ("coordinator_core/consolidate_assemble/__init__.py", "brief", "unique_commits"),
         ("coordinator_core/consolidate_assemble/__init__.py", "brief", "worktree_is_dirty"),
@@ -1166,6 +1339,117 @@ def test_discriminator_while_loop_not_flagged(tmp_path):
     )
     violations = find_unbatched_per_item_git_spawns((tmp_path,))
     assert violations == []
+
+
+def test_discriminator_chunking_stride_loop_not_flagged(tmp_path):
+    """Discriminator 4: `for i in range(0, len(xs), CHUNK)` is the BATCHED shape this
+    collector's own remedy asks for -- one spawn per chunk, not per item. Flagging it
+    reported `coverage.py::_filter_shas_by_scope_paths` (documented as batched over
+    stdin, explicitly "not one call per SHA") as an amplification site."""
+    fixture = tmp_path / "disc_stride.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "CHUNK = 50\n"
+        "\n"
+        "def _git_batch(shas):\n"
+        "    subprocess.run(['git', 'cat-file', '--batch-check'], cwd='/repo',\n"
+        "                   input='\\n'.join(shas))\n"
+        "\n"
+        "def check(shas):\n"
+        "    for i in range(0, len(shas), CHUNK):\n"
+        "        _git_batch(shas[i : i + CHUNK])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_unit_stride_range_still_flagged(tmp_path):
+    """Negative control for discriminator 4: a 3-arg `range` with a LITERAL `1` step is a
+    per-item walk wearing a stride's clothes, and must still be flagged -- the
+    discriminator keys on a non-unit stride, never on the `range` call alone."""
+    fixture = tmp_path / "disc_unit_stride.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _git_show(sha):\n"
+        "    subprocess.run(['git', 'show', sha], cwd='/repo')\n"
+        "\n"
+        "def check(shas):\n"
+        "    for i in range(0, len(shas), 1):\n"
+        "        _git_show(shas[i])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+_VERB_GATED_CHOKEPOINT = (
+    "import subprocess\n"
+    "\n"
+    "_SPAWN_VERBS = {'status', 'diff', 'add', 'commit'}\n"
+    "\n"
+    "def _run_git(args, cwd):\n"
+    "    if args[0] in _SPAWN_VERBS:\n"
+    "        return subprocess.run(['git', '-C', str(cwd), *args], capture_output=True)\n"
+    "    return _read_model(args, cwd)\n"
+    "\n"
+    "def _read_model(args, cwd):\n"
+    "    return None\n"
+    "\n"
+)
+
+
+def test_discriminator_verb_gated_chokepoint_non_spawning_verb_not_flagged(tmp_path):
+    """Discriminator 5: `pickup_assemble._run_git` spawns real git only for the verbs in its
+    own module-level allowlist and serves every other verb from an in-process read model, so
+    a loop calling it with `cat-file` creates ZERO processes. Reporting that as git
+    amplification is a false claim about cost, and its stated remedy would replace a working
+    in-process read with a `--batch` form the read model does not serve."""
+    fixture = tmp_path / "disc_verb_gated.py"
+    fixture.write_text(
+        _VERB_GATED_CHOKEPOINT
+        + "def check(shas, root):\n"
+        "    for sha in shas:\n"
+        "        _run_git(['cat-file', '-e', sha], root)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged(tmp_path):
+    """Negative control for discriminator 5: the SAME chokepoint called per-item with a verb
+    that IS on its spawn allowlist really does spawn one process per item, and must stay
+    flagged. The discriminator keys on the call site's own literal verb, never on the
+    chokepoint being a dispatcher."""
+    fixture = tmp_path / "disc_verb_gated_spawning.py"
+    fixture.write_text(
+        _VERB_GATED_CHOKEPOINT
+        + "def check(paths, root):\n"
+        "    for path in paths:\n"
+        "        _run_git(['diff', '--quiet', path], root)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
+
+
+def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
+    """Discriminator 5 stays false-negative-biased in the collector's own direction only:
+    a call site whose verb is a VARIABLE cannot be decided statically, so the chokepoint is
+    treated exactly as it was before this discriminator existed -- flagged."""
+    fixture = tmp_path / "disc_verb_gated_dynamic.py"
+    fixture.write_text(
+        _VERB_GATED_CHOKEPOINT
+        + "def check(verbs, root):\n"
+        "    for verb in verbs:\n"
+        "        _run_git([verb, '--quiet'], root)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
 def test_deep_tail_not_flagged(tmp_path):

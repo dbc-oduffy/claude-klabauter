@@ -3874,6 +3874,320 @@ DIRECTION_WE_BEHIND = "we-are-behind"
 DIRECTION_BOTH = "both"
 
 
+def _parse_semver_tuple(version: str) -> tuple[int, ...] | None:
+    """Best-effort `MAJOR.MINOR.PATCH`-shaped string -> int tuple, or None.
+
+    Deliberately narrow: only accepts a dot-separated run of digit groups
+    (no pre-release/build metadata parsing) — sufficient for the
+    `x-schema-version` vocabulary every vendored schema in this repo uses.
+    Returns None rather than raising on anything else, so a caller can
+    degrade to "cannot compare" instead of crashing on an unexpected string.
+    """
+    parts = version.split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
+# Leaf paths (as produced by _flatten_json) that check_schema_ahead_of_doe's
+# leaf-retention check is told NOT to require claude-klabauter's copy to retain
+# byte-for-byte -- UNIVERSAL entries only, i.e. ones that apply to every
+# schema in the registry, not to one consumer's content. A consumer-specific
+# exemption (e.g. a single schema's deliberately-rewritten description)
+# belongs on that schema's `_QUEUE_SCHEMA_AHEAD_PINS` entry via
+# `exempt_paths`, not here -- see check_schema_ahead_of_doe's `exempt_paths`
+# parameter. Review: eng-director P2-3 -- a review-trail-specific path
+# (`properties.scope_kind.description`) previously lived in this module-level
+# constant and silently applied to every future schema entering the registry.
+#
+#   - x-schema-version is a single token that REPLACES rather than extends,
+#     so retention cannot hold by construction: "1.1.0" is not a substring
+#     of "1.2.0". It is not thereby unchecked -- check 3 asserts it is
+#     strictly greater, which is the stronger statement.
+#   - x-bump-class is a single token that REPLACES rather than extends
+#     ("nested-field-additive" is not a substring of "major"), and carries
+#     no schema semantics of its own.
+#   - x-bump-note is NOT listed here: an ahead-bump APPENDS to the note, so
+#     example-doctrine-repo's text is expected to stay a literal substring of claude-klabauter's -- the
+#     same append-extend shape prose leaves like `description` have. It is
+#     covered by `_PROSE_ANNOTATION_LEAF_KEYS` below instead (Review:
+#     code-reviewer P1 -- the prior version of this comment claimed
+#     x-bump-note was covered by the description-suffix rule, but the
+#     predicate only matched a literal last-segment of "description", so
+#     x-bump-note never actually hit it; a legitimate ahead-bump note append
+#     failed the gate on the very case this carve-out exists for).
+_AHEAD_RETENTION_EXEMPT_PATHS: frozenset[tuple] = frozenset(
+    {
+        ("x-schema-version",),
+        ("x-bump-class",),
+    }
+)
+
+# Leaf key names (the LAST segment of a flattened path) whose values are
+# free-form prose annotations that legitimately grow over an ahead-bump --
+# example-doctrine-repo's value being a substring of claude-klabauter's is an honest append, not a
+# rewrite, for exactly these keys and no others. A NAMED set, not a suffix
+# match or "x-" prefix glob: a glob would silently absorb any future
+# code-consumed `x-*` key that is NOT prose (see example-doctrine-repo's equivalent
+# allowlist, named for the same reason). `$comment` is not listed here --
+# it is stripped by `_strip_comment_annotations` before flattening, so it
+# never reaches this retention check at all (D1's ruling: `$comment`
+# carries no schema semantics).
+_PROSE_ANNOTATION_LEAF_KEYS: frozenset[str] = frozenset({"description", "x-bump-note"})
+
+
+def check_schema_ahead_of_doe(
+    schema_path: str | Path,
+    doe_repo_path: str | Path,
+    *,
+    doe_ref: str,
+    reason: str,
+    provenance: str,
+    exempt_paths: frozenset = frozenset(),
+    local_shape_hash: str | None = None,
+) -> None:
+    """Gating check for a pin declared "claude-klabauter leads example-doctrine-repo, awaiting upward vendor".
+
+    `exempt_paths` is caller-trusted, same trust level as the module-level
+    `_AHEAD_RETENTION_EXEMPT_PATHS` constant it replaced the hardcoded form
+    of: the registry entry authoring it is developer-reviewed config, not an
+    externally-reachable input, and this function does not constrain its
+    breadth. A caller passing something broad enough (e.g. every leaf example-doctrine-repo's
+    schema has) neuters the retention check to a no-op for that call, with
+    nothing short of code review to catch it. Review: code-reviewer P2/P3.
+
+    Sibling to `check_schema_drift` (the byte-identity tamper-pin): where that
+    function asserts the vendored copy is UNCHANGED from a example-doctrine-repo ref, this one
+    asserts the DECLARED-AHEAD state is still honest, by checking four things:
+
+      1. Example-doctrine-repo's copy at `doe_ref` is byte-identical to example-doctrine-repo's copy at the most
+         recent commit touching this path on ANY local ref/branch in
+         `doe_repo_path` (`git log --all`, not `HEAD` — a clone's checked-out
+         branch is incidental, not the fact being asked about) — if example-doctrine-repo has
+         moved since `doe_ref`, the ahead-claim is stale and this raises
+         loudly rather than silently comparing against a ref example-doctrine-repo has already
+         superseded. A dirty worktree on that path is refused rather than
+         silently read past ("cannot check" is the honest answer, not
+         "unmoved").
+      2. Claude-klabauter's vendored copy RETAINS every leaf example-doctrine-repo's copy (at `doe_ref`)
+         declares: exact equality, except (a) the named universal exemptions
+         in `_AHEAD_RETENTION_EXEMPT_PATHS`, (b) any path in the caller-supplied
+         `exempt_paths` (per-pin, consumer-specific exemptions belong here —
+         see `_AHEAD_RETENTION_EXEMPT_PATHS`'s docstring comment), and (c) a
+         shared leaf whose path ends in a key named in
+         `_PROSE_ANNOTATION_LEAF_KEYS` (`description`, `x-bump-note`), where
+         example-doctrine-repo's value being a substring of claude-klabauter's is treated as an honest
+         append-extend rather than a rewrite. This is deliberately narrower than a general
+         substring rule: retention is a example-doctrine-repo-leaf-presence check, not a claim
+         that claude-klabauter's schema *validates* a superset of what example-doctrine-repo's does (leaf
+         addition can be a narrowing — `additionalProperties: false`, a new
+         `required` entry — which this check cannot and does not detect;
+         name it "retention", not "superset" or "containment").
+      3. Claude-klabauter's top-level `x-schema-version` parses as strictly greater
+         than example-doctrine-repo's `x-schema-version` at `doe_ref`.
+      4. If `local_shape_hash` is supplied, claude-klabauter's CURRENT vendored bytes
+         hash to it (`_canonical_schema_text` + sha256) — the ahead-state's
+         own local-tamper pin, since `check_schema_drift`'s ordinary byte-pin
+         does not run while a schema is ahead-pinned (see
+         `_local_shape_hash`).
+
+    `reason` and `provenance` are not compared against anything — they exist
+    so the caller is forced to state, at the call site, WHY this schema is
+    allowed to be ahead and what commit/memo authorized it; both are folded
+    into any raised SchemaDriftError so a failure is self-explanatory without
+    a second lookup.
+
+    Raises:
+        SchemaDriftError: on any of the four checks above failing, on the
+            example-doctrine-repo repo/ref being unreadable, on a dirty example-doctrine-repo worktree at this
+            path, or on either side's schema text not parsing as a JSON
+            object.
+
+    Negative-spec: unlike `check_schema_drift`, this function is not byte-exact
+    by design — it exists because byte-exactness is the wrong question to ask
+    of a schema that is deliberately, legitimately ahead. It is still a real
+    gate: every one of the checks above can fail and does raise, and any
+    check this function CANNOT decide (a dirty example-doctrine-repo worktree, an unparseable
+    version) fails closed rather than passing.
+
+    When example-doctrine-repo later vendors claude-klabauter's version (or later), remove this schema's
+    entry from the ahead-pin registry and restore an ordinary
+    `check_schema_drift` byte-pin call at the new shared SHA — that is the
+    designed exit path, not a permanent parking spot.
+    """
+    schema_path = Path(schema_path)
+    doe_repo_path = Path(doe_repo_path)
+
+    schema_filename = schema_path.name
+    doe_schema_ref = f'coordinator/schemas/{schema_filename}'
+
+    unusable = foreign_repo_unusable_reason(doe_repo_path, timeout=30)
+    if unusable is not None:
+        raise SchemaDriftError(
+            f'Cannot read example-doctrine-repo schema "{doe_schema_ref}": the example-doctrine-repo clone at '
+            f'{doe_repo_path} could not be read as a git repository ({unusable}). '
+            'This is NOT an ahead-pin finding — the comparison never ran.'
+        )
+
+    def _run_git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ['git', '-C', str(doe_repo_path), *args],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=scoped_git_env(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    def _show(ref: str) -> str:
+        result = _run_git('show', f'{ref}:{doe_schema_ref}')
+        if result.returncode != 0:
+            raise SchemaDriftError(
+                f'Cannot read example-doctrine-repo {ref} schema "{doe_schema_ref}": {result.stderr.strip()}. '
+                f'Ensure doe_repo_path ({doe_repo_path}) is a valid git repo with the schema at {ref}.'
+            )
+        return result.stdout
+
+    # Check 1 resolves "has example-doctrine-repo moved" against the most recent commit touching
+    # this path on ANY local ref (git log --all), never `HEAD` -- a sibling
+    # clone's checked-out branch is incidental and shared-tree branch
+    # switches are routine (see check_schema_ahead_of_doe's docstring).
+    # Review: eng-director P2-2.
+    dirty = _run_git('status', '--porcelain', '--', doe_schema_ref)
+    if dirty.returncode != 0:
+        raise SchemaDriftError(
+            f'Cannot determine example-doctrine-repo worktree state for "{doe_schema_ref}" '
+            f'in {doe_repo_path}: {dirty.stderr.strip()}.'
+        )
+    if dirty.stdout.strip():
+        raise SchemaDriftError(
+            f'Cannot check ahead-pin for "{schema_filename}": example-doctrine-repo clone at '
+            f'{doe_repo_path} has uncommitted changes to "{doe_schema_ref}". '
+            'A dirty example-doctrine-repo worktree cannot be read as "example-doctrine-repo has not moved" -- '
+            'commit or discard the change in the example-doctrine-repo clone before re-running.'
+        )
+
+    all_refs_head = _run_git('log', '--all', '-1', '--format=%H', '--', doe_schema_ref)
+    if all_refs_head.returncode != 0 or not all_refs_head.stdout.strip():
+        raise SchemaDriftError(
+            f'Cannot resolve the most recent commit touching "{doe_schema_ref}" '
+            f'across all local refs in {doe_repo_path}: {all_refs_head.stderr.strip()}.'
+        )
+    doe_pinned_content = _show(doe_ref)
+    doe_latest_content = _show(all_refs_head.stdout.strip())
+
+    if doe_pinned_content != doe_latest_content:
+        raise SchemaDriftError(
+            f'Ahead-pin for "{schema_filename}" is STALE: example-doctrine-repo has moved '
+            f'"{doe_schema_ref}" since the recorded ref {doe_ref} (it no '
+            'longer matches the most recent commit touching that path across '
+            'all local refs in the example-doctrine-repo clone). Re-derive the ahead-pin against '
+            'the new example-doctrine-repo state, or -- if example-doctrine-repo has vendored claude-klabauter\'s version -- '
+            'remove this ahead-pin entirely and restore an ordinary '
+            'check_schema_drift byte-pin at the new shared SHA.\n'
+            f'Recorded reason: {reason}\nRecorded provenance: {provenance}'
+        )
+
+    local_content = schema_path.read_text(encoding='utf-8')
+
+    if local_shape_hash is not None:
+        computed_hash = _local_shape_hash(local_content)
+        if computed_hash != local_shape_hash:
+            raise SchemaDriftError(
+                f'Ahead-pin for "{schema_filename}" failed its local tamper-pin: '
+                f'the vendored copy\'s canonical hash ({computed_hash}) does not '
+                f'match the recorded local_shape_hash ({local_shape_hash}). While '
+                'a schema is ahead-pinned, check_schema_drift\'s ordinary byte-pin '
+                'does not run against it -- this is that state\'s own local-tamper '
+                'pin, and it caught an unrecorded local edit. If the edit is '
+                'intentional, update local_shape_hash in the ahead-pin registry '
+                'entry to match.\n'
+                f'Recorded reason: {reason}\nRecorded provenance: {provenance}'
+            )
+
+    local_parsed = _parse_schema_dict(local_content)
+    doe_parsed = _parse_schema_dict(doe_pinned_content)
+    if local_parsed is None or doe_parsed is None:
+        raise SchemaDriftError(
+            f'Ahead-pin for "{schema_filename}" could not be checked: one of '
+            'the vendored copy or the example-doctrine-repo copy did not parse as a JSON object.'
+        )
+
+    local_flat = _flatten_json(_strip_comment_annotations(local_parsed))
+    doe_flat = _flatten_json(_strip_comment_annotations(doe_parsed))
+
+    all_exempt_paths = _AHEAD_RETENTION_EXEMPT_PATHS | frozenset(exempt_paths)
+
+    not_retained: list[str] = []
+    for path, doe_value in doe_flat.items():
+        if path in all_exempt_paths:
+            continue
+        if path not in local_flat:
+            not_retained.append(f'{".".join(str(p) for p in path)} (absent locally)')
+            continue
+        local_value = local_flat[path]
+        if local_value == doe_value:
+            continue
+        is_prose_annotation_path = bool(path) and path[-1] in _PROSE_ANNOTATION_LEAF_KEYS
+        if (
+            is_prose_annotation_path
+            and isinstance(local_value, str)
+            and isinstance(doe_value, str)
+            and doe_value in local_value
+        ):
+            continue
+        not_retained.append(f'{".".join(str(p) for p in path)} (not retained: doe={doe_value!r} local={local_value!r})')
+
+    if not_retained:
+        raise SchemaDriftError(
+            f'Ahead-pin for "{schema_filename}" failed the example-doctrine-repo-leaf-retention '
+            f'check -- claude-klabauter\'s copy no longer retains example-doctrine-repo\'s ref {doe_ref} '
+            f'content at: {"; ".join(not_retained)}.\n'
+            f'Recorded reason: {reason}\nRecorded provenance: {provenance}'
+        )
+
+    local_version = _read_schema_version(local_content)
+    doe_version = _read_schema_version(doe_pinned_content)
+    local_semver = _parse_semver_tuple(local_version) if local_version else None
+    doe_semver = _parse_semver_tuple(doe_version) if doe_version else None
+    if local_semver is None or doe_semver is None:
+        raise SchemaDriftError(
+            f'Ahead-pin for "{schema_filename}" could not compare '
+            f'x-schema-version (local={local_version!r}, doe={doe_version!r}) '
+            '-- both sides must carry a parseable MAJOR.MINOR.PATCH version.'
+        )
+    if not (local_semver > doe_semver):
+        raise SchemaDriftError(
+            f'Ahead-pin for "{schema_filename}" requires claude-klabauter\'s '
+            f'x-schema-version ({local_version}) to be strictly greater than '
+            f'example-doctrine-repo\'s at ref {doe_ref} ({doe_version}), but it is not.\n'
+            f'Recorded reason: {reason}\nRecorded provenance: {provenance}'
+        )
+
+
+def _local_shape_hash(local_content: str) -> str:
+    """sha256 hex digest of a schema's canonical text -- the ahead-pin's own
+    local-tamper pin (check_schema_ahead_of_doe's `local_shape_hash` check).
+
+    Uses `_canonical_schema_text` (default strip_comments=True) so a
+    `$comment`-only edit is not flagged as tamper, matching D1's ruling that
+    `$comment` carries no schema semantics (see `_strip_comment_annotations`).
+    Returns a hex digest rather than the raw text so a registry entry records
+    a short, comparable token rather than embedding a full schema copy.
+    """
+    canonical = _canonical_schema_text(local_content)
+    if canonical is None:
+        # Unparseable content: hash the raw text so the pin still detects a
+        # change (fails closed) rather than raising here and obscuring the
+        # real problem (surfaced instead by the _parse_schema_dict check that
+        # runs immediately after this is called).
+        canonical = local_content
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
 def _flatten_json(node: Any, prefix: tuple = ()) -> dict[tuple, Any]:
     """Flatten a parsed-JSON value into {path-tuple: leaf} for a structural diff.
 
@@ -4110,6 +4424,134 @@ def _read_bump_note(content: str) -> str | None:
     Never raises — mirrors the never-raises contract of every caller in this file.
     """
     return _read_schema_string_key(content, "x-bump-note")
+
+
+_BUMP_ADDS_MISSING = object()
+
+
+def _resolve_bump_adds_path(schema: dict, path: str) -> Any:
+    """Traverse `schema` by a dot-separated key path, returning the node found.
+
+    Returns the module-private `_BUMP_ADDS_MISSING` sentinel (never `None`,
+    which is a legitimate JSON leaf value) the moment any path segment does
+    not resolve to a dict key — including the degenerate case where an
+    intermediate node isn't a dict at all (e.g. the path walks through a
+    list or a scalar). No JSON Schema `$ref`/`allOf`/`oneOf` resolution:
+    entries are meant to name the literal authored path a bump adds, not an
+    evaluated/composed shape.
+    """
+    node: Any = schema
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _BUMP_ADDS_MISSING
+        node = node[part]
+    return node
+
+
+def _bump_adds_entry_resolves(schema: dict, entry: Any) -> bool:
+    """Does one `x-bump-adds` entry actually resolve in `schema`?
+
+    Two entry shapes:
+      - a bare dot-path (e.g. "properties.foo.properties.bar") — resolves
+        iff `_resolve_bump_adds_path` finds a node there.
+      - "path:value" — resolves iff the node at `path` is itself a list
+        containing `value`, or a dict with an `enum` key whose list
+        contains `value`. Lets a bump claim "this enum gained a member"
+        without claiming the whole enum key is new.
+
+    Non-string entries never resolve — `x-bump-adds` is a list of strings,
+    not a schema-shaped structure to recurse into.
+
+    Negative-spec: the "path:value" split is unescaped and ambiguous on two
+    axes, both fail-closed (reported as an unresolved entry, never a silent
+    pass), never raised as a distinct "malformed" error:
+      - A property name that itself contains a literal "." (valid JSON
+        Schema, e.g. `properties["a.b"]`) is indistinguishable from a
+        two-level dot-path `a.b` — this looks for nested key `b` under `a`
+        instead of the flat key `"a.b"` and reports "does not resolve"
+        rather than naming the ambiguity.
+      - `entry.partition(":")` splits on the FIRST colon only, so
+        `"properties.kind:alpha:beta"` treats `"alpha:beta"` as the enum
+        value, not an error — deterministic but undocumented before this
+        note. Review: code-reviewer P2.
+    """
+    if not isinstance(entry, str) or not entry:
+        return False
+    path, sep, value = entry.partition(":")
+    if not sep:
+        return _resolve_bump_adds_path(schema, path) is not _BUMP_ADDS_MISSING
+    node = _resolve_bump_adds_path(schema, path)
+    if node is _BUMP_ADDS_MISSING:
+        return False
+    if isinstance(node, list):
+        enum_values: Any = node
+    elif isinstance(node, dict):
+        enum_values = node.get("enum")
+    else:
+        return False
+    return isinstance(enum_values, list) and value in enum_values
+
+
+def check_bump_adds_self_consistency(schema: dict) -> list[ErrorDict]:
+    """Assert every `x-bump-adds` entry resolves in its OWN schema's bytes.
+
+    `x-bump-adds` is a structured sibling to the prose `x-bump-note`: a list
+    of property paths / enum values a bump claims to introduce. This closes
+    the SELF-consistency gap — nothing previously compared a schema's own
+    bump note to its own bytes (every existing drift/pin guard compares side
+    A to side B, or file to pin). See
+    state/improvement-queue/2026-08-10-vendored-schemas-have-no-machine-checkab-405eb7f5c628.yaml.
+
+    Three-way key state, load-bearing (do not collapse to a boolean):
+      - key ABSENT: the schema hasn't adopted the convention. Inert — `[]`
+        errors, same as every claude-klabauter schema today. This is deliberate, not
+        a stopgap: about a third of live bump notes describe removals or
+        narrowings with nothing to add, and adoption is opt-in per schema.
+      - `x-bump-adds: []`: an explicit, affirmative claim that this bump
+        adds nothing (a removal/narrowing bump). Valid — `[]` errors, same
+        outcome as absent, but a DIFFERENT state: this schema has adopted
+        the convention and is asserting "checked, nothing to add" rather
+        than "never considered it".
+      - non-empty list: every entry must resolve via
+        `_bump_adds_entry_resolves`, or this reports one ErrorDict per
+        unresolved entry. A `x-bump-adds` value that isn't a list at all is
+        itself a shape error (reported, not raised — this function never
+        raises, matching every other check_* in this module's advisory
+        surface).
+
+    Negative-spec: this does NOT parse `x-bump-note` prose, does NOT compare
+    against example-doctrine-repo HEAD or any pinned ref, and does NOT resolve `$ref` — it is
+    a closed-world check of one schema dict against itself. It also does
+    NOT enforce that every schema adopt `x-bump-adds` — key-absent is a
+    permanently valid state, not a transitional one this function flags.
+
+    Callers own reading the schema JSON into a dict; this function never
+    touches disk or a repo path, mirroring the synthetic-schema-dict shape
+    every test in test_schema_bump_adds_self_consistency.py exercises it
+    with.
+    """
+    errors: list[ErrorDict] = []
+    if not isinstance(schema, dict) or "x-bump-adds" not in schema:
+        return errors
+
+    adds = schema["x-bump-adds"]
+    if not isinstance(adds, list):
+        errors.append({
+            'field': 'x-bump-adds',
+            'error': 'x-bump-adds must be a list of strings',
+            'hint': 'use [] to affirmatively claim a no-additions bump, or omit the key entirely if not yet adopted',
+        })
+        return errors
+
+    for entry in adds:
+        if not _bump_adds_entry_resolves(schema, entry):
+            errors.append({
+                'field': 'x-bump-adds',
+                'error': f'claimed addition does not resolve in this schema: {entry!r}',
+                'hint': 'entries are dot-paths into the schema (e.g. "properties.foo"), optionally suffixed ":value" to assert an enum member exists at that path',
+            })
+
+    return errors
 
 
 def read_schema_version(content: str) -> str | None:

@@ -33,17 +33,37 @@ harder to reach for than the audit-authoring step already is.
 
 Composition (pure reuse of tested single-verb internals — same pattern as
 `handoff_ship_archive.py`'s ship+archive composite):
+  0. `handoff_children._handoff_has_live_children` (2026-08-10 fix, cross-
+     repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-
+     key.md § 2) — the SAME live-lineage-edge guard step 2's chain-mode call
+     runs internally, reused here BEFORE step 1 so a live successor edge
+     refuses the call outright instead of letting step 1 stamp closed_reason:
+     "displaced" (schema-forbidden with a lineage edge present) and step 2
+     merely retain the archival move on the same fact, too late to matter.
+     See § Live-lineage-edge guard below and the `_handler` inline comment
+     at the call site for the full design rationale and the reported verb-
+     gap this refusal surfaces rather than solves.
   1. `handoff_transition._close` — deployment_state -> closed, closed_reason:
      <reason> (DR-084 human/session-only terminal; `reason` must be one of
      `handoff_transition._CLOSED_REASONS` — "displaced" is the expected value
      for THIS shape: the baton's own next-steps were displaced/subsumed by
-     other work that landed after it was written).
+     other work that landed after it was written, AND step 0 has confirmed
+     no live successor names this baton as its predecessor). Also clears
+     `pickup_ready: false` (2026-08-10 fix, same memo § 1) — a closed baton
+     has nothing left to advertise to /pickup or boot-sweep triage; see
+     `_close`'s own docstring for the full rationale, now unconditional in
+     that verb so every caller of `_close` (not just this op) gets it.
   2. `handoff_archive_transition._handler(mode="chain")` — the terminal-state
      precondition it already enforces (git-mv only once deployment_state is
      one of shipped|continued|closed) is satisfied by step 1's fresh write,
      and the unconditional live-children guard still applies exactly as it
      does for every other chain-mode call — this op adds no privilege a caller
-     invoking the two verbs by hand would not already have.
+     invoking the two verbs by hand would not already have. Its guard is now
+     structurally redundant with step 0's fresh check for archival purposes
+     (a live edge that would retain here was already refused at step 0), but
+     is left unmodified — it is still the correct authority for its own
+     go/no-go decision, and de-duplicating the two calls is out of scope for
+     this fix.
 
 Idempotency: a SECOND call against a handoff already closed+archived by a
 prior call to this op resolves `handoff_path` under one of
@@ -67,7 +87,9 @@ coordinator_core/op_scopes.py, matching handoff.archive_transition/
 handoff.ship_and_archive's own precedent.
 
 Spec backlink: cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
-terminal-state-not-cleared-programmatically.md, defect 1, item 2.
+terminal-state-not-cleared-programmatically.md, defect 1, item 2. Also
+cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-
+scrub-key.md § 1-2 (pickup_ready + live-lineage-edge fixes).
 
 Negative-spec:
   - Does NOT re-derive whether a baton's next-steps are actually closed
@@ -75,6 +97,14 @@ Negative-spec:
     NOT attempt) stays with whichever caller decided to invoke this op; this
     op composes the terminal-stamp + archive-move ONLY, on a `reason` the
     caller has already decided.
+  - Does NOT decide whether a baton with a live lineage edge but no claim
+    history CAN be superseded — the step 0 guard only detects the edge and
+    refuses this op's own (wrong) route; whether DR-242 should ever admit a
+    never-claimed predecessor with a genuine successor is a discriminator
+    change this op does not make (see module docstring § Composition step 0
+    and this fix's own session report — DR-242's discriminator is project-
+    claude-klabauter's to own, ratified in archive/specs/2026-08/2026-08-02-roadmap-
+    baton-lifecycle-model.md, not re-decided from a single op's bugfix).
   - Does NOT hand-write frontmatter — reuses `handoff_transition._close` and
     `handoff_archive_transition._handler` verbatim; no field is set outside
     those two calls' own contracts.
@@ -101,6 +131,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import ARCHIVE_ROOT_SUBDIRS, main_worktree_root
 from coordinator_core.ops.handoff_archive_transition import _handler as _archive_transition_handler
+from coordinator_core.ops.handoff_children import _handoff_has_live_children
 from coordinator_core.ops.handoff_transition import _CLOSED_REASONS, _close
 # Aliased: `rel_id` is also a local variable name in _handler below, and an
 # unaliased import would be shadowed by that binding (UnboundLocalError) —
@@ -277,6 +308,94 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     rel_id = _wire_rel_id(contained_live, worktree)
+
+    # --- Step 0: live-lineage-edge guard (defect 2, cross-repo/inbox/2026-
+    # 08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-key.md § 2) ---
+    # The handoff schema's own closed_reason description is explicit:
+    # "displaced = replaced with NO lineage edge (with an edge it's
+    # continued, not closed)". This op's `reason` param defaults callers
+    # toward "displaced" for the no-successor reconcile-to-terminal shape
+    # (see module docstring), but nothing before this fix verified the
+    # "no successor" half of that premise — a caller could pass reason=
+    # "displaced" against a baton a live successor had already named via
+    # `predecessor:`, and step 1 would stamp the schema-forbidden combination
+    # sight-unseen.
+    #
+    # Reuses `handoff.has_live_children` (handoff_children._handoff_has_live_
+    # children) rather than reimplementing lineage detection — this is the
+    # EXACT SAME guard `handoff.archive_transition` mode="chain" runs at step
+    # 2 below (its own retain_kind="live-parent" / "still a live merge-parent
+    # of another active handoff" message). Running it there is too late: by
+    # the time chain mode's guard retains the archival move, step 1 has
+    # already written closed_reason:displaced to disk. Running the SAME
+    # check here, before any mutation, catches it before either field is
+    # touched.
+    #
+    # On a live edge (guard exit_code==0) or an indeterminate guard
+    # (exit_code==2, fail-closed — same posture as every other consumer of
+    # this guard in this codebase), this op REFUSES rather than either of
+    # the two alternatives considered:
+    #   - silently downgrading "displaced" to "stale"/"cancelled" would still
+    #     write deployment_state:closed over a live successor edge, which
+    #     the schema's own continued-vs-closed distinction says is simply
+    #     the wrong terminal, not a wrong SUBTYPE of the right terminal;
+    #   - writing deployment_state:continued + continued_into: directly
+    #     (the caller's own hand workaround) would duplicate
+    #     handoff_archive_transition._supersede_continued's tested holder-
+    #     attribution, conflict-detection, and roadmap-baton-kind gating
+    #     logic a second time in this module, AND would require this op to
+    #     decide whether DR-242 applies to the human/session-invoked door —
+    #     an explicit non-goal (see report to EM/PM: DR-242's discriminator
+    #     is claude-klabauter's to own, not to be re-decided from a single
+    #     op's fix).
+    # Refusing and naming the correct verb keeps this op's own scope exactly
+    # as documented (module docstring: "the reconcile-to-terminal, NO
+    # SUCCESSOR shape") — a baton WITH a successor edge was never this op's
+    # shape to begin with.
+    #
+    # KNOWN GAP (reported, not solved here): `handoff.archive_transition`
+    # mode="supersede" AND the `handoff.transition` verb dispatcher's
+    # "supersede" verb BOTH gate on DR-242 (`claimed_or_shipped_at_path`) —
+    # a predecessor that was never claimed or shipped refuses supersede for
+    # want of a claim. A baton that is (a) never formally claimed, (b) whose
+    # work was nevertheless done, and (c) now has a genuine successor via
+    # `predecessor:` therefore has NO automated route through EITHER verb
+    # after this fix: supersede refuses for want of a claim; close-terminal
+    # (this op) now correctly refuses too, instead of silently accepting and
+    # stamping the wrong terminal as it did before. This is a real regression
+    # in usability relative to the (incorrect) pre-fix behavior, flagged
+    # explicitly rather than shipped silently — see this session's report.
+    guard_result = await _handoff_has_live_children(
+        {"candidate": str(contained_live), "exclude": exclude}, repo_root
+    )
+    guard_exit = guard_result.get("exit_code")
+    if guard_exit != 1:
+        if guard_exit == 0:
+            child_rel_ids = [
+                _wire_rel_id(Path(c), worktree) for c in (guard_result.get("children") or [])
+            ]
+            return _err(
+                f"{rel_id} has a live lineage edge — named as predecessor by "
+                f"{', '.join(child_rel_ids) or 'a live successor'}. closed_reason:"
+                f"{reason!r} would be schema-forbidden when reason='displaced' "
+                "(handoff.schema.json: 'displaced = replaced with NO lineage edge "
+                "— with an edge it's continued, not closed'), and this op is "
+                "scoped to the no-successor reconcile-to-terminal shape only. "
+                "Route this baton through handoff.archive_transition "
+                "mode='supersede' (or the handoff.transition 'supersede' verb) "
+                "instead — deployment_state:continued + continued_into is the "
+                "correct terminal for a baton with a live successor edge. NOTE: "
+                "if this predecessor was never claimed or shipped, supersede's "
+                "own DR-242 gate will ALSO refuse it — that shape has no "
+                "automated route through either verb today; escalate rather than "
+                "hand-editing frontmatter."
+            )
+        return _err(
+            f"{rel_id}: live-lineage-edge guard indeterminate (exit_code "
+            f"{guard_exit}) — refusing rather than risk stamping closed_reason:"
+            f"{reason!r} over a lineage edge this guard could not rule out: "
+            f"{guard_result.get('error', 'unknown guard error')}"
+        )
 
     # --- Step 1: close (deployment_state -> closed; idempotent) ---
     close_res = await asyncio.to_thread(_close, rel_id, reason, worktree, repo_root)

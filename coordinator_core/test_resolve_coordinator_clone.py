@@ -109,13 +109,31 @@ def test_mode_flat_layout_unmarked_no_manifest_resolves_dev(isolated_home):
     pointer empty, and the flat `~/.claude/plugins/coordinator-claude`
     layout present WITHOUT a `.claude-plugin/plugin.json` marketplace
     manifest (e.g. a raw git checkout dropped at the flat path) and WITHOUT
-    a `.coordinator-dev-repo` dev marker. Previously this fell through every
-    rung and raised "no coordinator source found" even though a perfectly
-    good coordinator root sat right there. Must now resolve instead of
-    raising."""
+    a `.coordinator-dev-repo` dev marker, but WITH the published manifest
+    relpath present (B6 review fix, 2026-08-08 -- the rung now requires
+    `.git/` or the manifest as evidence of an actual coordinator tree, not
+    mere directory existence; see `test_mode_flat_layout_bare_empty_dir_...`
+    for the negative case this test previously conflated with). Previously
+    this fell through every rung and raised "no coordinator source found"
+    even though a perfectly good coordinator root sat right there. Must
+    still resolve instead of raising."""
+    flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
+    (flat / "schemas").mkdir(parents=True)
+    (flat / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+    assert rcc._resolve_source_mode("git-ops") == "dev"
+
+
+def test_mode_flat_layout_bare_empty_dir_fails_loud(isolated_home):
+    """B6 review fix (2026-08-08): mere directory existence at the flat path
+    -- no `.git/`, no manifest, no marketplace marker, no dev marker -- is
+    NOT evidence of a coordinator tree (an interrupted install, a
+    `rm -rf <dir>/*` leftover, or a user-created placeholder all produce
+    this shape). Must fail loud with the actionable "no coordinator source
+    found ... run coordinator:install" message, not silently resolve "dev"."""
     flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
     flat.mkdir(parents=True)
-    assert rcc._resolve_source_mode("git-ops") == "dev"
+    with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no coordinator source found"):
+        rcc._resolve_source_mode("git-ops")
 
 
 def test_clone_root_flat_unmarked_no_manifest_resolves(isolated_home):

@@ -127,6 +127,87 @@ class TestClassifySyncUnresolvedGuard:
         assert result["evidence"]["session_id_source"] == "param"
 
 
+class TestDetectorBPositiveOwnership:
+    """2026-08-10 archive-leg touch-vs-consume incident (example-retrieval-repo memo
+    `2026-08-10-example-retrieval-repo-em-wsc-archive-leg-infers-consumption-from-a-
+    touch.md`). Mirrors the fix landed in this module's `bin` sibling
+    (`coordinator/bin/wsc-session-disposition.py::_foreign_consumer_guard`,
+    covered by `coordinator/bin/tests/test_wsc_session_disposition.py`) — the
+    two copies are independently maintained, so the regression needs a test on
+    each side, not one."""
+
+    @staticmethod
+    def _repo_with_archived_touch(tmp_path, sid, frontmatter, subject):
+        repo = _make_repo(tmp_path)
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True
+        )
+        archive_dir = repo / "archive" / "handoffs"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "2026-08-10_144028_peer-baton.md").write_text(
+            frontmatter, encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"{subject}\n\nSession-Id: {sid}"],
+            cwd=repo,
+            check=True,
+        )
+        # `_classify_sync`'s first arg is the git COMMON DIR, not the worktree
+        # root (_OP_KEY_SCOPE = "common_dir"); it derives the worktree via
+        # `main_worktree_root`, which takes the parent. Handing it the worktree
+        # root instead silently classifies the parent directory — Detector B
+        # then fails its merge-base and is skipped, which reads as a clean
+        # "open" verdict rather than an error.
+        return repo / ".git"
+
+    def test_ownerless_looking_record_is_not_read_as_consumed(self, tmp_path):
+        """The observed shape: a live peer's baton whose ledger claim is
+        liveness-gated away and whose mirror carries `status: claimed` with no
+        `claimed_by:`, re-added by an ordinary-prose restore commit. Both
+        negative-evidence reads come back empty — which must now REJECT, not
+        fall through to acceptance."""
+        sid = "ddadea9e-0000-0000-0000-000000000000"
+        repo = self._repo_with_archived_touch(
+            tmp_path,
+            sid,
+            "---\nstatus: claimed\npredecessor: state/handoffs/2026-08-10-peer.md\n"
+            "deployment_state: continued\n"
+            "authoring_session: 9c0c419d-def6-4b98-90ba-42d2580e870a\n---\nbody\n",
+            "restore: re-track a peer's archived handoff my amend swept out",
+        )
+
+        result = rctd._classify_sync(repo, sid, {})
+        assert result["exit_code"] == 0
+        assert result["disposition"] == "open"
+        assert result["chain_terminal"] is False
+        assert result["evidence"]["consumed_handoff"] is None
+        assert any(
+            "is not evidence of consuming it" in note
+            for note in result["evidence"]["notes"]
+        ), result["evidence"]["notes"]
+
+    def test_own_claim_still_resolves_chain_terminal(self, tmp_path):
+        """Regression guard: positively-evidenced ownership must still resolve
+        chain-terminal — the tightening rejects only the no-evidence case.
+        Resolves via Detector A (the archived claim stamp), which is exactly
+        the point: an own-claim record never needs the git-provenance leg, so
+        tightening that leg cannot cost the legitimate path."""
+        sid = "ddadea9e-0000-0000-0000-000000000000"
+        repo = self._repo_with_archived_touch(
+            tmp_path,
+            sid,
+            f"---\nclaimed_by: {sid}\npredecessor: none\n"
+            "deployment_state: continued\n---\nbody\n",
+            "ship and archive my own predecessor",
+        )
+
+        result = rctd._classify_sync(repo, sid, {})
+        assert result["exit_code"] == 0
+        assert result["chain_terminal"] is True
+        assert result["disposition"] == "continued"
+
+
 class TestHandlerUnresolvedGuard:
     def test_handler_returns_error_envelope_when_sid_unresolvable(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

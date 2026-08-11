@@ -3,8 +3,11 @@ coordinator_core.hooks.suggest_sonnet_research — PreToolUse advisory hook op.
 
 Purpose: Nudges the EM to delegate web research to dedicated skills/agents rather
 than running ad-hoc research as Opus. Pure advisory (allow + additionalContext) —
-never blocks. Suppressed when fired from a subagent context (agent_id present) to
-avoid re-emitting the "delegate to a scout" advisory at researcher-altitude.
+never blocks. Suppressed when fired from a subagent context — either a bare-hex
+unnamed agent or a named teammate, as resolved by the shared
+`resolve_subagent_identity` primitive — to avoid re-emitting the "delegate to a
+scout" advisory at researcher-altitude. An agent_id that resolves to nothing
+(malformed, absent, or unrecognised shape) is NOT suppressed.
 
 The deep-research plugin conditional message is preserved faithfully from
 Port of: suggest-sonnet-research.sh (example-doctrine-repo 3a561713, 2026-07-22). If the plugin
@@ -20,11 +23,11 @@ Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter
 from __future__ import annotations
 
 import os
-import re
 
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks._payload import field
+from coordinator_core.session.identity import resolve_subagent_identity
 
 
 def _deep_research_plugin_dir() -> str | None:
@@ -101,9 +104,12 @@ def _has_deep_research_plugin() -> bool:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse advisory hook: nudge the EM to delegate web research.
 
-    Suppression: when agent_id is present the caller is already a delegated
-    researcher — emitting the advisory at subagent-altitude is doctrine-incorrect
-    and noisy. Return no_advisory() immediately.
+    Suppression: when agent_id resolves via `resolve_subagent_identity` — either
+    a bare-hex unnamed agent or a named teammate — the caller is already a
+    delegated researcher; emitting the advisory at subagent-altitude is
+    doctrine-incorrect and noisy. Return no_advisory() immediately. An agent_id
+    that fails to resolve (malformed, absent, unrecognised shape) does NOT
+    suppress — the advisory still fires.
 
     Otherwise: check whether the deep-research plugin is installed (blocking I/O
     wrapped in asyncio.to_thread) and return allow_advisory with the appropriate
@@ -116,12 +122,17 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
-    # Subagent suppression — agent_id is a real hex agent ID (^[a-f0-9]{12,}$) meaning
-    # an authorized researcher is running; suppress advisory at subagent altitude.
+    # Subagent suppression — agent_id resolves (bare-hex unnamed agent, or named
+    # teammate `a<name>-<16hex>` + session_id) via the shared, fail-closed
+    # `resolve_subagent_identity`; suppress advisory at subagent altitude.
     # Review: code-reviewer — A-F4: restore format guard; `present()` alone would
-    # suppress on any non-empty agent_id string, including malformed values.
+    # suppress on any non-empty agent_id string, including malformed values. That
+    # fail-closed property now comes from `resolve_subagent_identity`'s branch
+    # (c), which returns "" for garbage, short hex, uppercase hex, and malformed
+    # named-teammate shapes, rather than a local bare-hex-only regex.
     agent_id = field(params, "agent_id")
-    if agent_id and re.match(r"^[a-f0-9]{12,}$", agent_id):
+    session_id = field(params, "session_id")
+    if resolve_subagent_identity(agent_id, session_id):
         return no_advisory()
 
     plugin_present = await asyncio.to_thread(_has_deep_research_plugin)

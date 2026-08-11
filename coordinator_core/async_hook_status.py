@@ -15,7 +15,9 @@ Port of: async-hook-status.sh (example-doctrine-repo c187f5b9, 2026-07-21).
 Marker shape and directory layout are BYTE-IDENTICAL to the retired bash
 producer, which remains load-bearing for any consumer still golden-diffing
 against the original marker contract:
-  dir:  ${CLAUDE_HOME:-$HOME}/.claude/.cache/async-hook-status/
+  dir:  resolved via `coordinator_core._settings_home.claude_config_dir()`
+        (honours `CLAUDE_CONFIG_DIR` ahead of the `${CLAUDE_HOME:-$HOME}/
+        .claude` default) joined with `.cache/async-hook-status/`
   file: <hook-name>.json  (latest-wins — overwrites any prior marker)
   JSON: {"hook","failed_at" (ISO-UTC "Z"),"exit","detail","log","remediation":""}
 
@@ -40,6 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core._settings_home import claude_config_dir
+
 
 def status_dir(claude_home: Optional[Path] = None) -> Optional[Path]:
     """Return the async-hook-status marker directory, creating it if absent.
@@ -47,14 +51,22 @@ def status_dir(claude_home: Optional[Path] = None) -> Optional[Path]:
     Mirrors `ahs_status_dir()`: canonical
     `${CLAUDE_HOME:-$HOME}/.claude/.cache/async-hook-status` form.
 
+    `claude_home`, when passed, is the CLAUDE_HOME-analog override (the
+    *parent* of `.claude`) — kept for test-isolation callers that inject a
+    tmp_path directly. When omitted, the default path resolves through
+    `coordinator_core._settings_home.claude_config_dir()`, the seam that
+    honours the harness's own `CLAUDE_CONFIG_DIR` (naming `.claude` itself)
+    ahead of the `CLAUDE_HOME`-derived default, instead of hand-rolling the
+    `CLAUDE_HOME or HOME or Path.home()` chain here.
+
     Returns None (the Python equivalent of the bash sentinel-path degrade) when
     the directory cannot be created — callers must treat None as "skip silently",
     never raise.
     """
-    home = claude_home if claude_home is not None else Path(
-        os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or str(Path.home())
-    )
-    target = Path(home) / ".claude" / ".cache" / "async-hook-status"
+    if claude_home is not None:
+        target = Path(claude_home) / ".claude" / ".cache" / "async-hook-status"
+    else:
+        target = claude_config_dir() / ".cache" / "async-hook-status"
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError:

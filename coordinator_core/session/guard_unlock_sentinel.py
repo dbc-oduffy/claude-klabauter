@@ -203,6 +203,8 @@ def annotate_deny(
             return out
         line = (
             "Bypass options for a human operator, not this agent: create %s "
+            "FIRST, as its own command -- chaining it onto the denied command "
+            "re-denies, since the sentinel is checked before anything runs "
             "(in-session, one-shot, clears only this guard for this "
             "session) -- full list: %s"
             % (sentinel_path(session_id, guard_name), doc_display)

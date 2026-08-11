@@ -438,6 +438,25 @@ class TestAC5AllowOrphansDoesNotWiden:
             "change is deliberate, update _EXPECTED_SCOPE_HELPER_CALL_SITES with "
             "a decision record, do not delete this pin."
         )
+        # This census legitimately holds at ONE caller, not two. It used to
+        # pin block_subagent_commit.py (C4b, guard-side) AND
+        # scoped_git_commit.py (C4c, sink-side) — the 2026-08-08 excision
+        # (b56f3f3dd) dropped the C4c entry because C4c itself was removed.
+        # C2 (docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md,
+        # landed this session at e90cdfb217f0) replaces C4c's sink-side
+        # enforcement, but it does NOT call `assert_paths_in_session_scope` —
+        # it composes `claim_index.lookup()` instead (see the second census
+        # below, `TestClaimIndexLookupCallSitesDoNotWiden`). A future reader
+        # seeing this census at one caller after having been two must NOT
+        # "fix" it by re-adding a scoped_git_commit.py entry: that would
+        # re-introduce the exact predicate C2 deliberately avoided reusing.
+        assert set(_EXPECTED_SCOPE_HELPER_CALL_SITES) == {
+            (
+                "coordinator_core/bash_guards/block_subagent_commit.py",
+                "_git_commit_agent_may_commit",
+                "False",
+            ),
+        }, "sanity check on the pinned set itself failed — see comment above"
 
     def test_import_seam_inventory_is_exactly_the_enumerated_set(self):
         _calls, imports = _census_scope_helper_sites(_REPO_ROOT)
@@ -485,3 +504,118 @@ class TestAC5AllowOrphansDoesNotWiden:
         calls_after, imports_after = _census_scope_helper_sites(tmp_path)
         assert calls_after == frozenset(), "census failed to see a REMOVED call site"
         assert imports_after == frozenset(), "census failed to see a REMOVED import site"
+
+
+# ---------------------------------------------------------------------------
+# claim_index.lookup call-site census — the fast path C2 introduced in place
+# of the excised `assert_paths_in_session_scope` sink-side call (see the
+# comment inside `test_call_site_inventory_is_exactly_the_enumerated_set`
+# above). The thing whose widening nobody would otherwise notice moved from
+# `assert_paths_in_session_scope` to `claim_index.lookup()` — a new caller of
+# `lookup()` is a new O(pathspec) ownership-gate-shaped check appearing
+# somewhere else in the tree, which is exactly the kind of silent widening
+# AC5's census exists to catch for the older predicate.
+#
+# Test files are excluded from this census deliberately, same call as AC5's
+# own census docstring makes above: `test_claim_index.py` exercises `lookup`
+# directly as the unit under test (dozens of calls, churns every time a test
+# case is added or removed) and `test_scoped_git_commit_ownership.py` only
+# NAMES `claim_index.lookup` to save/monkeypatch it, never calls it. Counting
+# either would make this pin fire on ordinary test-authoring noise rather
+# than on a genuine new production call site — noise trains the next reader
+# to re-baseline reflexively, which is the failure mode this pin exists to
+# avoid. A real new caller added under `coordinator_core/session/` itself
+# (i.e. NOT `claim_index.py`'s own definition) would also be missed by this
+# tests-only exclusion if it were added without a corresponding production
+# module elsewhere; grep verification was run against the whole tree
+# (`grep -rn "claim_index" --include='*.py' .`, verified 2026-08-08 against
+# this repo's HEAD) and found exactly one non-test, non-definition call.
+# ---------------------------------------------------------------------------
+
+_CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.py"
+
+#: (repo-relative POSIX path, enclosing def qualname). Verified 2026-08-08
+#: against this repo's HEAD via `grep -rn "claim_index" --include='*.py' .`:
+#: the only actual `claim_index.lookup(...)` invocation outside
+#: `claim_index.py` itself and outside any tests/ path.
+_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
+    {
+        (
+            "coordinator_core/ops/ceremony/scoped_git_commit.py",
+            "_check_claim_conflicts",
+        ),
+    }
+)
+
+_LOOKUP_CALL_RE = re.compile(r"\bclaim_index\.lookup\(")
+
+
+def _census_claim_index_lookup_call_sites(root: Path) -> frozenset:
+    """AST-census `claim_index.lookup(...)` call sites under
+    `root/coordinator_core`, excluding `claim_index.py` itself (the
+    definition) and any tests/test_ path. Matches only the attribute-access
+    form `claim_index.lookup(...)` — the form every known caller uses — via
+    parsed syntax, not a source-text grep."""
+    found: set[tuple[str, str]] = set()
+    for path in sorted((root / "coordinator_core").rglob("*.py")):
+        if path == _CLAIM_INDEX_PATH:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if not _is_census_scope(rel):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for node, qualname in _walk_with_qualname(tree, []):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "lookup"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "claim_index"
+            ):
+                found.add((rel, qualname))
+    return frozenset(found)
+
+
+class TestClaimIndexLookupCallSitesDoNotWiden:
+    """Pin: `claim_index.lookup()`'s production call-site set is exactly the
+    enumerated set. C2's fast path is the new thing whose silent widening
+    nobody would otherwise notice — this census exists so a second caller
+    appearing anywhere in `coordinator_core/` (a second ownership-gate-shaped
+    check, reached from a different sink) fails loudly and names itself.
+
+    Spec backlink: docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md
+    § C7.
+    """
+
+    def test_lookup_call_site_inventory_is_exactly_the_enumerated_set(self):
+        found = _census_claim_index_lookup_call_sites(_REPO_ROOT)
+        assert found == set(_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES), (
+            "claim_index.lookup()'s call-site inventory changed — "
+            f"found={sorted(found)!r} expected="
+            f"{sorted(_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES)!r}. Each pair "
+            "is (file, enclosing def). A NEW call site is a second "
+            "ownership-gate-shaped check appearing outside "
+            "scoped_git_commit.py — update "
+            "_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES deliberately if that is "
+            "genuinely intended, with a decision record; do not delete this "
+            "pin."
+        )
+
+    def test_source_grep_confirms_the_single_production_caller(self):
+        text = _read_scoped_git_commit_source()
+        assert _LOOKUP_CALL_RE.search(text), (
+            "scoped_git_commit.py no longer calls claim_index.lookup(...) — "
+            "expected production call site is missing"
+        )
+
+
+def _read_scoped_git_commit_source() -> str:
+    path = _REPO_ROOT / "coordinator_core" / "ops" / "ceremony" / "scoped_git_commit.py"
+    return path.read_text(encoding="utf-8")

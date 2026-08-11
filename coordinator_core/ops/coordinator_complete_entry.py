@@ -295,6 +295,66 @@ def resolve_entry_path(repo_root: str, sid: str, chain_slug: str) -> str:
     return os.path.join(repo_root, "archive", "completed", yyyymm, entry_filename)
 
 
+def _refuse_if_live_foreign_entry_holder(entry_path: str, repo_root: str, closing_sid: str) -> Optional[str]:
+    """Refuse a stand-down onto an existing completion entry AUTHORED BY a
+    DIFFERENT, LIVE session — defence-in-depth for the same session-shape-
+    misdetection incident `plan_status_transition._refuse_if_live_foreign_
+    holder` guards against (cross-repo memo `2026-08-10-example-retrieval-repo-em-wsc-
+    misdetection-wrote-to-a-live-peers-plan.md`), but for the completion-
+    entry stand-down path rather than the plan stamp: a misdetected session
+    shape resolves the SAME `chain_slug` a live peer session already holds
+    an in-progress completion entry for, `resolve_effective_entry_path`
+    stands down onto that PEER's entry, `main()` still prints the foreign
+    path to stdout and returns 0, and `d-reconcile-completion-commits`
+    threads that path via `{d-complete-entry.entry_path}` and writes the
+    CLOSING session's commit SHAs into the PEER's live entry.
+
+    The discriminator is OWNERSHIP of the existing entry (its
+    `authored_by` frontmatter field — the session id `_write_entry` stamps
+    it with), never `chain_slug` — the slug is exactly what the
+    misdetection got wrong in the first place, so a slug-keyed check would
+    be vacuous under the same failure mode `plan_status_transition`'s own
+    docstring rules out an equivalent plan-claim-keyed check for.
+
+    Returns a human-readable refusal reason (non-None -> caller must fail
+    loud, never print the foreign path) or `None` when the stand-down may
+    proceed. TERMINAL-SAFE by construction, mirroring `plan_status_
+    transition._refuse_if_live_foreign_holder` exactly: unreadable/missing
+    `authored_by`, an unresolvable closing sid, self-authorship, or a dead
+    holder all proceed (return `None`) — this only fires on a POSITIVELY-
+    established live foreign holder, never on absence of evidence.
+    """
+    from coordinator_core.session.liveness import session_live
+
+    state = _read_existing_scaffold_state(entry_path)
+    if not state.exists:
+        return None
+
+    try:
+        with open(entry_path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    parsed = parse_frontmatter(text)
+    fm = parsed.get("frontmatter") or {}
+    authored_by = fm.get("authored_by")
+    if not authored_by:
+        return None
+    authored_by = str(authored_by)
+
+    if not closing_sid or authored_by == closing_sid:
+        return None
+
+    if not session_live(authored_by, cwd=repo_root):
+        return None
+
+    return (
+        f"{entry_path} is a completion entry authored by LIVE session "
+        f"{authored_by!r} (this session: {closing_sid!r}) — refusing to "
+        "stand down onto a foreign in-flight entry"
+    )
+
+
 def resolve_effective_entry_path(repo_root: str, sid: str, chain_slug: str) -> tuple[str, Optional[str]]:
     """THE single resolution of the path `main()` actually reads/writes for
     a given session — the SAME decision `main()` makes between standing
@@ -317,6 +377,12 @@ def resolve_effective_entry_path(repo_root: str, sid: str, chain_slug: str) -> t
         file path — `entry_path` falls back to today's derived path (the
         pre-existing degrade-on-ambiguity shape), but `main()` treats this
         marker as a hard error, not a stand-down.
+      - ``marker == "FOREIGN-LIVE"``: the stand-down candidate is owned by
+        a DIFFERENT, LIVE session (`_refuse_if_live_foreign_entry_holder`)
+        — `entry_path` is the FOREIGN entry's path for diagnostics only;
+        `main()` treats this marker as a hard error and must NOT print it
+        to stdout (that print is precisely what would hand the path
+        downstream to `d-reconcile-completion-commits`).
       - ``marker is None``: `entry_path` is today's freshly-derived
         canonical path (either `chain_slug` is empty, or no existing entry
         was found) — the path `main()` will write to.
@@ -327,6 +393,10 @@ def resolve_effective_entry_path(repo_root: str, sid: str, chain_slug: str) -> t
         if existing_path == "UNRECOVERABLE":
             return resolve_entry_path(repo_root, sid, chain_slug), "UNRECOVERABLE"
         if existing_path:
+            refusal = _refuse_if_live_foreign_entry_holder(existing_path, repo_root, sid)
+            if refusal is not None:
+                print(f"skip: resolve_effective_entry_path: {refusal}", file=sys.stderr)
+                return existing_path, "FOREIGN-LIVE"
             return existing_path, marker
     return resolve_entry_path(repo_root, sid, chain_slug), None
 
@@ -955,6 +1025,18 @@ def main(argv: List[str]) -> int:
     if stand_down_marker == "UNRECOVERABLE":
         print(
             f"ERROR: existing entry detected for chain '{chain_slug}' but path unrecoverable",
+            file=sys.stderr,
+        )
+        return 1
+    if stand_down_marker == "FOREIGN-LIVE":
+        # Deliberately NOT printed to stdout — printing the foreign path is
+        # exactly what would hand it downstream to
+        # d-reconcile-completion-commits via {d-complete-entry.entry_path}
+        # (see resolve_effective_entry_path's own docstring on this marker).
+        print(
+            f"ERROR: existing entry for chain '{chain_slug}' is owned by a "
+            "different LIVE session — refusing to stand down onto a foreign "
+            "in-flight completion entry",
             file=sys.stderr,
         )
         return 1

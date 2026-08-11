@@ -175,6 +175,57 @@ def test_does_not_absorb_concurrent_sibling_staged_file(tmp_path):
     assert any(line.endswith("tasks/sibling/other.md") for line in status)
 
 
+def test_diverged_path_reports_worktree_excluded_at_the_op_boundary(tmp_path):
+    """P1 fix (state/bug-backlog/2026-08-10-scoped-git-commit-reports-
+    success-while-334e90d707f9.yaml): the private-index branch's success
+    threads `worktree_excluded` all the way out to the op's own response,
+    naming the excluded path -- not just to `GitResult`/`CommitOutcome`."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "file.txt", "STAGED\n")
+    _git(["add", "--", "file.txt"], repo)
+    _seed_file(repo, "file.txt", "WORKTREE\n")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["file.txt"],
+            "message": "diverged: commit staged",
+        }
+    )
+
+    assert result["committed"] is True
+    assert result["worktree_excluded"] == ["file.txt"]
+    assert "file.txt" in result["worktree_excluded_warning"]
+    assert _committed_files_at_head(repo) == ["file.txt"]
+
+
+def test_agree_branch_reports_no_worktree_excluded_key(tmp_path):
+    """Silence on the clean path: the response carries no
+    `worktree_excluded` key at all when index and worktree agree."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["tasks/feature/todo.md"],
+            "message": "add feature todo",
+        }
+    )
+
+    assert result["committed"] is True
+    assert "worktree_excluded" not in result
+    assert "worktree_excluded_warning" not in result
+
+
 def test_missing_worktree_root_param_errors():
     result = _call({"paths": ["a.md"], "message": "m"})
     assert result["committed"] is False
@@ -192,6 +243,139 @@ def test_missing_message_param_errors():
     result = _call({"worktree_root": "/tmp/nonexistent", "paths": ["a.md"]})
     assert result["committed"] is False
     assert "message" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# `deliverable_id` -- C7a (AC14), docs/plans/2026-08-10-a-commit-trailer-
+# that-names-the-session.md. The CLI/op-schema round-trip: `--deliverable-id
+# <id>` on the CLI parses into `params["deliverable_id"]`, and the op's own
+# schema validates (accepts a string, rejects a non-string) without erroring
+# on an otherwise-valid call. Full end-to-end threading to `commit_scoped()`
+# is C7b's job -- see `_handler`'s own docstring for the current boundary;
+# not exercised here (out of this chunk's scope).
+# ---------------------------------------------------------------------------
+
+
+def _load_cli_module():
+    """Import the extension-less `scoped-git-commit` CLI as a module, purely
+    to test `_parse_args`'s own `--deliverable-id` grammar -- mirrors
+    `coordinator/bin/tests/test_scoped_git_commit_cli.py::_load_cli_module`
+    (that file is a peer's test surface, out of this chunk's scope to edit;
+    this is a same-shaped, independent loader inside this file, not an edit
+    to that one)."""
+    import importlib.machinery
+    import importlib.util
+
+    cli_path = (
+        Path(__file__).resolve().parents[4] / "coordinator" / "bin" / "scoped-git-commit"
+    )
+    loader = importlib.machinery.SourceFileLoader("scoped_git_commit_cli_ac14", str(cli_path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_cli_parses_deliverable_id_flag_into_params_shape():
+    cli = _load_cli_module()
+    subject, repo, paths, as_json, include_orphans, deliverable_id = cli._parse_args(
+        ["-m", "subject", "--deliverable-id", "dlv-abc123", "--", "a.md"]
+    )
+    assert deliverable_id == "dlv-abc123"
+    assert subject == "subject"
+    assert paths == ["a.md"]
+
+
+def test_cli_omits_deliverable_id_when_not_given():
+    cli = _load_cli_module()
+    _subject, _repo, _paths, _as_json, _include_orphans, deliverable_id = cli._parse_args(
+        ["-m", "subject", "--", "a.md"]
+    )
+    assert deliverable_id is None
+
+
+def _seed_deliverable_artifact(repo: Path, deliverable_id: str, *, slug: str = "seed-plan") -> Path:
+    """Mirrors `test_commit_scoped.py::_seed_deliverable_artifact` locally --
+    same shape, independent copy (not imported across test modules; see
+    `_load_cli_module`'s docstring above for why this file keeps its own
+    fixtures rather than reaching into a peer test module)."""
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    path = plans_dir / f"{slug}.md"
+    path.write_text(f"---\ndeliverable_id: {deliverable_id}\n---\n\n# seed plan\n", encoding="utf-8")
+    return path
+
+
+def test_op_schema_accepts_string_deliverable_id(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.md", "content")
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.md"],
+            "message": "subject",
+            "deliverable_id": "dlv-abc123",
+        }
+    )
+
+    assert result["committed"] is True
+    assert "error" not in result
+
+
+def test_deliverable_id_reaches_run_commit_pipeline(tmp_path, monkeypatch):
+    """C7b -- the CLI/schema round-trip above stops at "accepted"; this closes
+    the gap by asserting the value actually reaches `run_commit_pipeline`,
+    not merely that the op doesn't reject it. A spy on `run_commit_pipeline`
+    is used rather than a full end-to-end artifact-seeded commit (see
+    `test_commit_scoped.py::_seed_deliverable_artifact`) because the point
+    here is pinning THIS handler's forwarding, not re-testing
+    `commit_scoped`'s own resolution/validation of the id, which belongs to
+    `test_commit_scoped.py`.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.md", "content")
+
+    captured_kwargs = {}
+
+    def _fake_pipeline(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return SimpleNamespace(
+            committed_sha="deadbeef",
+            pushed=None,
+            push_status=scoped_git_commit.PUSH_STATUS_NO_REMOTE,
+            commit_failed=False,
+            integrity_breach=False,
+            diagnostics=[],
+        )
+
+    monkeypatch.setattr(scoped_git_commit, "run_commit_pipeline", _fake_pipeline)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.md"],
+            "message": "subject",
+            "deliverable_id": "dlv-abc123",
+        }
+    )
+
+    assert result["committed"] is True
+    assert captured_kwargs.get("deliverable_id") == "dlv-abc123"
+
+
+def test_op_schema_rejects_non_string_deliverable_id():
+    result = _call(
+        {
+            "worktree_root": "/tmp/nonexistent",
+            "paths": ["a.md"],
+            "message": "m",
+            "deliverable_id": 12345,
+        }
+    )
+    assert result["committed"] is False
+    assert "deliverable_id" in result["error"]
 
 
 def test_message_file_path_is_rejected_not_committed_verbatim(tmp_path):
@@ -354,6 +538,7 @@ def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypa
     fake_result = SimpleNamespace(
         committed_sha=sha,
         pushed=False,
+        push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
         commit_failed=False,
         integrity_breach=True,
         diagnostics=[],
@@ -402,6 +587,7 @@ def test_landed_but_sha_unverified_reports_committed_true_not_false(tmp_path, mo
     fake_result = SimpleNamespace(
         committed_sha=None,
         pushed=None,
+        push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
         commit_failed=False,
         integrity_breach=False,
         sha_unverified=True,
@@ -456,6 +642,7 @@ def _commit_and_fake_pipeline(tmp_path, monkeypatch, *, with_remote: bool):
         lambda *a, **k: SimpleNamespace(
             committed_sha=sha,
             pushed=False,
+            push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
             commit_failed=False,
             integrity_breach=True,
             diagnostics=[],
@@ -922,3 +1109,79 @@ def test_post_commit_release_phantom_claims_never_drops_a_pending_tracked_deleti
 
     offer = compute_offer(sid, cwd=str(repo))
     assert tracked_path in offer["safe_paths"]
+
+
+def test_declined_push_status_short_circuits_before_remote_probe(tmp_path, monkeypatch):
+    """AC5 (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md,
+    C5): a policy decline is known and deliberate, not the genuinely-unknown
+    case `_resolve_push_report`'s remote probe exists for -- it must render
+    `PUSH_STATE_DECLINED` WITHOUT ever calling `_remote_sha_state`. Asserting
+    only the returned string would pass even if the probe still ran (its
+    result is simply discarded by the branch order); the probe-not-called
+    assertion is the actual AC.
+    """
+    from coordinator_core.ops.ceremony import scoped_git_commit as sgc
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    probe_calls = []
+    monkeypatch.setattr(
+        sgc,
+        "_remote_sha_state",
+        lambda *a, **k: probe_calls.append((a, k)) or sgc._REMOTE_UNKNOWN,
+    )
+
+    pushed, push_state = sgc._resolve_push_report(str(repo), sha, sgc.PUSH_STATUS_DECLINED)
+
+    assert push_state == sgc.PUSH_STATE_DECLINED
+    assert pushed is None
+    assert probe_calls == []
+
+
+def test_unknown_push_status_still_probes_remote(tmp_path, monkeypatch):
+    """The regression that matters most: the short-circuit added for
+    `PUSH_STATUS_DECLINED` must not swallow the genuinely-unknown case --
+    anything other than pushed/declined/no-remote still reaches the remote
+    probe exactly as before this change.
+    """
+    from coordinator_core.ops.ceremony import scoped_git_commit as sgc
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    probe_calls = []
+
+    def _fake_probe(*a, **k):
+        probe_calls.append((a, k))
+        return sgc._REMOTE_PRESENT
+
+    monkeypatch.setattr(sgc, "_remote_sha_state", _fake_probe)
+
+    pushed, push_state = sgc._resolve_push_report(str(repo), sha, sgc.PUSH_STATUS_NOT_ATTEMPTED)
+
+    assert push_state == sgc.PUSH_STATE_PUSHED
+    assert pushed is True
+    assert len(probe_calls) == 1
+
+
+def test_no_remote_push_status_maps_to_push_state_no_remote(tmp_path):
+    """`PUSH_STATUS_NO_REMOTE` maps onto the existing `PUSH_STATE_NO_REMOTE`
+    rather than falling through to the unknown/probe path.
+    """
+    from coordinator_core.ops.ceremony import scoped_git_commit as sgc
+
+    pushed, push_state = sgc._resolve_push_report(str(tmp_path), None, sgc.PUSH_STATUS_NO_REMOTE)
+
+    assert push_state == sgc.PUSH_STATE_NO_REMOTE
+    assert pushed is None

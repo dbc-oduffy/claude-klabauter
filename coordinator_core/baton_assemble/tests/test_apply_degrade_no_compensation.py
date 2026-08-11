@@ -107,7 +107,14 @@ class TestADegradeCompensatesNothing:
         )
         assert (harness.repo / "state" / "handoffs" / successors[0]).is_file()
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2", "d4", "d5", "d6"]
+        # d7 (`handoff-carry-gate`) is a precondition gate that runs BEFORE d1
+        # scaffolds the successor -- see `_build_directives`'s d7 block in
+        # `coordinator_core/baton_assemble/__init__.py`, which explicitly
+        # prepends it ahead of d1 for exactly this predecessor-with-carried-
+        # items shape. It lands (not degrades) here: the never-claimed
+        # predecessor still has readable `carried_items` frontmatter, so the
+        # gate itself is satisfied -- only d6's DR-242 supersede gate declines.
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
 
     def test_the_decline_triggers_no_compensation_pass_at_all(
         self, tmp_path, monkeypatch

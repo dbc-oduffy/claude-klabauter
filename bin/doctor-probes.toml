@@ -4,7 +4,7 @@
 # static diagnostic probe engine (bin/claude-klabauter-doctor-probe.py).
 #
 # Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C5
-# Doctrine: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/doctor-probe-design.md
+# Doctrine: ~/.claude/plugins/coordinator/docs/wiki/doctor-probe-design.md
 #
 # REQUIRED / OPTIONAL split (PM-directed, the Staff Engineer F2):
 #   required = true  — core probes; SKIP/BROKEN counts in worst-of reduction.

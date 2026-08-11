@@ -308,21 +308,31 @@ def _parse_args(argv: List[str]) -> _Opts:
     return opts
 
 
+#: Closed two-kind registry (AC1). The handler's own kind registry
+#: (`deliverable_cascade._KIND_REGISTRY`) is closed at exactly these two names
+#: and `_kind_descriptor` raises fail-loud on anything else -- enumerated here
+#: rather than introduced as a plugin seam, per the plan's anti-scope.
+_CASCADE_TARGET_KINDS = ("handoff", "sizing")
+
+
 def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
-    """Fire the shared terminal-state cascade (deliverable.cascade_terminal, C6) after
-    a successful NON-no-op flip to status:implemented.
+    """Fire the shared terminal-state cascade (deliverable.cascade_terminal, C6) once
+    per target kind in `_CASCADE_TARGET_KINDS`, after a successful NON-no-op flip to
+    status:implemented.
 
     Guarded on "a flip actually occurred" by construction: the only caller is the
     branch of _stamp_implemented that just wrote a real status change. The idempotent
     no-op path (status already frozen/terminal) never reaches this function, so a
     repeat `stamp-implemented` invocation on an already-implemented plan never
-    re-cascades (AC6i).
+    re-cascades (AC6i) -- unchanged by targeting two kinds, since both runs still
+    happen only from that same single non-no-op call site.
 
     Returns this leg's contribution to the CLI's own exit code (see module docstring):
-    0 when the cascade is clean or there was nothing to cascade (no deliverable_id, or
-    repo-root unresolvable); 2 when the cascade ran but resolved no downstream artifact
-    -- the flip itself still succeeded, this is a "needs attention" signal, not a
-    reversal of the flip.
+    0 when the cascade is clean, there was nothing to cascade (no deliverable_id, or
+    repo-root unresolvable), or AT LEAST ONE kind advanced something; 2 only when
+    EVERY targeted kind ran and resolved no downstream artifact (AC2) -- the flip
+    itself still succeeded, this is a "needs attention" signal, not a reversal of
+    the flip.
     """
     deliverable_id = (deliverable_id or "").strip()
     if not deliverable_id:
@@ -357,31 +367,52 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
         )
         return 0
 
-    result = asyncio.run(
-        _cascade_handler(
-            {
-                "deliverable_id": deliverable_id,
-                "source_kind": "plan",
-                "source_path": plan_path,
-            },
-            repo_root=git_common_dir,
+    # Per-kind results are collected before any "nothing advanced" narration is
+    # emitted (AC4): if ANY kind advances, the flip is a clean success and the
+    # OTHER kind's empty-corpus result is suppressed entirely -- printing it
+    # unconditionally would inject a new stderr line into the handoff-only path
+    # that no test, and no prior behaviour, ever produced.
+    results: List["tuple[str, dict]"] = []
+    any_advanced = False
+    for target_kind in _CASCADE_TARGET_KINDS:
+        result = asyncio.run(
+            _cascade_handler(
+                {
+                    "deliverable_id": deliverable_id,
+                    "source_kind": "plan",
+                    "source_path": plan_path,
+                    "target_kind": target_kind,
+                },
+                repo_root=git_common_dir,
+            )
         )
-    )
-    for artifact in result.get("advanced", []):
-        print(f"{_PROG}: cascade advanced {artifact.get('handoff_path')}", file=sys.stderr)
-    for artifact in result.get("refused", []):
-        print(
-            f"{_PROG}: cascade refused {artifact.get('handoff_path')}: {artifact.get('reason')}",
-            file=sys.stderr,
-        )
-    if result.get("exit_code") != 0:
-        print(
-            f"{_PROG}: cascade resolved no downstream artifact for {plan_path}: "
-            f"{result.get('error')}",
-            file=sys.stderr,
-        )
-        return 2
-    return 0
+        results.append((target_kind, result))
+        advanced = result.get("advanced", [])
+        if advanced:
+            any_advanced = True
+        for artifact in advanced:
+            print(
+                f"{_PROG}: cascade advanced {artifact.get('path') or artifact.get('handoff_path')}",
+                file=sys.stderr,
+            )
+        for artifact in result.get("refused", []):
+            print(
+                f"{_PROG}: cascade refused "
+                f"{artifact.get('path') or artifact.get('handoff_path')}: {artifact.get('reason')}",
+                file=sys.stderr,
+            )
+
+    if any_advanced:
+        return 0
+
+    for target_kind, result in results:
+        if result.get("exit_code") != 0:
+            print(
+                f"{_PROG}: cascade resolved no downstream artifact for {plan_path}: "
+                f"{result.get('error')}",
+                file=sys.stderr,
+            )
+    return 2
 
 
 def _relpath_for_commit(plan_path: Path, worktree_root: Path) -> "tuple[Optional[str], Optional[str]]":
@@ -599,6 +630,165 @@ def _read_and_validate_resume_content(
     return captured.get("text"), None
 
 
+def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_id: Optional[str]) -> List[Path]:
+    """Reverse join: given a plan (identified by its own `deliverable_id`
+    frontmatter and its path), find every `state/handoffs/*.md` baton that
+    governs it — either by carrying a matching `deliverable_id`, or by an
+    explicit `governing_plan:` field naming this plan path.
+
+    This is the REVERSE of `workstream_complete._resolve_session_handoff_
+    plan_by_deliverable_id` (handoff -> plan); that function is not reused
+    directly (it walks `docs/plans/*.md` keyed off ONE handoff's
+    `deliverable_id`, the opposite direction), but shares its equivalence-
+    canonicalization and frontmatter-primitive idiom rather than re-deriving
+    either.
+
+    Never raises: an unreadable/non-UTF-8 handoff is skipped, not fatal to
+    the scan — mirrors the forward join's own resilience. Only scans the
+    live `state/handoffs/` directory (never `state/handoffs/.archive/` or
+    `archive/handoffs/`) — an archived handoff is not a live claim holder by
+    construction.
+    """
+    handoffs_dir = root / "state" / "handoffs"
+    if not handoffs_dir.is_dir():
+        return []
+
+    # Function-local imports: `workstream_complete/__init__.py` imports this
+    # module's sibling ops at module scope for other reasons, and importing
+    # it back here at module scope would risk a future cycle -- matching the
+    # function-local-import idiom `directives_lessons_plan.resolve_governing_
+    # plan_with_source` already uses for the same forward-join module.
+    from coordinator_core.ops.deliverable_equivalence import canonicalize as canonicalize_deliverable_id
+    from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
+
+    equivalence_map = load_equivalence_map(root)
+    canonical_plan_id = (
+        canonicalize_deliverable_id(plan_deliverable_id, equivalence_map) if plan_deliverable_id else None
+    )
+
+    try:
+        plan_resolved = plan_path.resolve()
+    except OSError:
+        plan_resolved = plan_path
+
+    matches: List[Path] = []
+    for handoff_path in sorted(handoffs_dir.glob("*.md")):
+        try:
+            handoff_text = handoff_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        split = split_frontmatter(handoff_text)
+        if split is None:
+            continue
+
+        governing_plan_field = read_fm_field_unquoted(split.fm_text, "governing_plan")
+        if governing_plan_field:
+            candidate = Path(governing_plan_field)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            try:
+                if candidate.resolve() == plan_resolved:
+                    matches.append(handoff_path)
+                    continue
+            except OSError:
+                pass
+
+        if canonical_plan_id is not None:
+            handoff_deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+            if handoff_deliverable_id and canonicalize_deliverable_id(handoff_deliverable_id, equivalence_map) == canonical_plan_id:
+                matches.append(handoff_path)
+
+    return matches
+
+
+def _refuse_if_live_foreign_holder(plan_path: Path, worktree_root: Path, closing_sid: Optional[str]) -> Optional[str]:
+    """Refuse a `stamp-implemented` write when a DIFFERENT, LIVE session
+    still holds this plan's governing handoff with in-flight
+    `deployment_state` — defence-in-depth for the incident this closes: a
+    session-shape misdetection resolved a LIVE PEER's plan as the closing
+    session's own governing plan and stamped it `implemented` (cross-repo
+    memo `2026-08-10-example-retrieval-repo-em-wsc-misdetection-wrote-to-a-live-peers-
+    plan.md`).
+
+    Returns a human-readable refusal reason (non-None -> caller must fail
+    loud, no write, no cascade) or `None` when the write may proceed.
+
+    Negative-spec — WHY this is keyed on LIVENESS, not provenance equality,
+    and must not be "simplified" back to either:
+      - The ceremony claims the plan itself one directive earlier via
+        `d-claim-plan-execution-lock` (`directives_lessons_plan.
+        build_plan_claim_and_stamp_directives`), so a check against the
+        PLAN-CLAIM holder reads as self-held and is vacuous.
+      - The misdetection this guards against corrupts the plan<->handoff
+        provenance JOIN itself (a wrong plan was resolved as "governing"
+        in the first place), so a provenance-EQUALITY check is also
+        vacuous under the exact failure this guards against.
+      - Only "a DIFFERENT session is alive right now and still holds this
+        work in flight" survives both failure modes. That is the entire
+        condition below — nothing more, nothing less.
+
+    Terminal-safe by construction: every ambiguity (zero handoffs found,
+    more than one, unreadable frontmatter, unresolvable/self sid, dead
+    holder, terminal `deployment_state`) returns `None` (proceed). This
+    guard only fires on a POSITIVELY-established live foreign holder — a
+    guard that blocked on absence of evidence would wedge every plan-less
+    or handoff-less session, which is not this incident's shape.
+    """
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+    from coordinator_core.session.core import resolve_session_id
+    from coordinator_core.session.liveness import session_live
+
+    plan_deliverable_id = None
+    try:
+        plan_text = plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        plan_text = None
+    if plan_text is not None:
+        split = split_frontmatter(plan_text.replace("\r\n", "\n"))
+        if split is not None:
+            plan_deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+
+    candidates = _find_governing_handoff_paths(worktree_root, plan_path, plan_deliverable_id)
+    if len(candidates) != 1:
+        # Zero -> nothing governs this plan (or it is genuinely plan-less
+        # from a handoff's perspective); more than one -> ambiguous join,
+        # same "do not guess" discipline as the forward join. Both proceed.
+        return None
+
+    handoff_path = candidates[0]
+    try:
+        handoff_text = handoff_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    split = split_frontmatter(handoff_text)
+    if split is None:
+        return None
+
+    claimed_by = read_fm_field_unquoted(split.fm_text, "claimed_by")
+    if not claimed_by:
+        return None
+
+    try:
+        resolved_closing_sid = closing_sid or resolve_session_id()
+    except Exception:
+        resolved_closing_sid = None
+    if resolved_closing_sid is None or claimed_by == resolved_closing_sid:
+        return None
+
+    if not session_live(claimed_by, cwd=str(worktree_root)):
+        return None
+
+    deployment_state = read_fm_field_unquoted(split.fm_text, "deployment_state")
+    if deployment_state and deployment_state in HANDOFF_TERMINAL_DEPLOYMENT:
+        return None
+
+    return (
+        f"{plan_path} is governed by {handoff_path} (deployment_state={deployment_state!r}), "
+        f"claimed by LIVE session {claimed_by} (this session: {resolved_closing_sid!r}) — "
+        "refusing to stamp implemented over a foreign in-flight claim"
+    )
+
+
 def _stamp_implemented(opts: _Opts) -> int:
     """Perform the stamp-implemented verb; returns the exit code.
 
@@ -655,6 +845,12 @@ def _stamp_implemented(opts: _Opts) -> int:
                 f"{_PROG}: --plan escapes the resolved git worktree: {opts.plan!r}",
                 file=sys.stderr,
             )
+            return 1
+
+    if worktree_root is not None:
+        refusal_reason = _refuse_if_live_foreign_holder(plan_path, worktree_root, opts.by)
+        if refusal_reason is not None:
+            print(f"{_PROG}: refusing to stamp implemented: {refusal_reason}", file=sys.stderr)
             return 1
 
     _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}

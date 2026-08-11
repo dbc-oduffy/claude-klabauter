@@ -322,10 +322,42 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
         content_root = os.environ.get(COORDINATOR_CONTENT_ROOT_ENV_KEY, "")
         is_empty = not content_root or not os.path.isdir(content_root)
 
+        # Classify BEFORE writing the sentinel, not after. `resolved_ok=false`
+        # is the EXPECTED steady state on a `--plugin-dir` or marketplace-live
+        # machine (see the two carve-outs below), so a sentinel carrying only
+        # that line reads as a fault on a perfectly healthy box — it has
+        # already cost one investigation that got as far as auditing a
+        # stood-down kill-switch marker before the carve-outs explained it.
+        # The sentinel is a human-facing breadcrumb; recording the RESOLUTION
+        # without the CLASSIFICATION is what made it misleading.
+        #
+        # Both discriminators are the same cheap probes the carve-outs run
+        # (`is_inline_install`: a `.doe-root` read plus one live `isdir`;
+        # `_is_marketplace_install_live`: the harness's own installed-plugins
+        # registry plus a stat) — computed once here and REUSED below, never
+        # called twice, so this preserves the module's no-subprocess
+        # "cheap by construction" contract. Neither runs at all when the
+        # content root resolved, which is the majority path.
+        inline_install = is_inline_install(resolved_config_dir) if is_empty else False
+        marketplace_live = (
+            _is_marketplace_install_live(resolved_config_dir)
+            if is_empty and not inline_install
+            else False
+        )
+        if not is_empty:
+            verdict = "resolved"
+        elif inline_install:
+            verdict = "expected-inline-plugin-dir"
+        elif marketplace_live:
+            verdict = "expected-marketplace-live"
+        else:
+            verdict = "unresolved-and-unexplained"
+
         sentinel = resolved_config_dir / _SENTINEL_NAME
         sentinel_body = (
             f"{COORDINATOR_CONTENT_ROOT_ENV_KEY}={content_root}\n"
             f"resolved_ok={'false' if is_empty else 'true'}\n"
+            f"verdict={verdict}\n"
         )
         _atomic_write_text(sentinel, sentinel_body)  # best-effort; failure is silent
 
@@ -375,7 +407,7 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
         # covered by `_is_marketplace_install_live` immediately below —
         # the two branches are disjoint by construction, and the OSS one
         # is the majority shape, so neither may be dropped as redundant.
-        if is_inline_install(resolved_config_dir):
+        if inline_install:  # computed once above; same probe, same semantics
             return ""
 
         # Marketplace/OSS carve-out (added 2026-07-31): the ONLY thing
@@ -387,7 +419,7 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
         # `_is_marketplace_install_live`'s own docstring for the exact
         # discriminator (harness's own installed-plugins registry,
         # validated by a stat -- never trusted bare).
-        if _is_marketplace_install_live(resolved_config_dir):
+        if marketplace_live:  # computed once above; same probe, same semantics
             return ""
 
         settings_out = resolve_settings_out_path(str(resolved_config_dir / "settings.json"))

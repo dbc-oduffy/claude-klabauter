@@ -572,6 +572,46 @@ def _created_this_session(repo_root: Path, rel_path: str, session_start_time: da
     return bool(proc is not None and proc.returncode == 0 and proc.stdout.strip())
 
 
+def _session_created_paths(repo_root: Path, session_start_time: datetime) -> "frozenset[str]":
+    """Batched replacement for per-path `_created_this_session`: ONE `git
+    log --diff-filter=A --since=<start> --name-only` spawn for the whole
+    `classify_session_authored_files` pass, rather than one spawn per dirty
+    path (the N+1 this function exists to eliminate -- see
+    state/bug-backlog for the hang this caused under this repo's dirty-file
+    load). Same predicate as `_created_this_session`, computed once: "does
+    `git log --diff-filter=A --since=<start>` show this session created
+    it" -- with no pathspec, `--name-only` enumerates every path any
+    in-range added-file commit touched, which is the exact union of paths
+    `_created_this_session` would have returned True for individually.
+
+    `--format=` (empty commit format) is deliberate: it suppresses the
+    commit-header lines `--name-only` would otherwise interleave with
+    paths, leaving pure path lines (plus blank separators, filtered below)
+    -- no per-commit parsing needed since only path membership matters
+    here, never which commit added which path.
+
+    Normalization: no `-c core.quotepath=false` override, matching
+    `_git_status_porcelain`'s own convention in this module (that function
+    does not force quotepath either) -- paths from this call and from
+    `_git_status_porcelain` see the same quoting behavior, so a raw
+    string-equality membership test compares like with like.
+
+    Returns `frozenset()` on git failure (`proc is None or returncode !=
+    0`) or on a git call that would not run at all -- the caller is
+    responsible for not invoking this when `session_start_time` is None,
+    matching `_created_this_session`'s own degrade-to-False posture on
+    failure (never raises, never over-reports as authored).
+    """
+    since = session_start_time.astimezone(timezone.utc).isoformat()
+    proc = _run_git(
+        repo_root,
+        ["log", "--diff-filter=A", f"--since={since}", "--name-only", "--format="],
+    )
+    if proc is None or proc.returncode != 0:
+        return frozenset()
+    return frozenset(line.strip() for line in proc.stdout.splitlines() if line.strip())
+
+
 def _mtime_after(path: Path, session_start_time: datetime) -> bool:
     try:
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
@@ -610,6 +650,10 @@ def classify_session_authored_files(
     module's scope (owned by `directives_commit_tail.py`, C2e); this function
     only says whether Step 2.67 itself may touch the path.
     """
+    session_created_paths: "frozenset[str]" = frozenset()
+    if session_start_time is not None:
+        session_created_paths = _session_created_paths(repo_root, session_start_time)
+
     results: list[dict[str, Any]] = []
     for rel_path, status_code in _git_status_porcelain(repo_root):
         if _is_keep_listed(rel_path):
@@ -622,7 +666,7 @@ def classify_session_authored_files(
         authored = False
         reason = "fails predicate (a) and (b)"
         if session_start_time is not None:
-            if _created_this_session(repo_root, rel_path, session_start_time):
+            if rel_path in session_created_paths:
                 authored = True
                 reason = "predicate (a): created this session"
             elif status_code.startswith("??") and _mtime_after(repo_root / rel_path, session_start_time):

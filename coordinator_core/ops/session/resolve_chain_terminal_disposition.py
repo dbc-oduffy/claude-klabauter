@@ -126,8 +126,12 @@ Negative-spec:
   - Does NOT prefer detector B over detector A — A (archived claim-stamp)
     wins, B fires only when A missed, and B's hit passes the spoof guard
     before it counts (fence semantics preserved).
-  - Does NOT treat an absent claim holder on a Detector-B candidate as proof
-    of this session's ownership, and does NOT treat a bulk/housekeeping
+  - Does NOT accept a Detector-B candidate on absent evidence: ownership must
+    be POSITIVELY named by the claim holder or `origin_session:` (2026-08-10
+    archive-leg touch-vs-consume incident — a restore/rename/reformat commit
+    is a touch, not a consume, and an ownerless-looking record is routinely a
+    live peer's baton whose ledger claim is liveness-gated away). Does NOT
+    treat a bulk/housekeeping
     archival commit (`fleet: archive …`, `session.boot_sweep: …`) as
     session-authored provenance — see the 2026-08-05 chain-terminal
     misattribution incident cited on `_git_provenance_shipped_handoff` and
@@ -610,11 +614,20 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
             #     present and naming a different session — the exact signal
             #     this session's own reproduction carried and the prior guard
             #     ignored because `consumer` was falsy.
-            # Neither field being SET is not itself disqualifying (the
-            # covered legitimate shape: a session ships/archives its own
-            # predecessor with no claim ever stamped and no origin_session
-            # recorded either) — only a field being set AND naming someone
-            # else rejects.
+            # Ownership must be POSITIVELY evidenced (tightened 2026-08-10 —
+            # example-retrieval-repo memo `2026-08-10-example-retrieval-repo-em-wsc-archive-leg-
+            # infers-consumption-from-a-touch.md`): at least one read must
+            # NAME this session. Both coming back empty now REJECTS rather
+            # than falling through to acceptance — "no one is on record as
+            # owning this" is indistinguishable from "someone owns it and the
+            # record does not say so", which is precisely a live peer's baton
+            # once its ledger claim is liveness-gated away and its frontmatter
+            # mirror carries no claimed_by. Fails closed; the caller already
+            # emits a loud WARN on the resulting single-session verdict.
+            # This does NOT subsume the sweep-subject filter above — that one
+            # is deliberately independent and rejects a bulk archival commit
+            # even when the swept record's claim holder DOES equal this
+            # session.
             consumer = _claim_holder(shipped_path, common_dir)
             origin = _origin_session(shipped_path)
             if consumer and consumer != sid:
@@ -631,6 +644,18 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
                     "closed — absence of a claim holder is not evidence of "
                     "this session's ownership; 2026-08-05 chain-terminal "
                     "misattribution incident)"
+                )
+            elif not consumer and not origin:
+                notes.append(
+                    f"Detector B hit {shipped_by_me} rejected — neither a claim "
+                    "holder nor origin_session names any session, so nothing "
+                    "positively attributes this record to this session; a commit "
+                    "touching an archived handoff (restore, rename, reformat, "
+                    "licence sweep) is not evidence of consuming it, and an "
+                    "ownerless-looking record is routinely a live peer's baton "
+                    "whose ledger claim is liveness-gated and whose mirror "
+                    "carries no claimed_by (2026-08-10 archive-leg "
+                    "touch-vs-consume incident)"
                 )
             elif _has_predecessor_field(shipped_path):
                 arch_hit = shipped_path

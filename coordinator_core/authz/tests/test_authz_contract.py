@@ -52,6 +52,22 @@ class TestClassify:
     def test_known_ops_return_correct_class(self, op_name: str) -> None:
         assert classify(op_name) is OpClass.COMPUTE_ONLY
 
+    def test_ceremony_chunk_commits_is_compute_only(self) -> None:
+        """2026-08-10 fix (state/bug-backlog/2026-08-10-chain-ancestry-waivers-reap-and-
+        ceremony-e5afd3e0e7ab.yaml): was registered+module-mapped but missing an
+        OP_CLASSIFICATION entry entirely (raised KeyError, outside the frozen
+        _KNOWN_UNCLASSIFIED_OPS_DEBT baseline). Pure git-log read — no write anywhere in
+        coordinator_core/ops/ceremony/chunk_commits.py."""
+        assert classify("ceremony.chunk_commits") is OpClass.COMPUTE_ONLY
+
+    def test_chain_ancestry_waivers_reap_is_mutating(self) -> None:
+        """2026-08-10 fix, same bug entry as above. Deletes waiver files/subdirectories
+        (coordinator_core/ops/reap_chain_ancestry_waivers.py — .unlink()/.rmdir()) — a
+        write to coordinator substrate, classified MUTATING even though the module's own
+        docstring frames deletion as fail-safe/remove-only (that property bounds the
+        DIRECTION of harm, not whether a write happens)."""
+        assert classify("chain_ancestry_waivers.reap") is OpClass.MUTATING
+
     def test_unknown_op_raises_key_error(self) -> None:
         """classify() raises KeyError on an unclassified op — fail-closed.
 

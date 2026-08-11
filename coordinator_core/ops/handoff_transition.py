@@ -132,6 +132,15 @@ Verb contracts (mirrored from the JS spec):
     - status: untouched — close is a deployment_state-only terminal stamp,
       mirroring ship's status-untouched contract; DR-084 does not couple
       status to closed.
+    - pickup_ready: false (2026-08-10 fix — cross-repo/inbox/2026-08-10-doe-
+      claude-em-reconcile-close-terminal-and-scrub-key.md § 1). Unlike claim/
+      unclaim, which PRESERVE pickup_ready untouched (an authorial-intent
+      record for a baton still in play), close is a terminal write and there
+      is no "still in play" to preserve — a closed baton with pickup_ready
+      left true kept advertising as live work to /pickup and boot-sweep
+      triage, a double-dispatch hazard invisible to an EM who trusts the
+      success line. Written unconditionally alongside deployment_state/
+      closed_reason (replace if present, insert if absent).
     - Human/session-only by DR-084 ruling: this verb is reachable ONLY
       through the operator-facing archive-stamp-cli close-handoff --reason
       surface, never composed by an automated writer (the supersede verb
@@ -146,9 +155,13 @@ Verb contracts (mirrored from the JS spec):
       be found at any of them, which is exactly why the executor who hit
       this gap had no correct verb to reach for.
     - Idempotency: no-op (exit_code=0) when deployment_state==closed AND
-      closed_reason already equals the requested reason. A re-close with a
-      DIFFERENT reason overwrites closed_reason (a human correcting their
-      own prior adjudication) rather than no-op'ing or refusing.
+      closed_reason already equals the requested reason AND pickup_ready is
+      already false — the third condition matters: a pre-fix record already
+      sitting at closed+matching-reason (with pickup_ready still true) must
+      NOT short-circuit past the pickup_ready fix on a re-close call. A
+      re-close with a DIFFERENT reason overwrites closed_reason (a human
+      correcting their own prior adjudication) rather than no-op'ing or
+      refusing.
 
   repark — intentional-unpause transition (params: handoff_path)
     - deployment_state: in_flight → ready_to_fire.
@@ -1007,14 +1020,21 @@ def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> d
 
         deployment = read_fm_field(split.fm_text, "deployment_state")
         existing_reason = read_fm_field(split.fm_text, "closed_reason")
+        # pickup_ready is read unquoted for the idempotency compare below —
+        # see § pickup_ready cleared on close.
+        existing_pickup_ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
 
         # Idempotency: no-op ONLY at the full target state (deployment_state
-        # already closed AND closed_reason already the requested value).
-        if deployment == "closed" and existing_reason == reason:
+        # already closed AND closed_reason already the requested value AND
+        # pickup_ready already false — see § pickup_ready cleared on close
+        # below; without this third condition, a re-close call against a
+        # pre-fix record already at closed+matching-reason would short-circuit
+        # on the first two conditions and never pick up the pickup_ready fix).
+        if deployment == "closed" and existing_reason == reason and existing_pickup_ready == "false":
             _state["applied"] = False
             _state["message"] = (
                 f"{handoff_path} already deployment_state:closed "
-                f"(closed_reason: {reason}) — no-op"
+                f"(closed_reason: {reason}, pickup_ready: false) — no-op"
             )
             return old_text  # byte-identical → locked_rmw skips the write
 
@@ -1042,6 +1062,26 @@ def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> d
         else:
             fm = insert_fm_field(fm, "closed_reason", reason, "deployment_state")
 
+        # pickup_ready → false (§ pickup_ready cleared on close). deployment_
+        # state:closed and pickup_ready:true are one logical state disagreeing
+        # with itself: a closed baton has nothing left to pick up, but nothing
+        # in this verb ever touched pickup_ready before this fix, so a closed
+        # record could keep advertising as live work to /pickup and boot-sweep
+        # triage — the exact double-dispatch hazard the schema's own
+        # pickup_ready description warns about ("positive pickup-authorized
+        # signal"). Unlike claim/unclaim, which deliberately PRESERVE
+        # pickup_ready untouched (an authorial-intent record for a baton still
+        # in play), close is a terminal write — there is no "still in play" to
+        # preserve. Replace if present (covers a stale true AND a stale
+        # already-quoted value); insert if absent (a record minted before
+        # pickup_ready existed gets the same guarantee going forward).
+        # Spec: cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-
+        # terminal-and-scrub-key.md § 1.
+        if read_fm_field(fm, "pickup_ready") is not None:
+            fm = replace_fm_field(fm, "pickup_ready", "false")
+        else:
+            fm = insert_fm_field(fm, "pickup_ready", "false", "closed_reason")
+
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
         if errors:
@@ -1050,7 +1090,8 @@ def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> d
 
         _state["applied"] = True
         _state["message"] = (
-            f"closed {handoff_path} (deployment_state: closed, closed_reason: {reason})"
+            f"closed {handoff_path} (deployment_state: closed, closed_reason: {reason}, "
+            "pickup_ready: false)"
         )
         return rebuild(split, fm)
 

@@ -79,7 +79,8 @@ and "background + new command" and must not be guessed.
 
 `py-tree-sitter` version constraint for C8 to pin (not this chunk's job to
 declare, per the plan's C2/C8 split -- this is the constraint C8 must
-provision): `tree-sitter>=0.21,<1` for the SAME reason the plan's own body
+provision): `tree-sitter` at 0.21 or above and below 1, for the SAME reason
+the plan's own body
 names -- 0.21+ replaced `Parser.set_language(LANG)` with `Parser(LANG)` /
 `parser.language = LANG`, and the two-arg `Language(path, name)`
 constructor with the single-arg `Language(ptr)` form. This module uses ONLY

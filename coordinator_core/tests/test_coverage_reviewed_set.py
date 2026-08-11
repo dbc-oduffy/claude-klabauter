@@ -2452,3 +2452,60 @@ def test_build_reviewed_set_plan_record_chain_scope_narrows_foreign_session(
         "interleaved commit exactly like a 'diff' record does — the "
         "planning classification does not bypass foreign-session narrowing"
     )
+
+
+def _write_unrecognized_kind_record(path: Path, sha_range: str, scope_kind: str) -> None:
+    """Write a trail record carrying a scope_kind outside the schema's closed
+    enum ({"diff", "plan", "integration"}) — the shape a hand-authored record
+    can still produce even after the write-time enum guard, e.g. a record
+    written before the 1.1.0 -> 1.2.0 schema bump landed."""
+    record = {
+        "sha_range": sha_range,
+        "reviewer": "code-reviewer",
+        "scope": "session",
+        "scope_kind": scope_kind,
+        "verdict": "ok",
+        "session_id": "00000000-0000-0000-0000-0000000000bb",
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_build_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """2026-08-10 coverage-gate wedge (cross-repo/inbox/2026-08-10-project-
+    rag-ue-addon-em-coverage-gate-crashes-on-chunk-and-inline-dispatch-
+    kinds.md): a review-trail corpus containing ONE record with an
+    unrecognized scope_kind ("chunk") must still let build_reviewed_set
+    return a verdict-computable set — never AssertionError the whole gate.
+    The unrecognized record earns ZERO credit (fail-closed) and a WARN naming
+    the kind and the record is emitted to stderr; a sibling "diff" record in
+    the same corpus is credited normally."""
+    from coordinator_core.coverage import build_reviewed_set
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    chunk_sha = _make_commit(repo, "C1: would-be chunk review")
+    diff_sha = _make_commit(repo, "C2: normal diff review")
+
+    chunk_record = tmp_path / "chunk_record.json"
+    _write_unrecognized_kind_record(chunk_record, f"{chunk_sha}^..{chunk_sha}", "chunk")
+    diff_record = tmp_path / "diff_record.json"
+    _write_trail_record(diff_record, diff_sha)
+
+    reviewed = build_reviewed_set(
+        [str(chunk_record), str(diff_record)], on_record_error="fail", repo_root=str(repo),
+    )
+
+    assert diff_sha in reviewed, "the sibling diff record must still be credited normally"
+    assert chunk_sha not in reviewed, (
+        "an unrecognized scope_kind must credit nothing — fail-closed, "
+        "not fatal to the whole gate"
+    )
+    err = capsys.readouterr().err
+    assert "chunk" in err and "WARN" in err, (
+        "the unrecognized kind must be named in a loud WARN to stderr, not "
+        "silently swallowed"
+    )

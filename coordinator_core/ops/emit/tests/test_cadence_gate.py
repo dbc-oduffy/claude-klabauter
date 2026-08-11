@@ -133,8 +133,6 @@ def test_artifact_emit_defaults_to_the_full_tier(tmp_path: Path, monkeypatch) ->
     dataclass protects an unknown NEW caller; it must not silently redefine what this op's own
     docstring calls authoritative.
     """
-    import asyncio
-
     from coordinator_core.ops import artifact_emit
 
     seen: list[EmitContext] = []
@@ -144,8 +142,8 @@ def test_artifact_emit_defaults_to_the_full_tier(tmp_path: Path, monkeypatch) ->
         artifact_emit._envelope, "emit", lambda ctx, out=None: seen.append(ctx) or {"ok": True}
     )
 
-    asyncio.run(artifact_emit._artifact_emit({}, repo_root=tmp_path))
-    asyncio.run(artifact_emit._artifact_emit({"full_enrichment": False}, repo_root=tmp_path))
+    artifact_emit._artifact_emit({}, repo_root=tmp_path)
+    artifact_emit._artifact_emit({"full_enrichment": False}, repo_root=tmp_path)
 
     assert [ctx.full_enrichment for ctx in seen] == [True, False], (
         "no param => full tier (the op's documented semantics); explicit False => cheap tier"
@@ -154,15 +152,13 @@ def test_artifact_emit_defaults_to_the_full_tier(tmp_path: Path, monkeypatch) ->
 
 def test_artifact_emit_rejects_a_non_boolean_full_enrichment(tmp_path: Path, monkeypatch) -> None:
     """A truthy string would silently select the opposite tier from the one written."""
-    import asyncio
-
     import pytest
 
     from coordinator_core.ops import artifact_emit
 
     monkeypatch.setattr(artifact_emit, "main_worktree_root", lambda root: tmp_path)
     with pytest.raises(ValueError, match="full_enrichment must be a boolean"):
-        asyncio.run(artifact_emit._artifact_emit({"full_enrichment": "false"}, repo_root=tmp_path))
+        artifact_emit._artifact_emit({"full_enrichment": "false"}, repo_root=tmp_path)
 
 
 # --------------------------------------------------------- 3/4. file_attributions (MUST_COMPUTE)

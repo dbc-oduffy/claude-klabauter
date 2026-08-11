@@ -254,7 +254,7 @@ def _build_parent_map(
     nodes: Dict[str, dict],
     handoff_dir: str,
     repo_root: str,
-    git_history_cache: Optional[Set[str]] = None,
+    git_history_cache: Optional[Set[str]] = None,  # unused when include_history_tier=False below; kept for signature parity with dag.resolve_target
 ) -> Dict[str, List[str]]:
     """Mirrors ``dag.walk_forward``'s own internal edge-resolution call shape
     exactly: a single, fixed *handoff_dir* for every ``resolve_target`` call
@@ -268,16 +268,17 @@ def _build_parent_map(
     silently diverge from what ``walk_forward`` itself used to discover
     these very nodes.
 
-    *git_history_cache*, when given, is threaded straight through to every
-    ``resolve_target`` call's tier-3 fallback (see ``dag.build_git_history_cache``)
-    — a single upfront ``git log --all --name-only`` pass in place of a
-    ``git log --all -- <path>`` subprocess spawn per unresolved edge target.
-    Callers of THIS function are expected to pass a cache already stripped
-    via ``dag.as_history_membership_set`` (``PriorityResolveCache.__init__``
-    does this) whenever the cache outlives one atomic build-then-consume —
-    so a MISS here falls through to the per-call check rather than being
-    fast-rejected, and passing a cache changes nothing about which parents
-    are found, only how many subprocesses that costs.
+    Every ``resolve_target`` call below passes ``include_history_tier=False``
+    — this function's loop discards the ``'git-history'`` sentinel
+    identically to ``None`` (see the ``if target and target != "git-history"``
+    check), so tier 3 (the ``git log`` subprocess fallback) has never
+    produced a distinguishable outcome for any caller of THIS function.
+    Skipping it removes the subprocess spawn per unresolved edge target
+    entirely rather than merely caching it. *git_history_cache* is still
+    accepted and threaded through for signature parity with
+    ``dag.resolve_target`` and any other internal caller that reuses this
+    same *nodes*/*handoff_dir*/*repo_root* shape, but with tier 3 skipped it
+    is inert here — never consulted, never populated on a miss.
     """
     parent_map: Dict[str, List[str]] = {}
     for path, meta in nodes.items():
@@ -285,7 +286,11 @@ def _build_parent_map(
         parents: List[str] = []
         for raw_ref in raw_edges:
             target = resolve_target(
-                raw_ref, handoff_dir, repo_root, git_history_cache=git_history_cache
+                raw_ref,
+                handoff_dir,
+                repo_root,
+                git_history_cache=git_history_cache,
+                include_history_tier=False,
             )
             if target and target != "git-history":
                 parents.append(target)

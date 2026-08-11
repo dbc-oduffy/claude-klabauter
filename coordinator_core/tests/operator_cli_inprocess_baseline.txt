@@ -51,10 +51,21 @@
 # itself; its one mutating path shells out to prune-resolved-queue-entries.py,
 # which declares the write at the real write site.
 #
-# `cartography.py` (triaged 2026-08-06): its only coordinator_core.ops import
-# is `_registry_map.OP_MODULE_MAP`, a static data map read at call time — not
-# an op invocation. It writes nothing (results go to stdout as JSON), so there
-# is no write to declare, and there is no op module behind it to route to.
+# `cartography.py`'s 2026-08-06 triage note — "its only coordinator_core.ops
+# import is `_registry_map.OP_MODULE_MAP`, a static data map read at call time,
+# not an op invocation" — turned out to describe a whole CLASS, not one file.
+# The gate's `_imports_an_op_in_process` credited ANY import from the package,
+# so a private helper, a constant enum, or a path-derivation function read as
+# an op reach. That predicate now requires an op ENTRYPOINT (see the function's
+# own docstring for the four live specimens and the fail-closed narrowness),
+# and these four left this file as a result — they were never bypasses:
+#   cartography.py (`_registry_map.OP_MODULE_MAP`),
+#   archive-stamp-cli (`handoff_stamp._SHIPPED_IN_KIND_ENUM`),
+#   handoff-archive-transition.py (`fleet._common.handoff_archive_dest`),
+#   query-records.py (`records_query._TYPE_TO_GLOB`).
+# Carry-forward: `archive-stamp-cli` is still kind-4 residual debt on its own
+# merits (its writes land 2+ layers down in ~15 handler-owned op modules), but
+# that debt is no longer visible to THIS gate and is not tracked by a row here.
 #
 # `check-auto-reconcile.py` (triaged 2026-08-06): already reaches the engine
 # through `coordinator_core.invoke.dispatch.dispatch_message` — the very
@@ -69,8 +80,6 @@
 # run_op_main, and the gate's seam check was a substring scan; that hole is
 # fixed (the check is AST-based on both sides now, requiring a real call), and
 # this pair is the reason the fixture for it exists.
-coordinator/bin/cartography.py
-coordinator/bin/archive-stamp-cli
 coordinator/bin/audit-enabled-plugins.py
 coordinator/bin/baton-drift-sweep.py
 coordinator/bin/check-auto-memory-drained.py
@@ -87,7 +96,6 @@ coordinator/bin/detect-staged-rollback.py
 coordinator/bin/dirty-tree-gate.py
 coordinator/bin/emit-goal-from-artifact.py
 coordinator/bin/generate-repomap.py
-coordinator/bin/handoff-archive-transition.py
 coordinator/bin/handoff-deliverable-carry.py
 coordinator/bin/lessons-outbox-drain.py
 coordinator/bin/list-orphaned-plans.py
@@ -97,7 +105,6 @@ coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
 coordinator/bin/probe-onboarding-currency.py
 coordinator/bin/prune-closed-improvements.py
 coordinator/bin/publish.py
-coordinator/bin/query-records.py
 coordinator/bin/review-brightline-gate.py
 coordinator/bin/safe-commit-offer.py
 coordinator/bin/spinoff-deliverable-and-commit.py

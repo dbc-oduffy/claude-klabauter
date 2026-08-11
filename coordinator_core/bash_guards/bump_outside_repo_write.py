@@ -52,6 +52,19 @@ REGISTERED target -- that is C4's `target_is_registered_repo` branch, not
 this guard's; this guard's job is the "does not bump" half of that same
 plan sentence.)
 
+NARROW (PM ruling 2026-08-10, `state/bug-backlog/2026-08-10-a-session-
+anchored-outside-any-git-repo-88ca86c1f8bf.yaml`) DOES NOT TOUCH THIS
+GUARD. Narrow confines a rootless session's write boundary to its own
+anchor-directory subtree (`_write_bump_applicability.
+anchor_subtree_contains`, wired into C4/C7's own no-repo-anchor branches),
+but this guard's defining predicate REQUIRES the target ALSO resolve to no
+git root at all -- under a rootless anchor that means neither the anchor
+nor the target has a gitdir anywhere, so there is no clearable marker site
+to narrow toward (see `anchor_subtree_contains`'s own docstring, and the
+eng-director recommendation this ruling shipped: "outside the anchor
+subtree AND in no repo ... can legitimately keep failing open"). The
+no-repo-anchor bail two paragraphs above is therefore UNCHANGED by Narrow.
+
 Reuses rather than reimplements (mirrors C4's own reuse list exactly, since
 these are the SAME shared modules C4 already consumes):
   - `_command_tokenizer.resolve_command_positions` -- the resolve-once entry
@@ -237,6 +250,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     session_anchor_has_git_repo,
     target_is_bare_temp_scratch,
     target_is_publish_destination,
+    target_is_under_claude_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     bump_is_cleared,
@@ -252,6 +266,7 @@ from coordinator_core.bash_guards._write_bump_message import (
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     PS_SET_LOCATION_ALIASES,
+    _host_is_windows,
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
@@ -366,6 +381,16 @@ def _target_is_always_allowed(
     if is_agent_memory_store_path(target_dir):
         return True
 
+    # ~/.claude carve-out (docs/plans/2026-08-10-carve-claude-out-and-
+    # close-the-backslash-bypass.md, C1, AC1-AC4). Unconditional, like the
+    # agent-memory check immediately above: `~/.claude` IS a real git
+    # checkout on this fleet, so it must not be gated on a resolved
+    # `target_gitdir` the way `_target_is_under_settings_home` gates the
+    # tool-surface settings-home exemption -- see `target_is_under_claude_
+    # home`'s own docstring.
+    if target_is_under_claude_home(target_dir, env=env):
+        return True
+
     for raw_root in _always_allowed_roots(anchor_git_root, effective_sid, env=env):
         root_cf = _resolve_and_casefold(raw_root)
         if root_cf is None:
@@ -431,11 +456,21 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
 
     `target_dir` is NOT YET resolved to a git root -- callers do that via
     `resolve_gitdir`/`nearest_existing_ancestor`.
+
+    `resolve_command_positions` (both here and the nested `-c`-payload
+    re-entry below) is called with `preserve_windows_backslashes=
+    _host_is_windows()` -- see `bump_foreign_repo_write._iter_write_sink_
+    candidates`'s own docstring (C2, docs/plans/2026-08-10-carve-claude-out-
+    and-close-the-backslash-bypass.md, AC5-AC6) for the mangled-token defect
+    this closes; both write-bump guards share this ONE opt-in flag on the
+    shared tokenizer rather than each re-deriving their own normalization.
     """
     if not cmd or not cmd.strip():
         return
     try:
-        resolved_segments = resolve_command_positions(cmd)
+        resolved_segments = resolve_command_positions(
+            cmd, preserve_windows_backslashes=_host_is_windows()
+        )
     except Exception:  # noqa: BLE001 -- fail open, never let a parse crash reach the dispatcher
         return
 
@@ -468,7 +503,9 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
             if not inline_payload:
                 continue
             try:
-                nested_segments = resolve_command_positions(inline_payload)
+                nested_segments = resolve_command_positions(
+                    inline_payload, preserve_windows_backslashes=_host_is_windows()
+                )
             except Exception:  # noqa: BLE001 -- fail open
                 continue
             for nrc in nested_segments:

@@ -504,6 +504,110 @@ def _anchor_is_under_claude_home(anchor: str, env: Optional[dict] = None) -> boo
     return _is_under(anchor_cf, claude_home_cf)
 
 
+def target_is_under_claude_home(path: str, env: Optional[dict] = None) -> bool:
+    """True iff `path` resolves under `~/.claude` -- the TARGET-side
+    counterpart of `_anchor_is_under_claude_home`, added by
+    docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md
+    chunk C1 (AC1-AC4).
+
+    Model is `_anchor_is_under_claude_home`, NOT `write_guards.
+    bump_out_of_repo_tool_write._target_is_under_settings_home`. The
+    settings-home predicate short-circuits `return False` whenever the
+    caller has already resolved a `target_gitdir` (a real checkout under
+    that root is still treated as a foreign repo) -- but `~/.claude` IS a
+    real git checkout on this machine (`git rev-parse --show-toplevel`
+    resolves inside it, verified live by the reviewer), so a predicate
+    built on that same short-circuit would never fire for it, which is
+    exactly why the settings-home exemption never covered `~/.claude` in
+    the first place. This predicate is therefore UNCONDITIONAL on git-dir
+    state -- callers consult it before, or independently of, any
+    `target_gitdir is not None` check, mirroring how `is_agent_memory_
+    store_path` (immediately above) already fires for a target inside
+    `~/.claude` despite that same git-checkout fact.
+
+    `~/.claude` is resolved from `env` via `trusted_root_guard.
+    _home_from_env` (`CLAUDE_HOME` -> `HOME` -> `USERPROFILE`), never a
+    hardcoded path -- same resolver `_anchor_is_under_claude_home` uses,
+    per the plan's Anti-scope ("Do not carve out by matching on a path
+    string"). `env` threads through explicitly so a single verdict cannot
+    resolve the anchor from live `os.environ` while resolving THIS
+    predicate from an injected mapping -- the same hazard `resolve_launch_
+    anchor`'s own docstring names for the anchor side.
+
+    Fails CLOSED on the exemption itself (`False` -- not under `~/.claude`,
+    so the carve-out is withheld and the ordinary bump logic decides) when
+    the home directory or `path` cannot be resolved. This does not invert
+    the module's overall fail-open posture: withholding an unresolvable
+    carve-out and falling through to the caller's own (already fail-open)
+    verdict is the same shape `target_is_publish_destination` documents
+    under "Fail-closed ON THE EXEMPTION ONLY".
+    """
+    env = os.environ if env is None else env
+    home = _home_from_env(env)
+    if not home:
+        return False
+    claude_home_cf = _resolve_path(os.path.join(home, ".claude"))
+    target_cf = _resolve_path(path) if path else None
+    if claude_home_cf is None or target_cf is None:
+        return False
+    return _is_under(target_cf, claude_home_cf)
+
+
+def anchor_subtree_contains(anchor: str, target: str) -> bool:
+    """True iff `target` resolves at or under the session's own anchored
+    launch-directory SUBTREE -- the Narrow shape for a rootless session
+    (PM ruling 2026-08-10, `state/bug-backlog/2026-08-10-a-session-
+    anchored-outside-any-git-repo-88ca86c1f8bf.yaml`; costed recommendation
+    `state/subagent-share/fe113177-19f4-4220-a8be-e2ae0c711dea/
+    coordinatoreng-director-de26add3.md`).
+
+    Consulted ONLY by the three write-confinement bump surfaces' own
+    NO-REPO-ANCHOR branch (`session_anchor_has_git_repo` / `own_gitdir is
+    None`) -- when the session's own anchor sits in NO git repo, today's
+    unconditional allow for every UNREGISTERED cross-repo target (§ measured
+    in `docs/research/spike-verdicts/2026-08-10-rootless-session-write-
+    boundary.md`) narrows to "allow only inside the anchor's own subtree" --
+    a REGISTERED target still bumps unconditionally, as it always has
+    (`target_is_registered_repo`, unaffected by this predicate).
+
+    NOT consulted by `bump_outside_repo_write.py`'s own no-repo-anchor bail
+    (`session_anchor_has_git_repo(...) is False -> return None`, unchanged
+    by this fix): that guard's own defining predicate requires the TARGET
+    also resolve to no git root, so under a rootless anchor there is no
+    gitdir anywhere -- neither the anchor's nor the target's -- to site a
+    clearable marker at. Narrowing that specific cell would produce exactly
+    the unclearable deny this shape was chosen to avoid (see the eng-
+    director recommendation, "The only unclearable residue is 'outside the
+    anchor subtree AND in no repo' ... can legitimately keep failing open").
+    A firing denial under THIS predicate is always sited at the TARGET's own
+    resolved gitdir -- a real repo, confirmed non-`None` by the caller
+    before this predicate is ever consulted -- so the existing target-gitdir
+    marker fallback keeps working unchanged; see this module's docstring,
+    "WHAT THIS MODULE ANSWERS", point 2, for the shared no-bump condition
+    this predicate narrows.
+
+    Both operands go through `_resolve_path` (realpath + case-fold, Windows
+    extended-length-prefix strip already folded in) before the SAME
+    boundary-anchored `_is_under` prefix test every other predicate in this
+    module uses -- `_is_under` appends a trailing `/` to the parent before
+    the `startswith` check, so an anchor named `work` does NOT admit a
+    sibling directory `workspace` merely sharing the leading characters of
+    its own name (illustrative shape, not a machine-specific path).
+
+    Fails OPEN (`True` -- "at/under the anchor, do not bump") on any
+    resolution failure for EITHER operand, matching this module's overall
+    fail-toward-not-bumping posture (module docstring's opening paragraph):
+    an unresolvable anchor or target gives this predicate no way to tell
+    whether containment holds, and uncertainty here always resolves toward
+    NOT bumping.
+    """
+    anchor_cf = _resolve_path(anchor) if anchor else None
+    target_cf = _resolve_path(target) if target else None
+    if anchor_cf is None or target_cf is None:
+        return True
+    return _is_under(target_cf, anchor_cf)
+
+
 def bump_applies(
     session_id: str, cwd: Optional[str] = None, env: Optional[dict] = None
 ) -> bool:

@@ -88,7 +88,10 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 190  # advisory/deny-offer band; next slot after 180 (see bump_out_of_repo_tool_write.py)
+PRIORITY = 190  # advisory/deny-offer band; next slot after 172 (see block_dev_side_mirror_wiki.py)
+# -- 180 is free (bump_out_of_repo_tool_write.py moved to the hard-deny
+# band's PRIORITY 135 when its CLASS flipped; see that module's own
+# PRIORITY comment).
 
 _CARVE_OUT_DOC = "docs/reference/shell-out-carve-outs.md"
 

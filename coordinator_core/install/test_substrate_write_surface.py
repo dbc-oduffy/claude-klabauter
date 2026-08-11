@@ -50,7 +50,7 @@ def test_write_surface_identity_and_clause_count():
     declaration = target.WRITE_SURFACE
     assert declaration.writer_id == "install-substrate"
     assert declaration.source_module == "coordinator_core.install.substrate"
-    assert len(declaration.clauses) == 28
+    assert len(declaration.clauses) == 29
 
 
 def test_two_distinct_os_env_var_clauses_for_windows_path():
@@ -314,8 +314,14 @@ def test_legacy_venv_delete_clause_is_distinct_from_ensure_venv_surface():
 def test_no_new_clause_restates_a_bin_dir_or_ensure_venv_surface():
     """Sanity guard: none of clauses 16-27 accidentally re-declare the
     `<settings-home>/bin/` surface (clauses 4/7-14) or the CURRENT
-    `<settings-home>/.coordinator-venv` tree (ensure_venv's own surface)."""
-    for clause in target.WRITE_SURFACE.clauses[15:]:
+    `<settings-home>/.coordinator-venv` tree (ensure_venv's own surface).
+
+    Bounded to exactly that range (not left open-ended past clause 27) —
+    clause 29 (chunk C5, the `hook-sitepackages.txt` pointer) is a
+    deliberate, distinct NEW entry under `<settings-home>/bin/`, not a
+    restatement of clauses 4/7-14's territory, so it must fall outside this
+    guard's slice rather than trip it."""
+    for clause in target.WRITE_SURFACE.clauses[15:27]:
         entries = clause.entries if isinstance(clause, StaticClause) else (clause.entry_template,)
         for entry in entries:
             if entry.path:

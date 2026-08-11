@@ -9,13 +9,31 @@ and touches none of the shared op-registry files. It provides the two-layer
 session-liveness model and the claim-layer liveness/identity predicates that
 the whole claim + reaper + enumeration stack routes through.
 
-TWO-LAYER LIVENESS MODEL (ported verbatim from the bash header):
+THREE SOURCES IN PRECEDENCE ORDER (Review: staff-eng, C2 — the registry
+branch below sits in FRONT of the two-layer model, not inside it):
+    Source 0 — the harness's own session registry
+      (``coordinator_core.session.harness_registry``, ``<claude-config>/
+      sessions/<pid>.json``): consulted first, via the single
+      ``harness_registry.lookup(sid)`` helper shared verbatim by
+      ``session_live`` and ``live_session_verdicts`` (AC5) — a difference
+      between the two on which scan/view they see is a defect, not a
+      deliberate divergence. It is an UNDOCUMENTED HARNESS INTERNAL: preferred
+      as a source, never depended on, unversioned, no stability guarantee.
+      Its ABSENCE IS NOT EVIDENCE OF DEATH — a miss is the fallback trigger to
+      Layer 1 and nothing else. A hit still routes through the SAME tolerant
+      birth-instant compare as Layer 1, at that layer's existing single
+      ``core.stable_pid_alive`` seam — this module never gains a second call
+      site for that comparison.
     Layer 1 — PPID-authoritative process-aliveness (when ``stable_pid`` is
       present in meta.json): ``session_live`` delegates to
       ``core.stable_pid_alive`` on the ``stable_pid`` + ``stable_pid_lstart``
       / ``stable_pid_start_epoch`` fields. Process alive + birth-instant match
       -> LIVE (authoritative; recency NOT consulted). Process gone or lstart
-      mismatch (PID recycled) -> DEAD within seconds of process exit.
+      mismatch (PID recycled) -> DEAD within seconds of process exit. A raise
+      from ``core.stable_pid_alive`` itself (e.g. ``MissingPsutilError``) is
+      caught here and fails OPEN (True), matching ``live_session_verdicts``'
+      own Layer-1 arm exactly (Review: staff-eng-review B) — never propagate,
+      never fall through to Layer 2 on the exception, never DEAD.
     Layer 2 — recency fallback (when ``stable_pid`` is absent/empty): falls
       through to ``is_session_live`` — ``elapsed_sec < 30 min`` -> live. The
       unchanged path for non-harness runs, legacy meta.json without
@@ -29,7 +47,12 @@ RAW-PID-LIVENESS floor (load-bearing invariant, docs/wiki/coordinator-tripwires.
     separate ``stable_pid`` field + stored lstart/epoch). The bash is forbidden
     from gating on ``pid`` and so is this port. ``core.pid_alive`` on ``pid``
     survives ONLY on the legacy pid-only claim-dir fallback (structurally
-    "always dead in-harness"), never for a session-liveness verdict.
+    "always dead in-harness"), never for a session-liveness verdict. The same
+    floor applies to the registry record introduced above: its ``pid`` is
+    admissible ONLY paired with ``start_epoch`` through
+    ``core.stable_pid_alive`` — a bare ``pid_exists``/``kill -0`` on it is the
+    same prohibited shape as on the meta ``pid`` field, not an exception to
+    this floor (Review: staff-eng, Finding 9).
 
 Single-liveness-key invariant (D5, pcore-03): ``core.stable_pid_alive`` is
 called from exactly ONE place here — ``session_live`` — never from the claim
@@ -63,7 +86,16 @@ Negative-spec:
       branch) — bash routes it through ``_cs_is_session_live`` UNCLAMPED, whose
       ``^[0-9]+$`` guard rejects a negative string -> not-live. This DIFFERS
       from ``session_live``'s Layer-2 arm and ``active_sessions``, which DO
-      clamp; the divergence is faithful to the bash originals.
+      clamp. Honest accounting (Review: staff-eng-review D, 2026-08-10): the
+      bash originals this ported are gone, so "faithful to the bash
+      originals" is no longer a live rationale — this arm fails DEAD under
+      backward clock skew, contrary to this module's own fail-open-never-
+      fail-dead bias elsewhere. The behaviour is preserved anyway because
+      changing it changes ``live_session_ids``, which feeds
+      ``compute_scope`` and ``_rm_peer_claim_of`` — a separate blast radius
+      that must not ride along with this pass. Tracked as its own
+      debt-backlog entry pending a dedicated assessment of
+      ``live_session_ids``' hot consumers.
     - Do NOT let a meta-less/unparseable-meta session dir read confirmed-DEAD
       by defaulting its recency to epoch-0 — that let a peer wrongfully take
       over a session that was merely mid-write (example-doctrine-repo 642195ba, follow-up
@@ -88,6 +120,7 @@ from pathlib import Path
 from typing import FrozenSet, Optional
 
 from coordinator_core.session import core
+from coordinator_core.session import harness_registry
 
 #: Thirty minutes in seconds — the recency liveness boundary (Layer 2).
 _THIRTY_MIN = 30 * 60
@@ -120,8 +153,18 @@ _DIGITS_RE = re.compile(r"^[0-9]+$")
 #:     ``CLAUDE_SESSION_ID`` env var (see ``bash_guards/dispatch_checks.py``
 #:     and ``write_guards/block_subagent_plan_body_write.py``); it is a
 #:     fallback bucket, never a real session.
+#:   - ``decisions`` -- pickup/judgment decision objects written by
+#:     ``ops/pickup_assemble`` alongside the session registry (2026-08-08
+#:     phantom-peer defect: this dir is actively mtime-touched, so an
+#:     unfiltered walk read it as a Layer-2-recent LIVE "session").
+#:   - ``reconcile-history`` -- reconciliation audit trail, same sibling
+#:     infra class as ``decisions``.
 #: Found on this repo's real on-disk corpus 2026-07-21 while diagnosing the
-#: meta.json-glob invisibility defect this constant exists to close.
+#: meta.json-glob invisibility defect this constant exists to close; extended
+#: 2026-08-08 for ``decisions``/``reconcile-history`` (same corpus, same
+#: enumerate-then-exclude shape -- see TestLiveSessionIdsCorpus's
+#: real-registry walk in test_liveness.py, which turns a future hole here
+#: into a red test rather than another silent phantom-peer).
 _NON_SESSION_DIR_NAMES = frozenset(
     {
         ".archive",
@@ -132,7 +175,23 @@ _NON_SESSION_DIR_NAMES = frozenset(
         "agent-sessions-locks",
         "logs",
         "no-session",
+        "decisions",
+        "reconcile-history",
     }
+)
+
+#: Allowlist of characters permitted in a session id passed to
+#: ``session_verdict`` (Review: coordinator:code-reviewer, colon/drive-letter
+#: gap). A prior blocklist rejecting `/`, `\`, `..`, NUL did not reject a
+#: bare drive-letter/colon component (e.g. ``"C:evil"``); on Windows,
+#: ``ntpath.join(base, "C:evil")`` DISCARDS ``base`` entirely, a full
+#: containment escape out of the sessions corpus. Restricting to
+#: ``[A-Za-z0-9_-]`` -- UUID-shaped tokens and hyphen/underscore test-fixture
+#: slugs like ``"test-session-abc123"`` -- closes colon, reserved device
+#: names, trailing dot/space, path separators, ``..``, and NUL by
+#: construction, and stays compatible with every sid already live on disk.
+_SID_ALLOWED_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 )
 
 
@@ -208,11 +267,15 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
 
     Two-layer decision:
       Layer 1 (PPID-authoritative): if ``stable_pid`` is non-empty in
-        meta.json AND ``stable_pid_lstart`` is present, delegate to
+        meta.json AND EITHER ``stable_pid_lstart`` OR
+        ``stable_pid_start_epoch`` is present (either is a sufficient
+        birth-instant witness for ``core.stable_pid_alive``), delegate to
         ``core.stable_pid_alive`` and RETURN its verdict — recency is NOT
-        consulted. ``stable_pid`` present but ``stable_pid_lstart`` ABSENT
-        (partial write / TOCTOU between the two meta writes) is NOT treated as
-        dead — fall through to Layer 2 to preserve the safety net (A-F1).
+        consulted. POSIX ``init()`` stopped writing ``stable_pid_lstart``
+        2026-07-27 (dca0e3e80) but still writes ``stable_pid_start_epoch``.
+        ``stable_pid`` present but BOTH witnesses ABSENT (partial write /
+        TOCTOU between the meta writes) is NOT treated as dead — fall
+        through to Layer 2 to preserve the safety net (A-F1).
       Layer 2 (recency fallback): read ``pid`` + ``last_activity``, convert via
         ``core.iso_to_epoch``, ``elapsed = now - last`` clamped ``>= 0``,
         then ``is_session_live(pid, elapsed)``. When ``last_activity`` is
@@ -241,17 +304,53 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     if not Path(sdir).is_dir():
         return False
 
+    # Source 0: harness session registry (preferred, never depended on). A
+    # hit routes through the SAME single core.stable_pid_alive seam Layer 1
+    # uses below -- this is not a second call site. A miss (None) or a
+    # birth-instant mismatch falls through to Layer 1 unchanged. Belt-and-
+    # braces over C1's own AC11 contract (harness_registry never raises to
+    # its caller): an unexpected exception here must still fall through
+    # rather than propagate, matching this module's fail-open bias.
+    try:
+        record = harness_registry.lookup(sid)
+    except Exception:
+        record = None
+    if record is not None:
+        # Review: fail-open parity with live_session_verdicts' registry arm —
+        # a raise from the compare (e.g. MissingPsutilError) must fall
+        # through to Layer 1/2 unchanged, never propagate out of
+        # session_live and never itself mean DEAD.
+        try:
+            if core.stable_pid_alive(str(record.pid), "", str(int(record.start_epoch))):
+                return True
+        except Exception:
+            pass
+
     # Layer 1: PPID-authoritative process check (when stable_pid captured at init).
     stable_pid = core.read_meta_field(sdir, "stable_pid")
     if stable_pid:
         stable_pid_lstart = core.read_meta_field(sdir, "stable_pid_lstart")
         stable_pid_start_epoch = core.read_meta_field(sdir, "stable_pid_start_epoch")
-        # lstart absent != process dead — fall through to Layer 2 (A-F1).
-        if stable_pid_lstart:
-            return core.stable_pid_alive(
-                stable_pid, stable_pid_lstart, stable_pid_start_epoch
-            )
-        # stable_pid present but lstart absent — fall through to Layer 2.
+        # Birth-instant witness absent != process dead — fall through to
+        # Layer 2 (A-F1) only when BOTH lstart and start_epoch are missing.
+        # POSIX init() stopped writing stable_pid_lstart 2026-07-27
+        # (dca0e3e80) but still writes stable_pid_start_epoch, which
+        # core.stable_pid_alive already accepts as a sufficient witness.
+        if stable_pid_lstart or stable_pid_start_epoch:
+            # Review: staff-eng-review B — a raise here (e.g. MissingPsutilError)
+            # must fail OPEN (True), matching live_session_verdicts' own
+            # Layer-1 arm exactly ((True, "unknown", None)). Do NOT fall
+            # through to Layer 2 on the exception — that would create a new
+            # undocumented divergence while fixing one, and
+            # MissingPsutilError's own docstring rules out any path where a
+            # psutil failure reads DEAD.
+            try:
+                return core.stable_pid_alive(
+                    stable_pid, stable_pid_lstart, stable_pid_start_epoch
+                )
+            except Exception:
+                return True
+        # Neither witness present — fall through to Layer 2.
 
     # Layer 2: recency fallback (stable_pid absent, legacy meta, or Guard-1 miss).
     pid = core.read_meta_field(sdir, "pid")
@@ -372,6 +471,17 @@ def claim_held_by_me(
 
 #: Basis vocabulary shared by ``live_session_verdicts`` and (via that seam)
 #: ``pickup_assemble.holder_evidence._liveness_basis``:
+#:   "harness-registry"      — Source 0, the harness's own session registry
+#:                              (``harness_registry.lookup``/``snapshot``),
+#:                              matched via the same tolerant birth-instant
+#:                              compare as "stable-pid". ``age_sec`` is always
+#:                              ``None`` here — evidence is not meaningful on
+#:                              a process-identity verdict and must never
+#:                              influence ``live`` (AC7). This is STRONGER
+#:                              evidence than "stable-pid" (harness-written
+#:                              process identity vs. our own derived stamp),
+#:                              not weaker — a consumer must not render it in
+#:                              a hedged/unknown arm.
 #:   "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
 #:   "recency-window"        — Layer 2 recency fallback, ``last_activity``
 #:                              present and parseable.
@@ -388,6 +498,74 @@ def claim_held_by_me(
 #:                              established ambiguous-failure bias (see
 #:                              ``core.stable_pid_alive``'s own
 #:                              ``_WinLivenessAmbiguous`` handling).
+
+
+def _verdict_for_sdir(
+    sid: str,
+    sdir: str,
+    record: Optional[harness_registry.RegistryRecord],
+    now_epoch: int,
+) -> tuple[bool, str, Optional[int]]:
+    """One id's verdict, factored out of ``live_session_verdicts``' loop body
+    (Review: staff-eng-review C) so ``session_verdict`` below can compute the
+    SAME per-id verdict without an O(n) whole-corpus scan. ``record`` is the
+    already-resolved harness-registry record for ``sid`` (``None`` on a miss)
+    -- callers own how they obtained it (a batch ``snapshot()`` for the loop,
+    a single ``lookup(sid)`` for the per-sid path), so this helper performs no
+    registry I/O itself. See ``live_session_verdicts``'s own docstring for the
+    full per-arm derivation this reproduces exactly."""
+    if record is not None:
+        try:
+            if core.stable_pid_alive(
+                str(record.pid), "", str(int(record.start_epoch))
+            ):
+                return (True, "harness-registry", None)
+        except Exception:
+            pass
+
+    stable_pid = core.read_meta_field(sdir, "stable_pid")
+    if stable_pid:
+        stable_pid_lstart = core.read_meta_field(sdir, "stable_pid_lstart")
+        stable_pid_start_epoch = core.read_meta_field(
+            sdir, "stable_pid_start_epoch"
+        )
+        if stable_pid_lstart or stable_pid_start_epoch:
+            try:
+                live = core.stable_pid_alive(
+                    stable_pid, stable_pid_lstart, stable_pid_start_epoch
+                )
+                basis = "stable-pid"
+            except Exception:
+                live = True
+                basis = "unknown"
+            return (live, basis, None)
+        # stable_pid present, neither witness present -- session_live's
+        # Layer-2 fallthrough (A-F1): CLAMPED elapsed.
+        pid = core.read_meta_field(sdir, "pid")
+        last_iso = core.read_meta_field(sdir, "last_activity")
+        last_epoch = core.iso_to_epoch(last_iso)
+        if not last_iso:
+            last_epoch = _dir_recency_fallback_epoch(sdir)
+            basis = "recency-window-mtime"
+        else:
+            basis = "recency-window"
+        elapsed = now_epoch - last_epoch
+        if elapsed < 0:
+            elapsed = 0
+        return (is_session_live(pid, elapsed), basis, elapsed)
+
+    # stable_pid absent -- live_session_ids' own Layer-2 arm: UNCLAMPED
+    # elapsed (module negative-spec — do NOT clamp here).
+    pid = core.read_meta_field(sdir, "pid")
+    last_iso = core.read_meta_field(sdir, "last_activity")
+    last_epoch = core.iso_to_epoch(last_iso)
+    if not last_iso:
+        last_epoch = _dir_recency_fallback_epoch(sdir)
+        basis = "recency-window-mtime"
+    else:
+        basis = "recency-window"
+    elapsed = now_epoch - last_epoch  # UNCLAMPED — see module negative-spec
+    return (is_session_live(pid, elapsed), basis, elapsed)
 
 
 def live_session_verdicts(
@@ -413,7 +591,8 @@ def live_session_verdicts(
     ``session_live``'s Layer-2 arm ... the divergence is faithful to the bash
     originals." So this function reproduces BOTH arms exactly as they exist
     today, per id:
-      - ``stable_pid`` present AND ``stable_pid_lstart`` present -> Layer 1
+      - ``stable_pid`` present AND (``stable_pid_lstart`` OR
+        ``stable_pid_start_epoch``) present -> Layer 1
         (``core.stable_pid_alive``, matching ``session_live``'s own Layer-1
         arm exactly). ``age_sec`` is always ``None`` here — evidence is not
         meaningful on a process-identity verdict, and per this module's own
@@ -422,7 +601,7 @@ def live_session_verdicts(
         (not left to propagate as ``session_live`` does) and resolves to
         ``(True, "unknown", None)`` — fail OPEN, never asserted-dead, and
         never asserted as a stronger basis than was actually established.
-      - ``stable_pid`` present but ``stable_pid_lstart`` absent -> Layer-2
+      - ``stable_pid`` present but BOTH witnesses absent -> Layer-2
         fallthrough (A-F1), using ``session_live``'s CLAMPED elapsed
         arithmetic (``elapsed = max(now - last_epoch, 0)``), with the
         meta-less/mid-write recency-SOURCE substitution
@@ -464,6 +643,13 @@ def live_session_verdicts(
         return {}
 
     now_epoch = core.now_epoch()
+    # Belt-and-braces over C1's own AC11 contract (harness_registry never
+    # raises to its caller): an unexpected exception here must still degrade
+    # to "no registry data" rather than propagate.
+    try:
+        registry = harness_registry.snapshot()
+    except Exception:
+        registry = {}
     verdicts: dict[str, tuple[bool, str, Optional[int]]] = {}
     for sdir_path in basep.iterdir():
         if not sdir_path.is_dir():
@@ -472,52 +658,67 @@ def live_session_verdicts(
         if sid in _NON_SESSION_DIR_NAMES:
             continue
         sdir = str(sdir_path)
-        stable_pid = core.read_meta_field(sdir, "stable_pid")
-        if stable_pid:
-            stable_pid_lstart = core.read_meta_field(sdir, "stable_pid_lstart")
-            if stable_pid_lstart:
-                stable_pid_start_epoch = core.read_meta_field(
-                    sdir, "stable_pid_start_epoch"
-                )
-                try:
-                    live = core.stable_pid_alive(
-                        stable_pid, stable_pid_lstart, stable_pid_start_epoch
-                    )
-                    basis = "stable-pid"
-                except Exception:
-                    live = True
-                    basis = "unknown"
-                verdicts[sid] = (live, basis, None)
-                continue
-            # stable_pid present, lstart absent -- session_live's Layer-2
-            # fallthrough (A-F1): CLAMPED elapsed.
-            pid = core.read_meta_field(sdir, "pid")
-            last_iso = core.read_meta_field(sdir, "last_activity")
-            last_epoch = core.iso_to_epoch(last_iso)
-            if not last_iso:
-                last_epoch = _dir_recency_fallback_epoch(sdir)
-                basis = "recency-window-mtime"
-            else:
-                basis = "recency-window"
-            elapsed = now_epoch - last_epoch
-            if elapsed < 0:
-                elapsed = 0
-            verdicts[sid] = (is_session_live(pid, elapsed), basis, elapsed)
-            continue
 
-        # stable_pid absent -- live_session_ids' own Layer-2 arm: UNCLAMPED
-        # elapsed (module negative-spec — do NOT clamp here).
-        pid = core.read_meta_field(sdir, "pid")
-        last_iso = core.read_meta_field(sdir, "last_activity")
-        last_epoch = core.iso_to_epoch(last_iso)
-        if not last_iso:
-            last_epoch = _dir_recency_fallback_epoch(sdir)
-            basis = "recency-window-mtime"
-        else:
-            basis = "recency-window"
-        elapsed = now_epoch - last_epoch  # UNCLAMPED — see module negative-spec
-        verdicts[sid] = (is_session_live(pid, elapsed), basis, elapsed)
+        # Source 0: harness session registry, ONE scan (fetched above) --
+        # never a per-id lookup(). Same tolerant compare as the "stable-pid"
+        # arm below; a miss or mismatch falls through unchanged.
+        record = registry.get(sid)
+        verdicts[sid] = _verdict_for_sdir(sid, sdir, record, now_epoch)
     return verdicts
+
+
+def session_verdict(
+    sid: str, cwd: Optional[str] = None
+) -> Optional[tuple[bool, str, Optional[int]]]:
+    """ONE-id verdict, computed via the SAME per-arm derivation
+    ``live_session_verdicts`` uses (``_verdict_for_sdir``) — never a second
+    computation — but without that function's whole-corpus scan (Review:
+    staff-eng-review C: ``holder_evidence.liveness_basis`` used to call
+    ``live_session_verdicts`` and discard every entry but one). Resolves
+    ``sid``'s directory via ``core.session_dir`` directly, O(1) like
+    ``session_live``.
+
+    Returns ``None`` when ``sid`` would have no entry in
+    ``live_session_verdicts``' dict: empty sid, no sessions dir, the session
+    dir doesn't exist, or ``sid`` is one of ``_NON_SESSION_DIR_NAMES`` (the
+    per-sid path does NOT inherit that filtering for free the way the
+    whole-corpus loop does — applied explicitly here so e.g. ``"no-session"``
+    still resolves to "no verdict" / basis ``"unknown"``, matching the loop).
+    A ``sid`` containing any character outside ``_SID_ALLOWED_CHARS`` also
+    returns ``None`` (Review: staff-eng slice-A P2; tightened to an
+    allowlist per coordinator:code-reviewer's colon/drive-letter gap
+    finding) — ``core.session_dir`` is a bare join with no validation of its
+    own, and the whole-corpus loop this function is meant to equal could
+    never produce such a value (it only ever sees real child directory
+    names). Without this guard,
+    ``holder_evidence.liveness_basis`` (reached with a ``holder_sid`` read
+    off disk) would ``is_dir()`` and read ``meta.json`` fields from an
+    arbitrary directory outside the sessions corpus.
+
+    NOT a corpus-scan equivalent on NTFS: ``live_session_verdicts`` keys its
+    dict by the on-disk directory name, so a case-variant ``sid`` (e.g.
+    ``"S-ABC"`` when the directory is ``"s-abc"``) is absent from that dict
+    (``None`` from ``.get``). ``core.session_dir`` + ``Path.is_dir()`` is
+    case-INSENSITIVE on Windows, so this function resolves a full verdict for
+    the same case-variant input where the whole-corpus dict would not. This
+    divergence is undocumented behaviour inherited from ``Path.is_dir()``,
+    not a deliberate design choice; see the P2 finding in
+    ``state/review-trail/findings/residuals-sliceA-liveness-findings.md`` for
+    the open question of whether to resolve the real on-disk name instead.
+    """
+    if not sid or sid in _NON_SESSION_DIR_NAMES:
+        return None
+    if not _SID_ALLOWED_CHARS.issuperset(sid):
+        return None
+    sdir = core.session_dir(sid, cwd)
+    if not sdir or not Path(sdir).is_dir():
+        return None
+    try:
+        record = harness_registry.lookup(sid)
+    except Exception:
+        record = None
+    now_epoch = core.now_epoch()
+    return _verdict_for_sdir(sid, sdir, record, now_epoch)
 
 
 def live_session_ids(cwd: Optional[str] = None) -> FrozenSet[str]:

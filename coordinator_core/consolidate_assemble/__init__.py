@@ -6,8 +6,9 @@ hand-walks — current-identity resolution, branch enumeration + ownership
 categorization (`git config user.email`, `git branch -a`,
 `git log -1 --format=%ae`), worktree enumeration + reachability
 categorization (`git worktree list --porcelain`, dirty check), unique-commit
-computation (`git log cur..stale`), and inspection data-gather
-(`git show --stat`) — computed ONCE here rather than re-derived by the EM
+computation (`git log cur..stale`), and inspection data-gather (one batched
+`git show --stat <sha>...` per stale branch, never one spawn per commit —
+see `inspect_commits`) — computed ONCE here rather than re-derived by the EM
 reading raw git output on every invocation. Returns the eight-key decision
 object (`artifact`/`preflight`/`gates`/`directives`/`judgment_points`/
 `decisions`/`narration`/`next_move`) per the Tier-B contract; every mutating
@@ -45,6 +46,11 @@ Negative-spec:
       `my_email` — such entries are reported in `gates.branches`/
       `gates.worktrees` with `category: "others"` and never appear in
       `directives[]` or `judgment_points[]`.
+    - Do NOT re-introduce a per-commit `git show` — the inspection gather is
+      one spawn per stale branch, not `unique_commits × ~100ms`
+      (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`
+      graduated this site off `_KNOWN_SITES`; a per-item reintroduction
+      fails that gate).
     - Do NOT shell out with a caller-derived string — every git invocation
       here is a literal argv list through the injected `run_git` callable,
       never a shell string built from a branch/path name.
@@ -198,9 +204,50 @@ def unique_commits(run_git: RunGit, repo_root: Path, current: str, stale_ref: st
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
-def inspect_commit(run_git: RunGit, repo_root: Path, sha: str) -> str:
-    proc = run_git(["show", "--stat", sha], repo_root)
-    return proc.stdout
+def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
+    """Returns `{sha: <that commit's `git show --stat` block>}` for every sha
+    in `shas`, from ONE `git show` invocation rather than one per commit.
+
+    `git show` accepts multiple revs and concatenates their blocks, each
+    opening with a column-0 `commit <full-sha>` line; message bodies are
+    indented four spaces in the medium format, so that line can only be a
+    real block boundary. Blocks are matched against `shas` in order, so an
+    abbreviated sha (what `unique_commits` yields) resolves against the full
+    sha git prints. Per-commit bytes are unchanged from the per-commit call
+    this replaces.
+
+    A git spawn on Windows costs ~100ms (example-doctrine-repo memo
+    `cross-repo/inbox/2026-08-08-example-doctrine-repo-em-engine-side-git-spawn-cost.md`,
+    7-rep median), so the per-commit shape cost `unique_commits × ~100ms` on
+    every consolidation.
+    """
+    if not shas:
+        return {}
+    proc = run_git(["show", "--stat", *shas], repo_root)
+
+    blocks: dict[str, str] = {}
+    pending: Optional[str] = None
+    lines: list[str] = []
+    remaining = list(shas)
+    for line in proc.stdout.splitlines(keepends=True):
+        if remaining and line.startswith("commit ") and line[len("commit "):].startswith(remaining[0]):
+            if pending is not None:
+                blocks[pending] = _drop_batch_separator("".join(lines))
+            pending = remaining.pop(0)
+            lines = [line]
+            continue
+        if pending is not None:
+            lines.append(line)
+    if pending is not None:
+        blocks[pending] = "".join(lines)
+    return blocks
+
+
+def _drop_batch_separator(block: str) -> str:
+    """Drops the blank line `git show` emits BETWEEN shown objects, so a
+    batched block is byte-identical to that commit's own `git show --stat`
+    output. The final block has no separator and is never passed here."""
+    return block[:-1] if block.endswith("\n\n") else block
 
 
 def _cherry_pick_or_merge_cli(commit_count: int) -> str:
@@ -257,10 +304,9 @@ def brief(
             )
             continue
 
-        inspections = [
-            {"sha": line.split(" ", 1)[0], "stat": inspect_commit(run_git, repo_root, line.split(" ", 1)[0])}
-            for line in commits
-        ]
+        shas = [line.split(" ", 1)[0] for line in commits]
+        stats = inspect_commits(run_git, repo_root, shas)
+        inspections = [{"sha": sha, "stat": stats.get(sha, "")} for sha in shas]
         jp_id = f"j-absorb-{name}"
         absorb_directive_id = f"d-absorb-{name}"
         absorb_cli = _cherry_pick_or_merge_cli(len(commits))

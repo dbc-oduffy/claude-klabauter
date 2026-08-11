@@ -1252,7 +1252,7 @@ class TestTypeToGlobDerivedGate:
         "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in example-doctrine-repo's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
         "review-sidecar":          "record-shaped (docs/plans/*.review.md) — not yet wired, out of scope for this fix",
         "run-report":              "record-shaped, wildcard-dir glob (state/subagent-share/*/*.md) — not yet wired, out of scope for this fix",
-        "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
+        "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator-claude/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
         "workstream":              "record-shaped (state/workstreams/*.yaml) — not yet wired, out of scope for this fix",
         "workstream-event":        "record-shaped (state/workstreams/events/*.yaml) — not yet wired, out of scope for this fix",
     }

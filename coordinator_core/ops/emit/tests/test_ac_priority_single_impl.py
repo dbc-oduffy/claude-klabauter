@@ -177,12 +177,12 @@ def test_handoff_id_authored_and_derived_both_present_never_null(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# AC2 — a hand-edit of the ledger directory is refused by a path-matched
+# AC2 — a hand-edit of the ledger directory is intercepted by a path-matched
 # guard that NAMES the op (design-as-offers: an offer, not a bare refusal).
 # ---------------------------------------------------------------------------
 
 
-def test_ledger_hand_edit_denied_and_names_priority_set():
+def test_ledger_hand_edit_is_redirected_and_names_priority_set():
     payload = {
         "tool_name": "Write",
         "tool_input": {
@@ -194,8 +194,14 @@ def test_ledger_hand_edit_denied_and_names_priority_set():
     result = ledger_guard.check(payload)
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    # a69586381 flipped this guard from a hard deny to an ADVISORY redirect (guard-class
+    # census, DR-27): it now emits `additionalContext` and no `permissionDecision` at all.
+    # That is the doctrine's ergonomics-over-enforcement default — the acceptance criterion
+    # here was never "deny", it was "the redirect names the op", which the advisory shape
+    # carries verbatim. Pin the message, not the enforcement class.
+    hook_output = result["hookSpecificOutput"]
+    assert "permissionDecision" not in hook_output
+    reason = hook_output["additionalContext"]
 
     # The guard's denial MESSAGE names the alternative op — not a bare
     # refusal. This is the acceptance-level pin: the guard offers the

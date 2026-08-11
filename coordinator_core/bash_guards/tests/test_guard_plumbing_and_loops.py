@@ -126,12 +126,8 @@ _FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD = (
     'for i in 1 2 3; do echo $i; done; find . -name "*.log" -exec chmod 644 {} \\;'
 )
 
-
-def _deny_reason(out):
-    assert out is not None, "expected a deny envelope, got None"
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    return hso["permissionDecisionReason"]
+# A while-read loop -- WHILE_READ_LOOP-shaped, no `find`/`for` anywhere.
+_WHILE_READ_CMD = 'cat items.txt | while read x; do echo "$x"; done'
 
 
 def _advisory_context(out):
@@ -318,6 +314,35 @@ class TestForLoopBareGlobStaysAdvisoryOnly:
         assert "..." in example_line or "'..." in ctx
 
 
+class TestWhileReadLoop:
+    """New verdict arm (docs/plans/2026-08-10-the-one-fan-out-shape-the-
+    classifier-nev.md § C2/C3/AC-4). No seam is consulted for this shape --
+    always `_generic_advisory`, never a deny, on every platform."""
+
+    def test_advisory_never_deny_on_windows(self):
+        out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+
+    def test_advisory_never_deny_on_macos(self):
+        out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=False)
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" not in hso
+
+    def test_message_names_the_while_read_shape(self):
+        # AC-5: the message must not misdescribe what tripped it.
+        out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert "while-read-loop" in ctx
+
+    def test_advisory_names_its_escape_hatch(self):
+        out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert "COORDINATOR_" in ctx
+
+
 class TestBareSeamAdvisoryNeverDenies:
     """Adversarial-review regression coverage: a seam check returning a
     bare `_advisory` (no `updatedInput` -- no confirmed rewrite) must be
@@ -372,6 +397,20 @@ class TestPrecedence:
             'for f in *.txt; do rm "$f"; done'
         )
         assert guard.check(_payload(cmd), host_is_windows=True) is None
+
+    def test_for_loop_precedence_fires_for_loop_arm_over_while_read(self):
+        # A command that is both FOR_LOOP and WHILE_READ_LOOP shaped fires
+        # this guard's FOR_LOOP arm (its own "for-loop" summary), never the
+        # while-read arm -- FOR_LOOP outranks WHILE_READ_LOOP in
+        # SHAPE_PRECEDENCE (AC-1/AC-7).
+        cmd = (
+            'for f in *.py; do wc -l "$f"; done; '
+            "cat items.txt | while read x; do echo \"$x\"; done"
+        )
+        out = guard.check(_payload(cmd), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert "for-loop" in ctx
+        assert "while-read-loop" not in ctx
 
 
 class TestCrashPropagatesForFailClosed:

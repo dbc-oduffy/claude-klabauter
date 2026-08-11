@@ -360,13 +360,24 @@ class TestPlumbingAndLoopsMessageAccuracy:
         assert "auto-rewritten single-process equivalent" not in advisory
         assert "docker ps | head -n 20" in advisory
 
+    def test_while_read_advisory_names_that_shape_not_for_loop(self):
+        # AC-5, sixth-shape coverage: the message must name the while-read
+        # shape it actually matched, never the for-loop shape it structurally
+        # resembles.
+        cmd = 'cat items.txt | while read x; do echo "$x"; done'
+        advisory = _advisory_text(
+            _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
+        )
+        assert "while-read-loop" in advisory
+        assert "for-loop" not in advisory
+
 
 # ---------------------------------------------------------------------------
 # Section 2 -- shape-overlap precedence: a command matching TWO or THREE
 # shapes at once must produce a message naming the PRECEDENCE WINNER, never
 # whichever matcher happened to run first. BX-2's own pinned contract:
 # GREP_VIA_BASH > MULTI_PROBE_BANNER > HEAD_TAIL_PLUMBING > FOR_LOOP >
-# FIND_EXEC_XARGS.
+# WHILE_READ_LOOP > FIND_EXEC_XARGS.
 # ---------------------------------------------------------------------------
 
 

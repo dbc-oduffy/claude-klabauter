@@ -1,11 +1,14 @@
 """coordinator_core.bash_guards._shape_classifier -- tokenizer-based shape
-classifier for the five ranked bash-spawn shapes identified by the
+classifier for the six ranked bash-spawn shapes identified by the
 1,389-transcript / 62,487-call fork-tax measurement
 (``state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``,
 Example-doctrine-repo ``docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md`` C2, AC-2):
 grep-via-Bash (50.9% of forks), multi-probe banner commands (40.1%),
-head/tail plumbing (25%), for-loops (9.0%), and ``find -exec``/``xargs``
-(3.5%).
+head/tail plumbing (25%), for-loops (9.0%), ``find -exec``/``xargs``
+(3.5%), and while-read loops (unmeasured in that sample -- see
+``docs/plans/2026-08-10-the-one-fan-out-shape-the-classifier-nev.md``,
+added as the structural twin of the for-loop shape, spawn-per-iteration in
+the exact same way, and no percentage of its own is invented for it).
 
 Built exclusively on ``_command_tokenizer.tokenize_full_command`` and its
 segment/binary-identity helpers -- NEVER regex for command-shape detection
@@ -17,10 +20,10 @@ tokenized argument, not a regex over the raw command text -- see its own
 docstring.
 
 THIS MODULE DOES NOT DENY. It classifies a command string into zero or
-more of the five shapes and returns a verdict object; C3 (grep-via-Bash),
-C4 (multi-probe banner), C5 (head/tail plumbing + for-loop), and C9
-(find-exec/xargs, if shipped) each consume this module's output to decide
-their own allow/advise/deny policy. Keeping detection and policy in
+more of the six shapes and returns a verdict object; C3 (grep-via-Bash),
+C4 (multi-probe banner), C5 (head/tail plumbing + for-loop + while-read),
+and C9 (find-exec/xargs, if shipped) each consume this module's output to
+decide their own allow/advise/deny policy. Keeping detection and policy in
 separate modules means a policy change in one guard can never silently
 change what another guard sees as a match.
 
@@ -30,22 +33,30 @@ updating every consumer and this module's own test file
 (``tests/test_shape_classifier.py``):
 ===========================================================================
 
-``Shape`` -- an ``str`` `Enum` naming the five shapes.
+``Shape`` -- an ``str`` `Enum` naming the six shapes.
 
-``SHAPE_PRECEDENCE`` -- the five shapes in fixed precedence order:
+``SHAPE_PRECEDENCE`` -- the six shapes in fixed precedence order:
 ``GREP_VIA_BASH > MULTI_PROBE_BANNER > HEAD_TAIL_PLUMBING > FOR_LOOP >
-FIND_EXEC_XARGS``. This order is LOAD-BEARING, not incidental: the five
-shapes overlap (a single real command can be a multi-probe banner, a
-grep-via-Bash, AND carry head/tail plumbing simultaneously -- the plan's
-own canonical example is
-``echo "=== ... ==="; ... | grep -i ... | head``), and with no precedence
-rule AC-7 ("no shipped deny message misdescribes what tripped it") is
-silently unsatisfiable, because a caller would have to pick arbitrarily
-among simultaneously-true matches. This module removes that arbitrariness
-by construction: ``classify_command`` walks ``SHAPE_PRECEDENCE`` in order
-and appends each shape's match (if any) to the result, so the FIRST entry
-in ``ShapeClassification.matches`` is always the precedence winner -- there
-is no separate sort step for a caller to get wrong.
+WHILE_READ_LOOP > FIND_EXEC_XARGS``. ``WHILE_READ_LOOP`` sits immediately
+after ``FOR_LOOP`` and before ``FIND_EXEC_XARGS`` -- it is the structural
+twin of the for-loop shape (spawn-per-iteration) and was unmeasured, not
+measured at zero, in the founding sample, so it inherits its position from
+that twin rather than carrying a rank of its own (docs/plans/2026-08-10-
+the-one-fan-out-shape-the-classifier-nev.md § Design decisions already
+made). This order is LOAD-BEARING, not incidental: the six shapes overlap
+(a single real command can be a multi-probe banner, a grep-via-Bash, AND
+carry head/tail plumbing simultaneously -- the plan's own canonical
+example is ``echo "=== ... ==="; ... | grep -i ... | head``), and with no
+precedence rule AC-7 ("no shipped deny message misdescribes what tripped
+it") is silently unsatisfiable, because a caller would have to pick
+arbitrarily among simultaneously-true matches. This module removes that
+arbitrariness by construction: ``classify_command`` walks
+``SHAPE_PRECEDENCE`` in order and appends each shape's match (if any) to
+the result, so the FIRST entry in ``ShapeClassification.matches`` is
+always the precedence winner -- there is no separate sort step for a
+caller to get wrong. A command that is both FOR_LOOP and WHILE_READ_LOOP
+shaped classifies FOR_LOOP-primary, with the while-read match surfacing in
+``.residue``.
 
 ``ShapeMatch`` -- a frozen dataclass pairing the matched ``Shape`` with a
 human-readable ``evidence`` string (the matched segment's tokens, rejoined
@@ -100,7 +111,7 @@ __all__ = [
 
 
 class Shape(str, Enum):
-    """The five ranked bash-spawn shapes this module classifies against.
+    """The six ranked bash-spawn shapes this module classifies against.
 
     Values are stable identifiers (used in test assertions and, by
     downstream guards, in deny/advise message templates) -- do not rename
@@ -111,6 +122,7 @@ class Shape(str, Enum):
     MULTI_PROBE_BANNER = "multi_probe_banner"
     HEAD_TAIL_PLUMBING = "head_tail_plumbing"
     FOR_LOOP = "for_loop"
+    WHILE_READ_LOOP = "while_read_loop"
     FIND_EXEC_XARGS = "find_exec_xargs"
 
 
@@ -124,6 +136,7 @@ SHAPE_PRECEDENCE: Tuple[Shape, ...] = (
     Shape.MULTI_PROBE_BANNER,
     Shape.HEAD_TAIL_PLUMBING,
     Shape.FOR_LOOP,
+    Shape.WHILE_READ_LOOP,
     Shape.FIND_EXEC_XARGS,
 )
 
@@ -298,6 +311,52 @@ def _detect_for_loop(tokens: List[str]) -> Optional[ShapeMatch]:
     return None
 
 
+def _detect_while_read_loop(
+    segments: List[Tuple[List[str], bool]], tokens: List[str]
+) -> Optional[ShapeMatch]:
+    """Match if some segment's OWN first token is the shell keyword
+    ``while`` and ``read`` appears anywhere else in that same segment's
+    tokens, AND both ``do`` and ``done`` appear in the FULL token stream --
+    the minimal signature of a ``while read`` fan-out loop
+    (``... | while read f; do ...; done``, ``while IFS= read -r f; do
+    ...; done < f``).
+
+    Segment-scoped for the ``while``/``read`` pair because the pipe-fed
+    spelling (``cat f | while read x; do ...; done``) puts ``while`` at a
+    segment head, not the command's own first token the way ``for`` always
+    is for `_detect_for_loop` -- segments split on ``;``/``&``/``|``, so
+    matching against every segment (not just ``tokens[0]``) is required to
+    see the piped spelling at all. ``do``/``done`` are checked against the
+    FULL stream instead, because the segment split on ``;`` ends the
+    ``while`` segment before ``do`` ever appears in it (mirrors
+    `_detect_for_loop`'s own full-stream `do`/`done` check).
+
+    ``read`` is required (not just ``while``) so a poll loop
+    (``while true; do ...; done``) -- a different shape with a different
+    remedy -- does not classify; and ``read`` is looked for anywhere in
+    ``tokens[1:]`` of the segment (not at a fixed position) so the
+    canonical safe spelling ``while IFS= read -r f``, which puts an
+    assignment between ``while`` and ``read``, still matches.
+
+    Plain equality against the shell keywords/builtin (``while``, ``read``,
+    ``do``, ``done``), never `token_matches_binary` -- mirrors
+    `_detect_for_loop`'s own reasoning: these are shell grammar and a
+    builtin, not executables, so the Windows-launcher-suffix/path-separator
+    normalization `token_matches_binary` exists for does not apply.
+    """
+    if "do" not in tokens or "done" not in tokens:
+        return None
+    for seg_tokens, _pipe_before in segments:
+        if not seg_tokens:
+            continue
+        if seg_tokens[0] != "while":
+            continue
+        if "read" in seg_tokens[1:]:
+            preview = seg_tokens[: min(len(seg_tokens), 12)]
+            return ShapeMatch(Shape.WHILE_READ_LOOP, evidence=" ".join(preview))
+    return None
+
+
 def _detect_find_exec_xargs(
     segments: List[Tuple[List[str], bool]]
 ) -> Optional[ShapeMatch]:
@@ -318,7 +377,7 @@ def _detect_find_exec_xargs(
 
 
 def classify_command(cmd_text: str) -> ShapeClassification:
-    """Classify `cmd_text` against all five ranked shapes and return a
+    """Classify `cmd_text` against all six ranked shapes and return a
     ``ShapeClassification`` whose ``matches`` are in fixed
     ``SHAPE_PRECEDENCE`` order (see module docstring). Never raises on
     ordinary unparseable input -- if ``tokenize_full_command`` returns
@@ -331,7 +390,7 @@ def classify_command(cmd_text: str) -> ShapeClassification:
     tokenizer's unquoted-newline-to-``;`` pre-pass): a heredoc BODY is stdin
     DATA, never shell command text. Before that pre-pass, a heredoc body
     (whitespace-joined by the tokenizer's own newline-as-whitespace
-    handling) could only be mistaken for one of these five shapes if it
+    handling) could only be mistaken for one of these six shapes if it
     happened to contain a literal ``;``/``&``/``|`` -- narrow, and already
     an accepted limitation. Once a bare newline became a segment boundary
     too, EVERY multi-line heredoc body would fragment at each line break,
@@ -361,6 +420,8 @@ def classify_command(cmd_text: str) -> ShapeClassification:
             match = _detect_head_tail_plumbing(segments)
         elif shape is Shape.FOR_LOOP:
             match = _detect_for_loop(tokens)
+        elif shape is Shape.WHILE_READ_LOOP:
+            match = _detect_while_read_loop(segments, tokens)
         elif shape is Shape.FIND_EXEC_XARGS:
             match = _detect_find_exec_xargs(segments)
         else:  # pragma: no cover -- exhaustive over SHAPE_PRECEDENCE

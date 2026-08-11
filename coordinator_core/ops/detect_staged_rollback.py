@@ -1,18 +1,39 @@
 """
-coordinator_core.ops.detect_staged_rollback — staged-index exact-blob rollback detector.
+coordinator_core.ops.detect_staged_rollback — staged-index exact-blob rollback
+detector, PLUS a staged mass-deletion tripwire.
 
-Purpose: reads the caller's staged index (``git diff --cached``) and flags the
-shape a 2026-07-28 incident produced on this repo — an in-progress index whose
-staged blobs, file by file, were byte-identical to an OLDER commit's blob for
-that same path, silently reverting landed work had it been committed. This
-module never mutates a repo: it is read-and-report only, and is NOT wired into
-any commit path (that is a separate, PM-gated decision — see the git-hook
-minimization carve-out in claude-klabauter's CLAUDE.md § Runtime conventions
-(b)). ``main()`` here is invoked directly by a caller (a future git hook, an
-EM session, a CI step) that decides for itself whether/how to gate on the
-exit code.
+Purpose: reads the caller's staged index (``git diff --cached``) and flags two
+distinct shapes:
 
-Detection logic:
+1. Exact-blob rollback (the module's original purpose) — the shape a
+   2026-07-28 incident produced on this repo: an in-progress index whose
+   staged blobs, file by file, were byte-identical to an OLDER commit's blob
+   for that same path, silently reverting landed work had it been committed.
+2. Staged mass deletion (added 2026-08-10, see
+   ``state/bug-backlog/2026-08-10-nothing-on-the-commit-path-can-see-a-mas-486778a10476.yaml``)
+   — the shape the SAME incident's root cause actually produced: commit
+   ``0a3462b72`` staged git's canonical empty tree
+   (``4b825dc642cb6eb9a060e54bf8d69288fbee4904``) against a parent holding
+   18,506 files. That commit was invisible to check (1) above because
+   ``_staged_blobs`` skips status-``D`` entries BY DESIGN (a deletion has no
+   staged blob content to compare against history) — a commit that drops
+   every tracked file was, and without this check remains, invisible to this
+   module. See ``find_mass_deletion`` / ``MASS_DELETION_RATIO_THRESHOLD`` /
+   ``MASS_DELETION_ABS_FLOOR`` below for the detection logic and thresholds.
+
+This module never mutates a repo — it is read-and-report only. It IS wired
+into a commit path: it is the sole entry in
+``coordinator_core.ops.install_claude_klabauter_precommit_hook._GATE_REGISTRY``, the
+registry that installs this repo's own ``.git/hooks/pre-commit`` (via the
+``coordinator/bin/detect-staged-rollback.py`` trampoline). As of 2026-08-10
+this is the ONLY gate that fires on this repo's commit path — every commit
+into claude-klabauter runs through ``main()`` here before it can land. A prior
+version of this docstring claimed the opposite ("NOT wired into any commit
+path"); that claim was stale the moment the installer above shipped, and its
+staleness is exactly why check (2) went unnoticed for a full commit — see the
+bug-backlog entry cited above.
+
+Detection logic (rollback, check 1):
     For each staged path, resolve its staged (index) blob sha, then walk that
     path's own commit history (bounded by ``HISTORY_DEPTH_LIMIT`` — see that
     constant's docstring for why 40) looking for an OLDER commit whose blob
@@ -21,47 +42,70 @@ Detection logic:
     that path were skipped backwards to reach it (1 = the immediately prior
     version of the file; deeper = further back).
 
-Threshold design (the whole point of this module — see MIN_ROLLBACK_PATHS /
-MIN_ROLLBACK_DEPTH docstrings for the numbers and their justification): a
-single file matching an older blob is ordinary (``git revert``, undoing one
-bad edit, restoring one file) and must NOT fire alone unless the match is
-deep. The signal this module exists to catch is BREADTH (many files at once)
-or DEPTH (one file jumping back past several of its own intervening edits) —
-never a lone shallow match.
+Threshold design (rollback): a single file matching an older blob is
+ordinary (``git revert``, undoing one bad edit, restoring one file) and must
+NOT fire alone unless the match is deep. The signal this module exists to
+catch is BREADTH (many files at once) or DEPTH (one file jumping back past
+several of its own intervening edits) — never a lone shallow match. See
+MIN_ROLLBACK_PATHS / MIN_ROLLBACK_DEPTH docstrings for the numbers.
 
-Override (deliberate divergence from a no-override discipline): unlike a
-correctness guard, this one has a real and benign false-positive case — a
-DELIBERATE mass revert is legitimate work indistinguishable, from git alone,
-from the incident this module exists to catch. So this module DOES take a
-named override env var (``COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK``),
-spelled to match the sibling precommit gates' convention in
-``coordinator_core.ops.install_meta_repo_precommit_hook._GATE_REGISTRY``. Do
-NOT "fix" this into a hard block by analogy with that module's own gates —
-every one of ITS refusal cases is a genuine defect (see that module's own
-docstring); this module's is not. A later reader who removes the override on
-that analogy would be reintroducing the exact false-positive this module was
-built to tolerate.
+Detection logic (mass deletion, check 2):
+    Reads every staged status-``D`` path (the exact set check 1 discards) and
+    the tracked-file total at ``HEAD`` (the pre-commit tree). Fires when
+    EITHER the absolute deleted-path count crosses ``MASS_DELETION_ABS_FLOOR``
+    OR the deleted-path count is at least ``MASS_DELETION_RATIO_THRESHOLD`` of
+    the tracked total — an OR, not an AND, because either signal alone is
+    sufficient evidence of an implausible deletion: a huge repo losing a
+    proportionally-small-but-absolutely-enormous subtree should fire on the
+    floor even if the ratio stays low, and a small repo (or subtree) losing
+    nearly everything should fire on the ratio even if the absolute count is
+    unremarkable. See MASS_DELETION_ABS_FLOOR / MASS_DELETION_RATIO_THRESHOLD
+    docstrings for the numbers and how they were derived from this repo's own
+    commit history.
 
-Not wired: this module registers no git hook, and is not invoked from
-``install_meta_repo_precommit_hook.py``'s gate registry or any other commit
-path. Wiring it in is a separate PM-gated decision.
+Override (deliberate divergence from a no-override discipline, both checks):
+unlike a correctness guard, both checks here have a real and benign
+false-positive case — a DELIBERATE mass revert or a DELIBERATE large prune is
+legitimate work indistinguishable, from git alone, from the incidents these
+checks exist to catch. So this module takes two named override env vars,
+one per check, each spelled to match the sibling precommit gates' convention
+in ``coordinator_core.ops.install_meta_repo_precommit_hook._GATE_REGISTRY``:
+``COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK`` (check 1, pre-existing) and
+``COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION`` (check 2, new). Do NOT "fix"
+either into a hard, unoverridable block by analogy with a correctness guard
+— every one of a correctness guard's refusal cases is a genuine defect;
+neither of these is, by construction. A later reader who removes either
+override on that analogy would be reintroducing the exact false-positive
+these checks were built to tolerate. Per the 2026-08-10 bug-backlog ruling,
+BOTH overrides are biased toward NOT firing on plausible legitimate work —
+this repo runs ~50 concurrent sessions sharing one hook, and a false positive
+here blocks every one of them from committing. Missing a marginal real
+incident is the deliberately preferred failure mode over blocking legitimate
+work; see the threshold docstrings for the historical margin each one keeps.
 
 Negative-spec:
     - NEVER runs a mutating git command (no ``git reset``, ``git checkout``,
       no staging/unstaging) — read-only over ``git diff --cached`` / ``git
-      log`` / ``git rev-parse`` only.
-    - Does NOT walk the FULL repo history per path — bounded by
+      log`` / ``git rev-parse`` / ``git ls-tree`` only.
+    - Does NOT walk the FULL repo history per path (check 1) — bounded by
       ``HISTORY_DEPTH_LIMIT``; a path with a real rollback beyond that depth
       is a known blind spot, not a silent success (see that constant's
       docstring).
-    - Does NOT special-case renames — invoked with ``--no-renames`` so a
-      renamed file surfaces as a plain delete + add, not a moved match. A
-      rename false-negative (content moved to a new path) is out of scope:
+    - Does NOT special-case renames (check 1) — invoked with ``--no-renames``
+      so a renamed file surfaces as a plain delete + add, not a moved match.
+      A rename false-negative (content moved to a new path) is out of scope:
       this module's own remit is "the same path rolled back", not general
       content provenance.
-    - Does NOT itself decide whether to block a commit — it is a read/report
-      library plus a CLI; the caller (once wired, if ever) owns the exit-code
-      → block decision.
+    - Does NOT weight staged deletions by path (check 2) — a deletion of
+      ``README.md`` and a deletion of a 40MB generated artifact count
+      identically as "one path". Byte-weighting is a different, unbuilt
+      detector; this one answers "how much of the TREE, by path count, is
+      gone", which is what an empty-tree-shaped incident actually produces.
+    - Does NOT itself decide whether to block anything beyond its own exit
+      code — it is a read/report library plus a CLI; the installed hook
+      (``coordinator_core.ops.install_claude_klabauter_precommit_hook``) clamps that
+      exit code to 0/1 at the commit boundary (see that module's own
+      docstring, "Exit-code clamping").
 """
 
 from __future__ import annotations
@@ -106,6 +150,55 @@ MIN_ROLLBACK_PATHS = 3
 MIN_ROLLBACK_DEPTH = 2
 
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
+
+# --- Mass-deletion tripwire (2026-08-10) ---------------------------------
+#
+# Both constants below were derived from this repo's OWN commit history, not
+# picked as round numbers — see
+# state/bug-backlog/2026-08-10-nothing-on-the-commit-path-can-see-a-mas-486778a10476.yaml
+# for the incident this exists to catch (commit 0a3462b72, which staged
+# git's canonical empty tree against an 18,506-file parent — every one of
+# those 18,506 paths a status-D entry, deleted_count/tracked_total == 1.0).
+#
+# A full sweep of every commit in this repo's history (`git log --all
+# --name-status`, ~13,200 commits) for its per-commit status-D count, cross-
+# referenced against the tracked-file total at that commit's PARENT (the
+# pre-commit tree, matching what this module measures at commit time), found
+# exactly one commit at ratio 1.0 (the incident itself, 18,506/18,506) and a
+# clear runner-up at ratio 0.505 (1,709/3,382 — `e6783a68bd0`, "prune(reclaim):
+# drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by example-doctrine-repo", a deliberate,
+# legitimate bulk prune). Every other commit with >=15 deletions in the same
+# sweep sits at ratio <= 0.102. There is no commit anywhere between 0.505 and
+# 1.0 — the two shapes (largest legitimate prune vs. the incident) are not
+# close together, which is what makes a threshold between them defensible
+# rather than arbitrary.
+MASS_DELETION_RATIO_THRESHOLD = 0.90
+"""Fire when staged deletions are >= this fraction of the tracked total at
+HEAD. 0.90 sits with ~1.8x headroom above the largest legitimate single-commit
+deletion ratio ever observed in this repo (0.505) while leaving 0.10 of
+margin below the incident's 1.0 — i.e. up to 10% of the tree could survive a
+staged commit and this would still fire, but a commit leaving MORE than 10%
+of the tree intact (as every real prune in this repo's history has) does not.
+Per the ~50-concurrent-session load constraint, the margin above the
+historical legitimate max (0.505) is deliberately generous rather than tight
+against it — a future prune materially larger than `e6783a68bd0` (but still a
+genuine partial prune, not a total wipe) must not trip this."""
+
+MASS_DELETION_ABS_FLOOR = 5127
+"""Fire when the ABSOLUTE staged-deletion count crosses this, regardless of
+ratio (catches a huge deletion inside a huge repo that stays proportionally
+small). Derived as 3x the largest legitimate single-commit deletion COUNT
+ever observed in this repo's history (1,709, the same `e6783a68bd0` commit
+the ratio threshold is keyed to) — a 3x safety margin above the historical
+worst case, biased toward the same "miss a marginal case over blocking
+legitimate work" preference the ratio threshold uses. This floor is a
+belt-and-braces catch for a repo shape where the ratio leg could stay under
+threshold (e.g. a 200,000-file monorepo losing 10,000 files is only a 5%
+ratio, but 10,000 deleted files is not a plausible ordinary edit) — the two
+legs are OR'd together (`_mass_deletion_should_fire`), not AND'd, precisely
+so neither shape has to also satisfy the other to be caught."""
+
+MASS_DELETION_OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
 
 _PROG = "detect-staged-rollback"
 
@@ -436,6 +529,130 @@ def _should_fire(candidates: Sequence[RollbackCandidate]) -> bool:
     return any(c.depth >= MIN_ROLLBACK_DEPTH for c in candidates)
 
 
+@dataclass(frozen=True)
+class MassDeletionFinding:
+    deleted_count: int
+    tracked_total: int
+    ratio: float  # 0.0 when tracked_total is 0 (nothing to divide by)
+    deleted_paths: Tuple[str, ...] = field(default_factory=tuple)
+
+
+def _staged_deletions(repo_root: str, env: Optional[dict] = None) -> List[str]:
+    """Every staged status-D path — the exact set `_staged_blobs` discards.
+
+    Same single `git diff --cached --raw -z --no-renames --no-abbrev` shape
+    (and the same record parsing) as `_staged_blobs`, kept as an independent
+    pass rather than folded into that function: `_staged_blobs` is a hot path
+    for the rollback check and its contract (deleted paths absent from the
+    returned dict) is depended on by `find_rollback_candidates` and pinned by
+    that function's own tests — branching its return shape to also carry
+    deletions would be a wider, riskier change for no shared benefit, since
+    this function's caller (`find_mass_deletion`) needs nothing else from the
+    diff.
+    """
+    result = _run_git(
+        ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"],
+        cwd=repo_root,
+        env=env,
+    )
+    if result.returncode != 0:
+        return []
+
+    tokens = result.stdout.split("\0")
+    if tokens and tokens[-1] == "":
+        tokens = tokens[:-1]
+
+    deleted: List[str] = []
+    i = 0
+    while i + 1 < len(tokens):
+        rawline = tokens[i]
+        path = tokens[i + 1]
+        i += 2
+        if not rawline.startswith(":"):
+            continue
+        parts = rawline[1:].split(" ")
+        if len(parts) != 5:
+            continue
+        _old_mode, _new_mode, _old_sha, _new_sha, status = parts
+        if status.startswith("D"):
+            deleted.append(path)
+    return deleted
+
+
+def _tracked_file_count(repo_root: str, env: Optional[dict] = None) -> int:
+    """Tracked-file total at HEAD — the pre-commit tree the staged deletions
+    are being measured against. 0 on any failure (no HEAD yet, e.g. a repo's
+    first commit — nothing can be a "mass deletion" of a tree that does not
+    exist yet; the ratio leg is skipped in that case and only the absolute
+    floor can fire, which is correct: an initial commit cannot delete
+    anything that was ever tracked)."""
+    result = _run_git(
+        ["ls-tree", "-r", "--name-only", "-z", "HEAD"],
+        cwd=repo_root,
+        env=env,
+    )
+    if result.returncode != 0:
+        return 0
+    tokens = result.stdout.split("\0")
+    return sum(1 for t in tokens if t)
+
+
+def find_mass_deletion(repo_root: str, env: Optional[dict] = None) -> Optional[MassDeletionFinding]:
+    """Read-only scan of the staged index for an implausible-share deletion.
+
+    Never mutates the repo. Returns None when nothing is staged for
+    deletion — a `MassDeletionFinding` otherwise, regardless of whether it
+    crosses either threshold (`_mass_deletion_should_fire` makes that call);
+    this function is measurement only, mirroring `find_rollback_candidates`'s
+    own separation of "what was found" from "does it fire".
+    """
+    deleted = _staged_deletions(repo_root, env=env)
+    if not deleted:
+        return None
+    total = _tracked_file_count(repo_root, env=env)
+    ratio = (len(deleted) / total) if total else 0.0
+    return MassDeletionFinding(
+        deleted_count=len(deleted),
+        tracked_total=total,
+        ratio=ratio,
+        deleted_paths=tuple(deleted),
+    )
+
+
+def _mass_deletion_should_fire(finding: Optional[MassDeletionFinding]) -> bool:
+    if finding is None:
+        return False
+    if finding.deleted_count >= MASS_DELETION_ABS_FLOOR:
+        return True
+    return finding.tracked_total > 0 and finding.ratio >= MASS_DELETION_RATIO_THRESHOLD
+
+
+def _mass_deletion_report(finding: MassDeletionFinding, overridden: bool) -> str:
+    verb = "would flag" if overridden else "BLOCKED"
+    pct = f"{finding.ratio * 100:.1f}%" if finding.tracked_total else "n/a (no HEAD)"
+    lines = [
+        f"{_PROG}: {verb} — staged commit deletes {finding.deleted_count} of "
+        f"{finding.tracked_total} tracked path(s) ({pct}).",
+    ]
+    sample = sorted(finding.deleted_paths)[:10]
+    for p in sample:
+        lines.append(f"  D  {p}")
+    remaining = finding.deleted_count - len(sample)
+    if remaining > 0:
+        lines.append(f"  ... and {remaining} more")
+    if overridden:
+        lines.append(
+            f"{_PROG}: {MASS_DELETION_OVERRIDE_ENV} is set — proceeding despite the above "
+            "(deliberate mass deletion)."
+        )
+    else:
+        lines.append(
+            f"{_PROG}: if this IS a deliberate mass deletion (archival sweep, bulk prune), "
+            f"set {MASS_DELETION_OVERRIDE_ENV}=1 and re-run."
+        )
+    return "\n".join(lines)
+
+
 def _report(candidates: Sequence[RollbackCandidate], overridden: bool) -> str:
     lines: List[str] = []
     verb = "would flag" if overridden else "BLOCKED"
@@ -466,15 +683,21 @@ def _report(candidates: Sequence[RollbackCandidate], overridden: bool) -> str:
 _USAGE = """\
 usage: detect-staged-rollback [repo-root]
 
-Read-and-report detector for a staged index whose blobs are byte-identical to
-an older commit's — i.e. a silent rollback of landed work. Never mutates a
-repo. repo-root defaults to the current working directory.
+Read-and-report detector for two staged-index shapes: (1) blobs byte-identical
+to an older commit's — i.e. a silent rollback of landed work — and (2) a
+staged deletion covering an implausible share of the tracked tree. Never
+mutates a repo. repo-root defaults to the current working directory.
 
 exit codes:
-  0  clean (no candidates, below threshold, or {override} set)
-  1  a staged-rollback finding crossed the breadth/depth threshold
+  0  clean (no finding, below threshold, or the relevant override is set)
+  1  a rollback finding crossed the breadth/depth threshold, and/or a mass-
+     deletion finding crossed the ratio/floor threshold
   2  usage error
-""".format(override=OVERRIDE_ENV)
+
+overrides:
+  {rollback_override}  bypasses a rollback finding (deliberate mass revert)
+  {mass_override}  bypasses a mass-deletion finding (deliberate bulk prune)
+""".format(rollback_override=OVERRIDE_ENV, mass_override=MASS_DELETION_OVERRIDE_ENV)
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
@@ -498,13 +721,32 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
 
     repo_root = argv[0] if argv else "."
 
+    # Both checks always run, independently — a commit can trip either, both,
+    # or neither, and each has its own override (see module docstring,
+    # "Override"). Neither check short-circuits the other: a rollback finding
+    # below its own threshold must not suppress a mass-deletion finding
+    # staged alongside it, and vice versa.
     candidates = find_rollback_candidates(repo_root, env=env)
-    if not candidates or not _should_fire(candidates):
+    rollback_fires = bool(candidates) and _should_fire(candidates)
+    rollback_overridden = env.get(OVERRIDE_ENV, "") not in ("", "0")
+
+    mass_finding = find_mass_deletion(repo_root, env=env)
+    mass_fires = _mass_deletion_should_fire(mass_finding)
+    mass_overridden = env.get(MASS_DELETION_OVERRIDE_ENV, "") not in ("", "0")
+
+    if not rollback_fires and not mass_fires:
         return 0
 
-    overridden = env.get(OVERRIDE_ENV, "") not in ("", "0")
-    print(_report(candidates, overridden), file=sys.stderr)
-    return 0 if overridden else 1
+    blocked = False
+    if rollback_fires:
+        print(_report(candidates, rollback_overridden), file=sys.stderr)
+        blocked = blocked or not rollback_overridden
+    if mass_fires:
+        assert mass_finding is not None  # _mass_deletion_should_fire(None) is False
+        print(_mass_deletion_report(mass_finding, mass_overridden), file=sys.stderr)
+        blocked = blocked or not mass_overridden
+
+    return 1 if blocked else 0
 
 
 if __name__ == "__main__":

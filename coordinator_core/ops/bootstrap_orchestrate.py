@@ -187,7 +187,13 @@ def _resolve_coordinator_root() -> str:
     # Best-effort fallback if invoked without the trampoline's env seed (e.g.
     # directly from a test): unconditional flat-layout default, matching the
     # sibling ports' rung-4 fallback.
-    claude_home = os.path.join(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~"), ".claude")
+    claude_home = os.path.join(
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~"),
+        ".claude",
+    )
     return os.path.join(claude_home, "plugins", "coordinator-claude", "coordinator")
 
 

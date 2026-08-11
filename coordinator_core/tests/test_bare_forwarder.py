@@ -8,6 +8,13 @@ used by ``coordinator_core.pyresolve._machine_local_impl``.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
     (T1b chunk B2 — bare forwarders: claude-home, coordinator-settings-home)
+
+The launchability seam stubbed here is `bare_forwarder.is_executable`, NOT
+`os.access`: `forward()` resolves through `win_portability.is_executable`,
+which is mode-bit inspection on POSIX and PATHEXT-sibling resolution on
+Windows — it never calls `os.access`, and an extensionless `widget` fixture
+is correctly non-launchable on Windows. Stubbing `os.access` pinned a
+predicate production does not use and only ever passed on POSIX.
 """
 from __future__ import annotations
 
@@ -27,7 +34,9 @@ def test_falls_back_to_legacy_when_settings_home_absent(tmp_path, monkeypatch):
     legacy.write_text("#!/bin/sh\necho hi\n")
     legacy.chmod(0o755)
 
-    monkeypatch.setattr(os, "access", lambda path, mode: str(path) == str(legacy))
+    monkeypatch.setattr(
+        bare_forwarder, "is_executable", lambda path: str(path) == str(legacy)
+    )
 
     captured = {}
 
@@ -65,7 +74,9 @@ def test_falls_back_to_legacy_via_userprofile_when_home_absent(tmp_path, monkeyp
     # simulate that resolution here so the test proves the delegation shape.
     monkeypatch.setattr(bare_forwarder, "home_dir", lambda: userprofile_home)
 
-    monkeypatch.setattr(os, "access", lambda path, mode: str(path) == str(legacy))
+    monkeypatch.setattr(
+        bare_forwarder, "is_executable", lambda path: str(path) == str(legacy)
+    )
 
     captured = {}
 
@@ -99,9 +110,9 @@ def test_resolves_settings_home_first_even_when_legacy_present(tmp_path, monkeyp
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
     monkeypatch.setattr(
-        os,
-        "access",
-        lambda path, mode: str(path) in {str(settings_home_bin), str(legacy)},
+        bare_forwarder,
+        "is_executable",
+        lambda path: str(path) in {str(settings_home_bin), str(legacy)},
     )
 
     captured = {}
@@ -124,7 +135,7 @@ def test_resolves_settings_home_first_even_when_legacy_present(tmp_path, monkeyp
 def test_exits_127_when_neither_rung_executable(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    monkeypatch.setattr(os, "access", lambda path, mode: False)
+    monkeypatch.setattr(bare_forwarder, "is_executable", lambda path: False)
 
     with pytest.raises(SystemExit) as exc_info:
         bare_forwarder.forward("widget", [])

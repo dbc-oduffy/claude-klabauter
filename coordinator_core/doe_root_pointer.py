@@ -69,55 +69,10 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.machine_resolver import registry_get
-
-# coordinator/lib — sibling of this file's repo-root parent, hosting the
-# shared coordinator_read_doe_root_pointer() substrate (rungs 2-3: durable +
-# legacy `.doe-root` pointer file reads). Two parents up from this file
-# (coordinator_core/doe_root_pointer.py -> coordinator_core -> repo root),
-# then down into coordinator/lib.
-_COORDINATOR_LIB_DIR = str(Path(__file__).resolve().parent.parent / "coordinator" / "lib")
-
-# Published payload flattens: the mirror ships the helper at "<repo root>/lib"
-# with no "coordinator/" segment. Probed as a fallback below — private tree
-# wins first.
-_COORDINATOR_LIB_DIR_FLAT = str(Path(__file__).resolve().parent.parent / "lib")
-
-
-def _file_rungs_via_shared_helper() -> str:
-    """Codename-free rungs 2-3: delegate to
-    coordinator/lib/read_doe_root_pointer.py::coordinator_read_doe_root_pointer()
-    rather than reimplementing the `.doe-root` pointer file read. That helper
-    already tries `${settings-home}/machine-local/.doe-root` then
-    `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` in that order, returns "" on
-    failure, and never raises. Does NOT validate the resolved path exists —
-    callers (this module's own contract) apply that gate.
-    """
-    lib_dir = _COORDINATOR_LIB_DIR
-    if not os.path.isfile(os.path.join(lib_dir, "read_doe_root_pointer.py")):
-        lib_dir = _COORDINATOR_LIB_DIR_FLAT
-    added = lib_dir not in sys.path
-    if added:
-        sys.path.insert(0, lib_dir)
-    try:
-        from read_doe_root_pointer import coordinator_read_doe_root_pointer
-
-        return coordinator_read_doe_root_pointer()
-    except Exception:
-        # Swallows: helper missing at both probed dirs, import error inside
-        # the helper itself, or any runtime failure in the read — all
-        # collapse to "no pointer configured" by contract (never-raise).
-        return ""
-    finally:
-        if added:
-            try:
-                sys.path.remove(lib_dir)
-            except ValueError:
-                pass
 
 
 def read_doe_root_pointer_file(home: str | None = None) -> str:
@@ -127,8 +82,8 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
         2. <home>/.claude/.doe-root                  (legacy fallback)
 
     Returns "" when neither is present/readable. `home` defaults to
-    ``${CLAUDE_HOME:-$HOME}``; callers that accept an injectable home (tests,
-    sandbox probes) pass it explicitly.
+    ``${CLAUDE_HOME:-$HOME:-$USERPROFILE}``; callers that accept an injectable
+    home (tests, sandbox probes) pass it explicitly.
 
     This is the file-rungs subset of :func:`read_doe_root_pointer`, WITHOUT the
     registry rung. It exists for the resolvers that deliberately consult the
@@ -142,20 +97,49 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
     ``gen_doe_root_pointer`` stopped writing the legacy target, and six call
     sites were each open-coding a single legacy ``open()``. One implementation
     so the next relocation is one edit, not a six-site sweep that misses two.
+
+    Review: B3 (MAJOR, 2026-08-08) -- when called with no explicit `home` and
+    none of CLAUDE_HOME/HOME/USERPROFILE nor a settings-home override are
+    resolvable, this previously still defaulted `home` via
+    `os.path.expanduser("~")` and read the REAL machine's legacy pointer --
+    the same "artifact of where it ran" failure `read_doe_root_pointer()`'s
+    own guard exists to prevent (that guard was never mirrored here even
+    though this function became a rung-1.5(a) caller in C1B). Now returns ""
+    in that state, matching the sibling guard exactly.
+    Review: B4 (MAJOR, 2026-08-08) -- this is now the ONLY place either
+    public entrypoint reads the pointer files; `read_doe_root_pointer()`
+    below delegates to it for the home-present case rather than carrying an
+    independent inline copy that disagreed on whitespace stripping
+    (`.strip()` here vs. `.rstrip("\\n")` there, for a trailing-space/
+    leading-tab pointer file). Whitespace handling is unified on
+    `.rstrip("\\n")` -- the bash-`$(cat ...)`-mirroring choice the module
+    docstring's negative-spec already commits to. The former
+    `_file_rungs_via_shared_helper()` delegate into `coordinator/lib` (with
+    its private-vs-flat-payload directory probe) is retired along with it:
+    this local implementation is provably equivalent for every state it
+    covered (see prior module history) and removes two further defects that
+    delegate carried -- B8 (a `sys.path`/`sys.modules` shadowing hazard) and
+    B9 (a swallowed exception indistinguishable from a clean miss) both
+    apply only to code that no longer exists.
     """
     if home is None:
-        home = (
+        home_env = (
             os.environ.get("CLAUDE_HOME")
             or os.environ.get("HOME")
             or os.environ.get("USERPROFILE")
-            or os.path.expanduser("~")
         )
+        settings_home_override = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.environ.get(
+            "MACHINE_LOCAL_REGISTRY_DIR"
+        )
+        if not (home_env or settings_home_override):
+            return ""
+        home = home_env or os.path.expanduser("~")
     for candidate in (
         settings_home() / "machine-local" / ".doe-root",
         Path(home) / ".claude" / ".doe-root",
     ):
         try:
-            content = candidate.read_text(encoding="utf-8").strip()
+            content = candidate.read_text(encoding="utf-8").rstrip("\n")
         except OSError:
             continue
         if content:
@@ -201,30 +185,23 @@ def read_doe_root_pointer() -> str:
         return ""
 
     if home:
-        # Rungs 2-3: durable-then-legacy `.doe-root` pointer file reads, via
-        # the shared coordinator/lib helper rather than a local
-        # reimplementation (see _file_rungs_via_shared_helper docstring).
-        # Codename-free — its vocabulary keys are all compound-with-claude, so
-        # the OSS scrub cannot touch them. Provably equivalent to the prior
-        # inline read for this state: the shared helper recomputes its own
-        # home via the IDENTICAL ``CLAUDE_HOME or HOME or USERPROFILE or ""``
-        # expression this function uses (both include the USERPROFILE rung),
-        # and its settings-home resolution
-        # (coordinator/lib/settings_home.py::settings_home()) mirrors
-        # coordinator_core._settings_home.settings_home()'s precedence
-        # (COORDINATOR_SETTINGS_HOME override, else CLAUDE_HOME/Path.home())
-        # line for line — see both modules' docstrings.
-        return _file_rungs_via_shared_helper()
+        # Rungs 2-3: durable-then-legacy `.doe-root` pointer file reads,
+        # delegated to read_doe_root_pointer_file() -- the single remaining
+        # implementation of this read (B4 review fix, 2026-08-08; see that
+        # function's docstring). Passing `home` explicitly reuses the exact
+        # value this function already resolved above, rather than letting
+        # the callee re-derive it.
+        return read_doe_root_pointer_file(home)
 
-    # home unset but settings_home_override set: the shared helper gates its
-    # own entry on a resolvable ${CLAUDE_HOME:-$HOME:-$USERPROFILE} home and
-    # returns "" immediately without it — so it can never reach the durable
-    # rung in this state, unlike the prior inline code, which tried the
-    # durable rung via settings_home() (override-driven, home-independent)
-    # regardless of home. The legacy rung stays unreachable here either way
-    # (it requires `home`), matching the prior code's own `if not home: return
-    # ""` gate before the legacy read. So only the durable rung applies, read
-    # directly rather than through the (home-gated) shared helper.
+    # home unset but settings_home_override set: read_doe_root_pointer_file's
+    # own no-explicit-home guard (B3) treats this state as reachable
+    # (settings_home_override alone satisfies it) and would fall back to
+    # os.path.expanduser("~") for its `home` -- reading the REAL machine's
+    # legacy pointer, exactly the artifact-of-where-it-ran failure B3 exists
+    # to prevent. So this state is deliberately NOT delegated: only the
+    # durable rung applies here (settings_home() is override-driven,
+    # home-independent), read directly, matching the prior code's own
+    # ``if not home: return ""`` gate before the legacy read.
     try:
         durable = settings_home() / "machine-local" / ".doe-root"
         content = durable.read_text(encoding="utf-8").rstrip("\n")

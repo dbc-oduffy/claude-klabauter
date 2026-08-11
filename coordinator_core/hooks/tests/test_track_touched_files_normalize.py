@@ -31,6 +31,7 @@ import pytest
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import scope as touch_scope
+from coordinator_core.session import core as session_core
 
 
 def _make_repo(tmp_path):
@@ -192,3 +193,167 @@ class TestHandlerRuntimeErrorFallbackNonGitFixture:
         assert not (non_git_root / ".git" / "coordinator-sessions").exists(), (
             "fallback branch re-introduced the doubled '.git' join"
         )
+
+
+class TestHandlerNormalizeTouchPathRootWiring:
+    """Pins the `_handler` call site's `normalize_touch_path(..., root=...)`
+    keyword wiring (break-class fix, 2026-08-08): `asyncio.to_thread` forwards
+    positionally, so the pre-fix call `normalize_touch_path(file_path,
+    _worktree_root)` bound `_worktree_root` to `cwd` only, never `root` —
+    `normalize_touch_path`'s ``resolved_root = root if root else
+    core.git_root(cwd)`` fallback then re-spawned ``git rev-parse
+    --show-toplevel`` on every untracked path, the exact spawn the ``root``
+    parameter exists to remove. `TestNormalizeTouchPathSpawnCount` in
+    `coordinator_core/session/tests/test_scope.py` calls
+    `normalize_touch_path` directly with `root=` and so never exercised this
+    caller; this class drives the real `_handler` entrypoint instead.
+
+    Monkeypatches `scope.core.git_root` (the sole subprocess seam for the
+    worktree-root re-derivation `normalize_touch_path` falls back to when
+    `root` is absent) to a plain counter — a call count of 0 proves the hook
+    supplied `root` and no re-derivation spawn occurred.
+    """
+
+    def test_untracked_path_handled_without_git_root_respawn(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+
+        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+
+        calls = {"git_root": 0}
+        real_git_root = session_core.git_root
+
+        def _counted_git_root(cwd=None):
+            calls["git_root"] += 1
+            return real_git_root(cwd)
+
+        monkeypatch.setattr(touch_scope.core, "git_root", _counted_git_root)
+
+        params = {
+            "session_id": "deadbeefcafe0003",
+            "tool_name": "Edit",
+            "file_path": str(target),
+        }
+        asyncio.run(ttf._handler(params, repo_root=common_dir))
+
+        assert calls["git_root"] == 0, (
+            "normalize_touch_path re-derived the worktree root via "
+            "core.git_root(cwd) — the hook failed to supply its own "
+            "`root=` keyword to normalize_touch_path"
+        )
+
+        touched_file = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
+        )
+        entries = [
+            touch_scope.parse_touch_event(line)[2]
+            for line in touched_file.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        assert "src/new.py" in entries
+
+
+class TestHandlerZeroSpawnFastArmAtCaller:
+    """Proves the zero-spawn fast arm (``scope._touch_path_fast_arm_eligible``
+    over ``scope._GUARD_CLAUSES``, landed C1 `b1e0881d3`) fires at the
+    CALLER — ``hooks.track_touched_files::_handler`` — not merely at
+    ``normalize_touch_path`` called directly with a hand-supplied ``root=``.
+
+    Spec backlink: docs/plans/2026-08-08-prove-the-arms-agree-then-stop-
+    asking-gi.md § AC1. This is the F0-catching test: staff-eng finding F0
+    on that plan noted every pre-existing spawn-count test called
+    ``normalize_touch_path`` directly with ``root=`` supplied, so a
+    function-level AC1 test proved nothing about production reachability —
+    the hot-path caller could (and once did, until `c53ad6774`) pass
+    ``root`` positionally, leaving it ``None`` at the fast-arm's truthy-
+    ``root`` gate and the guard permanently unreachable in production, with
+    every existing AC still green. A test that only calls
+    ``normalize_touch_path`` directly, with ``root=`` hand-supplied, does
+    NOT satisfy AC1 — this class drives the real ``_handler`` entrypoint on
+    the production call shape instead
+    (``repo_root=git_common_dir(repo)``, per
+    ``TestHandlerEndToEndCommonDirScopedRoot`` above).
+
+    Counted, and why: this monkeypatches the SAME two subprocess seams
+    ``TestNormalizeTouchPathSpawnCount._spy`` in
+    ``coordinator_core/session/tests/test_scope.py`` uses —
+    ``coordinator_core.session.scope._git_run`` (the sole seam for
+    ``ls-files``) and ``coordinator_core.session.core.git_root`` (the sole
+    seam for worktree-root re-derivation) — so a count of 0 proves no git
+    process was spawned at all, not merely that its result went unused.
+
+    Deliberately EXCLUDED from the zero-spawn assertion: `_handler` itself
+    may legitimately spawn git for reasons OTHER than
+    ``normalize_touch_path`` — session bootstrap (`_bootstrap_session` /
+    `core.init`) reads `git rev-parse HEAD` / `--abbrev-ref HEAD` via a
+    SEPARATE, unpatched `subprocess.check_output` call, and `git_common_dir`
+    resolution happens before `_handler` is even entered here (the test
+    computes it itself, outside the counted call). Weakening the assertion
+    to "fewer spawns than before" would hide exactly the regression this
+    test exists to catch, so instead: (1) the `_git_run` spy asserts NO call
+    carried `ls-files` in its args (the sole seam `normalize_touch_path`'s
+    slow-arm and fast-arm-declined path would use), and (2) `core.git_root`
+    is asserted never called (the sole seam the `root`-absent fallback
+    would re-derive the worktree root through). Both together prove the
+    fast arm — not merely "fewer spawns" — is what fired.
+    """
+
+    def test_tracked_path_zero_ls_files_and_zero_git_root_at_handler(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"  # tracked by _make_repo, guard-eligible
+
+        git_run_calls = []
+        real_git_run = touch_scope._git_run
+
+        def _counted_git_run(args, cwd=None):
+            git_run_calls.append(list(args))
+            return real_git_run(args, cwd)
+
+        git_root_calls = {"count": 0}
+        real_git_root = session_core.git_root
+
+        def _counted_git_root(cwd=None):
+            git_root_calls["count"] += 1
+            return real_git_root(cwd)
+
+        monkeypatch.setattr(touch_scope, "_git_run", _counted_git_run)
+        monkeypatch.setattr(touch_scope.core, "git_root", _counted_git_root)
+
+        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+
+        params = {
+            "session_id": "deadbeefcafe0004",
+            "tool_name": "Edit",
+            "file_path": str(target),
+        }
+        asyncio.run(ttf._handler(params, repo_root=common_dir))
+
+        ls_files_calls = [
+            args for args in git_run_calls if "ls-files" in args
+        ]
+        assert ls_files_calls == [], (
+            "normalize_touch_path spawned `git ls-files` for a guard-"
+            f"eligible tracked path — the fast arm did not fire: {ls_files_calls!r}"
+        )
+        assert git_root_calls["count"] == 0, (
+            "normalize_touch_path re-derived the worktree root via "
+            "core.git_root(cwd) — the fast arm did not fire, or the "
+            "handler failed to supply `root=`"
+        )
+
+        touched_file = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
+        )
+        entries = [
+            touch_scope.parse_touch_event(line)[2]
+            for line in touched_file.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        assert "README.md" in entries
+        for entry in entries:
+            assert not entry.startswith("../")
+            assert not (entry.startswith("/") or re.match(r"^[A-Za-z]:", entry))

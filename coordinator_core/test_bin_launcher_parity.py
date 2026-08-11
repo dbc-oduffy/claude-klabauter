@@ -862,13 +862,31 @@ def _launcher_parity_offenders(paths: list[str], exemptions: dict) -> list[tuple
         # backlink AND stay under this guard -- see gen-launcher-shim.py
         # § SPEC BACKLINKS for why a CLI flag would not have worked.
         rel_dir = rel.rsplit("/", 1)[0]
-        spec_backlink = gen.spec_backlink_for_entry_path(f"{rel_dir}/{entry}")
-        render = gen.render_cmd if suffix == ".cmd" else gen.render_ps1
-        expected = (
-            render(entry, spec_backlink=spec_backlink)
-            .replace("\n", "\r\n")
-            .encode("utf-8")
-        )
+        entry_path = f"{rel_dir}/{entry}"
+        spec_backlink = gen.spec_backlink_for_entry_path(entry_path)
+        if suffix == ".cmd":
+            # `preserve_raw_cmdline` (2026-08-08 caret-eating cmd.exe shim
+            # defect) is a SECOND opt-in, registry-driven byte-contract
+            # input alongside `spec_backlink` — resolved the same way
+            # `generate()` resolves it, so a `.cmd` twin actually declaring
+            # it is not perpetually flagged as drifted. `.ps1` has no
+            # counterpart (render_ps1 never loses the caret in the first
+            # place — see `_cmd_raw_cmdline_block`'s docstring).
+            expected = (
+                gen.render_cmd(
+                    entry,
+                    spec_backlink=spec_backlink,
+                    preserve_raw_cmdline=entry_path in gen._RAW_CMDLINE_ENTRYPOINTS,
+                )
+                .replace("\n", "\r\n")
+                .encode("utf-8")
+            )
+        else:
+            expected = (
+                gen.render_ps1(entry, spec_backlink=spec_backlink)
+                .replace("\n", "\r\n")
+                .encode("utf-8")
+            )
         if raw != expected:
             offenders.append((rel, f"body differs from gen-launcher-shim.py output for {entry!r}"))
     return offenders

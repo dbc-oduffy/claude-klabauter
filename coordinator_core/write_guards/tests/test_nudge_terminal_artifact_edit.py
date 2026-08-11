@@ -285,6 +285,121 @@ class TestNamesRealLiveAlternative:
 # --------------------------------------------------------------------------------------
 
 
+class TestSizingCandidateStatusFilter:
+    """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
+    § C2, AC2): the offer must not hand back a terminal (declined/superseded/shipped)
+    sizing-object as if it were a live alternative."""
+
+    def test_declined_sizing_is_not_offered(self, tmp_path):
+        rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
+        _write_doc(tmp_path, rel, "approved", body=_AC_TABLE_ALL_MET)
+
+        live_rel = "state/sizings/2026-08-03-sizing-topic-overlap-live.yaml"
+        declined_rel = "state/sizings/2026-08-03-sizing-topic-overlap-declined.yaml"
+        (tmp_path / "state/sizings").mkdir(parents=True, exist_ok=True)
+        (tmp_path / declined_rel).write_text(
+            "schema: sizing-object\nstatus: declined\n", encoding="utf-8"
+        )
+        (tmp_path / live_rel).write_text(
+            "schema: sizing-object\nstatus: routed\n", encoding="utf-8"
+        )
+
+        result = guard.check(
+            _payload("Edit", rel, cwd=str(tmp_path), old_string="x", new_string=_INSTRUCTION_TEXT)
+        )
+        text = _advisory_text(result)
+        assert live_rel in text
+        assert declined_rel not in text
+
+    @pytest.mark.parametrize("status", ["superseded", "shipped", "declined"])
+    def test_terminal_sizing_alone_falls_back_to_generic_category(self, tmp_path, status):
+        rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
+        _write_doc(tmp_path, rel, "approved", body=_AC_TABLE_ALL_MET)
+
+        terminal_rel = f"state/sizings/2026-08-03-sizing-topic-overlap-{status}.yaml"
+        (tmp_path / "state/sizings").mkdir(parents=True, exist_ok=True)
+        (tmp_path / terminal_rel).write_text(
+            f"schema: sizing-object\nstatus: {status}\n", encoding="utf-8"
+        )
+
+        result = guard.check(
+            _payload("Edit", rel, cwd=str(tmp_path), old_string="x", new_string=_INSTRUCTION_TEXT)
+        )
+        text = _advisory_text(result)
+        assert terminal_rel not in text
+        assert "state/sizings/<topic>.yaml" in text  # generic fallback, no live candidate found
+
+    def test_terminal_sizing_with_inline_enum_comment_trailer_is_excluded(self, tmp_path):
+        """2026-08-10 fix: `_SIZING_STATUS_RE` used to anchor `$` right after the
+        value, so this repo's house-style trailing `# enum | listing` comment on a
+        `status:` line defeated the match entirely, fail-opening a terminal sizing
+        back into the candidate list. Pins the exact two strings reproduced live in
+        this repo's own state/sizings/*.yaml files."""
+        rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
+        _write_doc(tmp_path, rel, "approved", body=_AC_TABLE_ALL_MET)
+
+        live_rel = "state/sizings/2026-08-03-sizing-topic-overlap-live.yaml"
+        declined_rel = "state/sizings/2026-08-03-sizing-topic-overlap-declined.yaml"
+        (tmp_path / "state/sizings").mkdir(parents=True, exist_ok=True)
+        (tmp_path / declined_rel).write_text(
+            "schema: sizing-object\n"
+            "status: declined  # draft | sized | routed | superseded | shipped | declined\n",
+            encoding="utf-8",
+        )
+        (tmp_path / live_rel).write_text(
+            "schema: sizing-object\n"
+            "status: routed  # draft | sized | routed | superseded\n",
+            encoding="utf-8",
+        )
+
+        result = guard.check(
+            _payload("Edit", rel, cwd=str(tmp_path), old_string="x", new_string=_INSTRUCTION_TEXT)
+        )
+        text = _advisory_text(result)
+        assert live_rel in text
+        assert declined_rel not in text
+
+    def test_sizing_status_regex_matches_repro_strings_directly(self):
+        """Pins the exact two strings from the confirmed repro against the regex
+        itself, independent of the candidate-scan plumbing above."""
+        m1 = guard._SIZING_STATUS_RE.search(
+            "status: routed  # draft | sized | routed | superseded"
+        )
+        assert m1 is not None
+        assert m1.group(1) == "routed"
+
+        m2 = guard._SIZING_STATUS_RE.search(
+            "status: declined  # draft | sized | routed | superseded | shipped | declined"
+        )
+        assert m2 is not None
+        assert m2.group(1) == "declined"
+
+    def test_handoff_status_regex_unchanged_by_sizing_fix(self):
+        """`_HANDOFF_STATUS_RE` and `_SIZING_STATUS_RE` were split 2026-08-10 --
+        confirm the handoff regex still requires an exact end-of-line match (no
+        comment-trailer tolerance), since state/handoffs/*.md carries no such
+        trailer convention and widening it was out of scope for this fix."""
+        assert guard._HANDOFF_STATUS_RE.search("status: open  # some trailing note") is None
+        m = guard._HANDOFF_STATUS_RE.search("status: open")
+        assert m is not None
+        assert m.group(1) == "open"
+
+    def test_sized_sizing_is_still_offered(self, tmp_path):
+        """A non-terminal status (`sized`, `routed`, `draft`) is unaffected by the filter."""
+        rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
+        _write_doc(tmp_path, rel, "approved", body=_AC_TABLE_ALL_MET)
+
+        sized_rel = "state/sizings/2026-08-03-sizing-topic-overlap-sized.yaml"
+        (tmp_path / "state/sizings").mkdir(parents=True, exist_ok=True)
+        (tmp_path / sized_rel).write_text("schema: sizing-object\nstatus: sized\n", encoding="utf-8")
+
+        result = guard.check(
+            _payload("Edit", rel, cwd=str(tmp_path), old_string="x", new_string=_INSTRUCTION_TEXT)
+        )
+        text = _advisory_text(result)
+        assert sized_rel in text
+
+
 class TestSilentOnNonPlanPath:
     def test_non_plan_path_passes_through(self, tmp_path):
         _write_doc(tmp_path, "state/handoffs/foo.md", "implemented", body=_INSTRUCTION_TEXT)

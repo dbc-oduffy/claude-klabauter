@@ -113,6 +113,7 @@ from coordinator_core.launchable import resolve_by_shebang
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 from coordinator_core.ops import check_windows_ssh_binary, ensure_python3_exe_shim, seed_skill_overrides
 from coordinator_core.trusted_root_guard import is_trusted as _trusted_root
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Ordered list of (display_name, entrypoint) for every claude-klabauter-owned
 # install-health leg. Each entrypoint is normalized to a single
@@ -370,9 +371,7 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
         # between a "prefix" shape and a "complete argv" shape is needed.
         launch_argv = resolve_by_shebang(script)
         try:
-            from coordinator_core.win_portability import no_console_creationflags
-
-            rc = subprocess.call(launch_argv, **no_console_creationflags())
+            rc = subprocess.call(launch_argv, **no_console_passthrough_kwargs())
         except OSError as exc:
             # Review: code-reviewer (Finding 1) — a resolved-but-nonexistent
             # interpreter (e.g. a shebang naming a version-pinned Python or

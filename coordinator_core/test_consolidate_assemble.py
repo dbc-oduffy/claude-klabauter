@@ -25,6 +25,16 @@ def _git(returncode=0, stdout="", stderr=""):
     return lambda args, cwd: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _show_stdout(shas):
+    """Mimics `git show --stat <sha>...`: concatenated per-commit blocks, each
+    opening with a column-0 `commit <sha>` line and carrying a four-space
+    indented message body."""
+    blocks = [
+        f"commit {sha}0000\nAuthor: me <me@x>\n\n    subject for {sha}\n\n f | 1 +\n" for sha in shas
+    ]
+    return "\n".join(blocks)
+
+
 def _dispatch(rules):
     """Builds a `run_git` stub keyed on `args[0]` (the git subcommand)."""
 
@@ -129,7 +139,8 @@ class TestBrief:
                     returncode=0, stdout="\n".join(unique_commits) + ("\n" if unique_commits else ""), stderr=""
                 )
             if args[0] == "show":
-                return SimpleNamespace(returncode=0, stdout="1 file changed\n", stderr="")
+                shas = [a for a in args[2:]]
+                return SimpleNamespace(returncode=0, stdout=_show_stdout(shas), stderr="")
             if args[0] == "worktree" and args[1] == "list":
                 return SimpleNamespace(returncode=0, stdout=worktree_stdout, stderr="")
             if args[0] == "merge-base":
@@ -184,6 +195,41 @@ class TestBrief:
         cherry_pick_directives = [d for d in do["directives"] if d["id"] == "d-absorb-stale"]
         assert cherry_pick_directives[0]["cli"] == "cherry-pick-and-delete"
         assert cherry_pick_directives[0]["depends_on"] == "j-absorb-stale"
+
+    def test_inspection_gather_is_one_show_spawn_for_all_commits(self, monkeypatch, tmp_path):
+        """The gather is `count × 1` git spawns, not `count × 1` per commit --
+        a git spawn is ~100ms on Windows (example-doctrine-repo spawn-cost memo, 2026-08-08)."""
+        calls = []
+        run_git = self._stub(
+            monkeypatch,
+            branch_lines="* current\n  main\n  stale\n",
+            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            unique_commits=["aaa111 first", "bbb222 second", "ccc333 third"],
+        )
+
+        def recording(args, cwd):
+            calls.append(args)
+            return run_git(args, cwd)
+
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=recording)
+        stale = [b for b in do["gates"]["branches"] if b["category"] == "mine-stale"]
+        show_calls = [args for args in calls if args[0] == "show"]
+        assert len(show_calls) == len(stale)
+        assert all(args == ["show", "--stat", "aaa111", "bbb222", "ccc333"] for args in show_calls)
+
+        jp = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale")
+        inspections = jp["evidence"]["inspections"]
+        assert [i["sha"] for i in inspections] == ["aaa111", "bbb222", "ccc333"]
+        assert all(i["stat"].startswith(f"commit {i['sha']}") for i in inspections)
+        # Each block is byte-identical to that commit's own `git show --stat` -- the batch
+        # separator git emits BETWEEN objects never bleeds into the preceding commit's evidence.
+        assert all(i["stat"] == _show_stdout([i["sha"]]) for i in inspections)
+
+    def test_inspect_commits_on_empty_sha_list_spawns_nothing(self, tmp_path):
+        def run_git(args, cwd):
+            raise AssertionError(f"unexpected git call: {args}")
+
+        assert consolidate_assemble.inspect_commits(run_git, tmp_path, []) == {}
 
     def test_others_branch_never_appears_in_directives(self, monkeypatch, tmp_path):
         run_git = self._stub(

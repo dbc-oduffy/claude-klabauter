@@ -26,6 +26,8 @@ DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-regi
 
 from __future__ import annotations
 
+import tomllib
+
 import pytest
 
 from coordinator_core import doe_root_pointer as drp
@@ -45,12 +47,23 @@ def _isolate_registry_env(monkeypatch):
 def _write_registry(settings_home_dir, filename, key, value):
     """Write a flat quoted-dotted-key TOML entry under
     ``<settings_home_dir>/machine-local/<filename>`` — mirrors
-    test_machine_resolver.py's helper of the same shape."""
+    test_machine_resolver.py's helper of the same shape.
+
+    Review: B10 (NIT, 2026-08-08) -- a TOML literal string cannot contain a
+    single quote; a `value` carrying one (e.g. a tmp_path under a user
+    profile with a `'` in it -- rare, legal on Windows) would silently fail
+    ``tomllib`` parsing, which ``registry_get`` swallows identically, and the
+    fixture would pass for the wrong reason. Now asserts the written document
+    parses so a malformed fixture fails loudly instead of quietly demoting a
+    rung.
+    """
     reg_dir = settings_home_dir / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
     path = reg_dir / filename
     existing = path.read_text() if path.exists() else ""
-    path.write_text(existing + f"\n\"{key}\" = '{value}'\n")
+    new_content = existing + f"\n\"{key}\" = '{value}'\n"
+    tomllib.loads(new_content)
+    path.write_text(new_content)
     return reg_dir
 
 
@@ -198,6 +211,26 @@ def test_override_only_no_home_no_durable_pointer_returns_empty(monkeypatch, tmp
     monkeypatch.delenv("USERPROFILE", raising=False)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
     assert drp.read_doe_root_pointer() == ""
+
+
+# --- B3: read_doe_root_pointer_file's own no-home guard ----------------------
+
+
+def test_read_doe_root_pointer_file_no_home_resolvable_returns_empty(monkeypatch, tmp_path):
+    """B3 review fix (2026-08-08): read_doe_root_pointer_file(), called with
+    no explicit `home` and none of CLAUDE_HOME/HOME/USERPROFILE nor a
+    settings-home override resolvable, must return "" rather than falling
+    back to os.path.expanduser("~") and reading the REAL machine's legacy
+    pointer -- the same "no home resolvable" contract
+    read_doe_root_pointer() already enforces. Direct callers of this
+    function (e.g. the codename-free ladder rung 1.5(a)) previously had no
+    such guard even though C1B promoted this function to that rung."""
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    assert drp.read_doe_root_pointer_file() == ""
 
 
 def test_userprofile_only_reaches_legacy_rung_via_shared_helper(monkeypatch, tmp_path):

@@ -74,6 +74,8 @@ _WRAPPER_INVOCATIONS = [
     (git_native.rebase_abort, ("/tmp/repo",), {}),
     (git_native.merge_base, ("/tmp/repo", "HEAD", "origin/main"), {}),
     (git_native.rev_parse_upstream, ("/tmp/repo",), {}),
+    (git_native.rev_parse, ("/tmp/repo", "origin/main"), {}),
+    (git_native.rev_list_count, ("/tmp/repo", "abc123..def456"), {}),
 ]
 
 
@@ -140,7 +142,17 @@ _STDIN_INPUT_WRAPPERS = {"check_ignore"}
 #: `test_cat_file_batch_carries_the_windows_safe_creationflag` below, the
 #: same pattern `test_hash_object_stdin_bytes_carries_the_windows_safe_
 #: creationflag` already establishes for the other bytes-mode bypass.
-_BYTES_MODE_WRAPPERS = {"cat_file_batch"}
+#:
+#: `cat_file_batch_objects()` is the same bypass one layer down: as of the
+#: vendored-schema shape-sweep work it OWNS the `subprocess.run` call and
+#: `cat_file_batch()` is a thin single-ref wrapper delegating to it, so both
+#: are bytes-mode by the identical reasoning. It is listed here for the same
+#: reason as `cat_file_batch` -- the (a) harness's `text=True`/`stdin=DEVNULL`
+#: assertions cannot express this call shape -- NOT as an exemption from
+#: coverage: `test_cat_file_batch_objects_*` below cover it directly,
+#: including the creationflag, and the cross-rev property that is its whole
+#: reason for existing.
+_BYTES_MODE_WRAPPERS = {"cat_file_batch", "cat_file_batch_objects"}
 
 
 def test_all_public_wrappers_are_covered():
@@ -855,6 +867,125 @@ def test_cat_file_batch_missing_path_resolves_to_none(tmp_path):
     assert result == {"file.txt": "original\n", "does-not-exist.txt": None}
 
 
+def _repo_with_two_commits(tmp_path):
+    """Real repo where `file.txt` holds different content at two commits, and
+    `second-only.txt` exists at the newer one alone. Returns
+    (repo, first_sha, second_sha)."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("first\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "first"], repo)
+    first_sha = git_native.rev_parse_head(repo).stdout.strip()
+
+    (repo / "file.txt").write_text("second\n", encoding="utf-8")
+    (repo / "second-only.txt").write_text("added later\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt", "second-only.txt"], repo)
+    _real_git(["commit", "-q", "-m", "second"], repo)
+    second_sha = git_native.rev_parse_head(repo).stdout.strip()
+    return repo, first_sha, second_sha
+
+
+def test_cat_file_batch_objects_resolves_specs_across_different_revs_in_one_call(tmp_path):
+    """THE property this function exists for, and the one most likely to break
+    if the parser is later "simplified": many `<rev>:<path>` specs spanning
+    DIFFERENT revs, resolved in a SINGLE spawn, each bound to its own slot.
+
+    `cat_file_batch()` can only batch many paths at ONE ref, which forces a
+    caller needing (rev, path) PAIRS into one spawn per rev -- a cold Windows
+    `git` process per commit over a whole history walk. The vendored-schema
+    full-history sweep is that caller. If this ever silently collapsed to
+    per-rev behaviour, or mis-aligned records across the batch, the sweep
+    would read one commit's blob as another's and mis-attribute schema debt.
+    """
+    repo, first_sha, second_sha = _repo_with_two_commits(tmp_path)
+
+    specs = [
+        f"{second_sha}:file.txt",
+        f"{first_sha}:file.txt",
+        f"{second_sha}:second-only.txt",
+        f"{first_sha}:second-only.txt",
+    ]
+    real_run = subprocess.run
+    spawns = []
+
+    def _spy(*args, **kwargs):
+        spawns.append(args)
+        return real_run(*args, **kwargs)
+
+    with patch("subprocess.run", side_effect=_spy):
+        result = git_native.cat_file_batch_objects(repo, specs)
+
+    assert result == {
+        f"{second_sha}:file.txt": "second\n",
+        f"{first_sha}:file.txt": "first\n",
+        f"{second_sha}:second-only.txt": "added later\n",
+        # Absent at the older commit -- `None`, never the other rev's blob and
+        # never a dropped key.
+        f"{first_sha}:second-only.txt": None,
+    }
+    assert len(spawns) == 1, "four specs across two revs must cost exactly one spawn"
+
+
+def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
+    """Same bytes-mode `_git()` bypass as `cat_file_batch` (which now delegates
+    here), so the `creationflags=CREATE_NO_WINDOW` flag is re-implemented
+    rather than inherited and must be asserted at this layer -- mirrors
+    `test_cat_file_batch_carries_the_windows_safe_creationflag` above."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    real_run = subprocess.run
+    captured_kwargs = []
+
+    def _spy(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return real_run(*args, **kwargs)
+
+    with patch("subprocess.run", side_effect=_spy):
+        result = git_native.cat_file_batch_objects(repo, ["HEAD:file.txt"])
+
+    assert result == {"HEAD:file.txt": "original\n"}
+    assert len(captured_kwargs) == 1
+    kwargs = captured_kwargs[0]
+    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs["input"] == b"HEAD:file.txt\n"
+    assert "text" not in kwargs
+
+
+def test_cat_file_batch_objects_empty_input_returns_empty_dict_no_spawn(tmp_path):
+    """Empty `objects` short-circuits to `{}` without spawning -- mirrors every
+    other empty-input guard in this module."""
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run") as mock_run:
+        result = git_native.cat_file_batch_objects(repo, [])
+    assert result == {}
+    mock_run.assert_not_called()
+
+
+def test_cat_file_batch_objects_bogus_rev_resolves_to_none(tmp_path):
+    """An unresolvable REV (not merely a missing path) is `git cat-file
+    --batch`'s "missing" header just the same, and must land as `None` in that
+    spec's own slot without disturbing the resolvable specs beside it. The
+    history sweep depends on this: a pruned or shallow-clone commit must read
+    as "no data", never as an error and never as a neighbour's blob."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    result = git_native.cat_file_batch_objects(
+        repo,
+        ["no-such-rev:file.txt", "HEAD:file.txt", "HEAD:does-not-exist.txt"],
+    )
+    assert result == {
+        "no-such-rev:file.txt": None,
+        "HEAD:file.txt": "original\n",
+        "HEAD:does-not-exist.txt": None,
+    }
+
+
 def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resolved(tmp_path):
     """Bound 2's contract: an explicitly-passed `deliverable_id` is the
     tier-0 join key and must win over a `Deliverable-Id` trailer
@@ -891,3 +1022,29 @@ def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resol
     assert "Deliverable-Id: caller-supplied-deliverable-id" in log_result.stdout
     assert "Deliverable-Id: session-resolved-deliverable-id" not in log_result.stdout
     assert "Session-Id: session-resolved-session-id" in log_result.stdout
+
+
+def test_validate_explicit_deliverable_id_accepts_archived_spec_only(tmp_path):
+    """AC3 (C1, docs/plans/2026-08-10-archived-specs-rejoin-the-scan-surface.md):
+    a deliverable_id resolving ONLY from an artifact under archive/specs/<YYYY-MM>/
+    (the fourth scan root `_scan_artifacts_by_deliverable_id` gained in C1) is
+    ACCEPTED by `_validate_explicit_deliverable_id` -- returns None, not a
+    rejection diagnostic. No control-flow change was made in this function; it
+    delegates entirely to the scanner, so this pins that the widened scan
+    surface is actually reachable through the guard."""
+    root = tmp_path / "repo"
+    specs_dir = root / "archive" / "specs" / "2026-08"
+    specs_dir.mkdir(parents=True)
+    (specs_dir / "2026-08-01-archived-plan.md").write_text(
+        "---\ndeliverable_id: dlv-archived-spec-only-guard\n---\n\n# archived plan\n",
+        encoding="utf-8",
+    )
+
+    result = git_native._validate_explicit_deliverable_id(
+        "dlv-archived-spec-only-guard", root
+    )
+
+    assert result is None, (
+        f"expected acceptance (None) for a deliverable_id resolving only from "
+        f"archive/specs, got rejection: {result!r}"
+    )

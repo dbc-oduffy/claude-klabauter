@@ -229,6 +229,20 @@ def _newest_cache_dir() -> Optional[str]:
     return str(best) if best is not None else None
 
 
+def _flat_evidences_coordinator_tree(flat: Optional[str]) -> bool:
+    """True if `flat` is a directory carrying actual evidence of a
+    coordinator tree — `.git/` (a raw git checkout, the B6 motivating
+    scenario) or the published manifest relpath. Mere directory existence is
+    NOT evidence (see B6 review finding on `_resolve_source_mode`'s flat
+    rung): an interrupted install, a `rm -rf <dir>/*` leftover, or a
+    user-created placeholder directory must not classify the box as "dev"."""
+    if not flat or not os.path.isdir(flat):
+        return False
+    if os.path.isdir(os.path.join(flat, ".git")):
+        return True
+    return os.path.isfile(os.path.join(flat, "schemas", "coordinator-registry.manifest.json"))
+
+
 # ---------------------------------------------------------------------------
 # Rung-0: dev-vs-oss source-mode selector, shared by both verbs.
 # ---------------------------------------------------------------------------
@@ -287,11 +301,23 @@ def _resolve_source_mode(verb: str) -> str:
     # gated on `not oss_present` so a genuine marketplace install (which DOES
     # carry the manifest) is never double-counted as both the OSS install AND
     # the "unmarked candidate" in the ambiguity check below.
+    #
+    # Review: B6 (MAJOR, 2026-08-08) -- this rung was previously gated on
+    # `os.path.isdir(flat)` alone: mere directory existence (an interrupted
+    # install, a `rm -rf <dir>/*` leftover, a user-created placeholder)
+    # classified the box as "dev", silently trading an accurate "no
+    # coordinator source found ... run coordinator:install" error for a
+    # downstream git-ladder failure that doesn't mention install. Now
+    # requires actual evidence of a coordinator tree, matching the same
+    # `.git`-or-manifest evidence `coordinator_doe_root._cf_flat_layout_probe`
+    # already requires for the identical path (that probe uses the
+    # marketplace marker; this rung uses `.git`/manifest since the
+    # motivating scenario is a raw git checkout with no marketplace marker).
     candidate = (
         _registry_example_doctrine_repo()
         or _registry_live_path()
         or _read_doe_root_pointer()
-        or (flat if flat and not oss_present and os.path.isdir(flat) else "")
+        or (flat if flat and not oss_present and _flat_evidences_coordinator_tree(flat) else "")
         or ""
     )
     candidate_resolved = bool(candidate) and os.path.isdir(candidate)

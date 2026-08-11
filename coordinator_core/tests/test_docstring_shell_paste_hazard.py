@@ -286,8 +286,6 @@ _BASELINE: set[tuple[str, str]] = {
      '2. `CC_BIN="${COORDINATOR_SETTINGS_HOME...}/bin"` assignment, then `"$CC_BIN/<cli>"`.'),
     ('coordinator/bin/tests/test_agent_helper_shim_doe_corpus_coverage.py',
      'own alias name), then `"${_wsc_scc}/<cli>"`.'),
-    ('coordinator/bin/tests/test_stitch_observer_sidecar.py',
-     'Covers the leak the inline bash Step 4d body (`cat $OBSERVER_SIDECAR >>'),
     ('coordinator/bin/validate-install-contract.py',
      '# contract/generator, claude-klabauter owns engine). The `jq` and `bash >= 4.3`'),
     ('coordinator/bin/workday-complete-close.py',

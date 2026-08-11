@@ -397,6 +397,22 @@ def test_status_routed_does_not_fire(repo):
     assert result is None
 
 
+def test_status_declined_does_not_fire(repo):
+    """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
+    § C2, AC2): a declined sizing must never be nagged as unrouted. No code
+    change was needed to satisfy this — `_matches_criteria` already gates on
+    `status == "sized"`, which a declined (formerly-routed) sizing never is —
+    this test pins that as an explicit regression rather than an accident of
+    the existing gate shape."""
+    session_id = "sess-declined"
+    rel = "state/sizings/x.yaml"
+    _write_sizing(repo, rel, _sizing_yaml(status="declined"))
+    _write_touched(repo, session_id, rel)
+    result = m.op(_payload(repo, session_id=session_id))
+    assert result is None
+    assert m._matches_criteria({"status": "declined", "route": "plan", "detents": [], "fork": None, "xl_exit": None}) is False
+
+
 # ---------------------------------------------------------------------------
 # 6. No sizing object written this session -> silent
 # ---------------------------------------------------------------------------

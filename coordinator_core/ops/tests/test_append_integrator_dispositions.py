@@ -81,14 +81,22 @@ class TestAppendSucceedsAndUnblocksGuard:
             "cwd": str(tmp_path),
             "session_id": "sess-abc",
         }
-        # Before the disposition write, the guard denies.
+        # Before the disposition write, the guard fires. It is CLASS =
+        # "advisory", so firing means an additionalContext advisory naming the
+        # pending sidecar -- NOT a permissionDecision: "deny". This assertion
+        # previously read the deny shape and had rotted silently: the KeyError
+        # it raised was indistinguishable from the guard not firing at all,
+        # which is the one thing this test exists to detect.
         result = guard.check(payload)
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        hook_output = result["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "PreToolUse"
+        assert "permissionDecision" not in hook_output
+        assert target_file in hook_output["additionalContext"]
 
         mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
 
-        # After, the guard allows.
+        # After, the guard goes quiet -- the loop is closed.
         assert guard.check(payload) is None
 
     def test_rationale_is_included_when_supplied(self, tmp_path):
@@ -311,6 +319,160 @@ class TestIdempotentSecondCall:
         assert result["already_dispositioned"] is True
 
 
+#: Agent types that are report_sidecar-eligible but whose deliverable is NOT a
+#: finding set — the refusal side of the reviewer-set gate.
+_NON_REVIEWER_AGENT_TYPES = (
+    "coordinator:executor",
+    "coordinator:review-integrator",
+    "coordinator:enricher",
+)
+
+
+class TestReviewerAgentTypeSet:
+    """The gate is a SET, and its membership is pinned.
+
+    Rationale for pinning rather than asserting shape: the set mirrors the
+    types example-doctrine-repo's `report_type_map:` routes to a reviewer template, but
+    this module deliberately does not read that peer policy at runtime (see the
+    constant's own comment). A pinned membership test is what carries the drift
+    risk that decision accepts — widening the set must be a deliberate edit
+    against a failing assertion, never a silent slide.
+    """
+
+    def test_membership_is_pinned(self):
+        assert mod._REVIEWER_AGENT_TYPES == frozenset(
+            {
+                "coordinator:code-reviewer",
+                "coordinator:code-reviewer-weekly",
+                "coordinator:staff-eng",
+                "coordinator:staff-data-sci",
+                "coordinator:senior-front-end",
+                "coordinator:staff-ux",
+                "coordinator:vp-product",
+                "coordinator:eng-director",
+            }
+        )
+
+    def test_stays_wider_than_the_sibling_guards_literal(self):
+        """The divergence from the guard's single literal is intentional.
+
+        The guard decides which sidecars BLOCK an EM hand-edit; this set
+        decides which can RECEIVE a disposition block. A future edit that
+        collapses them into one constant should fail here and read both
+        comments before proceeding.
+        """
+        opus_personas = {
+            "coordinator:staff-eng",
+            "coordinator:staff-data-sci",
+            "coordinator:senior-front-end",
+            "coordinator:staff-ux",
+            "coordinator:vp-product",
+            "coordinator:eng-director",
+        }
+        # Strict superset of the guard's single literal, and the six Opus
+        # personas must all be present as a group — not just "bigger than 1",
+        # which a narrowed-but-still-two-member set would also satisfy.
+        assert mod._REVIEWER_AGENT_TYPES > {guard._REVIEWER_AGENT_TYPE}
+        assert opus_personas <= mod._REVIEWER_AGENT_TYPES
+
+    @pytest.mark.parametrize("agent_type", sorted(mod._REVIEWER_AGENT_TYPES))
+    def test_every_member_can_be_dispositioned(self, tmp_path, agent_type):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "reviewer-slice.md",
+            agent_type=agent_type, body=_FINDINGS_BODY,
+        )
+        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        assert mod._DISPOSITIONS_HEADING in sidecar.read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("agent_type", _NON_REVIEWER_AGENT_TYPES)
+    def test_non_members_are_still_refused(self, tmp_path, agent_type):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "not-a-reviewer.md",
+            agent_type=agent_type, body=_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="agent_type"):
+            mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+    def test_refusal_message_names_the_accepted_set_not_one_value(self, tmp_path):
+        """A caller who passed the wrong path needs to see what WOULD be right."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "not-a-reviewer.md",
+            agent_type="coordinator:executor", body=_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError) as excinfo:
+            mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        message = str(excinfo.value)
+        assert "coordinator:code-reviewer" in message
+        assert "coordinator:staff-eng" in message
+
+
+class TestStaffEngReviewSidecarRoundTrip:
+    """The regression anchor: the exact case that is refused before this fix.
+
+    A `staff-eng-review` sidecar as `provision_report` actually emits it,
+    carrying a persona `agent_type`, must be dispositionable. Built through the
+    real template builder rather than a local fixture on purpose — a fixture
+    would keep passing if the template regressed, which is precisely the drift
+    that produced the defect.
+    """
+
+    def test_staff_eng_review_template_is_dispositionable(self, tmp_path):
+        from coordinator_core.subagent_sandbox import provision_report
+
+        doc_text = provision_report._build_staff_eng_review_doc_text(
+            "coordinator:staff-eng", "2026-08-10T00:00:00Z", "sess-abc"
+        )
+        filled = doc_text.replace(
+            mod._FINDINGS_SENTINEL,
+            "- [P1] `x.py:1` a real finding — disposition: accepted — rationale: fixed.",
+        )
+        sidecar_dir = tmp_path / "state" / "subagent-share" / "sess-abc"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        sidecar = sidecar_dir / "coordinatorstaff-eng-abc.md"
+        sidecar.write_text(filled, encoding="utf-8")
+
+        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+        assert result["already_dispositioned"] is False
+        assert mod._DISPOSITIONS_HEADING in sidecar.read_text(encoding="utf-8")
+
+    def test_unfilled_staff_eng_review_scaffold_is_still_refused(self, tmp_path):
+        """The widened set must not weaken the empty-scaffold refusal."""
+        from coordinator_core.subagent_sandbox import provision_report
+
+        doc_text = provision_report._build_staff_eng_review_doc_text(
+            "coordinator:staff-eng", "2026-08-10T00:00:00Z", "sess-abc"
+        )
+        sidecar_dir = tmp_path / "state" / "subagent-share" / "sess-abc"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        sidecar = sidecar_dir / "coordinatorstaff-eng-abc.md"
+        sidecar.write_text(doc_text, encoding="utf-8")
+
+        with pytest.raises(mod.DispositionsError, match="unfilled scaffold"):
+            mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+    def test_verdict_and_rationale_are_not_swallowed_into_the_findings_body(self):
+        """Section ORDER is the load-bearing part of the template change.
+
+        `_extract_findings_section` does not stop at an intervening `## `
+        heading, so a template emitting Verdict/Rationale AFTER Findings would
+        fold them into the findings body — making an unfilled scaffold look
+        filled the moment a reviewer wrote a verdict.
+        """
+        from coordinator_core.subagent_sandbox import provision_report
+
+        doc_text = provision_report._build_staff_eng_review_doc_text(
+            "coordinator:staff-eng", "2026-08-10T00:00:00Z", "sess-abc"
+        )
+        section = mod._extract_findings_section(doc_text)
+
+        assert section is not None
+        assert "## Verdict" not in section
+        assert "## Rationale" not in section
+        assert mod._findings_section_is_empty(section)
+
+
 class TestFailsLoudOnMisdirection:
     def test_refuses_own_run_report_sidecar_wrong_agent_type(self, tmp_path):
         sidecar = _write_sidecar(
@@ -412,3 +574,71 @@ class TestCliEntrypoint:
             "--root", str(tmp_path),
         ])
         assert rc == 1
+
+
+#: A findings body that QUOTES the disposition heading in prose while
+#: explaining the mechanism — the shape a good reviewer actually writes, and
+#: the shape that silently disarmed both consumers before the headings were
+#: line-anchored. Taken from a real code-reviewer sidecar, 2026-08-10.
+_FINDINGS_BODY_QUOTING_HEADINGS = (
+    "## Findings\n\n"
+    "Summary: verified the carve-out runs to whichever of `## Exit interview` /\n"
+    "`## Integrator Dispositions` comes first, with no intervening-`## ` stop.\n\n"
+    "- [P3] `some_file.py:42` unused import.\n\n"
+)
+
+
+class TestHeadingsAreLineAnchoredNotSubstrings:
+    """Regression: a sidecar that MENTIONS a heading does not carry it.
+
+    Both consumers keyed off `heading in text`, so a reviewer who quoted
+    `## Integrator Dispositions` while explaining the extractor made
+    `append_dispositions` no-op with the block never written, AND made the
+    sibling guard read the loop as closed, silently unblocking EM hand-edits
+    over undispositioned findings. The second is the dangerous direction: a
+    guard that disarms itself when someone describes it reads as all-clear.
+    """
+
+    def test_quoted_disposition_heading_is_not_read_as_already_dispositioned(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-quoting.md",
+            agent_type="coordinator:code-reviewer",
+            body=_FINDINGS_BODY_QUOTING_HEADINGS,
+        )
+        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        assert "applied: [F1]" in sidecar.read_text(encoding="utf-8")
+
+    def test_quoted_heading_does_not_disarm_the_sibling_guard(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-quoting.md",
+            agent_type="coordinator:code-reviewer",
+            body=_FINDINGS_BODY_QUOTING_HEADINGS,
+        )
+        payload = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "some_file.py", "old_string": "x", "new_string": "y"},
+            "cwd": str(tmp_path),
+            "session_id": "sess-abc",
+        }
+        assert guard.check(payload) is not None
+
+        mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        assert guard.check(payload) is None
+
+    def test_quoted_findings_heading_does_not_shift_the_section_carve(self):
+        text = (
+            "Preamble naming `## Findings` before the real one.\n\n"
+            "## Findings\n\nreal body\n\n## Exit interview\n\nq\n"
+        )
+        section = mod._extract_findings_section(text)
+        assert section is not None
+        assert "real body" in section
+        assert "Preamble" not in section
+
+    def test_indented_heading_is_not_a_heading(self):
+        assert mod._find_heading("    ## Findings\n", "## Findings") is None
+        assert mod._find_heading("## Findings\n", "## Findings") == 0
+
+    def test_trailing_whitespace_is_tolerated(self):
+        assert mod._find_heading("## Findings   \n", "## Findings") == 0

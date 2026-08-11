@@ -183,10 +183,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import subprocess
 import sys
+from datetime import timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional
+
+from coordinator_core.ops import list_review_trail_records
+from coordinator_core.ops.review_brightline_gate import classify_surface
 
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
 from coordinator_core.contract.decision_object.judgment import (
@@ -325,7 +331,24 @@ def _all_free_value_keys() -> tuple[str, ...]:
     return tuple(seen.keys())
 
 
-def build_decisions_template(judgment_points: list[dict[str, Any]]) -> dict[str, Any]:
+#: AC5 (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md,
+#: chunk C4) — the declared template-key -> envelope-path mapping for every
+#: free-value key `build_decisions_template` populates from data THIS SAME
+#: `brief()` call already resolved, rather than leaving it `None`. A key not
+#: listed here stays `None` unconditionally, even when some OTHER run might
+#: resolve it in principle — the other ~26 free-value keys are an open PM
+#: question, not this chunk (see this function's own Negative-spec).
+DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS: dict[str, str] = {
+    "governing_plan_slug": "preflight.governing_plan_resolution.slug",
+    "governing_plan_path": "preflight.governing_plan_resolution.path",
+    "stage_paths": "gates.stage_paths_candidates",
+}
+
+
+def build_decisions_template(
+    judgment_points: list[dict[str, Any]],
+    resolved_free_values: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
     """AC1/AC2 (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md):
     `preflight.decisions_template` — the fillable `--decisions` skeleton a
     caller reads instead of reverse-engineering key names from this
@@ -340,7 +363,17 @@ def build_decisions_template(judgment_points: list[dict[str, Any]]) -> dict[str,
       - Every free-value key the six `directives_*` submodules' builders
         read (AC2), valued `None` — the exact set `_all_free_value_keys`
         derives from each submodule's own `FREE_VALUE_KEYS` constant (AC3),
-        never hand-copied here.
+        never hand-copied here — UNLESS the key is one of
+        `DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS` (AC5) and
+        `resolved_free_values` carries a non-`None` value for it, in which
+        case the template pre-fills that ALREADY-COMPUTED value instead of
+        `None`. This never forecloses a caller's own answer — the EM's
+        subsequent `--decisions` call OVERRIDES whatever is pre-filled here;
+        a pre-filled value only saves the caller from re-deriving a fact
+        this same `brief()` run already resolved. `resolved_free_values` is
+        deliberately narrow: only keys with a REAL resolver in this same run
+        (not a guess) belong in it — see the module docstring's negative
+        spec on this point.
 
     A free-value key never collides with a judgment-point id in this
     package's current vocabulary (free-value keys are `snake_case`;
@@ -355,8 +388,12 @@ def build_decisions_template(judgment_points: list[dict[str, Any]]) -> dict[str,
             "disposition": None,
             "options": [d["value"] for d in jp.get("dispositions", [])],
         }
+    resolved_free_values = resolved_free_values or {}
     for key in _all_free_value_keys():
-        template[key] = None
+        if key in DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS and resolved_free_values.get(key) is not None:
+            template[key] = resolved_free_values[key]
+        else:
+            template[key] = None
     return template
 
 
@@ -721,11 +758,30 @@ def _build_legacy_coverage_and_trail_directives(
     plan_claim_directives: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """The pre-existing (Convert #2) `d-coverage-gate` / `d-write-trail`
-    pair, `depends_on` repointed onto `directives_lessons_plan.py`'s
-    `d-claim-plan-execution-lock` where the original pointed at the now-
-    superseded `d-claim-plan` (see module Negative-spec)."""
+    pair. Neither carries a `depends_on` — 2026-08-10 audit
+    (`state/audits/2026-08-10-...` sweep for the `depends_on`-repointed-
+    but-never-gating pattern): `depends_on` naming a sibling DIRECTIVE id
+    (as opposed to a judgment-point id) never gates in
+    `ceremony_common.apply_halt._directive_gate_open` — see that
+    function's own docstring — so a `depends_on` here would have been
+    decorative, not enforcement. The only mechanism that actually binds a
+    directive-id producer dependency is a `{<producer-id>.landed}`/
+    `{<producer-id>.entry_path}` token in `args`
+    (`workstream_complete.apply._resolve_arg_tokens`), and neither
+    `wsc-coverage-gate-runner` subcommand this pair dispatches
+    (`coverage-gate`, `write-trail`) has a positional slot to carry one —
+    both subparsers define ONLY `--flag`-form arguments (see
+    `coordinator/bin/wsc-coverage-gate-runner.py::_build_parser`), so an
+    appended bare token would surface as an unrecognized positional
+    argument and argparse-fail the directive outright. Ordering between
+    this pair and `plan_claim_directives`/each other is INCIDENTAL, not
+    enforced: guaranteed only by `directives.extend()` append order in
+    this module's assembly function (`plan_claim_directives` extended
+    before this pair; `d-coverage-gate` appended before `d-write-trail`
+    within this function), never by a runtime gate. A real block-until-
+    landed dependency here would require adding a tolerated extra
+    positional/flag to the CLI first — out of this sweep's scope."""
     directives: list[dict[str, Any]] = []
-    claim_id = next((d["id"] for d in plan_claim_directives if d["id"] == "d-claim-plan-execution-lock"), None)
 
     if canonicalize(gate.disposition) == PREDECESSOR_CONSUMED and gate.consumed_handoff:
         directives.append(
@@ -733,7 +789,6 @@ def _build_legacy_coverage_and_trail_directives(
                 "d-coverage-gate",
                 "wsc-coverage-gate-runner",
                 ["coverage-gate", "--from-handoff", gate.consumed_handoff],
-                depends_on=claim_id,
             )
         )
 
@@ -750,8 +805,7 @@ def _build_legacy_coverage_and_trail_directives(
         ]
         if review.get("scope_kind"):
             args += ["--scope-kind", str(review["scope_kind"])]
-        coverage_gate_id = next((d["id"] for d in directives if d["id"] == "d-coverage-gate"), None)
-        directives.append(_directive("d-write-trail", "wsc-coverage-gate-runner", args, depends_on=coverage_gate_id))
+        directives.append(_directive("d-write-trail", "wsc-coverage-gate-runner", args))
 
     return directives
 
@@ -807,6 +861,7 @@ def build_directives(
     decisions: dict[str, Any],
     repo_root: Path,
     governing_plan: Optional[directives_lessons_plan.GoverningPlan] = None,
+    session_start_time: Any = None,
 ) -> list[dict[str, Any]]:
     """Assembles the FULL mechanical directive spine — Convert #2's
     original Step 2.4/2.9/2.67/3 core plus every submodule's contribution
@@ -822,6 +877,18 @@ def build_directives(
     locally would re-read and re-parse the consumed handoff's frontmatter a
     second time per `brief()` call for a value that cannot differ, since
     both call sites pass identical arguments.
+
+    `session_start_time` (2026-08-08, docs/plans/2026-08-08-the-second-
+    close-re-measures-the-first-c.md): same "resolved once by the caller,
+    threaded through" pattern as `governing_plan` — `brief()` already
+    resolves it via `directives_memo_lifecycle.resolve_session_start_time`
+    for `_measure_session_review_scale_inputs`, so this parameter reuses
+    that SAME resolution rather than re-deriving it a second time. Used
+    ONLY to floor the mid-chain review-brightline-gate directive's range at
+    this session's own last-reviewed sha (`_resolve_review_brightline_
+    floor_kwargs` below) — `None` (every existing caller, including every
+    test that constructs `build_directives` directly) reproduces today's
+    exact `["--session-id", sid]` call, unchanged.
     """
     directives: list[dict[str, Any]] = []
 
@@ -918,7 +985,13 @@ def build_directives(
     # would reinstate the very hole this branch exists to close, just on a
     # rarer path. Wrong-scope-but-present beats absent.
     if canonicalize(gate.disposition) != PREDECESSOR_CONSUMED or not gate.consumed_handoff:
-        directives.append(directives_review.build_review_brightline_gate_directive(gate.sid))
+        floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
+        if floor_kwargs is not None:
+            directives.append(
+                directives_review.build_review_brightline_gate_directive(gate.sid, **floor_kwargs)
+            )
+        else:
+            directives.append(directives_review.build_review_brightline_gate_directive(gate.sid))
     else:
         directives.append(directives_review.build_chain_plan_brightline_gate_directive(gate.consumed_handoff))
     review_partition = decisions.get("review_partition") or {}
@@ -1024,7 +1097,12 @@ def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[
     )
 
 
-def build_review_scale_judgment_point(decision: directives_review.ReviewScaleDecision) -> Optional[dict[str, Any]]:
+def build_review_scale_judgment_point(
+    decision: directives_review.ReviewScaleDecision,
+    *,
+    chain_terminal: bool = False,
+    verdict_presence: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
     """Surfaces `decide_review_scale`'s verdict — otherwise dead code with
     no call site (source memo 2026-08-03-example-doctrine-repo-em-wsc-chain-terminal-
     brightline-gate-never-fires.md). Sits BESIDE `review-partition-strategy`
@@ -1084,6 +1162,83 @@ def build_review_scale_judgment_point(decision: directives_review.ReviewScaleDec
     dependency edge here without a fresh PM decision. Removing the
     recommendation changes what is *offered* on the unresolved path, never
     whether the point blocks.
+
+    The unresolved branch's disposition enum is DELIBERATELY not a
+    singleton (example-retrieval-repo-em memo, cross-repo/inbox/2026-08-10-example-retrieval-repo-
+    em-jp-review-scale-null-is-blocked-computation.md, defect 2): dropping
+    the recommendation above left `proceed-unresolved` as the sole
+    selectable value, so the only recordable answer was the one this
+    point's own `reason` calls routing around a missing verdict, and an EM
+    who correctly determined the close IS partition-mandatory had no way to
+    say so. A defect that offers exactly one exit and labels that exit
+    unsafe in the same breath gets taken eventually. The enum now mirrors
+    `backlog_grind_assemble.readers_mise._unresolved_range_judgment_point`
+    — the same untrusted-gate shape, already carrying actionable
+    dispositions for the same class of unmeasured-range problem — rather
+    than inventing a second idiom:
+
+      - `resolve-verdict-and-recompute` — the discharging exit. On a
+        chain-terminal close, run `wsc-coverage-gate-runner brightline-gate
+        --from-handoff <path>`: it computes the verdict AND persists it via
+        `chain_partition_verdict_store`, so the NEXT `brief()` resolves
+        rows 5/6 with no EM transcription (that store is the mechanism-2
+        fix; this disposition is what points the EM at it). Where the
+        unresolved input is session-scoped instead, supply it
+        (`decisions["stage_paths"]`, a resolvable session id) and recompute.
+      - `partition-review-by-hand` — the EM resolved the scale off SKILL.md's
+        table and is running the partitioned review on that basis. This is
+        the "resolved: partition-mandatory" answer the enum previously could
+        not express.
+      - `proceed-unresolved` — retained, unrecommended, and still described
+        by `reason` as the route-around it is.
+
+    Negative-spec on that enum: there is deliberately NO hand-declared
+    `single-reviewer-ok` / "resolve-not-mandatory" counterpart. The
+    asymmetry is a safety property, not an oversight — a permissive verdict
+    nothing computed is the one outcome `chain_partition_verdict_store`'s
+    fail-closed contract exists to make impossible (that module's docstring,
+    "Fail-closed contract"), and re-introducing it here as an EM-typed
+    disposition would reopen it at a different seam. Over-reviewing on a
+    hand call is safe; under-reviewing on one is the reported defect.
+
+    THE UNRESOLVED CAUSE IS DISCRIMINATED, NEVER ASSERTED (PM ruling
+    2026-08-10, correcting this function's own prior "unresolved is simply
+    honest" defence). The single unresolved branch used to tell EVERY
+    unresolved close that an unresolved chain-terminal decision "typically
+    means the brightline gate already computed a PARTITION-MANDATORY
+    verdict that was not carried forward." That sentence diagnoses a cause
+    the function had checked nothing to earn, and in the common case it is
+    simply FALSE: `brief()` appends `d-run-chain-plan-brightline-gate` to
+    `directives` unconditionally on a chain terminal with a resolved
+    consumed handoff, so the usual reason the verdict is missing is that
+    the producer ON THIS SAME ENVELOPE has not run yet. An envelope that
+    schedules the computation and, in the same breath, asks the EM to
+    exercise judgment in its absence is not surfacing a genuine judgment
+    gap — it is asking a question one of its own directives is about to
+    answer. That is `SKILL.md`'s "blocked computation" (unresolved only
+    because a computable input was not computed), which doctrine says is to
+    be reported, not answered.
+
+    `brief()` staying read-only — it does not shell out to run the gate
+    itself — is the part that IS by design, and it does not license the
+    conflation: the three causes are distinguishable from disk with one
+    stat, via `chain_partition_verdict_store.verdict_record_presence`.
+
+      - presence `absent` — PENDING. The producer has not run. Say so, name
+        the pending directive, and point at running it. Not a defect and
+        not an EM judgment call.
+      - presence `unreadable` — BREAK-CLASS. The gate ran and the verdict
+        did not survive the seam. This is the only cause under which the
+        old prose was accurate, and it is the one to report rather than
+        answer.
+      - not chain-terminal (or a caller-supplied verdict) — the residual
+        session-scoped unresolved input; genuinely the EM's, and the branch
+        that keeps the generic text.
+
+    Both new parameters default to the pre-existing behaviour
+    (`chain_terminal=False`, `verdict_presence=None`) so every caller and
+    test that passes only a `ReviewScaleDecision` keeps its exact prior
+    shape; only `brief()`, which can resolve both facts, opts in.
     """
     if decision.resolved and decision.row in (1, 2):
         return None
@@ -1104,20 +1259,84 @@ def build_review_scale_judgment_point(decision: directives_review.ReviewScaleDec
                 "judgment point is the surfacing this plan adds, not new enforcement."
             ),
         )
+    if chain_terminal and verdict_presence == chain_partition_verdict_store.PRESENCE_ABSENT:
+        return build_untrusted_gate_judgment_point(
+            id="jp-review-scale",
+            question=(
+                "The chain-scoped brightline verdict has not been computed yet for this "
+                "close — `d-run-chain-plan-brightline-gate` is on THIS envelope and has "
+                "not run. Run it (it persists its own verdict, so the next brief() "
+                "resolves rows 5/6 with nothing for you to retype), then recompute. "
+                "Answer this point by hand only if you are deliberately resolving the "
+                "scale off SKILL.md's table instead."
+            ),
+            dispositions=[
+                build_disposition("run-the-pending-gate-and-recompute", resolves=[]),
+                build_disposition("partition-review-by-hand", resolves=[]),
+                build_disposition("proceed-unresolved", resolves=[]),
+            ],
+            evidence=(
+                "gates['review_scale'] + chain_partition_verdict_store presence=absent "
+                "(no record for this session; the producer has not run)"
+            ),
+            reason=(
+                f"review scale unresolved: {decision.reason} — PENDING, not blocked: the "
+                "producer that settles it (`d-run-chain-plan-brightline-gate`) is carried "
+                "on this same envelope and simply has not executed yet. This is ordering, "
+                "not a defect, and it is not a judgment the assembler is asking you to "
+                "substitute for the gate: run the gate."
+            ),
+        )
+
+    if chain_terminal and verdict_presence == chain_partition_verdict_store.PRESENCE_UNREADABLE:
+        return build_untrusted_gate_judgment_point(
+            id="jp-review-scale",
+            question=(
+                "The brightline gate RAN for this close and its verdict did not survive "
+                "the persistence seam — a record exists at this session's verdict-store "
+                "path but does not read back (corrupt, schema-unexpected, or provenance "
+                "mismatched). This is a BREAK-CLASS engine defect, not a scale question: "
+                "report it. Re-running the gate may re-persist a clean record; if it does "
+                "not, partition by hand and memo the seam failure rather than closing on "
+                "an unresolved chain terminal."
+            ),
+            dispositions=[
+                build_disposition("rerun-gate-then-report-if-still-unreadable", resolves=[]),
+                build_disposition("partition-review-by-hand", resolves=[]),
+                build_disposition("proceed-unresolved", resolves=[]),
+            ],
+            evidence=(
+                "gates['review_scale'] + chain_partition_verdict_store presence=unreadable "
+                "(a record exists for this session and read_verdict_record rejects it)"
+            ),
+            reason=(
+                f"review scale unresolved: {decision.reason} — the verdict WAS computed and "
+                "did not carry forward. This is the one cause under which "
+                "proceed-unresolved routes around a gate's own missing verdict "
+                "(cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-"
+                "does-not-halt.md, mechanism 3), and the one that is break-class to report "
+                "rather than answer."
+            ),
+        )
+
     return build_untrusted_gate_judgment_point(
         id="jp-review-scale",
-        question="What review scale does decide_review_scale select for this close, and is it resolved?",
+        question=(
+            "What review scale does decide_review_scale select for this close, and is it "
+            "resolved? It is not resolved here — settle it rather than proceeding without "
+            "it: supply the missing input named in `reason` and recompute, or resolve the "
+            "scale by hand off SKILL.md's table and partition the review on that basis."
+        ),
         dispositions=[
+            build_disposition("resolve-input-and-recompute", resolves=[]),
+            build_disposition("partition-review-by-hand", resolves=[]),
             build_disposition("proceed-unresolved", resolves=[]),
         ],
         evidence="gates['review_scale'] (decide_review_scale's ReviewScaleDecision)",
         reason=(
-            f"review scale unresolved: {decision.reason} — an unresolved chain-terminal "
-            "decision typically means the brightline gate already computed a "
-            "PARTITION-MANDATORY verdict that was not carried forward; recommending "
-            "proceed-unresolved here would route around that gate's own missing verdict "
-            "(cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-"
-            "does-not-halt.md, mechanism 3)."
+            f"review scale unresolved: {decision.reason}. `resolve-input-and-recompute` and "
+            "`partition-review-by-hand` are the exits that settle it; proceed-unresolved is "
+            "selectable, not endorsed."
         ),
     )
 
@@ -1140,7 +1359,7 @@ def build_review_scale_judgment_point(decision: directives_review.ReviewScaleDec
 
 
 def build_completion_entry_scaffold_judgment_point(
-    entry_path: str, residue_fields: tuple[str, ...]
+    entry_path: str, residue_fields: tuple[str, ...], entry_exists: bool = True
 ) -> dict[str, Any]:
     """Blocks `d-run-wsc-tail` until the `d-complete-entry` scaffold at
     `entry_path` has been hand-authored. SKILL.md's own "Resolving these
@@ -1148,16 +1367,42 @@ def build_completion_entry_scaffold_judgment_point(
     authoring window as mandatory before the commit-tail keystone may
     fire — a single `apply` pass previously fired `d-complete-entry` and
     `d-run-wsc-tail` back to back with no window between them for the EM
-    to write anything."""
+    to write anything.
+
+    `entry_exists` distinguishes "not yet scaffolded at all" (no file at
+    `entry_path` yet — `directives_completion.compute_completion_entry_
+    scaffold_gate`'s own `_coordinator_complete_entry._read_existing_
+    scaffold_state` computes this `exists` bit, but `scaffold_residue_
+    fields` — the caller of that reader — only returns the missing-field
+    LIST and discards it) from "still carries placeholder" (a real file
+    exists on disk but one or more of title/nature/prose is still the
+    scaffold's own placeholder value). Reporting the absent case as
+    "still carries placeholder" claimed evidence this module never had —
+    there was nothing on disk to carry anything, placeholder or otherwise.
+    Computed here via a plain `Path(entry_path).is_file()` (this module's
+    own read-only posture already tolerates a disk read at this layer —
+    see `_read_consumed_handoff_text` — and duplicating a filesystem stat
+    is cheaper and lower-risk than importing `directives_completion`'s
+    private reader across a package boundary this chunk does not own)."""
     fields = ", ".join(residue_fields)
-    return build_untrusted_gate_judgment_point(
-        id="jp-completion-entry-scaffold",
-        question=(
+    if entry_exists:
+        question = (
             f"The completion entry at {entry_path!r} still carries placeholder "
             f"{fields} — has it been hand-authored yet?"
-        ),
+        )
+        evidence = f"{entry_path}'s own frontmatter/body — still-placeholder: {fields}"
+    else:
+        question = (
+            f"The completion entry at {entry_path!r} has not yet been scaffolded at all "
+            f"(no file on disk) — its {fields} still need authoring once it exists — "
+            "has it been hand-authored yet?"
+        )
+        evidence = f"{entry_path} does not exist on disk yet — not yet scaffolded: {fields}"
+    return build_untrusted_gate_judgment_point(
+        id="jp-completion-entry-scaffold",
+        question=question,
         dispositions=[build_disposition("not-yet-authored", resolves=[])],
-        evidence=f"{entry_path}'s own frontmatter/body — still-placeholder: {fields}",
+        evidence=evidence,
         reason=(
             f"Author the resolved {fields} directly into {entry_path}, then re-run apply — "
             "there is no disposition that can clear this gate short of actually editing the "
@@ -1182,7 +1427,12 @@ def build_commit_subject_missing_judgment_point() -> dict[str, Any]:
         evidence="decisions['subject'] / decisions['commit-message-authoring']['subject'], both absent",
         reason=(
             "wsc-tail.py's --subject is argparse required=True; dispatching without it is a "
-            "guaranteed exit-2 usage failure, never a legitimate tail-item soft-fail."
+            "guaranteed exit-2 usage failure, never a legitimate tail-item soft-fail. There is "
+            "no disposition that can clear this gate (like jp-completion-entry-scaffold, its "
+            "one disposition's resolves list is deliberately empty) — set decisions['subject'] "
+            "(or decisions['commit-message-authoring']['subject']) to the commit subject text "
+            "directly, then re-run apply; the next brief() recomputation simply stops emitting "
+            "this judgment point once a real value resolves."
         ),
     )
 
@@ -1776,8 +2026,14 @@ def _build_preserved_judgment_points(
     if decisions.get("scratch_candidates"):
         points.append(_judgments.build_scratch_disposition_per_file_judgment_point())
 
-    # Step 2.7/2.7b — predecessor distill-fate, chain-terminal only.
-    if predecessor_present:
+    # Step 2.7/2.7b — predecessor distill-fate, chain-terminal only, and
+    # only when the predecessor genuinely lacks a distill_fate: value to
+    # reuse (state/handoffs/2026-08-10-a-commit-trailer-that-names-the-
+    # session.md carrying `distill_fate: ephemeral` still tripped this
+    # point before the gate below was added -- see this function's own
+    # docstring precedent for untrusted-gate points reading another
+    # surface's already-authored prose).
+    if predecessor_present and _predecessor_lacks_distill_fate(repo_root, gate):
         points.append(_judgments.build_predecessor_distill_fate_judgment_point())
 
     # Step 2.8 — pinboard note content + orientation-doc row updates.
@@ -1862,6 +2118,41 @@ def _resolve_handoff_path_str(repo_root: Path, raw_path: str) -> Optional[Path]:
     if archived.is_file():
         return archived
     return None
+
+
+def _predecessor_lacks_distill_fate(repo_root: Path, gate: SessionShapeGate) -> bool:
+    """True when at least one element of the plural consumed-handoff set
+    (`gate.consumed_handoff_paths`, falling back to the scalar `gate.
+    consumed_handoff` if that tuple is somehow empty) genuinely lacks a
+    usable `distill_fate:` value -- the gate for Step 2.7/2.7b's
+    predecessor-distill-fate judgment point (`build_predecessor_distill_
+    fate_judgment_point`), which must fire only when there is something to
+    backfill. An unreadable handoff, absent/non-dict frontmatter, or an
+    empty/whitespace `distill_fate:` value all count as LACKING -- failing
+    open toward asking the question is correct here; failing closed would
+    silently re-skip an author's declaration (the defect this predicate
+    fixes). Never raises -- a read/parse error must not escape `brief()`."""
+    raw_paths = gate.consumed_handoff_paths or (
+        (gate.consumed_handoff,) if gate.consumed_handoff else ()
+    )
+    for raw_path in raw_paths:
+        resolved = _resolve_handoff_path_str(repo_root, raw_path)
+        if resolved is None:
+            return True
+        try:
+            text = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return True
+        try:
+            frontmatter = parse_frontmatter(text).get("frontmatter")
+        except Exception:
+            return True
+        if not isinstance(frontmatter, dict):
+            return True
+        value = frontmatter.get("distill_fate")
+        if not isinstance(value, str) or not value.strip():
+            return True
+    return False
 
 
 def _resolve_consumed_handoff_path(repo_root: Path, gate: SessionShapeGate) -> Optional[Path]:
@@ -2010,6 +2301,514 @@ def _narration_and_next_move(
     return narration, next_move
 
 
+# ---------------------------------------------------------------------------
+# gates.review_scale's three disk-derivable row-4 brightline inputs (AC6/AC9,
+# docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md, C5).
+# Follows `backlog_grind_assemble.readers_mise`'s shipped shape (that
+# module's `_run_git_read_only`/`_measure_range`) rather than inventing a
+# new one — see `_measure_session_review_scale_inputs`'s own docstring for
+# why the base-resolution differs (session-start-time-anchored here, vs.
+# mise's named `start_sha` run record). This helper lives here, never in
+# `directives_review.py`, which carries a no-subprocess negative-spec.
+# ---------------------------------------------------------------------------
+
+_REVIEW_SCALE_GIT_TIMEOUT = 15
+_REVIEW_SCALE_NUMSTAT_ROW_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
+
+
+def _run_git_read_only(args: list[str], cwd: Path) -> Optional[str]:
+    """Run a READ-ONLY `git` command under `cwd`, returning stdout, or
+    `None` on any failure (non-zero rc, missing binary, timeout) — never a
+    substitute default for a range this helper could not measure. Mirrors
+    `backlog_grind_assemble.readers_mise._run_git_read_only` verbatim in
+    shape; not imported cross-package since that one is private to its own
+    module."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=_REVIEW_SCALE_GIT_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout or ""
+
+
+def _resolve_base_sha_after_session_start(
+    root: Path, since_iso: str
+) -> tuple[Optional[list[str]], Optional[str]]:
+    """Base-sha resolution sub-step (Review: code-reviewer P3, 2026-08-08)
+    — the `git log --since=<since_iso> --format=%H --reverse` then `git
+    rev-parse <first-sha>~1` pipeline, now serving `_resolve_session_start_
+    sha` alone.
+
+    NEGATIVE-SPEC: this is a TIME window over the current branch, so on a
+    shared worktree its `shas` include every concurrent peer's commits.
+    `_measure_session_review_scale_inputs` was its second caller and no
+    longer is — it attributes commits by `Session-Id` trailer instead (see
+    `_session_owned_shas`). Do not re-point any session-scoped measurement
+    at this helper.
+
+    Returns `(shas, base)`: `shas` is `None` on a `git log` failure, else
+    the ordered list of commit shas at/after `since_iso` on the current
+    branch (possibly empty). `base` is the resolved parent-of-earliest-
+    commit sha, or `None` when `shas` is empty/`None`/`git rev-parse`
+    failed — deliberately NOT defaulted to `"HEAD"` or any other fallback
+    here, since the two callers disagree on what an empty/failed
+    resolution should fall back to (see each caller's own docstring)."""
+    commits_out = _run_git_read_only(["log", f"--since={since_iso}", "--format=%H", "--reverse"], root)
+    if commits_out is None:
+        return None, None
+    shas = [line.strip() for line in commits_out.splitlines() if line.strip()]
+    if not shas:
+        return shas, None
+    base_out = _run_git_read_only(["rev-parse", f"{shas[0]}~1"], root)
+    if base_out is None:
+        return shas, None
+    return shas, base_out.strip()
+
+
+def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
+    """This session's OWN commits, oldest-first, selected by `Session-Id`
+    commit trailer rather than by time window. `None` on any git failure or
+    an absent `session_id` — never `[]`, which a caller would read as a
+    truthful "this session committed nothing".
+
+    Trailer attribution, not `--since`, is the only sound selector on a
+    shared branch: this repo's load norm puts a dozen-plus concurrent EMs on
+    one worktree (`docs/wiki/machine-load-norm.md`), so a time window over
+    the current branch sweeps every peer that happened to commit during this
+    session — measured live at 17 commits for one session's 1. It also drops
+    this measurement's dependence on `resolve_session_start_time` being
+    accurate, which it is not required to be: a start time resolving LATER
+    than the session's own earliest commit silently excluded that commit
+    before.
+
+    DELIBERATELY UNANCHORED at the end. The sibling selector in
+    `review_brightline_gate._compute_session_oracle_single` reads
+    `--grep=^Session-Id: <sid>$`, and that trailing `$` silently drops any
+    commit whose `Session-Id` line is not the message's final line —
+    verified live: a commit carrying `Session-Id` followed by
+    `Co-Authored-By`/`Commit-Token` did not match the anchored form and did
+    match this one, while its message bytes were clean (no CR, no trailing
+    space). That is an UNDER-count, the direction that quietly shrinks a
+    review scale, so the anchor is not restored here. A same-prefix collision
+    is not a real risk against fixed-length UUID session ids.
+
+    KNOWN over-match, accepted: `git log --grep` matches per line of the FULL
+    commit message, not the trailer block, so a body line quoting another
+    session's trailer verbatim also matches. Over-inclusion is the safe
+    direction for this function's callers."""
+    if not session_id:
+        return None
+    out = _run_git_read_only(
+        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}", "--reverse"], root
+    )
+    if out is None:
+        return None
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+_REVIEW_SCALE_BRACED_RENAME_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
+_REVIEW_SCALE_BARE_RENAME_RE = re.compile(r"^(.*) => (.*)$")
+
+
+def _resolve_numstat_row_path(path: str) -> str:
+    """`git --numstat`'s rename row can name a path as `a/b/{old => new}.c`
+    (compact form, shared prefix/suffix hoisted out of the braces) or as a
+    bare `old/path => new/path` row (no shared prefix/suffix to hoist).
+    `classify_surface` needs the destination path, not the literal rename
+    fragment, to bucket the row correctly — LOC accounting is unaffected
+    either way, since the numstat added/deleted columns already sum the
+    whole row regardless of what this function returns."""
+    braced = _REVIEW_SCALE_BRACED_RENAME_RE.match(path)
+    if braced is not None:
+        prefix, _old, new, suffix = braced.groups()
+        return f"{prefix}{new}{suffix}"
+    bare = _REVIEW_SCALE_BARE_RENAME_RE.match(path)
+    if bare is not None:
+        _old, new = bare.groups()
+        return new
+    return path
+
+
+def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
+    """Sums added+deleted over `git --numstat` rows, folding each row's path
+    into `surfaces`. Binary rows (`-`/`-`) contribute 0 LOC but still count
+    as a touched surface."""
+    gross = 0
+    for line in text.splitlines():
+        match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
+        if not match:
+            continue
+        added, deleted, path = match.groups()
+        if added != "-":
+            gross += int(added)
+        if deleted != "-":
+            gross += int(deleted)
+        surfaces.add(classify_surface(_resolve_numstat_row_path(path)))
+    return gross
+
+
+def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], list[str]]]:
+    """Partitions `paths` into (tracked, untracked). `git diff` is blind to
+    untracked files, so an unpartitioned diff silently scores a session whose
+    whole output is new files — the common shape for `state/` artifacts — at
+    zero LOC.
+
+    `None` on a `git ls-files` failure — never `(list(paths), [])`, which
+    would route every path (tracked and untracked alike) into the
+    `git diff --numstat HEAD` leg. That leg is blind to untracked files, so a
+    failed listing under that fallback silently scored the untracked share of
+    `paths` at zero LOC while this function still returned a real
+    `(list, list)` pair, exactly the too-low-triple-standing-in-for-a-failure
+    shape `_measure_session_review_scale_inputs` forbids. The caller must
+    treat `None` here the same as any other measurement failure."""
+    if not paths:
+        return [], []
+    listed = _run_git_read_only(["ls-files", "--", *paths], root)
+    if listed is None:
+        return None
+    known = {line.strip() for line in listed.splitlines() if line.strip()}
+    tracked = [p for p in paths if p.replace("\\", "/") in known]
+    untracked = [p for p in paths if p.replace("\\", "/") not in known]
+    return tracked, untracked
+
+
+def _count_lines(path: Path) -> Optional[int]:
+    """Line count of an untracked file, as its added-LOC contribution.
+    `None` when unreadable (a path staged for deletion, a race with a peer's
+    write) — the caller must treat this the same as any other measurement
+    failure, not skip the file and score it zero."""
+    try:
+        with path.open("rb") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return None
+
+
+def _measure_session_review_scale_inputs(
+    root: Path,
+    session_start_time: Any,
+    session_id: str = "",
+    uncommitted_paths: Optional[list[str]] = None,
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """Measures `(gross_loc, commit_count, surface_count)` — the three
+    disk-derivable row-4 brightline inputs `decide_review_scale` reads —
+    over THIS session's own change set. Any element is `None` when
+    genuinely unresolvable (no `session_id`, no git, an unreadable range) —
+    never a zeroed triple standing in for a failed measurement, which would
+    read as a resolved, trivially-small diff and move the verdict toward
+    reviewing LESS (the same failure direction
+    `backlog_grind_assemble.readers_mise._measure_range`'s own docstring
+    guards against; this function mirrors its shape). A `(0, 0, 0)` returned
+    after a SUCCESSFUL measurement is a different thing and is honest: the
+    session genuinely owns no commits and no dirty files.
+
+    Both halves are session-scoped, because Step 6's review-scale question
+    is asked BEFORE `d-run-wsc-tail` commits and a measurement over landed
+    commits alone would undercount the normal uncommitted close:
+
+    - COMMITTED work is summed over `_session_owned_shas` via `git show
+      --numstat`, per-commit. A `base..HEAD` range is wrong here for the
+      same reason a time window is: on a shared branch it spans every peer
+      commit interleaved between base and HEAD.
+    - UNCOMMITTED work is `git diff --numstat HEAD` restricted to the paths
+      `directives_memo_lifecycle.classify_session_authored_files` marks
+      session-authored (itself fed the Step 3.0 case-(b) exclusion set from
+      `directives_commit_tail.resolve_known_concurrent_paths`). Unrestricted,
+      this leg measured the entire shared dirty tree — 1775 LOC across 5
+      surfaces of live peers' in-flight files attributed to a session whose
+      real diff was 96 lines (bug `2026-08-10-workstream-complete-measures-
+      review-scal-a52c3f9d55d2`).
+
+    NEGATIVE-SPEC: never widen either leg back to a branch-scoped range or an
+    unrestricted worktree diff. A brightline computed over work this session
+    did not author does not merely over-review — it invites an EM to record a
+    review attestation covering another session's changes, which is the one
+    outcome the review trail exists to prevent.
+
+    `surface_count` reuses `review_brightline_gate.classify_surface` — the
+    same bucketing the `review-brightline-gate` CLI this verdict names."""
+    shas = _session_owned_shas(root, session_id)
+    if shas is None:
+        return None, None, None
+    commit_count = len(shas)
+
+    gross_loc = 0
+    surfaces: set[str] = set()
+
+    if shas:
+        committed = _run_git_read_only(["show", "--numstat", "--format=", *shas], root)
+        if committed is None:
+            return None, None, None
+        gross_loc += _accumulate_numstat(committed, surfaces)
+
+    if uncommitted_paths is None:
+        uncommitted_paths = [
+            row["path"]
+            for row in directives_memo_lifecycle.classify_session_authored_files(
+                root,
+                session_start_time,
+                known_concurrent_paths=directives_commit_tail.resolve_known_concurrent_paths(
+                    root, session_id
+                ),
+            )
+            if row.get("session_authored")
+        ]
+
+    split = _split_tracked(root, uncommitted_paths)
+    if split is None:
+        return None, None, None
+    tracked, untracked = split
+    if tracked:
+        dirty = _run_git_read_only(["diff", "--numstat", "HEAD", "--", *tracked], root)
+        if dirty is None:
+            return None, None, None
+        gross_loc += _accumulate_numstat(dirty, surfaces)
+    for rel_path in untracked:
+        added = _count_lines(root / rel_path)
+        if added is None:
+            return None, None, None
+        gross_loc += added
+        surfaces.add(classify_surface(rel_path))
+
+    return gross_loc, commit_count, len(surfaces)
+
+
+# ---------------------------------------------------------------------------
+# The mid-chain review-brightline-gate range floor (2026-08-08,
+# docs/plans/2026-08-08-the-second-close-re-measures-the-first-c.md) — the
+# production caller-side supply for `directives_review.
+# build_review_brightline_gate_directive`'s four dormant kwargs (landed
+# 2026-08-08 as a builder-side capability with no caller; this is that
+# caller). Lives here, not in `directives_review.py`, for the same reason
+# `_run_git_read_only`/`_measure_session_review_scale_inputs` do: that
+# module carries a no-subprocess, no-trail-record-fetch negative-spec.
+# ---------------------------------------------------------------------------
+
+
+def _git_is_ancestor(root: Path, ancestor_sha: str, descendant_sha: str) -> bool:
+    """True iff `ancestor_sha` is an ancestor of (or identical to)
+    `descendant_sha`, via `git merge-base --is-ancestor` under `root`.
+    Mirrors `wsc-coverage-gate-runner.py::_git_is_ancestor` in shape —
+    duplicated rather than imported, matching this module's own
+    `_run_git_read_only` precedent of not reaching into `coordinator/bin/`.
+    Any subprocess failure (including a non-zero "not an ancestor" exit)
+    resolves to `False`: this predicate must never trust a floor it could
+    not positively confirm."""
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=_REVIEW_SCALE_GIT_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[str]:
+    """This session's own `session_start_sha` fallback for `resolve_mid_
+    chain_review_scope` — the same base-commit resolution idiom as
+    `_measure_session_review_scale_inputs` above (this session's first
+    commit at/after `session_start_time`, or that commit's parent when it
+    exists), now sharing that sub-step's actual implementation via
+    `_resolve_base_sha_after_session_start` (Review: code-reviewer P3,
+    2026-08-08) rather than duplicating the git-log/rev-parse pipeline a
+    second time — only the surrounding tuple/None-handling stays separate
+    per caller, since `_measure_session_review_scale_inputs` returns a
+    different (three-element) tuple shape and defaults `base` to `"HEAD"`
+    on zero commits, which this function must never do (see below). `None`
+    on any unresolvable step (`session_start_time` absent, a `git` failure,
+    OR — Review: code-reviewer (P2 #2) — zero commits landed since session
+    start)
+    — never a guessed sha, and never the literal `"HEAD"` token: that value
+    used to be returned here and could flow through to
+    `resolve_mid_chain_review_scope`'s own `session_start_sha` fallback,
+    which the caller (`_resolve_review_brightline_floor_kwargs`) then hands
+    to the gate builder as a real floor — emitting a well-formed but EMPTY
+    `HEAD..HEAD` range instead of the caller's byte-identical no-range
+    fallback. Returning `None` here instead makes
+    `_resolve_review_brightline_floor_kwargs` bail out via its own
+    `if session_start_sha is None: return None`, which is the safe,
+    already-tested no-range path."""
+    if session_start_time is None:
+        return None
+    since_iso = session_start_time.astimezone(timezone.utc).isoformat()
+    shas, resolved_base = _resolve_base_sha_after_session_start(root, since_iso)
+    if shas is None:
+        return None
+    if not shas:
+        # Review: code-reviewer (P2 #2) — returning the literal "HEAD" here
+        # propagated into `resolve_mid_chain_review_scope`'s fallback and
+        # could emit an empty `HEAD..HEAD` range instead of the caller's
+        # byte-identical no-range fallback. `None` makes
+        # `_resolve_review_brightline_floor_kwargs` bail out (its own
+        # `if session_start_sha is None: return None`), so the caller emits
+        # today's plain `["--session-id", sid]` call — the safe direction.
+        return None
+    return resolved_base
+
+
+def _list_review_trail_paths_for_root(root: Path) -> list[str]:
+    """`list_review_trail_records.list_paths()`-equivalent, but honouring
+    THIS caller's explicit `root` instead of that function's own cwd-or-
+    `COORDINATOR_ROOT` resolution.
+
+    Review: code-reviewer (P2 #1) — the prior call site
+    (`list_review_trail_records.list_paths(date_prefix="")`) has no
+    `root`/`repo_root` parameter at all; it resolves the state root purely
+    from process cwd (git-root-of-cwd) or the `COORDINATOR_ROOT` env var, so
+    a `brief(repo_root=...)` call against a root that differs from cwd read
+    (or failed to find) the WRONG tree's `state/review-trail/` — silently,
+    since every existing test monkeypatches `list_paths` itself rather than
+    exercising this path.
+
+    Reuses that module's own `_collect` scanner (the actual `*.json`
+    directory walk) rather than re-implementing it — only the two
+    directory paths are computed here, and only for the direct-root case
+    this caller always has (an explicit `root: Path`, never an env-override
+    or meta-repo cwd): `_resolve_state_root()`'s own doc says a sibling-repo
+    cwd resolves `state_root` as `<git-root>/state` directly (no meta-repo
+    detection needed once the root is already known), so `state_root =
+    root/"state"` and — mirroring that function's own basename-in("state")
+    branch, which is always true here — `archive_dir =
+    root/"archive"/"review-trail"`. This does NOT fork the UNION logic
+    (which two directories get combined); it only supplies the one caller-
+    known input (`root`) that function has no parameter for.
+
+    Review: code-reviewer (P3) — cross-reference, not just prose: mirrors
+    `list_review_trail_records.list_paths()`'s `live_dir`/`archive_dir`
+    computation at `coordinator_core/ops/list_review_trail_records.py:275-280`
+    verbatim (same two directories, same `_collect` scanner below).
+    """
+    state_root = root / "state"
+    live_dir = str(state_root / "review-trail")
+    archive_dir = str(root / "archive" / "review-trail")
+    try:
+        records = (
+            list_review_trail_records._collect(live_dir)  # noqa: SLF001 - reusing the module's own scanner, not re-implementing it
+            + list_review_trail_records._collect(archive_dir)  # noqa: SLF001
+        )
+    except OSError:
+        # Mirrors `list_paths`'s own `ReviewTrailListError` degradation on a
+        # directory-scan failure — the caller here treats an empty list
+        # exactly like "no own records", falling through to `None`.
+        return []
+    records.sort(key=lambda r: r[0])
+    return [str(Path(fullpath)) for _basename, fullpath in records]
+
+
+def _resolve_review_brightline_floor_kwargs(
+    root: Path, sid: str, session_start_time: Any
+) -> Optional[dict[str, Any]]:
+    """Builder-supply for `directives_review.build_review_brightline_gate_
+    directive`'s four dormant kwargs: this session's own prior review-trail
+    record(s), if any, floor the mid-chain brightline gate's range at the
+    last-reviewed sha instead of the whole session (the defect this plan
+    fixes — a session that closes twice had its second close scored over
+    both).
+
+    Returns `None` on the ordinary single-close path (AC2 — MUST stay
+    byte-identical; this is nearly every close) and on ANY resolution
+    failure — no `session_start_time`, an unreadable trail-record store, a
+    `git` failure resolving `session_start_sha` — never a guessed floor.
+    The caller falls back to today's plain `session_id`-only call in every
+    `None` case. Zero own trail records is itself the byte-identical AC2
+    path, not a failure — both reach `None` the same way, deliberately: a
+    caller does not need to distinguish "nothing to floor with" from "could
+    not resolve a floor," both mean "call the builder as before."
+
+    Record selection: trail records whose own `session_id` field equals
+    `sid` (exact string match — `sid` is the same value `gate.sid` resolves
+    elsewhere in this module, and every on-disk record under
+    `state/review-trail/` carries that same value verbatim in its own
+    `session_id` field, verified against real records). A peer session's
+    record is never included: including one would floor (or fail to floor)
+    this session's range using a peer's own reviewed span, which could
+    widen the emitted range over commits this session never touched —
+    forbidden by the plan's Anti-scope.
+
+    Review: code-reviewer (P2, 2026-08-08, scan cost) — this helper
+    `json.load`s every `*.json` under `state/review-trail/` and
+    `archive/review-trail/` (2,778 files measured on-disk today) on every
+    mid-chain close where `session_start_time` resolved, filtering by
+    `session_id` only AFTER the load. Accepted as-is, not optimised
+    speculatively: measured at ~0.07s for a full load, not currently a
+    budget breach for this ceremony op. No cheaper filter is available
+    without forking the live+archive union `list_review_trail_records`
+    already owns — `list_paths(date_prefix=...)` only trims by filename
+    DATE prefix, not `session_id`, and this caller has no independent
+    established filename<->session_id convention to filter on safely
+    (nothing else in this module relies on one). Revisit if the corpus
+    growth trend makes this scan measurably slow inside `brief()`'s
+    invocation budget — the fix then is threading `date_prefix` through
+    `_list_review_trail_paths_for_root`, not before.
+
+    Field-shape adapter: `resolve_mid_chain_review_scope` reads a record's
+    floor via the `sha_range_head`/`head` keys — a shape NO record on this
+    fleet's disk actually carries. Every real record instead carries
+    `sha_range` (format `"<start>..<tip>"`, occasionally `"<start>^..
+    <tip>"`). `directives_review.resolve_trail_range_tip` (already public,
+    left unmodified — AC3's ops-layer file stays untouched and this
+    module's own Negative-spec forbids re-implementing that resolution)
+    already extracts a record's trustworthy tip from that real shape; this
+    function re-keys the result onto `sha_range_head` before handing the
+    list to `resolve_mid_chain_review_scope`. A record whose tip cannot be
+    trusted (an unterminated `..HEAD` range, an unparseable `sha_range`) is
+    simply omitted from the re-keyed list — identical in effect to
+    `resolve_mid_chain_review_scope`'s own `if not head: continue`, since
+    an omitted record and one re-keyed to `sha_range_head=None` are
+    indistinguishable to that loop.
+
+    `chain_tip_sha="HEAD"` (the literal string, not a frozen sha) so the
+    emitted range stays live through the gate's own later read — freezing
+    an emit-time sha would shrink the range relative to today's default
+    (`merge-base(origin/main, HEAD)..HEAD`) and risks dropping this
+    session's own later commits, the review-LESS direction this whole
+    workstream exists to close."""
+    if session_start_time is None:
+        return None
+    paths = _list_review_trail_paths_for_root(root)
+    own_records: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                record = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(record, dict) and record.get("session_id") == sid:
+            own_records.append(record)
+    if not own_records:
+        return None
+
+    session_start_sha = _resolve_session_start_sha(root, session_start_time)
+    if session_start_sha is None:
+        return None
+
+    trail_records: list[dict[str, Any]] = []
+    for record in own_records:
+        tip, _reason = directives_review.resolve_trail_range_tip(record)
+        if tip is not None:
+            trail_records.append({"sha_range_head": tip})
+
+    return {
+        "trail_records": trail_records,
+        "chain_tip_sha": "HEAD",
+        "is_ancestor": lambda a, b: _git_is_ancestor(root, a, b),
+        "session_start_sha": session_start_sha,
+    }
+
+
 def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None) -> Mapping[str, Any]:
     """Computes the `/workstream-complete` decision object for the current
     (or a caller-supplied) repo root. Read-only throughout; mutates nothing.
@@ -2027,7 +2826,15 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     governing_plan, governing_plan_source = directives_lessons_plan.resolve_governing_plan_with_source(
         root, decisions, handoff_governing_plan_field, handoff_deliverable_id
     )
-    directives = build_directives(gate, decisions, root, governing_plan=governing_plan)
+    # Resolved once, here, and threaded into BOTH `build_directives` (the
+    # mid-chain review-brightline-gate floor, 2026-08-08) and
+    # `_measure_session_review_scale_inputs` below — see `build_directives`'s
+    # own `session_start_time` docstring for why this replaces a second,
+    # later resolution of the same fact.
+    session_start_time = directives_memo_lifecycle.resolve_session_start_time(root, gate.sid)
+    directives = build_directives(
+        gate, decisions, root, governing_plan=governing_plan, session_start_time=session_start_time
+    )
 
     # AC1/AC2/AC4 — the seven row-4/5/6 inputs are caller-supplied `decisions`
     # facts, never assembler-computed (brief() is read-only and budgeted; see
@@ -2057,11 +2864,73 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             expected_from_handoff=gate.consumed_handoff or None,
         )
 
+    # AC6/AC9 (2026-08-08-the-engine-asks-for-facts-it-already-holds, C5):
+    # `gross_loc`/`commit_count`/`surface_count` are the three disk-
+    # derivable row-4 brightline inputs — see
+    # `_measure_session_review_scale_inputs`. Backfilled ONLY when the
+    # caller left them unresolved (`decisions.get(...)` already returning
+    # `None`, the exact sentinel `decide_review_scale` reads as "not yet
+    # resolved") — a caller-supplied value always wins. `code_loc` stays a
+    # pure passthrough, the same posture `backlog_grind_assemble.
+    # readers_mise._read_phase_6_review_scale` documents for its own
+    # `code_loc=None`: row 3 short-circuits on `executor_dispatched is
+    # True` before `code_loc` is ever consulted, and computing a
+    # code-vs-noise LOC split would be a NEW predicate this chunk does not
+    # own. `session_start_time` was already resolved once above (now also
+    # threaded into `build_directives` for the review-brightline-gate
+    # floor) and is reused here rather than re-resolved a second time.
+    # A caller-supplied `stage_paths` is the EM's own reviewed-and-narrowed
+    # set of this session's uncommitted files (jp-stage-paths-missing), so it
+    # outranks re-deriving the same thing from the session-authored
+    # predicate — which cannot see a MODIFIED pre-existing file at all.
+    #
+    # Classified ONCE here and threaded to both consumers (the measurement
+    # below, and the `jp-stage-paths-missing` candidate set further down):
+    # `classify_session_authored_files` spawns one `git log` per dirty path,
+    # and on this repo's shared worktree the dirty set routinely runs to
+    # dozens of files, so a second caller doubles this op's whole spawn
+    # budget against its end-to-end invocation budget.
+    # `stage_paths: []` is an ANSWER ("this session has no uncommitted
+    # files"), not an absent one — distinguished by `is None`, never by
+    # truthiness. Collapsing the two costs one `git log` spawn per dirty
+    # path, and on this shared worktree the dirty set reaches five figures:
+    # measured live at 18,555 entries, which wedged this op past a 7-minute
+    # client timeout on a close whose own file set was already committed.
+    known_concurrent_paths: "Optional[frozenset[str]]" = None
+    classified_session_files: Optional[list[dict[str, Any]]] = None
+    measurement_paths = decisions.get("stage_paths")
+    if measurement_paths is None:
+        known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(root, gate.sid)
+        classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
+            root, session_start_time, known_concurrent_paths=known_concurrent_paths
+        )
+        measurement_paths = [
+            row["path"] for row in classified_session_files if row["session_authored"]
+        ]
+
+    measured_gross_loc, measured_commit_count, measured_surface_count = (
+        _measure_session_review_scale_inputs(
+            root,
+            session_start_time,
+            gate.sid,
+            uncommitted_paths=measurement_paths,
+        )
+    )
+    resolved_gross_loc = decisions.get("gross_loc")
+    if resolved_gross_loc is None:
+        resolved_gross_loc = measured_gross_loc
+    resolved_commit_count = decisions.get("commit_count")
+    if resolved_commit_count is None:
+        resolved_commit_count = measured_commit_count
+    resolved_surface_count = decisions.get("surface_count")
+    if resolved_surface_count is None:
+        resolved_surface_count = measured_surface_count
+
     review_scale_decision = directives_review.decide_review_scale(
-        gross_loc=decisions.get("gross_loc"),
+        gross_loc=resolved_gross_loc,
         code_loc=decisions.get("code_loc"),
-        commit_count=decisions.get("commit_count"),
-        surface_count=decisions.get("surface_count"),
+        commit_count=resolved_commit_count,
+        surface_count=resolved_surface_count,
         executor_dispatched=decisions.get("executor_dispatched"),
         shared_schema_touched=decisions.get("shared_schema_touched"),
         chain_disposition=gate.disposition,
@@ -2075,7 +2944,34 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     coverage_jp = build_coverage_judgment_point(gate, directives)
     if coverage_jp:
         judgment_points.append(coverage_jp)
-    review_scale_jp = build_review_scale_judgment_point(review_scale_decision)
+    # The unresolved point's cause is DISCRIMINATED, never asserted: before
+    # this, the point told every unresolved chain-terminal close that a
+    # verdict "was not carried forward" — a diagnosis it had checked
+    # nothing to earn, and which is FALSE in the common case where
+    # `d-run-chain-plan-brightline-gate` (appended unconditionally to
+    # `directives` above on this same envelope) simply has not run yet.
+    # Presence is a pure stat + the existing fail-closed read; the verdict
+    # VALUE still comes only from `read_verdict_record` above.
+    # Review: coordinator:code-reviewer (P1) — gate on gate.consumed_handoff
+    # too, mirroring line ~970's inverse condition exactly: without it, a
+    # chain terminal with an empty consumed_handoff takes the SESSION-scoped
+    # brightline directive (line 970's fallback) while this point still
+    # claimed the CHAIN-scoped directive was pending on this envelope.
+    review_scale_chain_terminal = (
+        canonicalize(gate.disposition) == PREDECESSOR_CONSUMED and bool(gate.consumed_handoff)
+    )
+    review_scale_presence = (
+        chain_partition_verdict_store.verdict_record_presence(
+            root, session_id=gate.sid, expected_from_handoff=gate.consumed_handoff or None
+        )
+        if review_scale_chain_terminal and chain_partition_verdict is None
+        else None
+    )
+    review_scale_jp = build_review_scale_judgment_point(
+        review_scale_decision,
+        chain_terminal=review_scale_chain_terminal,
+        verdict_presence=review_scale_presence,
+    )
     if review_scale_jp:
         judgment_points.append(review_scale_jp)
     judgment_points.extend(
@@ -2098,6 +2994,13 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # `directives` actually carries a `d-run-wsc-tail` entry (always true
     # today, but this mirrors `build_coverage_judgment_point`'s own
     # defensive `any(...)` check rather than assuming the id's presence).
+    # AC5's `stage_paths` template pre-fill source (`gates.stage_paths_
+    # candidates`) — only ever populated inside the branch below, when this
+    # run actually computed a candidate set; stays `None` otherwise (caller
+    # already supplied `decisions["stage_paths"]`, or `d-run-wsc-tail` is
+    # absent this pass).
+    stage_paths_candidates: Optional[list[str]] = None
+
     if any(d["id"] == "d-run-wsc-tail" for d in directives):
         effective_governing_plan_slug = (
             governing_plan.slug if governing_plan is not None else decisions.get("governing_plan_slug")
@@ -2107,7 +3010,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         )
         if scaffold_fact is not None:
             judgment_points.append(
-                build_completion_entry_scaffold_judgment_point(scaffold_fact.entry_path, scaffold_fact.residue_fields)
+                build_completion_entry_scaffold_judgment_point(
+                    scaffold_fact.entry_path,
+                    scaffold_fact.residue_fields,
+                    entry_exists=Path(scaffold_fact.entry_path).is_file(),
+                )
             )
             _append_directive_dependency(directives, "d-run-wsc-tail", "jp-completion-entry-scaffold")
 
@@ -2116,15 +3023,27 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             judgment_points.append(build_commit_subject_missing_judgment_point())
             _append_directive_dependency(directives, "d-run-wsc-tail", "jp-commit-subject-missing")
 
-        if not decisions.get("stage_paths"):
-            session_start_time = directives_memo_lifecycle.resolve_session_start_time(root, gate.sid)
-            known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(root, gate.sid)
-            classified = directives_memo_lifecycle.classify_session_authored_files(
-                root, session_start_time, known_concurrent_paths=known_concurrent_paths
-            )
-            session_authored_paths = [row["path"] for row in classified if row["session_authored"]]
+        if decisions.get("stage_paths") is None:
+            # `session_start_time`, the known-concurrent set and the
+            # session-authored classification were all resolved once above,
+            # for the review-scale measurement — reused here rather than
+            # recomputed, since the classification costs one `git log` spawn
+            # per dirty path.
+            if known_concurrent_paths is None or classified_session_files is None:
+                known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
+                    root, gate.sid
+                )
+                classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
+                    root, session_start_time, known_concurrent_paths=known_concurrent_paths
+                )
+            session_authored_paths = [
+                row["path"] for row in classified_session_files if row["session_authored"]
+            ]
             candidate_paths = directives_commit_tail.accumulate_session_paths(session_authored_paths)
-            judgment_points.append(_judgments.build_stage_paths_missing_judgment_point(candidate_paths))
+            stage_paths_candidates = candidate_paths
+            judgment_points.append(
+                _judgments.build_stage_paths_missing_judgment_point(candidate_paths, known_concurrent_paths)
+            )
             _append_directive_dependency(directives, "d-run-wsc-tail", "jp-stage-paths-missing")
 
     # AC3/AC4 — either leg fires -> emit ONE judgment point, then depend
@@ -2178,6 +3097,18 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # to distinguish null from empty.
     session_shape_fact = {**gate._asdict(), "detection": dict(gate.detection or {})}
 
+    # AC5 — the ONLY three free-value keys `build_decisions_template`
+    # pre-fills from data this SAME run already resolved (`DECISIONS_
+    # TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS`), threaded from the SAME local
+    # variables the envelope below reads for `preflight.governing_plan_
+    # resolution`/`gates.stage_paths_candidates` — never re-derived a second
+    # time here.
+    resolved_free_values = {
+        "governing_plan_slug": governing_plan.slug if governing_plan else None,
+        "governing_plan_path": str(governing_plan.path) if governing_plan else None,
+        "stage_paths": stage_paths_candidates,
+    }
+
     envelope = build_envelope(
         artifact={"path": str(root), "classification": "workstream", "frontmatter": {}},
         preflight={
@@ -2186,8 +3117,9 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "governing_plan_resolution": {
                 "source": governing_plan_source,
                 "slug": governing_plan.slug if governing_plan else None,
+                "path": str(governing_plan.path) if governing_plan else None,
             },
-            "decisions_template": build_decisions_template(judgment_points),
+            "decisions_template": build_decisions_template(judgment_points, resolved_free_values),
         },
         gates={
             "session_shape": session_shape_fact,
@@ -2195,6 +3127,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "open_spine_row_worklist": open_spine_row_gate._asdict(),
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
             "review_scale": review_scale_decision._asdict(),
+            "stage_paths_candidates": stage_paths_candidates,
         },
         directives=directives,
         judgment_points=judgment_points,

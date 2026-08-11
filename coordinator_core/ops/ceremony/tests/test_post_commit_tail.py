@@ -59,7 +59,7 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE
+from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE, PushOutcome
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
@@ -297,9 +297,9 @@ def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit
 
     async def _fake_to_thread_commit_and_push(
         worktree_root: Path, closed_paths: list[str], committed_sha: str, push_mode: str
-    ) -> tuple[Optional[str], Optional[bool], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
         follow_up_calls.append((worktree_root, list(closed_paths), committed_sha, push_mode))
-        return ("followupsha", True, None)
+        return ("followupsha", True, m.PUSH_STATUS_PUSHED, None)
 
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(m, "_to_thread_commit_and_push", _fake_to_thread_commit_and_push)
@@ -501,17 +501,96 @@ def test_origin_stub_close_follow_up_commit_preserves_peer_staged_divergence(tmp
         repo, "docs/plans/some-stub.md", staged_content="STAGED\n", worktree_content="WORKTREE\n"
     )
 
-    follow_up_sha, pushed, error = m._commit_and_push_origin_stub_close(
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
         repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=PUSH_MODE_NONE
     )
 
     assert error is None, error
     assert follow_up_sha is not None
     assert pushed is None  # push_mode="none" -- no attempt, not a failure
+    assert push_status == m.PUSH_STATUS_NOT_ATTEMPTED
     assert _committed_content_at_head(repo, "docs/plans/some-stub.md") == "STAGED\n"
     # Worktree content is untouched -- commit_scoped never re-derives the
     # diverged path's content from the worktree.
     assert (repo / "docs/plans/some-stub.md").read_text(encoding="utf-8") == "WORKTREE\n"
+
+
+# ---------------------------------------------------------------------------
+# (n) C6d — `_commit_and_push_origin_stub_close`'s push-status vocabulary: a
+# policy decline is reported distinctly from a genuine push failure, and
+# distinctly from `push_mode="none"`'s own no-attempt shape.
+# docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md § C6d.
+# ---------------------------------------------------------------------------
+
+
+def test_origin_stub_close_push_decline_is_not_routed_through_error_channel(tmp_path, monkeypatch):
+    repo = real_git_repo(tmp_path)
+    (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs/plans/some-stub.md").write_text("content\n", encoding="utf-8")
+
+    declined_outcome = PushOutcome(
+        exit_code=0, skipped=["push:branch-policy"], message="declined: not a work/* branch"
+    )
+    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root: declined_outcome)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
+        repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=m.PUSH_MODE_SYNC
+    )
+
+    assert follow_up_sha is not None
+    assert error is None, "a policy decline must not surface through the error channel"
+    assert pushed is None
+    assert push_status == m.PUSH_STATUS_DECLINED
+
+
+def test_origin_stub_close_genuine_push_failure_still_routes_through_error_channel(tmp_path, monkeypatch):
+    repo = real_git_repo(tmp_path)
+    (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs/plans/some-stub.md").write_text("content\n", encoding="utf-8")
+
+    failed_outcome = PushOutcome(
+        exit_code=1, failed=["push:rejected"]
+    )
+    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root: failed_outcome)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
+        repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=m.PUSH_MODE_SYNC
+    )
+
+    assert follow_up_sha is not None
+    assert pushed is False
+    assert push_status == m.PUSH_STATUS_FAILED
+    assert error is not None
+    assert "git push failed" in error
+
+
+def test_origin_stub_close_push_mode_none_keeps_distinct_not_attempted_shape(tmp_path, monkeypatch):
+    """`push_mode="none"` (no attempt at all) and a `"sync"` attempt that
+    `push_with_retry` itself declined are two different reasons for "no push
+    happened" -- see module docstring. Both carry `push_status` values, but
+    `push_mode="none"` never calls `push_with_retry` at all."""
+    repo = real_git_repo(tmp_path)
+    (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs/plans/some-stub.md").write_text("content\n", encoding="utf-8")
+
+    called = False
+
+    def _boom(worktree_root):
+        nonlocal called
+        called = True
+        raise AssertionError("push_with_retry must not be called under push_mode='none'")
+
+    monkeypatch.setattr(m, "push_with_retry", _boom)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
+        repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=PUSH_MODE_NONE
+    )
+
+    assert called is False
+    assert follow_up_sha is not None
+    assert pushed is None
+    assert push_status == m.PUSH_STATUS_NOT_ATTEMPTED
+    assert error is None
 
 
 # ---------------------------------------------------------------------------

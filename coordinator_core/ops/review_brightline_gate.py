@@ -2,10 +2,13 @@
 coordinator_core.ops.review_brightline_gate — mechanical partition-vs-single
 review gate for /workstream-complete Step 2.9.
 
-Prints: `range=… loc=… commits=… surfaces=… files=… [filtered_to=…] VERDICT={PARTITION-MANDATORY|single-reviewer-ok}`
+Prints: `range=… loc=… commits=… surfaces=… files=… [filtered_to=…] VERDICT={PARTITION-MANDATORY|single-reviewer-ok|indeterminate}`
 to stdout, reading the diff over a git range (or a `--session-id`-filtered
 subset of it) and comparing gross LOC / commit count / surface-bucket count
-against fixed thresholds.
+against fixed thresholds. `VERDICT=indeterminate` is the `--session-id`
+zero-match outcome (see below) — it means the gate examined nothing, not
+that what it examined was small; it is neither of the two measured verdicts
+and a consumer must not coerce it into either.
 
 Thresholds (any one trips PARTITION-MANDATORY): loc>=500 (gross insertions+
 deletions), commits>=5, surfaces>=4. `files=` is reported for operator
@@ -22,9 +25,13 @@ CLI contract (unchanged from the bash oracle):
 --session-id <id> filters the range to commits whose trailer matches
 `^Session-Id: <id>$` (prepare-commit-msg hook injects this trailer per
 docs/wiki/workstream-complete-review.md), recomputing all four metrics over
-the filtered commit set only. Zero-match is a distinct, non-fatal outcome
-(vacuous verdict, exit 0, stderr note) — NOT the same as a `range` resolution
-failure (exit 1).
+the filtered commit set only. A zero-match against the resolved `range_`
+first retries against a session-aware floor (C2, 2026-08-08,
+`_resolve_session_floor`) — the session's own earliest commit reachable
+from HEAD, found by an unbounded trailer search rather than the (peer-
+advanceable) merge-base — before falling back to the vacuous outcome
+(`VERDICT=indeterminate`, exit 0, stderr note) — NOT the same as a `range`
+resolution failure (exit 1).
 
 Exit codes: 0 — verdict printed (incl. vacuous zero-match). 1 — usage error
 (bad --session-id, missing --session-id argument, unresolvable origin/main,
@@ -76,9 +83,18 @@ Negative-spec (pre-existing bash-oracle quirks, faithfully REPRODUCED, not fixed
       and dies silently. Both gates are reproduced (see `_session_scoped`).
     - The `--session-id` zero-MATCH branch (no commits carry the trailer) is
       explicitly guarded in the bash source and is NOT a die-silent case —
-      it prints a vacuous `VERDICT=single-reviewer-ok` line to stdout plus a
-      stderr note, exit 0. Do not conflate this with the die-silent gates
-      above; they are reachable only once `filtered_count > 0`.
+      it prints `VERDICT=indeterminate` (2026-08-08 fix — the bash oracle
+      and the original port both emitted a fabricated `VERDICT=single-
+      reviewer-ok` here on zero examined commits; see
+      docs/plans/2026-08-08-the-gate-says-ok-when-it-could-not-look.md) to
+      stdout plus the existing stderr note, exit 0. This is a deliberate,
+      NON-faithful deviation from the bash oracle's vacuous-path token —
+      everything else in this negative-spec section reproduces the oracle's
+      quirks faithfully; this one line does not, because the quirk it
+      reproduced was a correctness defect (a permissive verdict on zero
+      evidence), not a faithfully-portable idiosyncrasy. Do not conflate
+      this branch with the die-silent gates above; they are reachable only
+      once `filtered_count > 0`.
     - `git show --stat --format=` over the filtered SHAs is invoked with all
       SHAs as a single argv batch, not xargs' possible multi-invocation
       batching under ARG_MAX — immaterial for realistic corpora sizes but a
@@ -109,6 +125,7 @@ from coordinator_core.coverage import (
     _is_planning_artifact_path,
     _PLANNING_ARTIFACT_PATH_PREFIXES,
 )
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops import ownership_index
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
@@ -213,6 +230,8 @@ _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 # Spec backlink: docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C7, AC8
 _PLANNING_LOC_WEIGHT = 0.2  # 1 planning-artifact LOC counts as 0.2 chain_loc
 
+
+_SHIPPED_IN_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 _CHAIN_SHOW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CHAIN_NUMSTAT_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
@@ -479,10 +498,86 @@ def _enumerate_owned_batons(
     means an archive subtree could not be fully scanned, so a claimed
     basename living under it may be silently missing from ``owned_batons``;
     the caller must surface this rather than treat an empty list as "no
-    owned batons"."""
+    owned batons".
+
+    Close-vs-session distinction (C2, 2026-08-08): this function's returned
+    set is scoped to the SESSION, not to the CLOSE — a session that already
+    capped one workstream and later takes a chain-terminal close for another
+    still owns both batons here, by design (its session-wide contract is
+    load-bearing for AC17/AC20 and for callers other than the two --from-
+    handoff oracles that union over owned batons; see this module's
+    Anti-scope). A caller that needs "only the batons THIS close is capping"
+    (`_from_handoff_main`, which feeds the SAME filtered set to BOTH
+    `_compute_chain_oracle` and `_compute_plan_oracle` — the plan's own
+    Problem section names both as unioning across owned batons, and
+    narrowing only one would manufacture spurious plan_oracle!=chain_oracle
+    disagreement) filters the returned tuples itself, via
+    `_capped_by_earlier_close` —
+    excluding a baton whose frontmatter already carries a terminal
+    `deployment_state` AND a `shipped_in` sha at scan time, since that pair
+    can only have been written by an EARLIER close's own stamp-and-archive
+    step (`d-run-wsc-tail`, which fires strictly after this gate in the same
+    close's directive sequence — see `_capped_by_earlier_close`). This
+    preserves AC17/AC20: a baton archived AND stamped during THIS SAME close
+    reads `deployment_state: in_flight`/no `shipped_in` at gate-scan time
+    (the stamp lands later in the tail), so it is never excluded by that
+    filter — it stays counted, exactly as this function's own docstring
+    already promises above."""
     if not closing_session_id:
         return [], []
     return ownership_index.build_ownership_index(repo_root, closing_session_id)
+
+
+def _capped_by_earlier_close(baton_fm: dict) -> bool:
+    """True iff `baton_fm` was already terminal-stamped AND shipped BEFORE
+    this close's own gate-scan — i.e. it was capped by an EARLIER close, not
+    the one running this gate right now (C2, 2026-08-08).
+
+    Ordering this predicate depends on: `d-run-chain-plan-brightline-gate`
+    (this gate) carries no `depends_on` and is appended to the directive
+    list strictly BEFORE `d-run-wsc-tail` (the stamp-and-archive step that
+    writes `deployment_state`/`shipped_in`) — see
+    `coordinator_core.workstream_complete.directives_review
+    .build_chain_plan_brightline_gate_directive` and
+    `coordinator_core.workstream_complete.__init__.build_directives`, and
+    the ordering-pin test
+    `test_gate_directive_precedes_tail_directive_in_build_order` in this
+    module's test file. So a baton this CURRENT close is capping has not
+    been stamped yet at scan time, and reads a non-terminal
+    `deployment_state` (or no `shipped_in`) here — never excluded.
+
+    A baton reading BOTH a terminal `deployment_state` (member of
+    `HANDOFF_TERMINAL_DEPLOYMENT`) AND a `shipped_in` value that parses as a
+    plausible git sha can only have gotten that pair from a PRIOR close's
+    own tail already having run — exclude it from the set this close's chain
+    oracle unions over.
+
+    Review: code-reviewer — P2: this predicate's safety rests on the AND
+    with `shipped_in`, NOT on `HANDOFF_TERMINAL_DEPLOYMENT` membership alone.
+    Two of that set's four members (`closed`, `abandoned`) are, per
+    `handoff_archive_transition.py`, never freshly paired with a `shipped_in`
+    stamp by this repo's own automated close paths today — only `shipped`
+    and `continued` are. If some other writer ever hand-wrote or
+    legacy-carried a `closed`/`abandoned` state alongside a plausible-looking
+    `shipped_in` (e.g. copied from a predecessor), this predicate would
+    exclude it even though it was not capped by a close's tail step in the
+    sense this docstring describes. Do not read set membership by itself as
+    proof of "capped by a close" — the `shipped_in` conjunct is what
+    currently carries that guarantee.
+
+    AC5: every ambiguity resolves toward KEEPING (returning False) — an
+    absent/non-string `deployment_state`, an absent/non-string/malformed
+    `shipped_in`, or a `deployment_state` outside `HANDOFF_TERMINAL_DEPLOYMENT`
+    all return False (never dropped). Never raises."""
+    deployment_state = baton_fm.get("deployment_state")
+    if not isinstance(deployment_state, str):
+        return False
+    if deployment_state not in HANDOFF_TERMINAL_DEPLOYMENT:
+        return False
+    shipped_in = baton_fm.get("shipped_in")
+    if not isinstance(shipped_in, str) or not _SHIPPED_IN_SHA_RE.match(shipped_in):
+        return False
+    return True
 
 
 def _find_governing_plans(repo_root: Path, baton_fm: dict) -> List[Path]:
@@ -959,8 +1054,40 @@ def _from_handoff_main(rest: List[str]) -> int:
         print(f"{_PROG}: --from-handoff: {exc}", file=sys.stderr)
         return 1
 
-    plan_result = _compute_plan_oracle(repo_root, owned_batons)
-    chain_result = _compute_chain_oracle(repo_root, owned_batons, closing_session_id)
+    # C2 (2026-08-08): BOTH the plan oracle and the chain oracle union only
+    # the batons THIS close is capping — a baton already terminal-stamped by
+    # an EARLIER close is excluded here, at the oracle call site (never by
+    # narrowing what `_enumerate_owned_batons` itself returns — see that
+    # function's docstring and `_capped_by_earlier_close`). The plan's own
+    # Problem section names `_compute_plan_oracle` as unioning across the
+    # SAME owned-baton set as the chain oracle, so narrowing one side and
+    # not the other would manufacture spurious plan_oracle!=chain_oracle
+    # disagreement (which `_determine_tier`'s tier=B ruling reads as
+    # meaningful) between a close-scoped chain oracle and a session-scoped
+    # plan oracle. `session_result` is deliberately NOT filtered — it is
+    # computed from the git range/trailer, not from `owned_batons`, so this
+    # discrimination does not apply to it.
+    # Review: code-reviewer — P1: `_capped_by_earlier_close`'s ordering
+    # premise (this gate runs strictly before `d-run-wsc-tail` within a
+    # SINGLE `build_directives()` call) does not hold across a SECOND pass
+    # for the SAME close (`brief()` regenerates the directive list fresh on
+    # every invocation). On a resumed/retried pass, the seed baton this
+    # close is capping can already carry a terminal `deployment_state` +
+    # `shipped_in` from pass 1's own tail — the predicate would otherwise
+    # read that as "capped by an earlier close" and drop it, under-counting.
+    # The seed IS, by definition, the baton this close is capping, whatever
+    # its stamp state — never exclude it via `_capped_by_earlier_close`.
+    # Compared by resolved path identity (the seed arg may be absolute or
+    # repo-relative; owned-baton paths come from the ownership index).
+    seed_resolved = seed_abs.resolve()
+    chain_owned_batons = [
+        (path, fm)
+        for path, fm in owned_batons
+        if path.resolve() == seed_resolved or not _capped_by_earlier_close(fm)
+    ]
+
+    plan_result = _compute_plan_oracle(repo_root, chain_owned_batons)
+    chain_result = _compute_chain_oracle(repo_root, chain_owned_batons, closing_session_id)
     session_result = _compute_session_oracle(range_, closing_session_id, cross_repo_roots)
 
     for note in chain_result["notes"]:
@@ -1036,7 +1163,60 @@ def _from_handoff_main(rest: List[str]) -> int:
     return 0
 
 
+def _resolve_session_floor(session_id: str) -> Optional[str]:
+    """C2 (2026-08-08): the session's own earliest commit reachable from
+    HEAD, found via an UNSCOPED (full HEAD ancestry, not merge-base-bounded)
+    Session-Id-trailer search — the same technique
+    `_compute_session_oracle_single` already uses for cross-repo siblings
+    (an `--all`/unbounded log search in place of a range-scoped one, on the
+    grounds that the trailer is a unique-enough needle). Returns
+    `f"{earliest_sha}^"` (a floor EXCLUSIVE of that commit, so `floor..HEAD`
+    includes it), or `None` if the trailer matches nothing reachable from
+    HEAD at all — a session that made no commits on this branch, or whose
+    trailer never fired, is a genuinely vacuous case this cannot rescue.
+
+    Never widens what gets MEASURED: the caller re-applies the SAME
+    Session-Id-trailer filter to whatever this floor's range contains, so
+    only this session's own commits are ever counted toward loc/commits/
+    surfaces — a peer's commits sitting between this floor and HEAD (e.g.
+    because their push advanced origin/main past this session's own
+    commits, the exact blindness this floor exists to route around) are
+    present in the wider git range but filtered out downstream exactly as
+    they already are in the merge-base-bounded case. See Anti-scope's
+    "do not widen the range over peer commits" — that warning is about
+    sweeping a peer's DIFF into the measurement, not about how far back the
+    trailer search itself looks.
+    """
+    shas_out, rc = _run_git(
+        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", "HEAD"]
+    )
+    if rc != 0:
+        return None
+    shas = [line for line in shas_out.splitlines() if line.strip()]
+    if not shas:
+        return None
+    earliest = shas[-1]  # git log lists newest-first; the last line is oldest
+    return f"{earliest}^"
+
+
 def _session_scoped(range_: str, session_id: str) -> int:
+    """`--session-id`-filtered scan over `range_`.
+
+    Zero-match against `range_` first retries with a session-aware floor
+    (`_resolve_session_floor`, C2) — a shared-branch merge-base can advance
+    past this session's own commits as peers push, which is not the same as
+    the session genuinely having nothing to measure. Only if THAT also
+    turns up nothing does the scan resolve to the vacuous outcome: it
+    prints `VERDICT=indeterminate` (2026-08-08 fix), never
+    `single-reviewer-ok` and never `PARTITION-MANDATORY` — the gate
+    examined zero commits, so it has no basis to claim either a small diff
+    or a mandatory partition. Per the PM constraint
+    (docs/plans/2026-08-08-the-gate-says-ok-when-it-could-not-look.md), the
+    vacuous case must not resolve to a forced partition either; it hands
+    the "I could not look" fact to the consumer instead of manufacturing a
+    verdict. Exit code stays 0 — this is a legitimate, honestly-reported
+    outcome, not the die-silent infra-failure case below (which prints
+    nothing and returns 1)."""
     shas_out, _rc = _run_git(
         ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", range_]
     )
@@ -1044,9 +1224,27 @@ def _session_scoped(range_: str, session_id: str) -> int:
     filtered_count = len(filtered_shas)
 
     if filtered_count == 0:
+        floor = _resolve_session_floor(session_id)
+        if floor is not None:
+            retry_range = f"{floor}..HEAD"
+            retry_shas_out, _rc2 = _run_git(
+                ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", retry_range]
+            )
+            retry_shas = [line for line in retry_shas_out.splitlines() if line.strip()]
+            if retry_shas:
+                print(
+                    f"note: range={range_} matched 0 commits — recovered via "
+                    f"session-aware floor, rescanning {retry_range}",
+                    file=sys.stderr,
+                )
+                range_ = retry_range
+                filtered_shas = retry_shas
+                filtered_count = len(filtered_shas)
+
+    if filtered_count == 0:
         print(
             f"range={range_} loc=0 commits=0 surfaces=0 files=0 "
-            f"filtered_to=0 VERDICT=single-reviewer-ok"
+            f"filtered_to=0 VERDICT=indeterminate"
         )
         print(
             "note: session-id matched 0 commits in range — gate vacuous, "

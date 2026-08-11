@@ -35,6 +35,46 @@ def test_write_then_read_round_trips_the_verdict_verbatim(tmp_path):
     assert verdict == "PARTITION-MANDATORY"
 
 
+def test_presence_separates_never_ran_from_ran_and_did_not_survive(tmp_path):
+    """`read_verdict_record` collapses both to `None` by design; the two
+    call for OPPOSITE responses (run the gate vs. investigate a broken
+    seam), and `build_review_scale_judgment_point` used to assert the
+    second on every unresolved close having checked neither."""
+    assert store.verdict_record_presence(tmp_path, session_id="sid-1") == store.PRESENCE_ABSENT
+
+    path = store.verdict_store_path(tmp_path, session_id="sid-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ not json", encoding="utf-8")
+    assert store.verdict_record_presence(tmp_path, session_id="sid-1") == store.PRESENCE_UNREADABLE
+
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-1",
+        verdict="PARTITION-MANDATORY",
+        from_handoff="state/handoffs/x.md",
+        git_range=None,
+        basis="tier=B",
+        tier="B",
+    )
+    assert store.verdict_record_presence(tmp_path, session_id="sid-1") == store.PRESENCE_PRESENT
+
+
+def test_presence_reports_a_foreign_session_record_as_unreadable_not_present(tmp_path):
+    """A record whose body belongs to another session is rejected by
+    `read_verdict_record`'s provenance check. Presence must follow that
+    rejection rather than reporting `present` off a bare stat — otherwise
+    the diagnostic axis would contradict the value axis and point an EM at
+    a seam bug that is really a wrong-session hit."""
+    path = store.verdict_store_path(tmp_path, session_id="sid-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"schema_version": 1, "session_id": "someone-else", "verdict": "PARTITION-MANDATORY"}),
+        encoding="utf-8",
+    )
+    assert store.read_verdict_record(tmp_path, session_id="sid-1") is None
+    assert store.verdict_record_presence(tmp_path, session_id="sid-1") == store.PRESENCE_UNREADABLE
+
+
 def test_write_creates_the_expected_directory_and_a_readable_json_file(tmp_path):
     path = store.write_verdict_record(
         tmp_path,

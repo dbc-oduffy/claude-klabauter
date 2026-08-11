@@ -27,6 +27,16 @@
 > breaking change.
 >
 > **Changelog:**
+> - **2026-08-10 (producer-count correction):** § 1.2's "claude-klabauter has TWO independent producers of
+>   this one FK" corrected to THREE: `commit.anchors`, `coordinator-prepare-commit-msg`, and the
+>   previously-unnamed `coordinator_core/git/commit_trailers.py::compute_missing_trailer_args`,
+>   invoked by `coordinator_core/ops/ceremony/git_native.py::commit_scoped`'s diverged/commit-tree
+>   branch (which fires no git hooks, which is why that third producer exists at all). Also records,
+>   under § 3, the producer-side behaviour change this plan's C2 makes: an ambiguous multi-claim
+>   commit now omits `Deliverable-Id:` entirely, a posture `commit_anchors.py` already had. Prose/
+>   fact-correction only; no key, grain, enum, cardinality, or extraction pattern changed, so this
+>   is outside the § 5.2 bump protocol and does not reopen the FROZEN v1.0 gate. Source:
+>   `docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md`, task C5.
 > - **2026-08-01:** `Resolves:` added to § 1.1's key table as an eighth recognized trailer,
 >   completion-grain, 0..N, author-supplied-shape but now ALSO stamped by `commit.anchors` at
 >   the workstream-complete / ship-handoff completion event (a one-key extension of the
@@ -158,6 +168,7 @@ derived/stamped by `commit.anchors`, at the completion event only.
 | `Session-Id:` | already stamped by existing `coordinator-prepare-commit-msg` hook | session-grain | **1** (always present) | **YES** — durable commit→session edge; transitive root | `<session-uuid>` |
 | `Closes:` | **author-supplied** git-trailer convention — NOT derived/stamped by `commit.anchors`; consumed at emit time by the `commit_closures` section porter (§ 1.2a) | work-item reference | 0..N (per commit; multiple `Closes:` values recognized) | **YES** — but the join key is `(repo, item_id, sha)`, a write-time-per-row identity, not a single durable id (docs/plans/2026-07-17-commit-closure-emission-fact.md DECISION-4) | `RECS-42` |
 | `Resolves:` | derived/stamped by `commit.anchors` — same `deliverable_id` as `Deliverable-Id:` (staged plan frontmatter), emitted ONLY when a completion entry (`archive/completed/*.md`) is ALSO in the staged diff (the completion-event gate; § 1.2b) | completion-grain (contrast `Deliverable-Id:`'s membership-grain) | **0..1 from this producer** (this op resolves at most one staged plan per commit, mirroring `Deliverable-Id:`; the `Resolves:` convention itself is 0..N-capable per `coordinator/docs/wiki/resolves-commit-trailer.md` for a hand-authored multi-artifact commit, but `commit.anchors` never emits more than one) | **YES** — durable `dlv-…` minted id; the fleet's sole ship-state oracle join (`rollup_derive.py`, unchanged by this addition) | `dlv-claude-klabauter-commit-anchor-stamper-queryable-g-2064ae` |
+| `Commit-Token:` | `coordinator_core.ops.ceremony.commit_pipeline.commit()` — minted `uuid4().hex` per call, appended before the message is written to its temp file (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md, W1) | producer-internal verification token | **1** (always present on every commit `commit_pipeline.commit()` makes) | **NO** — producer-internal verification token, not a join key; matched by this call's own post-commit `git log --grep` to resolve `committed_sha` on the agree branch, never read back by any other consumer | `a1b2c3d4e5f6...` (32 hex chars) |
 
 ### 1.2 Grain and join-key semantics — critical distinctions
 
@@ -175,15 +186,31 @@ retained in the schema purely for human legibility in `git log`.
 deliverable-grain key spanning plans, commits, and sessions. It is the cross-entity join key from
 DR-207's deliverable-spine initiative. Consumers join commit→deliverable on this key.
 
-**The key is `Deliverable-Id:`, never bare `Deliverable:` (ruled 2026-07-28).** claude-klabauter has TWO
-independent producers of this one FK — `commit.anchors` (staged plan frontmatter, ceremony path)
-and `coordinator/bin/coordinator-prepare-commit-msg` (session-shape, every commit) — and they
-spelled it two different ways from the start. They are NOT two trailers for two purposes: same
-`dlv-…` value space, same commit→deliverable edge, two spellings of one key. `Deliverable-Id:`
-wins on three counts: every consumer already reads it (claude-klabauter's `coverage.py` DAG attribution and
-`execute_plan_assemble/close_out_and_stamp.py`, example-retrieval-repo's `workstate_store` ingest), it is
-84-commits-to-4 in live history, and it matches the `-Id`-suffix convention the sibling id-valued
-keys follow (`Plan-Id:`, `Session-Id:` — bare `Plan:` is the path, not an id).
+**The key is `Deliverable-Id:`, never bare `Deliverable:` (ruled 2026-07-28).** claude-klabauter has THREE
+independent producers of this one FK (2026-08-10 correction — a prior revision of this paragraph
+said TWO): `commit.anchors` (`coordinator_core/ops/commit_anchors.py`, staged plan frontmatter,
+ceremony path), `coordinator/bin/coordinator-prepare-commit-msg` (session-shape, every commit —
+Example-doctrine-repo's hook), and `coordinator_core/git/commit_trailers.py`'s `compute_missing_trailer_args`,
+invoked by `coordinator_core/ops/ceremony/git_native.py::commit_scoped`'s diverged branch (which
+routes through `_commit_scoped_private_index` and commits via `git commit-tree` directly). That
+last path fires **no git hooks at all**, so the hook-based producer never runs there — this is
+precisely why a third, independent producer exists: `commit_scoped`'s diverged branch needs its
+own resolution of the same FK because it cannot rely on `coordinator-prepare-commit-msg` firing.
+All three spell the key the same way today (`Deliverable-Id:`), same `dlv-…` value space, same
+commit→deliverable edge. `Deliverable-Id:` wins on three counts: every consumer already reads it
+(claude-klabauter's `coverage.py` DAG attribution and `execute_plan_assemble/close_out_and_stamp.py`,
+Example-retrieval-repo's `workstate_store` ingest), it is 84-commits-to-4 in live history, and it matches the
+`-Id`-suffix convention the sibling id-valued keys follow (`Plan-Id:`, `Session-Id:` — bare
+`Plan:` is the path, not an id).
+
+**`commit_anchors.py` is deliberately separate, not a convergence backlog.** Of the three
+producers, `commit_anchors.py` already omits `Deliverable-Id:` when it cannot verify unambiguously
+(resolving strictly from staged plan frontmatter) — the § 3 precision posture the other two
+producers acquire only via this plan's C2 (an ambiguous multi-claim commit now omits
+`Deliverable-Id:` rather than guessing; see § 3). This is not drift to be converged away: each
+producer resolves the FK from a different input (staged plan frontmatter vs. session-claim state)
+for a different call site, and `commit_anchors.py` already carries the precision guarantee the
+plan brings to the other two.
 
 Because `%(trailers:key=X)` is an **exact** key match and not a prefix match, the bare spelling
 was not a cosmetic inconsistency: it read as empty for every consumer in the fleet and errored
@@ -202,6 +229,17 @@ graph is built from `Plan-Id:` / `Deliverable-Id:` / `Session-Id:`.
 **`Session-Id:` is the transitive root.** Already stamped by the existing hook on every
 coordinator-session commit. It is the commit→session durable edge — the anchor from which all other
 commit-graph context is reachable.
+
+**`Commit-Token:` is producer-internal — explicitly NOT a join key.** `commit_pipeline.commit()`
+mints a fresh `uuid4().hex` per call and appends it as a trailer so its own post-commit
+verification (a pathspec-scoped, bounded `git log --grep=<token> --fixed-strings`) can
+unambiguously resolve `committed_sha` on the agree branch — no peer can ever author this exact
+string, so the match is collision-free by construction (see that function's own docstring). It
+exists to answer "which commit did THIS call just make", a question internal to one producer
+invocation, not "which commit belongs to which plan/session/deliverable" — the question every
+other durable key in this table answers. **Consumers must NOT build graph edges on it** — it
+carries no cross-call or cross-entity meaning, and nothing outside `commit_pipeline.commit()`
+ever reads it back.
 
 ### 1.2b `Resolves:` — completion-grain, gated on the ceremony completion event
 
@@ -357,6 +395,28 @@ Session-Id: <session-uuid>
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
+### 2.3 Negative-spec — one trailing block, never two
+
+**A producer must never emit a blank line inside the trailer block.** Every trailer key belongs to
+the single last paragraph of the message. `%(trailers:key=...)` and `git interpret-trailers --parse`
+both read *only* that last paragraph, so a block split by a blank line silently orphans every key
+above the split while leaving them perfectly legible in the raw message.
+
+This is a quiet wrong answer, not a visible break, and no consumer detects it (both confirmed
+2026-08-08, `cross-repo/inbox/2026-08-08-example-retrieval-repo-em-commit-token-trailer-no-closed-key-set.md`
+and `...-example-cockpit-repo-em-commit-token-trailer-no-key-enumeration-here.md`):
+
+- **rag** — `_GIT_LOG_FORMAT` / `_parse_commit_block` return the empty string per slot; `Plan-Id:`
+  and `Nature:` simply starve, with no error and no quarantine (that keys off the SHA field).
+- **cockpit** — never parses a message at all; it consumes rag's typed projection, so an emptied
+  `nature` lands the commit in the `unattached` bucket, reported as *unplanned work*.
+
+The producer side is therefore the only control point on this seam. The house check is an
+enumerate-and-compare over a commit range — extract by key per § 2.1, compare against the keys
+present in `%B`, and treat any key visible in the body but empty by extraction as an orphan.
+Same failure class as the 2026-07-28 `Deliverable:` / `Deliverable-Id:` exact-match miss, which
+starved for weeks with nothing surfaced anywhere.
+
 ---
 
 ## 3. Producer precision guarantee
@@ -383,6 +443,15 @@ Claude-klabauter's `commit.anchors` op resolves only what it can pin unambiguous
 This guarantee is **asymmetric by design**: the precision cost of a false edge (cockpit renders a
 confident wrong join) exceeds the recall cost of a missing trailer (rag projects an absent edge as
 null, not an error).
+
+**2026-08-10 addition — an ambiguous multi-claim commit now omits `Deliverable-Id:` entirely.**
+`compute_missing_trailer_args` (§ 1.2, the third producer) and the `coordinator-prepare-commit-msg`
+hook both acquire this posture via this plan's C2: where a commit's session holds more than one
+plan claim and the FK cannot be resolved to a single `dlv-…` id, the producer omits `Deliverable-Id:`
+rather than guessing. This is the same producer becoming *more* conservative that this section
+already sanctions — no consumer widen is needed, since every consumer already treats an absent key
+as a safe null (§ 3 above). `commit_anchors.py` already had this posture; C2 brings the other two
+producers to parity with it.
 
 ---
 

@@ -122,14 +122,6 @@ _BANNER_CMD_CONFIRMED = (
 )
 
 
-def _reason(out):
-    assert out is not None, "expected a deny envelope, got allow"
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "additionalContext" not in hso
-    return hso["permissionDecisionReason"]
-
-
 def _ctx(out):
     assert out is not None, "expected an allow_advisory envelope, got None"
     hso = out["hookSpecificOutput"]
@@ -240,44 +232,35 @@ class TestMultiProbeBannerVerdict:
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=True) is None
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
 
-    def test_banner_confirmed_rewrite_example_matches_sibling_chain_entry(self):
-        # The Example shown must be BYTE-IDENTICAL to what
-        # `check_multiprobe_banner_rewrite` itself would compute for the
-        # same command -- proves this guard reads the sibling's answer
-        # rather than re-deriving a parallel one that could drift.
-        from coordinator_core.bash_guards.dispatch_checks import (
-            check_multiprobe_banner_rewrite,
-        )
-
-        expected = check_multiprobe_banner_rewrite(_BANNER_CMD_CONFIRMED, "sess1")
-        expected_cmd = expected["hookSpecificOutput"]["updatedInput"]["command"]
-        # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
-        # envelope) -- this guard never denies any more, but the advisory
-        # template's own Example field carries the identical rewritten
-        # command, so the byte-identity claim this test pins is unaffected.
-        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True))
-        assert expected_cmd in ctx
-
-    def test_advisory_example_carries_the_full_rewrite_not_bare_evidence(self):
-        # RETARGETED (DR-280, 2026-08-07): was `test_deny_command_field_
-        # carries_full_command_not_bare_evidence`, pinning that the deny
-        # template's "Command:" field rendered the caller's FULL command
-        # rather than `primary.evidence` (only the matched banner-marker
-        # segment) -- Review: code-reviewer, Finding 1, C19a. That field
-        # belongs to the deny template only; this guard's deny branch is
-        # retired (it never renders that template through `check()` any
-        # more), so there is no "Command:" field left to pin here.
+    def test_advisory_example_is_the_full_sibling_chain_rewrite(self):
+        # MERGED (DR-280 cleanup, 2026-08-07): this test used to be two --
+        # `test_banner_confirmed_rewrite_example_matches_sibling_chain_entry`
+        # (the Example shown must be BYTE-IDENTICAL to what
+        # `check_multiprobe_banner_rewrite` itself would compute -- proves
+        # this guard reads the sibling's answer rather than re-deriving a
+        # parallel one that could drift) and
+        # `test_advisory_example_carries_the_full_rewrite_not_bare_evidence`
+        # (RETARGETED from `test_deny_command_field_carries_full_command_
+        # not_bare_evidence` -- Review: code-reviewer, Finding 1, C19a --
+        # originally pinned via the deny template's "Command:" field that
+        # this guard's now-retired deny branch used to render, proving the
+        # rewrite named the FULL caller command rather than a stand-in
+        # derived from bare banner-marker evidence alone).
         #
-        # What survives from the original regression this test guarded
-        # against -- a message that names only the matched banner-marker
-        # segment, dropping the rest of the caller's command from the
-        # rewrite entirely -- is still checkable via the advisory's Example
-        # field: it must be the literal rewrite BX-16 computed for the
-        # WHOLE command (folding every recognized probe, including the
-        # trailing `git rev-parse HEAD` segment that is NOT part of the
-        # banner-marker echo, into one `git status --porcelain=v2 --branch`
-        # call per the module docstring), not a stand-in derived from the
-        # bare banner-marker evidence alone.
+        # Once the deny branch was retired under DR-280, both tests were
+        # retargeted onto the SAME assertion -- the advisory template's
+        # Example field is the only surviving outlet, and it carries the
+        # sibling chain's full computed rewrite either way -- leaving two
+        # byte-identical test bodies. Merged into one; this single identity
+        # assertion still pins BOTH original regressions: (1) this guard
+        # reads the sibling's answer rather than re-deriving a parallel one
+        # that could drift, and (2) that rewrite is the FULL command (every
+        # recognized probe, including the trailing `git rev-parse HEAD`
+        # segment that is NOT part of the banner-marker echo, folded into
+        # one `git status --porcelain=v2 --branch` call per the module
+        # docstring) rather than a stand-in derived from bare banner-marker
+        # evidence alone. Do not re-split without re-deriving a case where
+        # the two claims can actually diverge.
         from coordinator_core.bash_guards.dispatch_checks import (
             check_multiprobe_banner_rewrite,
         )

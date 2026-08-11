@@ -195,6 +195,44 @@ class RollupRepo:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def write_archive_spec(
+        self,
+        subdir: str,
+        name: str,
+        *,
+        deliverable_id: Optional[str] = None,
+        initiative: Optional[str] = None,
+        title: str = "Test Archive Spec",
+    ) -> Path:
+        """Write a plan-shaped file to archive/specs/<subdir>/<name>.
+
+        Purpose: exercises the recursive archive/specs/**/*.md scan path (C1).
+        `fleet.archive_completed_plans` moves a plan here from docs/plans/ the
+        instant its status flips terminal.
+        """
+        path = self.root / "archive" / "specs" / subdir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        lines = [
+            f'title: "{title}"',
+            "created: 2026-07-01",
+            "status: implemented",
+        ]
+        if deliverable_id is not None:
+            lines.append(f"deliverable_id: {deliverable_id}")
+        if initiative is not None:
+            if initiative == "null":
+                lines.append("initiative: null")
+            else:
+                lines.append(f"initiative: {initiative}")
+        else:
+            lines.append("initiative: null")
+
+        fm_body = "\n".join(lines)
+        content = f"---\n{fm_body}\n---\n\n# {title}\n\nBody.\n"
+        path.write_text(content, encoding="utf-8")
+        return path
+
     def write_initiative(
         self,
         initiative_id: str,
@@ -701,6 +739,40 @@ def test_archive_handoff_scan_path(rollup_repo: RollupRepo) -> None:
 
 
 # ---------------------------------------------------------------------------
+# (viii-b) C1/AC4 — archive/specs scan path — fourth recursive scan root
+# ---------------------------------------------------------------------------
+
+
+def test_archive_specs_scan_path_deliverable_id_only_under_archive_specs(
+    rollup_repo: RollupRepo,
+) -> None:
+    """AC4: a deliverable_id carried ONLY by a file under
+    archive/specs/<YYYY-MM>/ resolves — the post-archival commit that, before
+    C1, was refused now succeeds. No file with this deliverable_id exists
+    under docs/plans (or any other root), so this proves the new root itself
+    is scanned, not that some other root already covered it."""
+    rollup_repo.write_archive_spec(
+        "2026-08",
+        "2026-08-01-archived-plan.md",
+        deliverable_id="dlv-archived-spec-only",
+        initiative="init-archived-spec",
+    )
+    rollup_repo.write_initiative(
+        "init-archived-spec", label="Archived Spec Initiative", status="active"
+    )
+
+    result = _handler(
+        {"deliverable_id": "dlv-archived-spec-only"},
+        repo_root=rollup_repo.common_dir,
+    )
+
+    _assert_schema(result, "dlv-archived-spec-only")
+    assert result["artifacts_matched"] == 1
+    initiative_ids = {e["id"] for e in result["advances_initiatives"]}
+    assert "init-archived-spec" in initiative_ids
+
+
+# ---------------------------------------------------------------------------
 # (ix) traversal guard in initiative_id — malformed frontmatter initiative FK
 # ---------------------------------------------------------------------------
 
@@ -1159,16 +1231,20 @@ _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
 )
 
 
-@_SKIP_CHMOD_UNRELIABLE
 def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
-    rollup_repo: RollupRepo, caplog
+    rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unreadable state/handoffs/ dir (a flat scan root) logs a WARNING and sets
     the internal scan_incomplete signal — a blocked scan root must not silently
     roll up to 'deliverable has no artifacts', which is exactly what glob("*.md")'s
     PermissionError-swallowing selector would otherwise produce. Asserted directly
     against _scan_artifacts_by_deliverable_id — the wire shape is checked separately
-    (test_handler_payload_wire_shape_includes_scan_incomplete_true below)."""
+    (test_handler_payload_wire_shape_includes_scan_incomplete_true below).
+
+    Exercises the production contract directly (Path.iterdir() raising OSError,
+    caught by the try/except around base_dir.iterdir() in the flat-root loop) rather
+    than provoking it via chmod 0o000, which is unreliable on Windows/as root. This
+    runs on every platform."""
     # A plan under docs/plans/ (unaffected scan root) so the result would otherwise
     # look non-trivially resolved — this is NOT vacuously empty for an unrelated reason.
     rollup_repo.write_plan(
@@ -1182,17 +1258,22 @@ def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
         encoding="utf-8",
     )
 
-    original_mode = handoffs_dir.stat().st_mode
-    os.chmod(handoffs_dir, 0o000)
-    try:
-        with caplog.at_level(
-            logging.WARNING, logger="coordinator_core.ops.deliverable_rollup"
-        ):
-            matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
-                rollup_repo.root, "dlv-blocked"
-            )
-    finally:
-        os.chmod(handoffs_dir, original_mode)
+    original_iterdir = Path.iterdir
+    resolved_handoffs_dir = handoffs_dir.resolve()
+
+    def _fake_iterdir(self: Path):
+        if self.resolve() == resolved_handoffs_dir:
+            raise OSError(13, "Permission denied", str(self))
+        return original_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _fake_iterdir)
+
+    with caplog.at_level(
+        logging.WARNING, logger="coordinator_core.ops.deliverable_rollup"
+    ):
+        matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
+            rollup_repo.root, "dlv-blocked"
+        )
 
     assert scan_incomplete is True, (
         "internal scan_incomplete signal must be True when a flat scan root "
@@ -1213,12 +1294,15 @@ def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
     )
 
 
-@_SKIP_CHMOD_UNRELIABLE
 def test_unreadable_recursive_scan_root_sets_internal_scan_incomplete_signal(
-    rollup_repo: RollupRepo, caplog
+    rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unreadable archive/handoffs/ dir (the recursive scan root) logs a WARNING
-    and sets the internal scan_incomplete signal, mirroring the flat-root case above."""
+    and sets the internal scan_incomplete signal, mirroring the flat-root case above.
+
+    Exercises the production contract directly (os.walk(onerror=...) invoking its
+    error callback with an OSError) rather than provoking it via chmod 0o000, which
+    is unreliable on Windows/as root. This runs on every platform."""
     archive_dir = rollup_repo.root / "archive" / "handoffs"
     archive_dir.mkdir(parents=True, exist_ok=True)
     (archive_dir / "2026-07-01-unreachable.md").write_text(
@@ -1226,17 +1310,25 @@ def test_unreadable_recursive_scan_root_sets_internal_scan_incomplete_signal(
         encoding="utf-8",
     )
 
-    original_mode = archive_dir.stat().st_mode
-    os.chmod(archive_dir, 0o000)
-    try:
-        with caplog.at_level(
-            logging.WARNING, logger="coordinator_core.ops.deliverable_rollup"
-        ):
-            matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
-                rollup_repo.root, "dlv-archive-blocked"
-            )
-    finally:
-        os.chmod(archive_dir, original_mode)
+    original_walk = os.walk
+    resolved_archive_dir = archive_dir.resolve()
+
+    def _fake_walk(top, onerror=None, **kwargs):
+        top_path = Path(top)
+        if top_path.resolve() == resolved_archive_dir:
+            if onerror is not None:
+                onerror(OSError(13, "Permission denied", str(top_path)))
+            return iter([])
+        return original_walk(top, onerror=onerror, **kwargs)
+
+    monkeypatch.setattr(_rollup_mod.os, "walk", _fake_walk)
+
+    with caplog.at_level(
+        logging.WARNING, logger="coordinator_core.ops.deliverable_rollup"
+    ):
+        matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
+            rollup_repo.root, "dlv-archive-blocked"
+        )
 
     assert scan_incomplete is True, (
         "internal scan_incomplete signal must be True when the recursive "
@@ -1251,6 +1343,64 @@ def test_unreadable_recursive_scan_root_sets_internal_scan_incomplete_signal(
     ]
     assert dir_warnings, (
         "expected a logged WARNING naming the unreadable archive dir; "
+        f"none found in: {[r.message for r in caplog.records]}"
+    )
+
+
+def test_unreadable_archive_specs_scan_root_sets_internal_scan_incomplete_signal(
+    rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5 (C1): an unreadable archive/specs/ dir (the fourth, recursive scan
+    root) logs a WARNING and sets the internal scan_incomplete signal,
+    mirroring the archive/handoffs case above — a blocked archive/specs
+    subtree must never silently roll up to 'deliverable has no artifacts'.
+
+    Exercises the production contract directly (os.walk(onerror=...) invoking its
+    error callback with an OSError) rather than provoking it via chmod 0o000, which
+    is unreliable on Windows/as root. This runs on every platform. Together with
+    the archive/handoffs case above, this pins that EITHER of the two recursive
+    roots — walked in the same per-root loop, each re-initialising walk_errors and
+    setting scan_incomplete independently — propagates the blocked signal."""
+    specs_dir = rollup_repo.root / "archive" / "specs"
+    specs_dir.mkdir(parents=True, exist_ok=True)
+    (specs_dir / "2026-08-01-unreachable.md").write_text(
+        "---\ndeliverable_id: dlv-specs-blocked\ninitiative: init-x\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    original_walk = os.walk
+    resolved_specs_dir = specs_dir.resolve()
+
+    def _fake_walk(top, onerror=None, **kwargs):
+        top_path = Path(top)
+        if top_path.resolve() == resolved_specs_dir:
+            if onerror is not None:
+                onerror(OSError(13, "Permission denied", str(top_path)))
+            return iter([])
+        return original_walk(top, onerror=onerror, **kwargs)
+
+    monkeypatch.setattr(_rollup_mod.os, "walk", _fake_walk)
+
+    with caplog.at_level(
+        logging.WARNING, logger="coordinator_core.ops.deliverable_rollup"
+    ):
+        matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
+            rollup_repo.root, "dlv-specs-blocked"
+        )
+
+    assert scan_incomplete is True, (
+        "internal scan_incomplete signal must be True when the recursive "
+        f"archive/specs/ scan root cannot be enumerated — got {scan_incomplete!r}"
+    )
+    assert matches == []
+
+    dir_warnings = [
+        r
+        for r in caplog.records
+        if str(specs_dir) in r.message and r.levelno == logging.WARNING
+    ]
+    assert dir_warnings, (
+        "expected a logged WARNING naming the unreadable archive/specs dir; "
         f"none found in: {[r.message for r in caplog.records]}"
     )
 

@@ -140,10 +140,10 @@ discharge test in CLAUDE.md ("the operator remembers" is not an answer). The
 scan is bounded and string-prefiltered before any I/O:
 ``os.scandir(state/handoffs/)`` and ``os.scandir(state/sizings/)``, each
 capped at ``_SCAN_CAP`` entries, non-recursive; a STRING-ONLY filename-token
-overlap prefilter runs before the one disk read per matching handoff
-candidate (to confirm ``status: open`` — sizing candidates are matched by
-filename token overlap alone, no disk read, since ``state/sizings/*.yaml``
-files are already topic-scoped by filename convention). This keeps the write
+overlap prefilter runs before the one disk read per matching candidate (to
+confirm ``status: open`` for a handoff, or a NON-terminal status —
+``_SIZING_TERMINAL_STATUSES``, added 2026-08-10 alongside the sizing-object
+``declined`` value — for a sizing). This keeps the write
 hot path's per-invocation cost to: one bounded regex on the path, one disk
 read of the (already-small) target plan, two compiled-regex passes over
 text already in memory, and at most ``_SCAN_CAP`` filename comparisons per
@@ -261,6 +261,47 @@ _STOPWORDS = frozenset({
 
 _HANDOFF_STATUS_RE = re.compile(r'^status:\s*"?([A-Za-z_]+)"?\s*$', re.MULTILINE)
 
+#: A sizing-object is whole-document YAML (no `---` frontmatter fence), so its
+#: own `status:` line sits at the document's own top level rather than inside
+#: a fenced block. NOT an alias of `_HANDOFF_STATUS_RE` (was, until
+#: 2026-08-10) -- this repo's house style for `state/sizings/*.yaml` puts a
+#: trailing `# draft | sized | routed | superseded | ...` enum-listing
+#: comment directly on the `status:` line (verified: every sampled sizing
+#: file carries one; zero sampled `state/handoffs/*.md` files do, so the two
+#: corpora are NOT unified here even though they were before -- confirmed by
+#: re-checking both directories rather than assumed). The shared regex's `$`
+#: anchored right after the (optionally quoted) value, so it silently failed
+#: to match ANY commented status line -- `m` came back `None`, the exclusion
+#: guard (`if m and ...`) was skipped, and a terminal (declined/superseded/
+#: shipped) sizing was offered as a live alternative anyway. Fail-open,
+#: confirmed reproduced against this repo's actual files:
+#: `status: routed  # draft | sized | routed | superseded` and
+#: `status: declined  # draft | sized | routed | superseded | shipped | declined`
+#: both failed to match the old pattern. This pattern tolerates an optional
+#: trailing `#`-comment (and trailing whitespace before it) while still
+#: requiring the value itself to be a bare word -- a quoted value containing
+#: a literal `#`, or a fully commented-out `# status: x` line (no leading
+#: `status:` at column 0), still does not match.
+_SIZING_STATUS_RE = re.compile(
+    r'^status:\s*"?([A-Za-z_]+)"?\s*(?:#.*)?$', re.MULTILINE
+)
+
+#: Terminal sizing statuses (`coordinator_core.frontmatter.schemas.
+#: sizing-object.schema.json`'s own `status.enum` terminal members, own local
+#: copy per this package's per-module convention -- see e.g.
+#: `deliverable_cascade._SIZING_TERMINAL_STATUS`) -- a sizing-object in one of
+#: these states is DONE, not a live alternative an EM should be redirected
+#: into. Added 2026-08-10 alongside `declined`
+#: (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2):
+#: before this, `_sizing_candidates` offered ANY topically-overlapping sizing
+#: file regardless of status -- a declined (or already-superseded/shipped)
+#: sizing could be handed back as if it were still live, exactly the
+#: "phantom live item" failure class this plan closes for a status QUERY;
+#: this guard's own live-alternative offer is a second surface of the same
+#: failure, so it is fixed here too rather than left to keep offering a dead
+#: end.
+_SIZING_TERMINAL_STATUSES = frozenset({"superseded", "shipped", "declined"})
+
 
 def _slug_tokens(stem: str) -> set:
     return {
@@ -305,8 +346,24 @@ def _handoff_candidates(repo_root: Path, plan_tokens: set, limit: int = 1) -> li
 
 def _sizing_candidates(repo_root: Path, plan_tokens: set, limit: int = 1) -> list:
     """Return up to `limit` `state/sizings/*.yaml` paths sharing topic tokens with the
-    plan -- filename-token match only, no disk read (sizing filenames are already
-    topic-scoped by convention).
+    plan AND NOT in a terminal status (`_SIZING_TERMINAL_STATUSES`) -- filename-token
+    prefilter first (no I/O for a non-matching filename), then a bounded confirming
+    disk read per matching candidate, mirroring `_handoff_candidates`'s own
+    prefilter-then-confirm shape (that function confirms `status: open`; this one
+    confirms the sizing is NOT terminal).
+
+    A sizing whose `status:` line is absent or unreadable (`OSError` on open, or no
+    `status:` match at all) is treated as a candidate (fail-open, matching this
+    guard's advisory posture elsewhere) rather than excluded on an ambiguous read --
+    the confirming read here is a precision improvement over the pre-2026-08-10
+    filename-only match, not a new gate that can itself go silent. This is a
+    DELIBERATE fail-open, not the same shape as the `_SIZING_STATUS_RE` trailing-
+    comment gap fixed the same day: that one was an accidental parse failure on a
+    common, well-formed line (the regex silently not matching text it should have
+    matched); this one is "the file could not be read/parsed at all" (locked,
+    permission-denied, or genuinely absent status field), where offering it as a
+    candidate rather than blocking the write is the correct advisory-posture call --
+    see CLASS rationale in the module docstring.
     """
     sizings_dir = repo_root / "state" / "sizings"
     if not sizings_dir.is_dir():
@@ -323,7 +380,16 @@ def _sizing_candidates(repo_root: Path, plan_tokens: set, limit: int = 1) -> lis
             continue
         overlap = plan_tokens & _slug_tokens(Path(entry.name).stem)
         if not overlap:
+            continue  # string-only prefilter -- no I/O for a non-matching filename
+        try:
+            with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
+                head = fh.read(4096)
+        except OSError:
+            scored.append((len(overlap), f"state/sizings/{entry.name}"))
             continue
+        m = _SIZING_STATUS_RE.search(head)
+        if m and m.group(1).strip().lower() in _SIZING_TERMINAL_STATUSES:
+            continue  # a terminal sizing is not a live alternative to offer
         scored.append((len(overlap), f"state/sizings/{entry.name}"))
     scored.sort(key=lambda t: -t[0])
     return [path for _, path in scored[:limit]]

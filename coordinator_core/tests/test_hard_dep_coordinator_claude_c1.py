@@ -66,6 +66,12 @@ def _load_scripts_setup_module():
         "_scripts_setup_under_test_c1", _SETUP_PY_PATH
     )
     module = importlib.util.module_from_spec(spec)
+    # Registered in sys.modules before exec, matching scripts/test_setup.py:
+    # setup.py's `@dataclass` classes resolve their string annotations
+    # (`from __future__ import annotations`) via `sys.modules[cls.__module__]`
+    # at class-definition time; without this registration dataclass() raises
+    # `AttributeError: 'NoneType' object has no attribute '__dict__'`.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

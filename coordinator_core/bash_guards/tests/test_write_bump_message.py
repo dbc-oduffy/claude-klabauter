@@ -690,3 +690,82 @@ def test_render_bump_message_default_raw_target_is_backward_compatible(tmp_path)
         raw_target="",
     )
     assert with_kwarg_omitted == with_explicit_empty
+
+
+# ---------------------------------------------------------------------------
+# `surface` axis (chunk 3, state/bug-backlog/2026-08-10-cross-repo-write-
+# boundary-denies-on-bash-b6fd16ed9ab9.yaml) -- the clear-line offer must
+# describe its ACTUAL scope, which diverges between the two Bash guards
+# (per-target marker) and the tool surface (session-wide marker).
+# ---------------------------------------------------------------------------
+
+
+def test_default_surface_renders_byte_identical_bash_copy(tmp_path):
+    """`surface` defaults to `SURFACE_BASH` -- every pre-existing caller
+    (both Bash guards, which pass no `surface` keyword) keeps rendering the
+    exact pre-chunk-3 phrase, unchanged."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
+    assert "clear this target" in text
+    assert "session-wide" not in text
+
+
+def test_surface_tool_states_the_session_wide_breadth_truthfully(tmp_path):
+    """The tool surface's marker lives at the SESSION's own gitdir (see
+    `_write_bump_marker.py`'s "MARKER LOCATION" and `bump_out_of_repo_tool_
+    write.check`'s `marker_gitdir = own_gitdir if own_gitdir is not None
+    else target_gitdir`), so its clear-line offer must say plainly that
+    clearing stands the whole boundary down for the session, not just this
+    target."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(
+        _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, surface=message.SURFACE_TOOL
+    )
+    assert "session-wide" in text
+    assert "clear this target" not in text
+
+
+@pytest.mark.parametrize(
+    "render_fn,args",
+    [
+        (message.render_em_message, (_TARGET_REPO, _SESSION_REPO)),
+        (message.render_subagent_message, (_TARGET_REPO, _SESSION_REPO)),
+    ],
+)
+def test_surface_tool_variants_fit_the_prose_cap(tmp_path, render_fn, args):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    if render_fn is message.render_subagent_message:
+        text = render_fn(*args, gitdir, _SESSION_ID, _SANDBOX_ROOT, surface=message.SURFACE_TOOL)
+    else:
+        text = render_fn(*args, gitdir, _SESSION_ID, surface=message.SURFACE_TOOL)
+    envelope = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": text,
+        }
+    }
+    measurement = measure_envelope(envelope)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES, (
+        text,
+        measurement.prose_bytes,
+    )
+
+
+def test_render_bump_message_threads_surface_to_the_foreign_em_template(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_bump_message(
+        agent_class=message.AGENT_CLASS_EM,
+        target_repo=_TARGET_REPO,
+        session_repo=_SESSION_REPO,
+        gitdir=gitdir,
+        session_id=_SESSION_ID,
+        surface=message.SURFACE_TOOL,
+    )
+    assert text == message.render_em_message(
+        _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, surface=message.SURFACE_TOOL
+    )

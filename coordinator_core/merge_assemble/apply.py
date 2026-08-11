@@ -49,8 +49,10 @@ from typing import Any, Callable, Optional
 
 from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
+    GATE_DIRECTIVE_IDS,
     NODE_CEREMONY_TEST_RELPATH,
     brief,
+    build_gate_verdicts_scaffold,
     normalize_decisions,
     resolve_repo_root,
 )
@@ -168,6 +170,35 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
 }
 
 
+def _fill_gate_verdicts(report: dict[str, Any]) -> dict[str, str]:
+    """C3 fix — populates the `gates` key `merge_assemble`'s module
+    docstring already claimed `apply()` fills in but never did (no `gates`
+    key was ever written; this function is the first writer). Reads only
+    what `execute_directives` already has in hand in THIS SAME `report` —
+    `report["results"]` (one `DirectiveResult.to_report()` per directive
+    that actually dispatched) and `report.get("failed_directive")` (set
+    only on `APPLY_EXIT_PARTIAL_MUTATION`) — never re-runs or re-derives
+    anything. A gate whose directive never reached either list (blocked on
+    an unresolved judgment point, or the run halted before it) stays
+    `"pending"`, exactly as `build_gate_verdicts_scaffold` seeds it."""
+    gates = build_gate_verdicts_scaffold()
+    directive_id_to_gate = {v: k for k, v in GATE_DIRECTIVE_IDS.items()}
+    for result in report.get("results", []):
+        # Review: code-reviewer — an `already_satisfied` result (e.g. a
+        # `--force` bypass) was skipped without dispatching, so it never
+        # observed the gate's directive succeed; "passed" must not be
+        # asserted for it (unobserved-fact hazard named in the brief).
+        if result.get("already_satisfied"):
+            continue
+        gate = directive_id_to_gate.get(result.get("id"))
+        if gate is not None:
+            gates[gate] = "passed"
+    failed_gate = directive_id_to_gate.get(report.get("failed_directive"))
+    if failed_gate is not None:
+        gates[failed_gate] = "failed"
+    return gates
+
+
 def _apply_force_bypass(directives: list[dict[str, Any]], force: bool) -> list[dict[str, Any]]:
     """`--force` bypass (chunk C6 AC): marks the node ceremony gate (`d0`)
     `already_satisfied` so it is reported landed without ever dispatching
@@ -245,6 +276,7 @@ def apply(
         artifact = decision.get("artifact") or {}
         report["branch_state"] = artifact.get("branch_state")
         report["release_tag_cut"] = artifact.get("release_tag_cut")
+        report["gates"] = _fill_gate_verdicts(report)
         return exit_code, report
 
 

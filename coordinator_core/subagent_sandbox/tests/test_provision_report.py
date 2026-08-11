@@ -29,6 +29,13 @@ import yaml
 from coordinator_core.dispatch.provision import _build_sidecar_text
 from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.subagent_sandbox.provision_report import _build_doc_text
+from coordinator_core.subagent_sandbox.provision_report import _build_run_report_doc_text
+from coordinator_core.subagent_sandbox.provision_report import (
+    _build_run_report_legacy_doc_text,
+)
+from coordinator_core.subagent_sandbox.provision_report import (
+    _build_staff_eng_review_doc_text,
+)
 from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_LENS
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
@@ -870,7 +877,7 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
         ("run-report", ["## Divergence from plan", "## Completion"]),
         ("review-findings", ["## Findings"]),
         ("assessment", ["## Questions"]),
-        ("staff-eng-review", ["## Verdict", "## Rationale"]),
+        ("staff-eng-review", ["## Verdict", "## Rationale", "## Findings"]),
     ],
 )
 def test_type_argument_selects_expected_template_shape(
@@ -906,6 +913,37 @@ def test_type_argument_selects_expected_template_shape(
     assert "dispatch_feed: null" in text
     assert "divergence:\n  diverged: false" in text
     assert f"lead_session_id: {session_id}" in text
+
+
+def test_staff_eng_review_emits_findings_last_so_the_extractor_scopes_correctly() -> None:
+    """Section ORDER, not just presence — `## Findings` must come last.
+
+    `append_integrator_dispositions._extract_findings_section` carves from
+    `## Findings` to the exit-interview heading and deliberately does not stop
+    at an intervening `## ` heading, so Verdict/Rationale emitted after Findings
+    would be folded into the findings body — a reviewer writing only a verdict
+    would then read as having filled in findings. Presence assertions alone
+    cannot catch that; this one can.
+    """
+    text = _build_staff_eng_review_doc_text(
+        "coordinator:staff-eng", "2026-08-10T00:00:00Z", "sess-order"
+    )
+    assert (
+        text.index("## Verdict")
+        < text.index("## Rationale")
+        < text.index("## Findings")
+        < text.index("## Exit interview")
+    )
+
+
+def test_run_report_templates_are_untouched_by_the_findings_convergence() -> None:
+    """Negative-spec guard (inbound memo item 3, adopted): `## Observations` is
+    right for a run report. The defect was never that run-report says
+    Observations — only that reviewers could reach it by default."""
+    for builder in (_build_run_report_doc_text, _build_run_report_legacy_doc_text):
+        text = builder("coordinator:executor", "2026-08-10T00:00:00Z", "sess-untouched")
+        assert "## Observations" in text
+        assert "## Findings" not in text
 
 
 def test_type_key_already_in_payload_wins_over_cli_default(

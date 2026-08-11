@@ -78,6 +78,42 @@ def test_raises_when_doe_root_resolved_but_dir_missing(tmp_path, monkeypatch):
         dr_mod.data_root("schemas")
 
 
+def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypatch):
+    """F2 regression (2026-08-08, hermetic-ac-reverify) -- when
+    `coordinator_doe_root()` resolves an OSS-flat root (`schemas/` sits
+    directly under the root, no `coordinator/` segment -- e.g. a real
+    marketplace-cache install), the terminal join must NOT unconditionally
+    insert `coordinator/`. Before the fix this raised RuntimeError even
+    though the resolved root was correct and the dir existed one level up."""
+    colocated_base = tmp_path / "colocated"
+    colocated_base.mkdir()
+    doe_root = tmp_path / "flat-doe-root"
+    (doe_root / "schemas").mkdir(parents=True)  # OSS-flat: no coordinator/ prefix
+
+    monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
+    monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
+
+    result = dr_mod.data_root("schemas")
+    assert result == doe_root / "schemas"
+
+
+def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypatch):
+    """F2 regression: the private-layout join (`<doe>/coordinator/<dir_name>`)
+    must still be tried FIRST -- unchanged default behaviour for every
+    existing caller/test resolving a private-layout root."""
+    colocated_base = tmp_path / "colocated"
+    colocated_base.mkdir()
+    doe_root = tmp_path / "both-doe-root"
+    (doe_root / "coordinator" / "schemas").mkdir(parents=True)
+    (doe_root / "schemas").mkdir(parents=True)  # would also satisfy the flat fallback
+
+    monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
+    monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
+
+    result = dr_mod.data_root("schemas")
+    assert result == doe_root / "coordinator" / "schemas"
+
+
 def test_colocated_root_points_at_coordinator_dir():
     # coordinator_core/data_root.py -> parent.parent/"coordinator" should be
     # the coordinator/ directory that sits beside coordinator_core/ in the

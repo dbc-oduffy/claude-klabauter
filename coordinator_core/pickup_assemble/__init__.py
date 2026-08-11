@@ -123,6 +123,7 @@ from coordinator_core.ops.parse_completeness_item import (
     _Malformed as _CompletenessMalformed,
     parse_completeness_item as _parse_completeness_item,
 )
+from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session import worktree_safety as _worktree_safety
@@ -1921,6 +1922,14 @@ _PATH_WRAPPERS = {"(": ")", "[": "]", "<": ">", '"': '"', "'": "'", "`": "`"}
 #: human ends a sentence with it (`...fix.md.`, `...fix.md,` etc).
 _TRAILING_SENTENCE_PUNCT = ".,;:!?"
 
+#: A hard line wrap the rendering surface inserted into a pasted path, plus
+#: the continuation indent on either side of it — see
+#: `_sanitize_artifact_path_str` § Line-wrap tolerance for why this rejoins
+#: with no separator. Deliberately NOT `\s` on either side: a match must be
+#: anchored on a real newline, so a path containing an ordinary interior
+#: space is never touched.
+_LINE_WRAP_RE = re.compile(r"[ \t]*\r?\n[ \t]*")
+
 
 def _last_path_segment(path_str: str) -> str:
     """Returns the final `/`- or `\\`-delimited segment of `path_str` (both
@@ -1940,10 +1949,32 @@ def _sanitize_artifact_path_str(raw: str) -> str:
     Strips, to a fixed point (so a wrapped-and-punctuated path like
     "(`foo.md`)." resolves fully in one call):
       - surrounding whitespace;
+      - an interior HARD LINE WRAP — a `\\n`/`\\r\\n` plus whatever
+        horizontal whitespace the wrapping surface put on either side of it
+        — rejoined with NO separator (§ line-wrap tolerance below);
       - a matched wrapper pair — `(...)`, `[...]`, `<...>`, `"..."`,
         `'...'`, backticks — ONLY when BOTH ends match; an unmatched
         leading `(` with no closing `)` is left untouched;
       - a single trailing `.`/`,`/`;`/`:`/`!`/`?`.
+
+    Line-wrap tolerance (2026-08-10, PM ask — the Windows case): a long
+    absolute path pasted into a prompt, a terminal, or a slash-command
+    argument is routinely hard-wrapped mid-token by the rendering surface,
+    arriving as `...predecessor-not-th\\n  e-new-baton.md`. Windows paths
+    are long enough that this is the common case there, not an edge one.
+    A newline is not a legal character in a Windows filename and is
+    vanishingly rare in a POSIX one, so its presence is evidence of the
+    wrap itself, never of the path — the rejoin is unconditional and the
+    adjacent horizontal whitespace (the continuation indent) goes with it.
+
+    Negative-spec — the rejoin uses NO separator, so a wrap that fell on a
+    genuine SPACE inside a path (`.../My Documents/x.md` broken after
+    `My`) is NOT recovered: nothing in the wrapped string distinguishes a
+    consumed space from a mid-token break, and coordinator artifact
+    basenames are kebab-case by construction. Do not "fix" this by also
+    emitting a space-joined variant unless the caller is first widened to
+    take a candidate LIST — a second single-string guess would just move
+    which of the two cases silently resolves wrong.
 
     Negative-spec — this is a FALLBACK CANDIDATE, never a normalizer: the
     caller must attempt resolution with the RAW string first and only fall
@@ -1965,6 +1996,10 @@ def _sanitize_artifact_path_str(raw: str) -> str:
         stripped = s.strip()
         if stripped != s:
             s = stripped
+            continue
+        unwrapped = _LINE_WRAP_RE.sub("", s)
+        if unwrapped != s:
+            s = unwrapped
             continue
         if len(s) >= 2 and s[0] in _PATH_WRAPPERS and s[-1] == _PATH_WRAPPERS[s[0]]:
             s = s[1:-1]
@@ -2523,11 +2558,12 @@ def compute_coast(
     notes: list[str] = []
     verdict = "blocked" if blocked_by else "clear"
 
-    cg_verdict = claim_grant.get("verdict") if claim_grant else None
+    grant = claim_grant or {}
+    cg_verdict = grant.get("verdict")
     if cg_verdict == "denied":
         verdict = "blocked"
     elif cg_verdict == "granted-with-warning":
-        notes.append("claim granted with warning: " + str(claim_grant.get("reason", "stale claim")))
+        notes.append("claim granted with warning: " + str(grant.get("reason", "stale claim")))
 
     if tree_quiescence and tree_quiescence.get("verdict") == "dirty":
         notes.append("tree not quiet: uncommitted changes in scoped paths")
@@ -3169,7 +3205,9 @@ def _claim_age_minutes(claims_dir: Path) -> Optional[int]:
     return elapsed // 60
 
 
-def _claim_grant_denied_live_reason(holder_sid: str, evidence: dict[str, Any]) -> str:
+def _claim_grant_denied_live_reason(
+    holder_sid: Optional[str], evidence: dict[str, Any]
+) -> str:
     """Compose the AC3b row-3 `denied` reason from whatever `holder_evidence()`
     fields resolved — a decidable one-liner instead of the former bare
     `"held by <sid> — that session is live"` (the unfalsifiable-evidence
@@ -3185,8 +3223,15 @@ def _claim_grant_denied_live_reason(holder_sid: str, evidence: dict[str, Any]) -
     recent_paths = evidence.get("recent_paths") or []
     scope_overlap = evidence.get("scope_overlap")
 
-    if basis == "stable-pid":
-        header = f"held by {holder_sid} — live (stable-pid)"
+    # A live claim dir CAN name no holder — `claim_holder_live` falls back to
+    # the ephemeral-pid test for a legacy dir carrying no `session_id` file,
+    # and a concurrent takeover can remove that file between two reads.
+    # Rendering the gap beats printing a literal "None" into a reason line an
+    # EM is meant to act on.
+    holder_display = holder_sid or "an unidentified session"
+
+    if basis in ("stable-pid", "harness-registry"):
+        header = f"held by {holder_display} — live ({basis})"
         clauses = []
         if age_sec is not None:
             clauses.append(f"last activity {age_sec}s ago")
@@ -3212,7 +3257,7 @@ def _claim_grant_denied_live_reason(holder_sid: str, evidence: dict[str, Any]) -
     else:
         inner_clauses.append("no recent file activity found")
     inner = ", ".join(inner_clauses)
-    return f"held by {holder_sid} — live ({basis_note}: {inner}) — may be a stale claim"
+    return f"held by {holder_display} — live ({basis_note}: {inner}) — may be a stale claim"
 
 
 def compute_claim_grant(
@@ -3250,6 +3295,15 @@ def compute_claim_grant(
          confirming a non-bug. Every other row carries `held_by_self: False`
          explicitly, so callers never have to fall back on a bare `.get()`
          default to tell "not self" from "not computed".
+      2b. Holder is a DIFFERENT session holding an EXPIRED `brief`-stage
+         lease (`session.claims.brief_lease_expired`) -> `granted-with-
+         warning`, EVEN IF that session reads live. This is the ONE row on
+         which a live holder's claim is takeable, and it exists because
+         liveness cannot bound a brief-stage reservation: `session_live`'s
+         Layer 1 is PPID-authoritative and ignores recency, so a session that
+         briefed the artifact and walked away without exiting would otherwise
+         hold it for its whole lifetime. An `apply`-stage claim never reaches
+         this row — rows 3-5 below own it unchanged.
       3. Holder is a DIFFERENT session and live -> `denied`, UNLESS (AC3e)
          that holder is lineage-related to this artifact via `fm`
          (`_lineage_related_sessions` — this artifact's own author, or a
@@ -3284,6 +3338,7 @@ def compute_claim_grant(
             "holder_live": False,
             "held_by_self": False,
             "claim_age_minutes": None,
+            "claim_stage": None,
             "drop_invocation": drop_invocation,
         }
 
@@ -3330,6 +3385,7 @@ def compute_claim_grant(
                 "holder_live": True,
                 "held_by_self": True,
                 "claim_age_minutes": claim_age_minutes,
+                "claim_stage": _claims.claim_stage(claims_dir),
                 "drop_invocation": drop_invocation,
             }
         )
@@ -3338,6 +3394,25 @@ def compute_claim_grant(
         holder_live = _liveness.claim_holder_live(str(claims_dir), cwd_str)
     except (OSError, ValueError):
         holder_live = False
+
+    stage = _claims.claim_stage(claims_dir)
+    if stage == _claims.CLAIM_STAGE_BRIEF and _claims.brief_lease_expired(claims_dir):
+        return _with_evidence(
+            {
+                "verdict": "granted-with-warning",
+                "reason": (
+                    f"{holder_sid} reserved this at brief {claim_age_minutes} minutes ago "
+                    f"and never applied it — the {_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute "
+                    "brief-stage lease has elapsed, so the reservation is takeable"
+                ),
+                "holder": holder_sid,
+                "holder_live": holder_live,
+                "held_by_self": False,
+                "claim_age_minutes": claim_age_minutes,
+                "claim_stage": stage,
+                "drop_invocation": drop_invocation,
+            }
+        )
 
     if holder_live:
         related_sessions = _lineage_related_sessions(repo_root, fm)
@@ -3354,6 +3429,7 @@ def compute_claim_grant(
                     "holder_live": True,
                     "held_by_self": False,
                     "claim_age_minutes": claim_age_minutes,
+                    "claim_stage": stage,
                     "drop_invocation": drop_invocation,
                 }
             )
@@ -3372,6 +3448,7 @@ def compute_claim_grant(
             "holder_live": True,
             "held_by_self": False,
             "claim_age_minutes": claim_age_minutes,
+            "claim_stage": stage,
             "drop_invocation": drop_invocation,
         }
 
@@ -3387,6 +3464,7 @@ def compute_claim_grant(
                 "holder_live": False,
                 "held_by_self": False,
                 "claim_age_minutes": claim_age_minutes,
+                "claim_stage": stage,
                 "drop_invocation": drop_invocation,
             }
         )
@@ -3407,9 +3485,100 @@ def compute_claim_grant(
             "holder_live": False,
             "held_by_self": False,
             "claim_age_minutes": claim_age_minutes,
+            "claim_stage": stage,
             "drop_invocation": drop_invocation,
         }
     )
+
+
+def acquire_brief_claim(
+    repo_root: Path, class_: str, basename: str
+) -> Optional[dict[str, Any]]:
+    """Take the `brief`-stage claim on `<class>-claims/<basename>` — the fix
+    for the 2026-08-10 duplicate-memo incident (`state/bug-backlog/
+    2026-08-10-pickup-claim-lands-at-apply-not-at-brief-36f1446e3e4b.yaml`).
+
+    Before this, the claim landed only during `apply`, so everything between
+    `brief` and `apply` — reading the artifact, verifying it against HEAD,
+    drafting the reply, and, in the incident, SENDING a counter memo to a
+    sibling repo — ran with no mutual exclusion at all. Two sessions each took
+    a clean no-claim brief, each did the work, and each shipped a memo; the
+    second `apply` failed correctly, but the externally-visible effect had
+    already left the repo. The claim has to land at the START of that window
+    for the exclusion to mean anything.
+
+    Returns a record of what the acquisition DISPLACED, or `None` when it
+    displaced nothing (a fresh lock, a re-brief of a lock this session already
+    holds, or a failed acquisition). Shape when non-`None`:
+
+        {"holder": <the sid we took it from>,
+         "basis": "expired-brief-lease" | "dead-holder",
+         "claim_age_minutes": <age of the claim we displaced>}
+
+    That record exists so a reclaim stays DISTINGUISHABLE from a fresh
+    pickup in the emitted brief. Without it the two collapse: the moment this
+    function takes over an abandoned reservation, `compute_claim_grant`
+    re-reads the dir, finds this session holding it, and reports the row-2
+    "you already hold this" that a first-ever brief of an unclaimed artifact
+    also reports. An EM would have no way to tell "nobody had this" from "I
+    just took this off session X" — and the second one it needs to know
+    about, because X may still be mid-work with an artifact it believes it
+    holds.
+
+    A failed acquisition (a live peer holds it) is NOT an error and is not
+    raised: the `compute_claim_grant` call that follows re-reads the same dir
+    and resolves the contention into the existing `denied` / stand-down
+    narration, which is the surface the EM already knows how to read.
+    Acquiring is an offer to take the lock, never a second gate.
+    """
+    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+
+    # Snapshot the incumbent BEFORE the mkdir race — after a successful
+    # takeover the dir names us, and what we displaced is unrecoverable.
+    prior_holder: Optional[str] = None
+    prior_age: Optional[int] = None
+    prior_lease_expired = False
+    if claims_dir.is_dir():
+        try:
+            prior_holder = (
+                (claims_dir / "session_id").read_text(encoding="utf-8").strip() or None
+            )
+        except OSError:
+            prior_holder = None
+        prior_age = _claims.claim_age_minutes(claims_dir)
+        prior_lease_expired = _claims.brief_lease_expired(claims_dir)
+
+    try:
+        # A re-brief of a lock this session already holds refreshes the lease
+        # rather than contending for it — active work must not age out.
+        if _claims.touch_brief_claim(class_, basename, cwd=str(repo_root)):
+            return None
+        took_it = _claims.claim_artifact(
+            class_,
+            basename,
+            cwd=str(repo_root),
+            stage=_claims.CLAIM_STAGE_BRIEF,
+        )
+    except (OSError, ValueError):
+        # A brief that cannot take the lock still owes the EM a decision
+        # object — the grant computation below reports the claim state either
+        # way, so a failed acquisition degrades to today's behaviour rather
+        # than losing the whole brief.
+        return None
+
+    if not took_it or prior_holder is None:
+        return None
+    try:
+        now_holder = (claims_dir / "session_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        now_holder = ""
+    if now_holder == prior_holder:
+        return None
+    return {
+        "holder": prior_holder,
+        "basis": "expired-brief-lease" if prior_lease_expired else "dead-holder",
+        "claim_age_minutes": prior_age,
+    }
 
 
 def _claim_already_self_held(repo_root: Path, class_: str, basename: str) -> bool:
@@ -4807,7 +4976,14 @@ def _build_action_memo_args(artifact_path: str, kind_resolved: str, decisions: d
     jkind = jkind if isinstance(jkind, dict) else {}
     disposition = jkind.get("disposition")
     args = ["action-memo", artifact_path]
-    decision_value = _MEMO_ACTION_DECISION_MAP.get((kind_resolved, disposition))
+    # `disposition` is EM-supplied JSON, so it is only a lookup key when it is
+    # actually a string — a non-string could never match this map's
+    # `tuple[str, str]` keys anyway, so the guard changes no behaviour.
+    decision_value = (
+        _MEMO_ACTION_DECISION_MAP.get((kind_resolved, disposition))
+        if isinstance(disposition, str)
+        else None
+    )
     if decision_value is not None:
         # Defect fix (2026-07-25, live repro this session): `--decision` and
         # `--actioned-note` are mutually exclusive on `cs_action_memo`'s own
@@ -5056,7 +5232,53 @@ def build_liveness_judgment_point(liveness_signal_fired: bool, evidence_pointer:
     )
 
 
-def build_gate_check_judgment_point(evidence_pointer: str, resolves: list[str]) -> dict[str, Any]:
+def compute_gate_shipped_blocker_evidence(
+    repo_root: Path, gate_evidence: Optional[dict[str, Any]]
+) -> Optional[dict[str, Any]]:
+    """Narrow `jgate` evidence enrichment (plan 2026-08-08-the-engine-asks-
+    for-facts-it-already-holds, chunk C7) — reads ONLY this handoff's own
+    `gate_evidence` frontmatter field (schema § `gate_evidence`), never a
+    corpus walk of sibling handoffs (live or archived, contract negative
+    spec 2). `gate_evidence` is authored directly onto THIS record by the
+    same hand that wrote `gate_dependency`/`blocked_by`, so reading it costs
+    nothing beyond the git read this module already performs elsewhere
+    (`compute_premise_checks`'s `sha` premise kind is the same shape, same
+    `_run_git` choke point — never raises).
+
+    Returns evidence for the FIRST `legs[]` entry with `kind ==
+    "commit-sha"` whose `ref` resolves via `git cat-file -e` in this repo,
+    but ONLY when `covers_prose` is explicitly `True` (schema rule 0 — an
+    absent or `False` `covers_prose` leaves every leg inert, so this
+    function must not manufacture a recommendation the schema itself
+    would treat as non-authoritative). Returns `None` on any of: no
+    `gate_evidence`, `covers_prose` not `True`, no resolvable `commit-sha`
+    leg — every one of those is a silent degrade to today's
+    insufficient-evidence brief, never a dangling-ref assertion: this
+    function only ever adds POSITIVE evidence when a sha genuinely
+    resolves, and never claims a blocker is unshipped."""
+    if not isinstance(gate_evidence, dict):
+        return None
+    if gate_evidence.get("covers_prose") is not True:
+        return None
+    legs = gate_evidence.get("legs")
+    if not isinstance(legs, list):
+        return None
+    for leg in legs:
+        if not isinstance(leg, dict) or leg.get("kind") != "commit-sha":
+            continue
+        ref = leg.get("ref")
+        if not isinstance(ref, str) or not ref.strip():
+            continue
+        sha = ref.strip()
+        result = _run_git(["cat-file", "-e", sha], repo_root)
+        if result.returncode == 0:
+            return {"leg_id": leg.get("leg_id", "<unknown>"), "sha": sha}
+    return None
+
+
+def build_gate_check_judgment_point(
+    evidence_pointer: str, resolves: list[str], recommendation: Optional[dict[str, str]] = None
+) -> dict[str, Any]:
     """The `awaiting_gate` JUDGMENT entry (contract § JUDGMENT checklist,
     "Has this `awaiting_gate` handoff's gate actually cleared?") — the engine
     surfaces the gate-dependency content and the aging verdict as evidence
@@ -5066,7 +5288,31 @@ def build_gate_check_judgment_point(evidence_pointer: str, resolves: list[str]) 
     Tier: `insufficient-evidence` — the evidence pointer names engine-read
     gate-dependency/aging content, not a verbatim quote of untrusted body
     text, but reading whether the named gate has actually cleared is
-    exactly the judgment this module never mechanizes."""
+    exactly the judgment this module never mechanizes.
+
+    `recommendation` (plan 2026-08-08-the-engine-asks-for-facts-it-already-
+    holds, chunk C7) is an OPTIONAL enrichment — `None` by default,
+    preserving the exact `insufficient-evidence` shape every prior caller
+    relied on. When the caller has resolved `compute_gate_
+    shipped_blocker_evidence` to a positive hit, it passes a
+    `disposition`/`rationale` dict here instead, so the EM reads a
+    substantiated point rather than a bare ask. This is ALWAYS additive to
+    the evidence, never a suppression: the judgment point is still emitted
+    unconditionally either way (contract negative spec 1), the
+    `dispositions`/`resolves` lists below are unchanged by which branch
+    fires, and the EM still resolves it — a recommendation narrows what is
+    read, never what is decided."""
+    if recommendation is not None:
+        return build_judgment_point(
+            "jgate",
+            "Has this awaiting_gate handoff's gate actually cleared?",
+            evidence_pointer,
+            [
+                {"value": "cleared", "resolves": resolves},
+                {"value": "not-cleared", "resolves": []},
+            ],
+            recommendation,
+        )
     return build_judgment_point(
         "jgate",
         "Has this awaiting_gate handoff's gate actually cleared?",
@@ -6131,14 +6377,47 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> "BriefResult":
     return BriefResult(decision_object, exit_code)
 
 
-def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None) -> BriefResult:
+def brief(
+    artifact_path: str,
+    decisions: Optional[dict[str, Any]] = None,
+    repo_root: Optional[Path] = None,
+    claim_at_brief: bool = False,
+) -> BriefResult:
     """`brief <artifact-path> [--decisions <json>]` — the single-shot decision
     object computation (contract § two-phase-stateless protocol, resolved
-    single-shot). Read-only throughout; mutates nothing (AC3)."""
+    single-shot).
+
+    Mutates no TRACKED content (AC3): every computation below reads disk and
+    git state only, and `test_brief_mutates_nothing_on_disk` still holds the
+    working tree clean across a call.
+
+    `claim_at_brief` (default False) is the one exception, and it writes nothing
+    tracked either — it takes the `brief`-stage mkdir lock under
+    `.git/coordinator-sessions/`, so that the read-verify-draft window this
+    brief opens is actually excluded against a concurrent pickup rather than
+    only being checked once that window has already closed
+    (`acquire_brief_claim`'s docstring has the incident). Acquisition happens
+    only once the artifact has resolved to a live handoff/spinoff/memo that a
+    pickup could actually proceed on — never for an archived, ambiguous,
+    already-`actioned`, or wrong-addressee artifact, none of which reach an
+    `apply`.
+
+    It defaults False so that every in-process caller and every test that
+    treats `brief()` as a pure computation keeps that guarantee; the CLI turns
+    it on for a SINGLE-artifact `brief` (`brief_multi`), which is the shape
+    that means "I am picking this up". A multi-artifact ` AND `/brace argument
+    is a survey and claims nothing.
+    """
     decisions = decisions or {}
     root = repo_root or resolve_repo_root()
     if root is None:
         raise _TransportFailure("could not resolve a git worktree root")
+
+    # Set by the acquisition below when this brief took the lock off a
+    # PREVIOUS holder; read by `_emit_elision_aware` so the reclaim is
+    # narrated instead of vanishing behind the "you already hold this" the
+    # grant reports the instant the takeover lands.
+    reclaimed: list[dict[str, Any]] = []
 
     try:
         artifact = resolve_artifact(artifact_path, root)
@@ -6214,9 +6493,14 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
             )
             decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
         if sanitize_resolution:
+            # `passed` is rendered with its line breaks escaped: the sanitize
+            # tier also repairs a hard line wrap, and a raw newline here would
+            # split this one-line note across the narration.
+            _passed = sanitize_resolution["passed"].replace("\r", "\\r").replace("\n", "\\n")
             note = (
-                f"Passed path '{sanitize_resolution['passed']}' only resolved after "
-                f"trimming surrounding/trailing prose punctuation -> "
+                f"Passed path '{_passed}' only resolved after "
+                f"trimming surrounding/trailing prose punctuation and rejoining "
+                f"any hard line wrap -> "
                 f"'{sanitize_resolution['resolved']}'. "
             )
             decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
@@ -6226,6 +6510,34 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
                 f"via unique basename-suffix match -> '{suffix_resolution['resolved']}'. "
             )
             decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
+        if reclaimed:
+            record = reclaimed[0]
+            basis_phrase = (
+                f"its {_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute brief-stage lease elapsed"
+                if record["basis"] == "expired-brief-lease"
+                else "that session reads dead"
+            )
+            age = record.get("claim_age_minutes")
+            age_phrase = f" (claim was {age}m old)" if age is not None else ""
+            note = (
+                f"RECLAIMED from session {record['holder']} — {basis_phrase}{age_phrase}. "
+                f"That session may still believe it holds this; reconcile before acting "
+                f"externally on it. "
+            )
+            decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
+            # `gates.claim_reclaim`, NOT a key inside `gates.claim_grant`:
+            # the memo branch emits no `claim_grant` at all (only the handoff
+            # branch computes one), and the memo path is precisely where the
+            # 2026-08-10 incident happened — so hanging this off `claim_grant`
+            # would drop the machine-readable record on the one class that
+            # most needs it, leaving only prose. One field path, present for
+            # both classes, and no fabricated half-populated `claim_grant`.
+            gates = decision_object.get("gates")
+            if isinstance(gates, dict):
+                decision_object = {
+                    **decision_object,
+                    "gates": {**gates, "claim_reclaim": record},
+                }
         return _emit(decision_object, exit_code)
 
     classification = artifact["classification"]
@@ -6332,6 +6644,13 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
     if classification in ("handoff", "spinoff"):
         artifact_live_path = root / artifact["path"]
         aging_verdict = compute_aging_verdict(artifact_live_path)
+        # Claim FIRST, then read the claim state: both reads below must see
+        # the post-acquisition truth, or this brief would narrate "no
+        # competing claim" about a lock it just took itself.
+        if claim_at_brief:
+            took_from = acquire_brief_claim(root, "handoff", basename)
+            if took_from:
+                reclaimed.append(took_from)
         claim = compute_claim_gate(root, "handoff", basename)
         claim_grant = compute_claim_grant(root, "handoff", basename, artifact["path"], cwd=str(root), fm=fm)
         # Self-claim idempotence (2026-07-29): `d2` (archive-stamp-cli's
@@ -6461,7 +6780,26 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
                 "gate_dependency": fm.get("gate_dependency"),
                 "aging_verdict": aging_verdict,
             }
-            gate_jp = build_gate_check_judgment_point("gates.gate_check", ["d2"])
+            # C7 enrichment — reads ONLY this record's own `gate_evidence`
+            # field (no corpus walk); see `compute_gate_shipped_blocker_
+            # evidence`'s docstring for the narrowing rationale.
+            shipped_blocker = compute_gate_shipped_blocker_evidence(root, fm.get("gate_evidence"))
+            if shipped_blocker is not None:
+                gate_check["shipped_blocker"] = shipped_blocker
+                gate_jp = build_gate_check_judgment_point(
+                    "gates.gate_check",
+                    ["d2"],
+                    recommendation={
+                        "disposition": "cleared",
+                        "rationale": (
+                            f"gate_evidence leg {shipped_blocker['leg_id']!r} names "
+                            f"commit-sha {shipped_blocker['sha']}, resolvable in this "
+                            "repo — the named blocker appears shipped."
+                        ),
+                    },
+                )
+            else:
+                gate_jp = build_gate_check_judgment_point("gates.gate_check", ["d2"])
             judgment_points.append(gate_jp)
         elif fm.get("deployment_state") == "shipped":
             # 2026-07-25 defect fix — a shipped handoff previously briefed as
@@ -6682,6 +7020,16 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, repo_r
     # round-trip, rather than needing a third pass.
     kind_resolved, kind_unrecognized = resolve_memo_kind(fm)
 
+    # Placed after the M0 `actioned` short-circuit and the addressee gate,
+    # both of which return without any path to an `apply` — an artifact this
+    # session must not action is one it must not lock either. Everything from
+    # here on IS the unguarded window the 2026-08-10 duplicate-memo incident
+    # ran through (`acquire_brief_claim`), so this is where the lock belongs.
+    if claim_at_brief:
+        took_from = acquire_brief_claim(root, "memo", basename)
+        if took_from:
+            reclaimed.append(took_from)
+
     directives = build_memo_directives(artifact["path"], kind_resolved, decisions)
     if _claim_already_self_held(root, "memo", basename):
         # Idempotent same-session re-entry (see _claim_already_self_held's
@@ -6868,11 +7216,21 @@ def brief_multi(
     and re-anchoring resolution). The repo root is resolved once and threaded to
     every call. A single-path argument yields a one-element list whose sole
     entry is identical to `brief(artifact_arg, …)`.
+
+    CLAIM-AT-BRIEF IS SINGLE-ARTIFACT ONLY. A one-path argument is a pickup
+    attempt and takes the `brief`-stage lock (`acquire_brief_claim`); an
+    ` AND `-joined or brace-expanded argument is a SURVEY across several
+    batons — locking all of them would strand every one the EM did not go on
+    to pick up, which is a worse failure than the contention this exists to
+    stop. Splitting a survey into N separate single-path invocations does
+    claim each one, and that is correct: each of those IS a pickup attempt.
     """
     root = repo_root or resolve_repo_root()
     if root is None:
         raise _TransportFailure("could not resolve a git worktree root")
-    return [brief(path, decisions, root) for path in split_artifact_args(artifact_arg)]
+    paths = split_artifact_args(artifact_arg)
+    claim_at_brief = len(paths) == 1
+    return [brief(path, decisions, root, claim_at_brief=claim_at_brief) for path in paths]
 
 
 class _TransportFailure(Exception):

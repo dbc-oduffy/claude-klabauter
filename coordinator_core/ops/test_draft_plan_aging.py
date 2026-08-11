@@ -222,6 +222,91 @@ def test_batch_git_commit_epochs_empty_input_no_spawn():
     assert _batch_git_commit_epochs(Path("."), []) == {}
 
 
+def _commit_at(repo: Path, message: str, commit_days_ago: int, today: date, *, allow_empty: bool = False) -> None:
+    """Commit currently-staged changes with an explicit author/committer date,
+    matching `_write_and_commit_plan`'s date-pinning idiom above."""
+    commit_date = today - timedelta(days=commit_days_ago)
+    env_date = f"{commit_date.isoformat()}T12:00:00"
+    args = ["git", "commit", "-q", "-m", message]
+    if allow_empty:
+        args.append("--allow-empty")
+    subprocess.run(
+        args,
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **_base_env(),
+            "GIT_AUTHOR_DATE": env_date,
+            "GIT_COMMITTER_DATE": env_date,
+        },
+    )
+
+
+def test_batch_git_commit_epochs_resolves_conflict_resolution_merge_commit(tmp_path):
+    """Regression for the merge-suppression trap: `git log --name-only`
+    prints NO file-list line for a merge commit by default, even one that
+    survives history simplification under a pathspec (i.e. genuinely
+    touched the path via conflict resolution) — so without
+    `--diff-merges=first-parent`, the batched matcher would skip past the
+    merge's header (real, current `%ct`) straight to the next, OLDER commit
+    that does print a name line, silently returning a stale timestamp. This
+    pins that the merge commit's own epoch is returned instead.
+    """
+    from coordinator_core.ops.draft_plan_aging import _batch_git_commit_epochs
+
+    today = date(2026, 7, 22)
+    rel_path = "docs/plans/conflict.md"
+    _init_repo(tmp_path)
+    _run_git(tmp_path, "checkout", "-b", "main")
+
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = plans_dir / "conflict.md"
+
+    plan_path.write_text("base\n", encoding="utf-8")
+    _run_git(tmp_path, "add", rel_path)
+    _commit_at(tmp_path, "add base", commit_days_ago=20, today=today)
+
+    _run_git(tmp_path, "checkout", "-b", "side")
+    plan_path.write_text("side change\n", encoding="utf-8")
+    _run_git(tmp_path, "add", rel_path)
+    _commit_at(tmp_path, "side edit", commit_days_ago=15, today=today)
+
+    _run_git(tmp_path, "checkout", "main")
+    plan_path.write_text("trunk change\n", encoding="utf-8")
+    _run_git(tmp_path, "add", rel_path)
+    _commit_at(tmp_path, "trunk edit", commit_days_ago=14, today=today)
+
+    merge = subprocess.run(
+        ["git", "merge", "--no-ff", "--no-commit", "side"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert merge.returncode != 0, "expected a real conflict to set up this fixture"
+
+    plan_path.write_text("resolved\n", encoding="utf-8")
+    _run_git(tmp_path, "add", rel_path)
+    _commit_at(tmp_path, "merge: resolve conflict", commit_days_ago=0, today=today)
+
+    merge_epoch = int(
+        subprocess.run(
+            ["git", "log", "-1", "--format=%ct"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
+
+    result = _batch_git_commit_epochs(tmp_path, [rel_path])
+
+    assert rel_path in result
+    assert result[rel_path] == merge_epoch
+
+
 def test_list_stale_executing_multi_plan_uses_one_batched_git_log_call(tmp_path, monkeypatch):
     """Regression pin for C14: with N `status: executing` plans present,
     `list_stale_executing` must call `_batch_git_commit_epochs` exactly ONCE

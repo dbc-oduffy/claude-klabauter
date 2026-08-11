@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.plan_status_transition import main
 
 _GIT_ENV_KEYS = {
@@ -519,7 +520,17 @@ def test_stamp_superseded_happy_path(tmp_path, capsys):
     assert f'status "draft" → superseded (by {successor})' in out
     text = p.read_text(encoding="utf-8")
     assert "status: superseded" in text
-    assert f"superseded_by: {successor}" in text
+    # `successor` carries native path separators (backslashes on Windows) --
+    # a Windows path containing `:` (drive letter) forces `serialize_yaml_scalar`
+    # to single-quote the written scalar (`:` is a YAML structural character).
+    # Single-quoted YAML does NOT interpret `\` as an escape, so the value
+    # round-trips intact through the documented reader
+    # (`read_fm_field_unquoted`/`unquote_yaml_scalar`) that every real
+    # consumer of `superseded_by` uses -- assert against THAT contract, not
+    # against unquoted on-disk bytes the writer never promised to emit.
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "superseded_by") == str(successor)
 
 
 def test_stamp_superseded_missing_by_fails_loud(tmp_path, capsys):
@@ -559,6 +570,124 @@ def test_stamp_superseded_refuses_terminal_source_status(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "already terminal at status \"implemented\"" in err
     assert p.read_text(encoding="utf-8") == original
+
+
+# ---------------------------------------------------------------------------
+# Production-caller coverage for the terminal-state cascade (this session,
+# 2026-08-10): `EndToEndSizingCascadeClosesTest` in coordinator/bin/tests/
+# test_coordinator_doc_new_sizing_object_gate.py proves the cascade
+# MECHANISM closes a cited sizing to `status: shipped`, but reaches it by
+# fetching `deliverable.cascade_terminal`'s handler directly
+# (`ipc_mod.get_op_handler(...)`) and calling it with a hand-built dict that
+# explicitly names `target_kind: "sizing"`. Production never constructs that
+# argument -- the only caller that fires this cascade off a real
+# plan-implemented event is `_run_cascade` above, and it hands the handler
+# exactly `{deliverable_id, source_kind: "plan", source_path}` with no
+# `target_kind` at all, so the handler's own default applies
+# (`deliverable_cascade.py`'s `_handler`: `target_kind_name = (...) or
+# "handoff"`). This test enters through the real production entrypoint --
+# `plan_status_transition.main(["stamp-implemented", ...])` -- rather than
+# the handler directly, to prove (or disprove) that a cited sizing actually
+# closes when a plan is stamped implemented for real. Both tests stay: the
+# handler-level one is the faster signal if the cascade mechanism itself
+# regresses; this one is the only one that would catch a caller-side
+# regression (a renamed kwarg, a dropped `target_kind`, a typo'd
+# `source_kind`) that leaves the mechanism itself intact but never reaches
+# it from production.
+# ---------------------------------------------------------------------------
+
+def _load_doc_new_cli():
+    """Load `coordinator/bin/coordinator-doc-new` as a module by file path --
+    it is an extensionless polyglot entrypoint, not a `.py` module, so it
+    cannot be imported normally. Mirrors the load idiom in
+    `coordinator/bin/tests/test_coordinator_doc_new_sizing_object_gate.py`'s
+    own `_load_cli_module`.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    repo_root = Path(__file__).resolve().parents[3]
+    cli_path = repo_root / "coordinator" / "bin" / "coordinator-doc-new"
+    loader = importlib.machinery.SourceFileLoader(
+        "plan_status_transition_test_doc_new_cli", str(cli_path)
+    )
+    spec = importlib.util.spec_from_loader(
+        "plan_status_transition_test_doc_new_cli", loader
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(mod)
+    return mod
+
+
+def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_path, capsys):
+    """Flip a plan through `_stamp_implemented`'s own production call to
+    `_run_cascade` (never a hand-built handler-dict) and assert the sizing it
+    cites reaches `status: shipped` with its `plan` FK written -- the same
+    assertion `EndToEndSizingCascadeClosesTest` makes, but entered through
+    the caller production code actually uses. See the block comment above
+    for why this is a distinct, non-redundant leg of coverage.
+
+    Negative-spec: `EndToEndSizingCascadeClosesTest` passing is NOT evidence
+    that production closes a sizing. It supplies `target_kind: 'sizing'`
+    itself, a shape production never sends, so it proves the cascade
+    mechanism works while saying nothing about whether anything reaches it.
+    """
+    import yaml
+
+    doc_new = _load_doc_new_cli()
+
+    # `_scaffold_sizing` itself never mints -- the CLI's `main()` resolves
+    # `deliverable_id` (via `_mint_deliverable_id_from_title`) BEFORE calling
+    # it, per the CLI's own `--type sizing-object` dispatch. Mirrored here
+    # rather than invoking `main()`/a subprocess, since only the scaffold
+    # shape (not the CLI's arg-parsing) is under test.
+    minted_id = doc_new._mint_deliverable_id_from_title(
+        "E2E production-caller sizing", "sizing-object"
+    )
+    assert minted_id
+
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    sizing_content = doc_new._scaffold_sizing(
+        title="E2E production-caller sizing", deliverable_id=minted_id
+    )
+    sizing_out = _write(tmp_path, "state/sizings/2026-08-10-e2e.yaml", sizing_content)
+    sizing_doc = yaml.safe_load(sizing_out.read_text(encoding="utf-8"))
+    deliverable_id = sizing_doc["deliverable_id"]
+    assert deliverable_id
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    plan_relpath = "docs/plans/2026-08-10-e2e-plan.md"
+    plan_content = doc_new._scaffold_plan(
+        title="E2E production-caller plan",
+        branch="work-e2e",
+        author="test",
+        deliverable_id=deliverable_id,
+        sizing_object="state/sizings/2026-08-10-e2e.yaml",
+    )
+    plan_path = _write(tmp_path, plan_relpath, plan_content)
+
+    # Mirrors the CLI's own `--type plan --sizing-object ...` reverse-edge
+    # write (C4, `_mutate_sizing_reverse_edge`): a real citing-plan creation
+    # bumps the sizing to `status: routed` at plan-creation time, putting it
+    # in the cascade's live set BEFORE the plan is ever stamped implemented.
+    # `_scaffold_plan` alone (called directly above, not through `main()`)
+    # never performs that reverse-edge write, so it is reproduced here --
+    # this is test SETUP mirroring production shape, not an assertion.
+    sizing_out.write_text(
+        doc_new._mutate_sizing_reverse_edge(sizing_out.read_text(encoding="utf-8"), plan_relpath),
+        encoding="utf-8",
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(plan_path)])
+    out, err = capsys.readouterr()
+    assert rc == 0, (out, err)
+
+    after = yaml.safe_load(sizing_out.read_text(encoding="utf-8"))
+    assert after["status"] == "shipped", (
+        f"sizing never closed through the production caller -- got "
+        f"status={after.get('status')!r}. stderr: {err!r}"
+    )
+    assert after["plan"] == plan_relpath
 
 
 def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):

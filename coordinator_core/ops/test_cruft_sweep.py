@@ -665,3 +665,197 @@ def test_apply_mode_has_no_double_delete_for_overlapping_name(tmp_path):
         repo_root, apply=True, json_mode=False, quiet=True,
     )
     assert empty_items == 0
+
+
+# ---------------------------------------------------------------------------
+# scratchpad class — sweep_harness_scratchpads adapter over
+# scratchpad_sweep.sweep_scratchpads. See dispatch brief's critical
+# correctness constraint: apply must map to reclaim, never inverted.
+# ---------------------------------------------------------------------------
+
+_SP_SID_DEAD_OLD = "33333333-3333-3333-3333-333333333333"
+_SP_SID_SELF = "44444444-4444-4444-4444-444444444444"
+
+
+def _build_scratchpad_fixture(tmp_path, project_slug="X--claude-klabauter"):
+    """One dead-and-old scratchpad session (reclaimable) plus the invoking
+    session's own (never touched). Mirrors test_scratchpad_sweep.py's own
+    fixture shape at the unit boundary that module already established."""
+    claude_root = tmp_path / "claude" / project_slug
+    claude_root.mkdir(parents=True)
+
+    for sid in (_SP_SID_DEAD_OLD, _SP_SID_SELF):
+        sdir = claude_root / sid
+        sdir.mkdir()
+        scratch = sdir / "scratchpad"
+        scratch.mkdir()
+        f = scratch / "a.txt"
+        f.write_text("x" * 100, encoding="utf-8")
+        if sid == _SP_SID_DEAD_OLD:
+            old_stamp = time.time() - 10 * 86400
+            os.utime(f, (old_stamp, old_stamp))
+
+    return tmp_path
+
+
+@pytest.fixture
+def _patch_scratchpad_liveness(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.scratchpad_sweep._session_liveness.session_live",
+        lambda sid, cwd=None: False,
+    )
+
+
+def _sweep_scratchpad_kwargs(tmp_path, **overrides):
+    kwargs = dict(
+        temp_root=str(tmp_path),
+        self_session_id=_SP_SID_SELF,
+        slug_to_root_map={"X--claude-klabauter": "X:/claude-klabauter"},
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_run_all_phases_scratchpad_class_dispatches_phase(tmp_path, monkeypatch, _patch_scratchpad_liveness):
+    _build_scratchpad_fixture(tmp_path)
+    called = {}
+
+    def _fake_sweep(*, apply, json_mode, quiet, log_path=None, emit_fn=None, **kwargs):
+        called["hit"] = True
+        called["apply"] = apply
+        return 0, 0
+
+    monkeypatch.setattr(cruft_sweep, "sweep_harness_scratchpads", _fake_sweep)
+    totals = cruft_sweep._run_all_phases(
+        "scratchpad", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        None, [], [], None, None,
+    )
+    assert called.get("hit") is True
+    assert "scratchpad" in totals
+
+
+def test_run_all_phases_harness_and_scratch_classes_do_not_dispatch_scratchpad(monkeypatch):
+    called = {"hit": False}
+
+    def _fake_sweep(*args, **kwargs):
+        called["hit"] = True
+        return 0, 0
+
+    monkeypatch.setattr(cruft_sweep, "sweep_harness_scratchpads", _fake_sweep)
+
+    cruft_sweep._run_all_phases(
+        "harness", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        None, [], [], None, None,
+    )
+    assert called["hit"] is False
+
+    cruft_sweep._run_all_phases(
+        "scratch", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        Path("/nonexistent-repo-root"), [], [], None, None,
+    )
+    assert called["hit"] is False
+
+
+def test_run_all_phases_all_class_includes_scratchpad_in_grand_total(tmp_path, monkeypatch, _patch_scratchpad_liveness):
+    _build_scratchpad_fixture(tmp_path)
+
+    def _fake_sweep(*, apply, json_mode, quiet, log_path=None, emit_fn=None, **kwargs):
+        return 12345, 1
+
+    monkeypatch.setattr(cruft_sweep, "sweep_harness_scratchpads", _fake_sweep)
+
+    totals = cruft_sweep._run_all_phases(
+        "all", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        Path(str(tmp_path / "not-a-repo")), [], [], None, None,
+    )
+    assert totals["scratchpad"] == {"bytes": 12345, "items": 1}
+    assert totals["_grand_total_bytes"] >= 12345
+    assert totals["_grand_total_items"] >= 1
+
+
+def test_sweep_harness_scratchpads_dry_run_deletes_nothing(tmp_path, _patch_scratchpad_liveness):
+    _build_scratchpad_fixture(tmp_path)
+    old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_DEAD_OLD / "scratchpad"
+    assert old_scratch.is_dir()
+
+    total_bytes, total_items = cruft_sweep.sweep_harness_scratchpads(
+        apply=False, json_mode=False, quiet=True,
+        **_sweep_scratchpad_kwargs(tmp_path),
+    )
+
+    assert old_scratch.is_dir(), "dry-run (apply=False) must never delete"
+    assert total_items == 1
+    assert total_bytes == 100
+
+
+# Review: code-reviewer -- Finding 7: every other apply-path test monkeypatches
+# sweep_scratchpads entirely, so "apply actually deletes" was verified only at
+# the kwarg boundary. This exercises the real (non-monkeypatched)
+# sweep_scratchpads end-to-end against a fixture, asserting an actual deletion.
+def test_sweep_harness_scratchpads_apply_deletes_real_dead_scratchpad(tmp_path, _patch_scratchpad_liveness):
+    _build_scratchpad_fixture(tmp_path)
+    old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_DEAD_OLD / "scratchpad"
+    self_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_SELF / "scratchpad"
+    assert old_scratch.is_dir()
+    assert self_scratch.is_dir()
+
+    total_bytes, total_items = cruft_sweep.sweep_harness_scratchpads(
+        apply=True, json_mode=False, quiet=True,
+        **_sweep_scratchpad_kwargs(tmp_path),
+    )
+
+    assert not old_scratch.is_dir(), "apply=True must actually delete the reclaimable scratchpad"
+    assert self_scratch.is_dir(), "the invoking session's own scratchpad must never be touched"
+    assert total_items == 1
+    assert total_bytes == 100
+
+
+def test_sweep_harness_scratchpads_apply_maps_to_reclaim(tmp_path, monkeypatch, _patch_scratchpad_liveness):
+    """Asserts the delegation itself -- apply=True must call
+    sweep_scratchpads(reclaim=True) -- without deleting a real tree outside
+    a fixture (the underlying sweep_scratchpads call is monkeypatched out)."""
+    captured = {}
+
+    def _fake_sweep_scratchpads(**kwargs):
+        captured.update(kwargs)
+        return {
+            "entries": [], "counts": {}, "ttl_days": kwargs.get("ttl_days", 7),
+            "bytes_reclaimable": 0, "bytes_reclaimed": 0,
+        }
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.scratchpad_sweep.sweep_scratchpads", _fake_sweep_scratchpads
+    )
+
+    cruft_sweep.sweep_harness_scratchpads(
+        apply=True, json_mode=False, quiet=True,
+        **_sweep_scratchpad_kwargs(tmp_path),
+    )
+
+    assert captured.get("reclaim") is True
+
+
+def test_sweep_harness_scratchpads_dry_run_maps_apply_false_to_reclaim_false(tmp_path, monkeypatch, _patch_scratchpad_liveness):
+    captured = {}
+
+    def _fake_sweep_scratchpads(**kwargs):
+        captured.update(kwargs)
+        return {
+            "entries": [], "counts": {}, "ttl_days": kwargs.get("ttl_days", 7),
+            "bytes_reclaimable": 0, "bytes_reclaimed": 0,
+        }
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.scratchpad_sweep.sweep_scratchpads", _fake_sweep_scratchpads
+    )
+
+    cruft_sweep.sweep_harness_scratchpads(
+        apply=False, json_mode=False, quiet=True,
+        **_sweep_scratchpad_kwargs(tmp_path),
+    )
+
+    assert captured.get("reclaim") is False

@@ -40,8 +40,13 @@ Two DISTINCT error-class flags (guards-match-conditions-not-containers):
         commits, so affected commits surface as MORE review, never less.
 
 Negative-spec:
-    - --segments-json mode never batches `git rev-list` — per-record file
-      attribution requires the per-record `git log --name-only` call anyway.
+    - --segments-json mode never batches `git rev-list` or `git log
+      --name-only` across DISTINCT ranges — both legs ARE memoised per
+      DISTINCT sha_range (build_segments's revlist_memo/namelog_memo) since
+      each is a pure function of (sha_range, cwd), but combining ranges
+      into one call is a separate, still-forbidden operation (SAFE_RANGE
+      admits symbolic/live-HEAD endpoints — see build_segments's own
+      comment).
     - --reviewed-set mode also resolves each DISTINCT range independently
       (one `git rev-list` per range, deduplicated, unioned) rather than
       reproducing the bash oracle's single-batched-call optimization — see
@@ -260,6 +265,21 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
                     file=sys.stderr,
                 )
             return None
+        if scope_kind not in ("diff", "plan") and warn:
+            # Per-record degrade, not global fatal (2026-08-10 coverage-gate
+            # wedge: an unrecognized scope_kind anywhere in the trail corpus
+            # must never take the whole gate down before it reaches a
+            # VERDICT — see cross-repo/inbox/2026-08-10-example-retrieval-repo-ue-addon-
+            # em-coverage-gate-crashes-on-chunk-and-inline-dispatch-kinds.md).
+            # The record still flows through and resolves like any other, but
+            # `_credit_from_kind_partition` never reads an unrecognized kind's
+            # bucket, so it earns zero credit — fail-closed, unchanged safety
+            # direction.
+            print(
+                f"WARN: unrecognized scope_kind {scope_kind!r} — record "
+                f"credits nothing: {artifact}",
+                file=sys.stderr,
+            )
         # scope_kind == "diff" credits unconditionally (fall through);
         # scope_kind == "plan" (or future value) is resolved here and filtered
         # to planning-artifact commits downstream in build_reviewed_set.
@@ -429,12 +449,17 @@ def build_reviewed_set(
 
 # ---------------------------------------------------------------------------
 # --segments-json mode — per-record git rev-list + git log --name-only.
-# Mirrors the bash oracle. The git log --name-only leg is NOT batched:
-# per-segment file attribution is required for seam detection. The git
-# rev-list leg IS memoised per DISTINCT sha_range (see revlist_memo in
-# build_segments) — that comment does not justify skipping dedup on a
-# range re-cited by multiple records; see build_segments docstring/inline
-# comment for why multi-range batching is still forbidden even so.
+# Mirrors the bash oracle. Neither leg is BATCHED across distinct ranges
+# (SAFE_RANGE admits symbolic/live-HEAD endpoints; git computes
+# reachable(positives) \ reachable(negatives) as ONE set expression per
+# range — combining ranges would silently drop coverage on a linear chain).
+# Both legs ARE memoised per DISTINCT sha_range (revlist_memo / namelog_memo
+# in build_segments): `git log --name-only --format= <sha_range>` is a pure
+# function of (sha_range, cwd) with `kind` already discarded by `_classify`,
+# so two records citing the same range resolve to the identical `files` set.
+# Per-segment ATTRIBUTION is still preserved — each record still gets its
+# own segment dict, the memoised set is just emitted into every one of them
+# instead of being re-resolved by a fresh spawn each time.
 # ---------------------------------------------------------------------------
 
 
@@ -445,9 +470,9 @@ def build_segments(
 ) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
 
-    # Per-range memo for the `git rev-list` leg only (keyed on sha_range
-    # alone — build_segments has no kind-partition, unlike build_reviewed_set).
-    # Each DISTINCT range is still resolved independently (no multi-range
+    # Per-range memo for the `git rev-list` leg (keyed on sha_range alone —
+    # build_segments has no kind-partition, unlike build_reviewed_set). Each
+    # DISTINCT range is still resolved independently (no multi-range
     # batching: SAFE_RANGE admits symbolic/live-HEAD endpoints, and git
     # computes reachable(positives) \ reachable(negatives) as ONE set
     # expression per range — combining ranges would silently drop coverage
@@ -455,12 +480,18 @@ def build_segments(
     # RE-resolving a range already seen in this same build_segments call —
     # the top repeater fires 22x with zero dedup before this fix.
     #
-    # The sibling `git log --name-only` leg is NOT memoised or batched: it
-    # produces per-segment file attribution required for seam detection, so
-    # every record still needs its own git log call even when sha_range
-    # repeats (a prior record's file list cannot stand in for this one).
+    # The sibling `git log --name-only` leg gets the identical treatment
+    # (namelog_memo/namelog_skip below): memoised per DISTINCT sha_range,
+    # never batched across ranges. `git log --name-only --format= <range>`
+    # is a pure function of (sha_range, cwd) — `_classify` already discarded
+    # `kind` before this point — so two records citing the same range get an
+    # identical `files` set. Per-segment file ATTRIBUTION (the reason this
+    # leg exists) is preserved because the memoised set is still emitted
+    # into every record's own segment dict below, not deduplicated away.
     revlist_memo: Dict[str, Optional[Set[str]]] = {}
     revlist_skip: Set[str] = set()
+    namelog_memo: Dict[str, Set[str]] = {}
+    namelog_skip: Set[str] = set()
 
     for _source_path, rec in all_records:
         classified = _classify(rec)
@@ -490,19 +521,27 @@ def build_segments(
             shas = set(shas_out.splitlines()) if shas_out else set()
             revlist_memo[sha_range] = shas
 
-        rc2, log_out, log_err = _run(
-            ["git", "log", "--name-only", "--format=", sha_range], cwd=cwd
-        )
-        if rc2 != 0:
-            if on_unresolvable_ref == "skip":
-                print(
-                    f"WARN: skipping trail record (git log failed) {sha_range!r} ({artifact})",
-                    file=sys.stderr,
-                )
-                continue
-            print(f"ERROR: command failed: git log {sha_range}\n{log_err}", file=sys.stderr)
-            raise _FatalError(f"git log {sha_range} failed")
-        files = set(line for line in log_out.splitlines() if line.strip()) if log_out else set()
+        if sha_range in namelog_skip:
+            continue
+
+        if sha_range in namelog_memo:
+            files = namelog_memo[sha_range]
+        else:
+            rc2, log_out, log_err = _run(
+                ["git", "log", "--name-only", "--format=", sha_range], cwd=cwd
+            )
+            if rc2 != 0:
+                if on_unresolvable_ref == "skip":
+                    print(
+                        f"WARN: skipping trail record (git log failed) {sha_range!r} ({artifact})",
+                        file=sys.stderr,
+                    )
+                    namelog_skip.add(sha_range)
+                    continue
+                print(f"ERROR: command failed: git log {sha_range}\n{log_err}", file=sys.stderr)
+                raise _FatalError(f"git log {sha_range} failed")
+            files = set(line for line in log_out.splitlines() if line.strip()) if log_out else set()
+            namelog_memo[sha_range] = files
 
         segments.append({"sha_range": sha_range, "shas": shas, "files": files})
 

@@ -86,7 +86,7 @@ def test_every_live_bin_inventory_entry_lands_in_a_real_install(monkeypatch, tmp
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
-        python3_cmd_rendered=None, check_only=False,
+        check_only=False,
         python3_cmd_resolved_bin="/usr/bin/python3",
     )
 

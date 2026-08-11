@@ -50,16 +50,20 @@ from coordinator_core.ops.fleet.memo_send import (
     SendParams,
     _append_sent_ledger,
     _commit_delivered_memo,
+    _commit_ledger_once,
+    _commit_sender_ledger,
     _compose_memo,
     _containment_check,
     _git_check_ignore,
     _memo_filename,
     _memo_send,
+    _memo_send_fan_out,
     _normalize_in_reply_to,
     _portable_delivered_to_form,
     _read_central_receiver_ids,
     _read_receiver_aliases,
     _read_registry_repos,
+    _read_sent_ledger_locked,
     _receiver_em_to_repo_key,
     _redelivery_filename,
     _resolve_receiver_inbox,
@@ -70,6 +74,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _write_memo_file,
     resolve_sender_id,
 )
+from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._common import _make_git_env, main_worktree_root
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
@@ -4454,3 +4459,449 @@ class TestSentMemoLedger:
         ))
         assert result["exit_code"] == 0, result
         assert result["acted"], result
+
+
+# ===========================================================================
+# C4a — engine-side tests for the sender ledger COMMIT leg
+# (docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md § C4).
+#
+# The append leg (_append_sent_ledger) is covered above (TestSentMemoLedger);
+# this class covers _commit_sender_ledger / _commit_ledger_once /
+# _read_sent_ledger_locked and the commit's threading through _memo_send /
+# _memo_send_fan_out — AC1, AC2, AC4, AC5, AC6, AC8, AC9.
+# ===========================================================================
+
+def _seed_committed_ledger(sender_repo: Path) -> None:
+    """Seed an empty, already-committed sent-ledger.jsonl into HEAD.
+
+    `commit_authored_content` (DR-272 § 3.3 form-3) is built for in-place
+    mutation of an EXISTING reserved-noun file, not for creating a new one
+    (see its own docstring bound) — so a genuinely fresh sender repo's very
+    first send can never land the commit leg (the path does not yet exist
+    in HEAD; see `test_fresh_clone_untracked_ledger_does_not_retry`, which
+    pins exactly that non-retryable refusal). Tests asserting a SUCCESSFUL
+    commit call this first so the path already exists in HEAD, matching
+    every real sender repo after its own first send.
+    """
+    ledger_path = _sender_sent_ledger_path(sender_repo)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text("", encoding="utf-8")
+    _git(sender_repo, "add", "--", _SENT_LEDGER_RELPATH_FOR_TEST)
+    _git(sender_repo, "commit", "-m", "seed empty sent-ledger")
+
+
+class TestSenderLedgerCommitLeg:
+
+    def test_send_commits_ledger_in_sender_repo_and_stamps_entry(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC1 — after a send, the ledger path is committed in the SENDER
+        repo (a real, distinct commit landing on top of the sender's HEAD)
+        and the acted entry carries the SHA under sender_ledger_commit
+        (never as a top-level envelope key)."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        head_before = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac1-ledger-commit", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+
+        entry = result["acted"][0]
+        sha = entry["sender_ledger_commit"]
+        assert sha, "sender_ledger_commit must be a non-empty SHA on the acted entry"
+        assert "sender_ledger_commit" not in result, (
+            "sender_ledger_commit must never be a top-level envelope key"
+        )
+
+        head_after = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+        assert head_after == sha
+        assert head_after != head_before
+
+    def test_ledger_commit_changed_path_set_is_a_single_path(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC2 — cheap invariant only: the ledger commit's changed-path set
+        is a single path. commit_authored_content is single-path by
+        signature, so this cannot regress; NOT a substitute for AC10's
+        directory-pathspec regression test (owned by C4b)."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac2-single-path", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        sha = result["acted"][0]["sender_ledger_commit"]
+
+        changed = _git(
+            sender_repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha,
+        ).stdout.decode().splitlines()
+        assert changed == [_SENT_LEDGER_RELPATH_FOR_TEST]
+
+    def test_fan_out_commits_ledger_exactly_once_for_the_campaign(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC9 — a fan-out send to N (>=2) receivers fires the ledger commit
+        EXACTLY ONCE for the whole campaign, not once per receiver. Counts
+        commit_authored_content INVOCATIONS directly (never ledger lines —
+        N lines and 1 commit is the correct expectation), and every acted
+        entry in the campaign carries that same single SHA."""
+        receiver_a = _make_receiver_git_repo(tmp_path, "receiver-a")
+        receiver_b = _make_receiver_git_repo(tmp_path, "receiver-b")
+        receiver_c = _make_receiver_git_repo(tmp_path, "receiver-c")
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(
+            tmp_path,
+            {
+                "receiver_a": receiver_a,
+                "receiver_b": receiver_b,
+                "receiver_c": receiver_c,
+            },
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        call_count = {"n": 0}
+        real_commit_authored_content = git_native.commit_authored_content
+
+        def _counting_commit_authored_content(*args, **kwargs):
+            call_count["n"] += 1
+            return real_commit_authored_content(*args, **kwargs)
+
+        monkeypatch.setattr(
+            memo_send_module.git_native,
+            "commit_authored_content",
+            _counting_commit_authored_content,
+        )
+
+        params = _base_params(dry_run=False, topic="ac9-fan-out-once")
+        params["to"] = ["receiver-a-em", "receiver-b-em", "receiver-c-em"]
+        result = _run(_memo_send(params, repo_root=str(sender_repo / ".git")))
+        assert result["exit_code"] == 0, result
+
+        assert call_count["n"] == 1, (
+            f"expected exactly one commit_authored_content invocation for the "
+            f"whole campaign, got {call_count['n']}"
+        )
+        assert len(result["acted"]) == 3
+        shas = {entry["sender_ledger_commit"] for entry in result["acted"]}
+        assert len(shas) == 1
+        assert all(shas), "every acted entry must carry the single campaign SHA"
+
+    def test_fan_out_all_receivers_fail_fires_zero_ledger_commits(
+        self, tmp_path, monkeypatch,
+    ):
+        """Review: code-reviewer (P2-2) — a fan-out where EVERY receiver
+        fails before reaching its own `_append_sent_ledger` call must not
+        fire the post-loop ledger commit at all. `_read_sent_ledger_locked`
+        would otherwise return the pre-existing (unchanged) ledger text, and
+        `commit_authored_content` has no unchanged-tree short-circuit — a
+        naive `ledger_text is not None` gate would land a genuine no-op
+        commit for a campaign that delivered nothing. Regression test for
+        exactly that defect."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        head_before = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+        call_count = {"n": 0}
+        real_commit_authored_content = git_native.commit_authored_content
+
+        def _counting_commit_authored_content(*args, **kwargs):
+            call_count["n"] += 1
+            return real_commit_authored_content(*args, **kwargs)
+
+        monkeypatch.setattr(
+            memo_send_module.git_native,
+            "commit_authored_content",
+            _counting_commit_authored_content,
+        )
+
+        params = _base_params(dry_run=False, topic="p2-2-all-fail")
+        params["to"] = ["unregistered-em-1", "unregistered-em-2"]
+        result = _run(_memo_send(params, repo_root=str(sender_repo / ".git")))
+
+        assert result["exit_code"] == 2, result
+        assert len(result["acted"]) == 0
+        assert len(result["failed"]) == 2
+
+        assert call_count["n"] == 0, (
+            "no receiver appended a ledger row this campaign — the post-loop "
+            "commit must not fire at all"
+        )
+        head_after = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+        assert head_after == head_before, (
+            "an all-fail fan-out campaign must not create a no-op ledger commit"
+        )
+
+    def test_commit_failure_never_fails_the_send(self, tmp_path, monkeypatch):
+        """AC4 — force the ledger commit to fail (never-raise contract) and
+        assert the send still reports success, with sender_ledger_commit
+        None on the acted entry."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        def _raising_commit_ledger_once(*args, **kwargs):
+            raise RuntimeError("simulated ledger commit failure")
+
+        monkeypatch.setattr(
+            memo_send_module, "_commit_ledger_once", _raising_commit_ledger_once,
+        )
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac4-commit-failure", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["sender_ledger_commit"] is None
+
+    def test_commit_never_raises_on_non_repo(self, tmp_path):
+        """AC4 idiom (mirrors test_commit_delivered_memo_never_raises_on_non_repo):
+        pointing _commit_sender_ledger at a non-repo directory must not raise."""
+        non_repo = tmp_path / "not-a-git-repo"
+        non_repo.mkdir()
+
+        sha = _run(_commit_sender_ledger(non_repo, "one ledger line\n"))
+        assert sha is None
+
+    def test_ledger_commit_sha_is_an_ancestor_of_head(self, tmp_path, monkeypatch):
+        """AC5 (ancestry) — the returned ledger commit SHA resolves to a real
+        commit object AND `git merge-base --is-ancestor <sha> HEAD` succeeds,
+        with no intervening commit. This is the property close-out-and-stamp
+        actually depends on — existence alone (AC1) does not cover it."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac5-ancestry", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        sha = result["acted"][0]["sender_ledger_commit"]
+
+        cat_file = _git(sender_repo, "cat-file", "-t", sha)
+        assert cat_file.stdout.decode().strip() == "commit"
+
+        ancestor_check = _git(
+            sender_repo, "merge-base", "--is-ancestor", sha, "HEAD", check=False,
+        )
+        assert ancestor_check.returncode == 0, (
+            f"ledger commit {sha} must be an ancestor of HEAD"
+        )
+        head = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+        assert sha == head, "no intervening commit expected in this single-send test"
+
+    def test_cas_retry_lands_when_head_moves_between_append_and_commit(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC5 (CAS retry) — a concurrent commit moving HEAD between the
+        ledger append and the commit landing must be retried EXACTLY ONCE
+        and land against the new HEAD. Regression test for the finding that
+        no existing case exercised this retry."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        topic = "ac5-cas-retry"
+
+        # Seed the ledger file into HEAD first (commit_authored_content
+        # requires the path to already exist in HEAD — see the fresh-clone
+        # non-retry case below for the alternative branch).
+        ledger_path = _sender_sent_ledger_path(sender_repo)
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        seed_line = json.dumps({"seed": True}) + "\n"
+        ledger_path.write_text(seed_line, encoding="utf-8")
+        _git(sender_repo, "add", "--", _SENT_LEDGER_RELPATH_FOR_TEST)
+        _git(sender_repo, "commit", "-m", "seed ledger")
+
+        real_commit_ledger_once = memo_send_module._commit_ledger_once
+        call_count = {"n": 0}
+
+        def _counting_commit_ledger_once(worktree, content):
+            call_count["n"] += 1
+            return real_commit_ledger_once(worktree, content)
+
+        monkeypatch.setattr(
+            memo_send_module, "_commit_ledger_once", _counting_commit_ledger_once,
+        )
+
+        # Inject the concurrent peer commit INSIDE commit_authored_content's
+        # own execution — between its internal `rev-parse HEAD` capture
+        # (early) and its CAS `update-ref` (late) — so the CAS genuinely
+        # observes a stale expected-old-value. Hooking at the "write-tree"
+        # git call (after the HEAD capture, before update-ref) is the
+        # narrowest point that reproduces a real concurrent-HEAD-move race
+        # without threading. Fires exactly once (first commit attempt only).
+        real_git = git_native._git
+        injected = {"done": False}
+
+        def _intercepting_git(args, **kwargs):
+            if not injected["done"] and list(args)[:1] == ["write-tree"]:
+                injected["done"] = True
+                (sender_repo / "concurrent-file.txt").write_text(
+                    "concurrent peer commit\n", encoding="utf-8",
+                )
+                _git(sender_repo, "add", "--", "concurrent-file.txt")
+                _git(sender_repo, "commit", "-m", "concurrent peer commit")
+            return real_git(args, **kwargs)
+
+        monkeypatch.setattr(git_native, "_git", _intercepting_git)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic=topic, to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        sha = result["acted"][0]["sender_ledger_commit"]
+        assert sha, "the CAS retry must land a real commit SHA"
+        assert call_count["n"] == 2, (
+            "expected exactly one retry (two total attempts) after the "
+            "concurrent HEAD move"
+        )
+        head = _git(sender_repo, "rev-parse", "HEAD").stdout.decode().strip()
+        assert sha == head
+
+    def test_fresh_clone_untracked_ledger_does_not_retry(self, tmp_path, monkeypatch):
+        """AC5 negative — the HEAD-existence refusal on a fresh clone where
+        the ledger is UNTRACKED (never yet committed) must NOT retry; this
+        is a distinct, non-retryable branch from the CAS-failure retry
+        above."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        call_count = {"n": 0}
+        real_commit_ledger_once = memo_send_module._commit_ledger_once
+
+        def _counting_commit_ledger_once(worktree, content):
+            call_count["n"] += 1
+            return real_commit_ledger_once(worktree, content)
+
+        monkeypatch.setattr(
+            memo_send_module, "_commit_ledger_once", _counting_commit_ledger_once,
+        )
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac5-fresh-clone-no-retry", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        # Ledger is untracked in HEAD on this repo's very first send —
+        # commit_authored_content refuses ("does not exist in HEAD"), and
+        # that refusal must NOT trigger the CAS retry path.
+        assert call_count["n"] == 1, (
+            "the HEAD-existence refusal on an untracked ledger must not retry"
+        )
+        assert result["acted"][0]["sender_ledger_commit"] is None
+
+    def test_one_shot_form_still_commits_ledger_row(self, tmp_path, monkeypatch):
+        """AC6 — a one-shot flag-form send (no draft, no outbox copy) still
+        commits its ledger row; the leg is not gated on the lifecycle path,
+        matching _append_sent_ledger's own unconditional contract."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _seed_committed_ledger(sender_repo)
+
+        topic = "ac6-one-shot"
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic=topic, to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        assert not (sender_repo / "state" / "memo-outbox" / f"{topic}.md").exists()
+
+        sha = result["acted"][0]["sender_ledger_commit"]
+        assert sha
+        changed = _git(
+            sender_repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha,
+        ).stdout.decode().splitlines()
+        assert changed == [_SENT_LEDGER_RELPATH_FOR_TEST]
+
+    def test_commit_leg_uses_asyncio_to_thread_not_direct_subprocess(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC8 (DR-211 D4) — the ledger commit leg offloads its sync git work
+        via asyncio.to_thread rather than blocking the event loop directly."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        to_thread_calls = []
+        real_to_thread = asyncio.to_thread
+
+        async def _tracking_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(func)
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(memo_send_module.asyncio, "to_thread", _tracking_to_thread)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac8-to-thread", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        assert memo_send_module._commit_ledger_once in to_thread_calls, (
+            "the ledger commit's sync git work must be routed through "
+            "asyncio.to_thread, never a direct blocking call on the event loop"
+        )
+
+    def test_ledger_append_uses_asyncio_to_thread_not_direct_call(
+        self, tmp_path, monkeypatch,
+    ):
+        """Review: code-reviewer (P2-1) — `_append_sent_ledger`'s
+        `locked_rmw` call acquires a cross-process flock (up to
+        LOCK_TIMEOUT_SECS of wait), unlike the plain unlocked `open` write it
+        replaced, so it must be thread-wrapped on the same footing as the
+        commit leg (AC8 above) rather than run inline on the event loop.
+        Regression test for the one call site the original diff missed."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        to_thread_calls = []
+        real_to_thread = asyncio.to_thread
+
+        async def _tracking_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(func)
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(memo_send_module.asyncio, "to_thread", _tracking_to_thread)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="p2-1-append-to-thread", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        assert memo_send_module._append_sent_ledger in to_thread_calls, (
+            "the ledger append's locked_rmw work must be routed through "
+            "asyncio.to_thread, never a direct blocking call on the event loop"
+        )
+
+
+_SENT_LEDGER_RELPATH_FOR_TEST = "/".join(
+    memo_send_module._SENDER_OUTBOX_DIRNAME + (memo_send_module._SENT_LEDGER_FILENAME,)
+)

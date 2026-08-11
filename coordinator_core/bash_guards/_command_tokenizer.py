@@ -156,6 +156,19 @@ _MAX_TOKENIZABLE_COMMAND_CHARS = 65536
 #: observes it. See `_mask_adjacent_ampersand_redirects`.
 _AMP_REDIRECT_SENTINEL = ""
 
+#: Stand-in for an UNQUOTED backslash when `preserve_windows_backslashes=True`
+#: (Review: coordinator:code-reviewer P1, 05fb6ef70 follow-up -- see
+#: `_mask_unquoted_backslashes`'s own docstring). Distinct private-use
+#: codepoint from `_AMP_REDIRECT_SENTINEL` so the two maskings cannot
+#: collide or be un-masked into each other. `shlex` treats it as an
+#: ordinary word character (never as its `escape` character), so an
+#: unquoted Windows-path backslash survives tokenization unconsumed without
+#: this module ever having to touch `lex.escape` -- the mechanism that made
+#: quoted-token lexing collateral damage in the first place. Every token is
+#: un-masked back to `\` immediately after lexing, so no caller ever
+#: observes it.
+_BACKSLASH_SENTINEL = ""
+
 
 def normalize_executable_basename(token: str) -> str:
     """Return `token`'s basename normalized for exact-identity comparison:
@@ -377,7 +390,9 @@ def exceeds_tokenizable_ceiling(text: str) -> bool:
     return len(text) > _MAX_TOKENIZABLE_COMMAND_CHARS
 
 
-def tokenize_full_command(cmd_text: str) -> Optional[List[str]]:
+def tokenize_full_command(
+    cmd_text: str, *, preserve_windows_backslashes: bool = False
+) -> Optional[List[str]]:
     """Tokenize `cmd_text` with :mod:`shlex`, treating `;`/`&`/`|` as
     ALWAYS-separate punctuation tokens regardless of surrounding whitespace,
     while still respecting POSIX quoting -- a quoted separator or a quoted
@@ -405,19 +420,61 @@ def tokenize_full_command(cmd_text: str) -> Optional[List[str]]:
     new fail-direction and no new caller contract, so a command past the
     ceiling lands on exactly the fail-closed path an unterminated quote
     already lands on today.
+
+    `preserve_windows_backslashes` (C2, docs/plans/2026-08-10-carve-claude-
+    out-and-close-the-backslash-bypass.md): `False` (default) is IDENTICAL
+    to this function's prior behavior for every existing caller -- plain
+    POSIX `shlex` escape semantics, where an UNQUOTED backslash consumes
+    itself and quotes the following character literally (`\\U` -> `U`).
+    That rule is what real bash does too, but it silently destroys every
+    path SEPARATOR in an unquoted Windows-drive-absolute token
+    (`C:\\Users\\x\\out.txt` -> `C:Usersxout.txt`, no separators left at  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    all) BEFORE the write-bump guards' own path-resolution helpers
+    (`_write_bump_sink_shapes.translate_msys_path`/`resolve_relative`) ever
+    see the string -- there is no later seam that can recover a separator
+    once `shlex` has consumed it, so this is the ONLY point upstream of
+    "path resolution" where the loss can be prevented rather than repaired.
+    `True` (passed ONLY by the two write-bump guards'
+    candidate-extraction call sites, gated on their own `_host_is_windows()`
+    read -- see `bump_foreign_repo_write.py`/`bump_outside_repo_write.py`)
+    masks every UNQUOTED backslash with `_BACKSLASH_SENTINEL` on the raw
+    text BEFORE `shlex` ever sees it (`_mask_unquoted_backslashes`), then
+    un-masks it back to `\\` in the resulting tokens -- `shlex.shlex.escape`
+    is left at its POSIX default the entire time. (Review:
+    coordinator:code-reviewer P1, 05fb6ef70 follow-up: the original shape
+    of this flag set `lex.escape = ""` for the whole lexer state, which
+    also disables `escapedquotes` handling -- `shlex`'s `escape` attribute
+    is not scoped to the unquoted case alone, so a legitimately escaped
+    `\\"` inside a QUOTED token on the same command line closed the quote
+    early regardless of whether that command contained a Windows path at
+    all. Pre-masking on the raw, quote-aware text instead means quoted
+    content is never touched -- a `\\"` inside a double-quoted token lexes
+    through the untouched default `shlex.escape` exactly as it did before
+    this flag existed.) Scoped as an opt-in KEYWORD, not a new default, so
+    every OTHER consumer of this shared tokenizer
+    (`block_subagent_commit.py`, `block_subagent_destructive_action.py`,
+    the branch-naming/precedence guards, `dispatch.py`'s own M5 resolve-once
+    cache) is completely unaffected -- this repo's fail-closed detectors
+    depend on today's escape semantics for their own, unrelated shapes, and
+    auditing all of them against a global escape-behavior change is out of
+    this chunk's scope.
     """
     if exceeds_tokenizable_ceiling(cmd_text):
         return None
     cmd_text = split_unquoted_newlines(cmd_text)
+    masked = _mask_adjacent_ampersand_redirects(cmd_text)
+    if preserve_windows_backslashes:
+        masked = _mask_unquoted_backslashes(masked)
     lex = shlex.shlex(
-        _mask_adjacent_ampersand_redirects(cmd_text),
+        masked,
         posix=True,
         punctuation_chars=";&|",
     )
     lex.whitespace_split = True
     try:
         tokens = [
-            token.replace(_AMP_REDIRECT_SENTINEL, "&") for token in lex
+            token.replace(_AMP_REDIRECT_SENTINEL, "&").replace(_BACKSLASH_SENTINEL, "\\")
+            for token in lex
         ]
     except ValueError:
         return None
@@ -479,6 +536,109 @@ def _mask_adjacent_ampersand_redirects(cmd_text: str) -> str:
             and cmd_text[i + 1] == ">"
         ):
             masked.append(_AMP_REDIRECT_SENTINEL)
+            i += 1
+            continue
+        masked.append(char)
+        i += 1
+    return "".join(masked)
+
+
+def _mask_unquoted_backslashes(cmd_text: str) -> str:
+    """Replace every UNQUOTED backslash in `cmd_text` with
+    `_BACKSLASH_SENTINEL`, leaving every backslash INSIDE a single- or
+    double-quoted span untouched. Used only by `tokenize_full_command` when
+    `preserve_windows_backslashes=True`.
+
+    This is the fix for a P1 review finding on this flag's original shape
+    (Review: coordinator:code-reviewer, 05fb6ef70 follow-up): that shape set
+    `lex.escape = ""` for the WHOLE lexer, which also disables `shlex`'s
+    `escapedquotes` handling -- a `\\"` inside a double-quoted token no
+    longer escaped the quote, so the quote closed early and the remainder
+    re-tokenized as fresh, unquoted words, on ANY command on a Windows
+    host, not just ones containing a Windows path. Masking on the raw text
+    instead means quoted spans are never touched at all: `shlex.escape`
+    stays at its POSIX default for the whole tokenize call, so a quoted
+    `\\"` lexes exactly as it did before `preserve_windows_backslashes`
+    existed. Only a backslash OUTSIDE any quote gets sentinel-masked, which
+    is the one shape C2 actually needed to preserve (an unquoted
+    Windows-drive-absolute path's separators) -- `shlex` then sees the
+    sentinel as an ordinary word character (never as its own `escape`
+    character, whatever that is set to), so it passes through tokenization
+    unconsumed, and `tokenize_full_command` un-masks it back to `\\` in
+    every resulting token.
+
+    Quote-state tracking mirrors `_mask_adjacent_ampersand_redirects`: a
+    backslash-escaped quote character inside a double-quoted span does not
+    toggle quote state (real shell semantics -- `\\"` inside `"..."` is an
+    escaped literal `"`, not the end of the string), and single-quoted
+    spans never interpret backslash specially at all (POSIX: nothing is
+    special inside single quotes), so nothing inside either quote form is
+    ever sentinel-masked or otherwise altered by this walk.
+
+    RUN-LENGTH PAIRING (Review: coordinator:code-reviewer, 36bfdde30
+    follow-up, two P2s): a lone UNQUOTED backslash immediately before a
+    quote OR a `;`/`&`/`|` punctuation character is an atomic escaped-pair
+    in real bash -- left raw here (same reasoning as the `\'`/`\"` case
+    below) so shlex's own default `escape` handling consumes it, instead of
+    the prior narrower fix that only special-cased a quote and let `\;`/
+    `\&`/`\|` fall through to plain sentinel-masking (fabricating a real
+    separator token bash never produces). The pairing decision is made on
+    the RUN of consecutive unquoted backslashes, not on each backslash in
+    isolation: bash consumes a backslash run two-at-a-time, left to right
+    (each even-positioned backslash escapes the odd-positioned one right
+    before it, producing one literal backslash per pair), so only an ODD
+    total run length leaves one backslash unpaired at the end to escape
+    whatever real character follows the run. Deciding pairing per-character
+    instead of per-run (the prior shape) mis-paired `\\'` as `(\)(\\')`
+    instead of bash's own `(\\)('...)` -- i.e. it let the SECOND backslash
+    of an already-self-escaping pair reach for the quote that bash's first
+    backslash had already claimed. All backslashes within complete pairs
+    inside the run are still emitted as individual sentinels (their
+    grouping among themselves produces the same literal-backslash output
+    either way, so pairing them up explicitly buys nothing); the one
+    difference an odd run makes is whether the trailing quote/punctuation
+    character is claimed by the run's last backslash or left to be
+    processed fresh.
+    """
+    masked: List[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    total = len(cmd_text)
+    while i < total:
+        char = cmd_text[i]
+        if in_double and char == "\\" and i + 1 < total:
+            masked.append(char)
+            masked.append(cmd_text[i + 1])
+            i += 2
+            continue
+        if char == "\\" and not in_single and not in_double:
+            run_start = i
+            j = i
+            while j < total and cmd_text[j] == "\\":
+                j += 1
+            run_len = j - run_start
+            paired = (run_len // 2) * 2
+            for _ in range(paired):
+                masked.append(_BACKSLASH_SENTINEL)
+            i = run_start + paired
+            if run_len % 2 == 1:
+                if i + 1 < total and cmd_text[i + 1] in ("'", '"', ";", "&", "|"):
+                    masked.append(cmd_text[i])
+                    masked.append(cmd_text[i + 1])
+                    i += 2
+                else:
+                    masked.append(_BACKSLASH_SENTINEL)
+                    i += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            masked.append(char)
+            i += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            masked.append(char)
             i += 1
             continue
         masked.append(char)
@@ -1218,7 +1378,9 @@ def _peel_command_position(seg_tokens: List[str]) -> Tuple[List[str], Resolution
     return tokens, (ResolutionConfidence.PEELED if peeled_anything else ResolutionConfidence.RESOLVED)
 
 
-def resolve_command_positions(cmd_text: str, *, _depth: int = 0) -> List[ResolvedCommand]:
+def resolve_command_positions(
+    cmd_text: str, *, _depth: int = 0, preserve_windows_backslashes: bool = False
+) -> List[ResolvedCommand]:
     """THE resolve-once entry point: raw command text -> an ordered list of
     `ResolvedCommand`, one per executed segment. Peels ONCE, in one place:
     separators, quoting, `(...)`/`{...;}` grouping, backtick/`$(...)`
@@ -1252,6 +1414,16 @@ def resolve_command_positions(cmd_text: str, *, _depth: int = 0) -> List[Resolve
     would still cost real time after the tokenizer itself had declined the
     work. This is the SAME fail-closed `UNRESOLVED` shape the unparseable
     path below already returns -- see `_MAX_TOKENIZABLE_COMMAND_CHARS`.
+
+    `preserve_windows_backslashes` (C2) is forwarded unchanged to
+    `tokenize_full_command` (see that function's own docstring) and to
+    every recursive re-entry this function makes into itself (command
+    substitutions, `-c` payloads) -- a nested segment recovered from inside
+    the SAME outer command must classify backslashes the same way the
+    outer one did, or a target reached only through a substitution would
+    silently regress back to the lossy default. `False` by default,
+    matching `tokenize_full_command`'s own default, so every pre-existing
+    caller is unaffected.
     """
     if exceeds_tokenizable_ceiling(cmd_text):
         return [ResolvedCommand(
@@ -1269,9 +1441,17 @@ def resolve_command_positions(cmd_text: str, *, _depth: int = 0) -> List[Resolve
     stripped = _strip_heredocs(cmd_text)
     neutralized, subs = _extract_command_substitutions(stripped)
     for sub_cmd in subs:
-        results.extend(resolve_command_positions(sub_cmd, _depth=_depth + 1))
+        results.extend(
+            resolve_command_positions(
+                sub_cmd,
+                _depth=_depth + 1,
+                preserve_windows_backslashes=preserve_windows_backslashes,
+            )
+        )
 
-    tokens = tokenize_full_command(neutralized)
+    tokens = tokenize_full_command(
+        neutralized, preserve_windows_backslashes=preserve_windows_backslashes
+    )
     if tokens is None:
         results.append(ResolvedCommand(
             tokens=[cmd_text], raw_tokens=[cmd_text], head=cmd_text or None,
@@ -1292,7 +1472,13 @@ def resolve_command_positions(cmd_text: str, *, _depth: int = 0) -> List[Resolve
             if head_base in _SHELL_INTERPRETERS_WITH_C:
                 payload = _extract_dash_c_payload(peeled[1:])
                 if payload is not None:
-                    results.extend(resolve_command_positions(payload, _depth=_depth + 1))
+                    results.extend(
+                        resolve_command_positions(
+                            payload,
+                            _depth=_depth + 1,
+                            preserve_windows_backslashes=preserve_windows_backslashes,
+                        )
+                    )
 
     return results
 

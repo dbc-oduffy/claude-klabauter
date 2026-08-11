@@ -420,9 +420,13 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
-from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_STATUS_NOT_ATTEMPTED,
+    run_commit_pipeline,
+)
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
+from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_close_origin_stub import _handler as _close_origin_stub_handler
 from coordinator_core.ops.plan_status_transition import (
     _FLIPPABLE_STATUSES,
@@ -1092,6 +1096,183 @@ def _plan_execution_authorized_sha(plan_text: str) -> Optional[str]:
     return read_fm_field_unquoted(split.fm_text, "execution_authorized_sha")
 
 
+#: Record and field separators for the ONE `git log` shape every
+#: `Deliverable-Id` reader in this module runs. Chosen over the newline the
+#: format used before the message-line fallback landed (2026-08-10) because
+#: that fallback needs `%B` -- a multi-line atom -- on the same record as the
+#: sha, so a newline can no longer delimit records. ASCII RS/US are the
+#: control characters reserved for exactly this and cannot occur in a sha, a
+#: subject, or a trailer value; a commit BODY carrying one literally would
+#: garble its own record and drop it from the join, which is a strictly
+#: better failure than the silent mis-attribution a printable sentinel could
+#: produce.
+_LOG_RECORD_SEP = "\x1e"
+_LOG_FIELD_SEP = "\x1f"
+
+#: A `Deliverable-Id:` line anywhere in a commit BODY, anchored to line start
+#: so a value merely quoted mid-sentence cannot match. See
+#: `_resolve_deliverable_id` for when this is consulted at all.
+#:
+#: NEGATIVE SPEC -- CRLF (Review: code-reviewer -- Finding 1, refuted): a
+#: `re.MULTILINE` `$` does not match immediately before `\r\n` (only before a
+#: bare `\n` or end-of-string), so a naive reading suggests a CRLF-terminated
+#: body line would silently fail this pattern despite reading
+#: `Deliverable-Id: <id>` at column 0. That never reaches this regex: `body`
+#: comes from `_run_git`'s `subprocess.run(..., text=True)` call, which
+#: applies Python's universal-newline translation to stdout BEFORE this code
+#: ever sees it -- both `\r\n` and a lone `\r` are converted to `\n` at the
+#: subprocess boundary, so a `\r` cannot survive into `body`. This pattern is
+#: therefore safe against a CRLF-authored commit body only because of that
+#: decoding step; a future change to `_run_git` (e.g. adding `newline=''`, or
+#: swapping to a byte-mode/`Popen` call that skips universal-newline
+#: translation) is what would reopen this, not a change here.
+_DELIVERABLE_ID_BODY_LINE_RE = re.compile(
+    r"^Deliverable-Id:[ \t]*(\S[^\r\n]*?)[ \t]*$", re.MULTILINE
+)
+
+
+def _resolve_deliverable_id(trailer_block: str, body: str) -> str:
+    """This commit's `Deliverable-Id` join key: git's own parsed trailer when
+    it produced one, else the message-line fallback.
+
+    The fallback exists because git recognises ONLY the message's LAST
+    paragraph as trailers, and a defect in `commit()`'s trailer-join branch
+    (fixed at `5fcbb42696e5`, 2026-08-10 -- it tested `endswith("\\n")`, so a
+    message already ending in a blank line kept both newlines and the branch
+    whose entire purpose is to avoid a paragraph break produced one) emitted
+    a blank line between the caller's `Deliverable-Id:` and the pipeline's
+    own `Commit-Token:`/`Session-Id:` block. Git then reads only that last
+    paragraph as trailers and DEMOTES the caller's line to prose:
+    `%(trailers:key=Deliverable-Id,valueonly)` returns empty for a commit
+    that visibly carries the line. Every `-F`-file caller was exposed, which
+    is the commit practice `/execute-plan` doctrine tells EMs to use, and the
+    demotion was live for as long as that path has been -- so the affected
+    set is "every plan whose chunks landed before the fix", not the two
+    commits that surfaced it (`b1e0881d39a7`, `3301a8d1f68c` -- bug-backlog
+    `2026-08-10-two-commits-on-work-machine-a-080826-carry-af536f05255e.yaml`).
+    Recovering them by rewriting shared-branch history is explicitly not the
+    remedy (`/execute-plan` SKILL Phase 4), so the reader adapts instead.
+
+    Precedence is trailer-first and never the reverse: where git parsed a
+    trailer, that value is authoritative, so a correctly-formed commit's join
+    key is byte-identical to what it was before this fallback existed and no
+    already-passing verdict can change. Only the empty-atom case -- which
+    previously joined against nothing at all -- consults the body.
+
+    Multi-value handling is FIRST-NON-EMPTY-value-wins, not byte-identical to
+    the pre-fallback reader for one narrow edge case (Review: code-reviewer --
+    Finding 2): for the typical case -- a single trailer value, or a genuinely
+    populated first value among several -- this matches the old reader
+    exactly, since the old newline-delimited format emitted one output line
+    per value and any second line, carrying no tab, was dropped by every
+    caller's `len(parts) < 2` filter. But an EMPTY first `Deliverable-Id`
+    trailer value followed by a populated second one for the same key differs:
+    the old reader saw a blank first line, found no tab, and `continue`d --
+    treating the WHOLE commit as trailer-less (never joined via the trailer
+    path at all). This reader instead skips the blank line and returns the
+    second, populated value, joining on it. Judged the better behavior, not
+    weakened to match: a populated `Deliverable-Id` value that exists anywhere
+    in the trailer block is real evidence and discarding it to preserve exact
+    parity with a reader whose blank-first-line handling was itself
+    incidental (a side effect of the old single-line `len(parts) < 2` filter,
+    not a deliberate join-key policy) would throw away a genuine join for no
+    benefit. Requires an explicit empty-then-populated same-key trailer pair,
+    so it is narrow in practice.
+
+    The body fallback takes the LAST matching line, mirroring git's own
+    preference for the last trailer block when a message carries several.
+
+    False-positive posture: a body line reading `Deliverable-Id: <id>` at
+    column 0 that is NOT an attribution -- prose quoting the convention, or a
+    pasted commit message inside another commit message -- is
+    indistinguishable from the real thing here and would join. That is
+    accepted for the same reason the trailer join itself is scoped by exact
+    post-canonicalization equality against ONE plan's own id: a false match
+    requires quoting that specific deliverable's id at line start, and the
+    cost of a miss (a shipped plan permanently unstampable) exceeds the cost
+    of that hit. This does NOT widen subject matching, which is where the
+    2026-07-27 false-positive incident lived -- see this module's docstring
+    § Deliverable scoping."""
+    for candidate in trailer_block.splitlines():
+        value = candidate.strip()
+        if value:
+            return value
+    matches = _DELIVERABLE_ID_BODY_LINE_RE.findall(body)
+    if matches:
+        return matches[-1].strip()
+    return ""
+
+
+def _deliverable_log_records(
+    repo_root: Path, log_args: Sequence[str], full_sha: bool = False
+) -> tuple[bool, list[tuple[str, str, str]]]:
+    """Runs the module's single `Deliverable-Id`-bearing `git log` shape over
+    `log_args` and returns `(query_ok, [(sha, subject, deliverable_id)])`.
+
+    Every reader of a commit's deliverable identity routes through here so
+    the format string, the record parse, and the message-line fallback
+    (`_resolve_deliverable_id`) can never drift between them -- the same
+    single-producer property `_chunk_evidence_log_range` already enforces for
+    the RANGE, extended to the PARSE now that a demoted trailer means the raw
+    atom is no longer the whole answer.
+
+    `full_sha` (Review: code-reviewer -- Finding 2) selects `%H` (full sha)
+    over the default `%h` (abbreviated) for the sha atom only -- every other
+    field is identical either way. `_first_deliverable_commit_range_base`
+    passes `True`: it feeds the sha straight into `git rev-parse --verify
+    --quiet <sha>^`, and an abbreviated sha is only guaranteed unambiguous
+    against the object database at the moment THIS `git log` ran -- on this
+    machine's concurrency a commit can land between this query and that
+    later `rev-parse` call and widen the disambiguation boundary, in
+    principle producing an ambiguous-short-sha failure a full sha never
+    could. `_chunk_evidence_log_lines` (every other caller) keeps the
+    default `%h`: its consumers (`committed_shas`, diagnostics) surface the
+    sha to callers that have always seen the abbreviated form, and widening
+    that surface is a change of its own, not a side effect of this fix.
+
+    `query_ok` is `False` ONLY when git itself failed (not on PATH, non-zero
+    `git log` exit), never for an empty result -- callers must check it
+    before trusting the records, exactly as they did before this extraction.
+    A record whose field count is short (a body containing a literal RECORD
+    separator, `\\x1e`, which fragments the record itself) is skipped rather
+    than guessed at; the field split uses `maxsplit=3` so a body containing a
+    literal FIELD separator (`\\x1f`) cannot silently truncate `%B` into a
+    fourth field and inflate the split past 4 -- the trailing field always
+    absorbs the rest of the record verbatim, matching the "dropped, not
+    guessed at" contract this docstring makes for the record-separator case."""
+    sha_atom = "%H" if full_sha else "%h"
+    result = _run_git(
+        [
+            "log",
+            "--format="
+            + _LOG_RECORD_SEP
+            + sha_atom
+            + _LOG_FIELD_SEP
+            + "%s"
+            + _LOG_FIELD_SEP
+            + "%(trailers:key=Deliverable-Id,valueonly)"
+            + _LOG_FIELD_SEP
+            + "%B",
+            *log_args,
+        ],
+        repo_root,
+    )
+    if result.returncode != 0:
+        return False, []
+    records: list[tuple[str, str, str]] = []
+    for raw_record in (result.stdout or "").split(_LOG_RECORD_SEP):
+        if not raw_record.strip():
+            continue
+        fields = raw_record.split(_LOG_FIELD_SEP, 3)
+        if len(fields) < 4:
+            continue
+        sha = fields[0].strip()
+        if not sha:
+            continue
+        records.append((sha, fields[1], _resolve_deliverable_id(fields[2], fields[3])))
+    return True, records
+
+
 def _first_deliverable_commit_range_base(
     repo_root: Path, deliverable_id: Optional[str]
 ) -> Optional[str]:
@@ -1122,27 +1303,21 @@ def _first_deliverable_commit_range_base(
     docstring § Deliverable scoping and its own 2026-07-27 false-positive
     incident for why an UNSCOPED subject-match widening would be dangerous;
     this widening is scoped by deliverable identity, never by subject shape
-    alone, so it does not reintroduce that incident."""
+    alone, so it does not reintroduce that incident.
+
+    Queries `_deliverable_log_records` with `full_sha=True` (Review:
+    code-reviewer -- Finding 2): the matched commit's sha feeds straight into
+    `git rev-parse --verify --quiet <sha>^` below, and only a full sha is
+    guaranteed unambiguous against the object database at the time that
+    later call runs -- see `_deliverable_log_records`'s own docstring."""
     if not deliverable_id:
         return None
-    result = _run_git(
-        [
-            "log",
-            "--reverse",
-            "--format=%H%x09%(trailers:key=Deliverable-Id,valueonly)",
-            "HEAD",
-        ],
-        repo_root,
-    )
-    if result.returncode != 0:
+    query_ok, records = _deliverable_log_records(repo_root, ["--reverse", "HEAD"], full_sha=True)
+    if not query_ok:
         return None
     equivalence_map = load_equivalence_map(repo_root)
     canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-    for line in (result.stdout or "").splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) < 2 or not parts[0]:
-            continue
-        commit_sha, trailer_value = parts[0], parts[1].strip()
+    for commit_sha, _subject, trailer_value in records:
         if not trailer_value:
             continue
         if canonicalize(trailer_value, equivalence_map) != canonical_deliverable_id:
@@ -1225,7 +1400,7 @@ def _chunk_evidence_log_range(
 
 def _chunk_evidence_log_lines(
     repo_root: Path, plan_text: Optional[str] = None
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], list[str]]:
     """Runs the ONE `git log` query every chunk-evidence caller
     (`_committed_chunk_shas`, `_deliverable_id_near_miss_diagnostics`,
     `_hyphen_range_subject_diagnostics`) needs -- same range
@@ -1244,26 +1419,42 @@ def _chunk_evidence_log_lines(
     query distinction every caller already documents (Defect 2(d)):
     `False` ONLY when the git query itself failed (git not on PATH, a
     `git log` non-zero exit) -- callers must check it before trusting
-    `lines`, exactly as before this extraction. `lines` is the RAW,
-    un-split `git log` stdout lines (`[]` on a failed query) -- this is a
-    PURE query-construction extraction only: tab-splitting, length
-    filtering, and per-caller emptiness handling all stay at each call
-    site unchanged, since the three callers apply slightly different
-    length/emptiness filters over the same tab-separated shape and
-    unifying THAT parsing is a separate, riskier change than sharing the
-    query construction alone."""
+    `lines`, exactly as before this extraction.
+
+    `lines` is one `<short-sha>\\t<subject>\\t<deliverable-id>` line per
+    commit (`[]` on a failed query) -- the SAME tab-separated shape the
+    three callers' own `split("\\t", 2)` already consumes, so their parsing
+    is untouched. Calls `_deliverable_log_records` with its default
+    `full_sha=False` (`%h`) deliberately (Review: code-reviewer -- Finding
+    2): `committed_shas` and the diagnostics built on this surface have
+    always carried the abbreviated sha, and widening that width is a
+    surface change of its own, not a side effect of the full-sha fix
+    `_first_deliverable_commit_range_base` needed for its own, unrelated,
+    `rev-parse ...^` ambiguity concern -- see that function's docstring. It is no longer raw `git log` stdout: since 2026-08-10 the
+    underlying query is record-separated (`_deliverable_log_records`) and the
+    third field is the RESOLVED join key, which falls back to a message-line
+    read when git demoted the trailer to prose -- see `_resolve_deliverable_id`
+    for the defect that makes that necessary. Normalizing here rather than at
+    each call site is deliberate: all three callers must agree on the join
+    key for the same reason `_chunk_evidence_log_range` forces them to agree
+    on the range -- a diagnostic that explained a verdict computed from a
+    different key would be worse than no diagnostic at all.
+
+    Returns `(query_ok, lines, log_range)` (Review: code-reviewer, 2026-08-10,
+    slice D finding P1): `log_range` is the SAME `_chunk_evidence_log_range`
+    result this call resolved and queried against, threaded back out so a
+    caller needing a second, separately-formatted `git log` over the
+    IDENTICAL range (`_session_id_fallback_evidence`, via
+    `_committed_chunk_shas`) can pass it in verbatim instead of re-deriving
+    it -- `_chunk_evidence_log_range` is a live git query (merge-base /
+    earliest-deliverable-commit lookup) whose result depends on repo HEAD
+    state at call time, so a second independent call is not provably the
+    same range on a machine where a commit can land between the two calls."""
     log_range = _chunk_evidence_log_range(repo_root, plan_text)
-    result = _run_git(
-        [
-            "log",
-            "--format=%h%x09%s%x09%(trailers:key=Deliverable-Id,valueonly)",
-            *log_range,
-        ],
-        repo_root,
-    )
-    if result.returncode != 0:
-        return False, []
-    return True, (result.stdout or "").splitlines()
+    query_ok, records = _deliverable_log_records(repo_root, log_range)
+    if not query_ok:
+        return False, [], log_range
+    return True, [f"{sha}\t{subject}\t{deliverable_id}" for sha, subject, deliverable_id in records], log_range
 
 
 def _chunk_evidence_range_summary(
@@ -1293,7 +1484,7 @@ def _chunk_evidence_range_summary(
     log_range = _chunk_evidence_log_range(repo_root, plan_text)
     range_token = log_range[0] if log_range else "HEAD"
     base = range_token.split("..", 1)[0] if ".." in range_token else "HEAD"
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
+    query_ok, log_lines, _log_range = _chunk_evidence_log_lines(repo_root, plan_text)
     commit_count = len([line for line in log_lines if line]) if query_ok else 0
     return {"base": base, "commit_count": commit_count}
 
@@ -1341,11 +1532,145 @@ class DeliverableJoinStats:
     matched_commit_count: int
 
 
+def _plan_claim_holder_session_id(root: Path, plan_path_rel: Optional[str]) -> Optional[str]:
+    """The `session_id` file content inside THIS plan's own claim dir --
+    `coordinator_core.ops.fleet._common.plan_claim_dir`'s canonical
+    `<common_dir>/coordinator-sessions/plan-claims/<plan-path-stem>` path,
+    the SAME convention `session.claims.claim_plan`/`claim_artifact("plan",
+    ...)` already write and that module's own negative-spec forbids
+    hand-rolling a second time -- reused verbatim, not a new plan-identity
+    join (Session-Id fallback leg, 2026-08-10, `docs/plans/2026-08-10-a-
+    commit-trailer-that-names-the-session.md` C6, finding 0).
+
+    `None` (never a crash, never a guess) when `plan_path_rel` is not
+    supplied (a caller with no plan-path context at all -- e.g. a direct
+    unit-test call to `_committed_chunk_ids`/`_committed_chunk_shas`, or a
+    sibling-repo scan, which never threads this through -- see
+    `_committed_chunk_shas`'s own docstring), `git_common_dir` cannot
+    resolve (not a git repo), or the claim dir/`session_id` file does not
+    exist or cannot be read (no session has ever claimed this plan, or the
+    claim was released/reaped). This mirrors the same false-negative-over-
+    false-positive posture the rest of this module already commits to: an
+    unresolvable claim degrades the Session-Id fallback to "no evidence",
+    never a guessed session identity.
+
+    NO LIVENESS CHECK (Review: code-reviewer, Finding P3, 2026-08-10, slice
+    D): whatever `session_id` was last written to the claim dir counts as
+    "the session holding a claim on this plan" -- no pid check, no
+    staleness/reap check. A crashed session's stale, not-yet-reaped claim
+    dir can therefore authorize fallback evidence for its own old commits.
+    Left unexploited by the fail-closed design elsewhere (matching stays
+    scoped to `plan_path_rel` and further gated on `spine_ids` coverage --
+    a wrong/stale `session_id` just means the fallback finds no match,
+    never a false positive across plans), so this is a caveat, not a fix."""
+    if not plan_path_rel:
+        return None
+    try:
+        common_dir = git_common_dir(root)
+    except RuntimeError:
+        return None
+    claim_dir = plan_claim_dir(common_dir, Path(plan_path_rel))
+    try:
+        value = (claim_dir / "session_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _session_id_fallback_evidence(
+    repo_root: Path,
+    log_range: list[str],
+    claim_holder_sid: str,
+    spine_ids: Optional[Iterable[str]],
+) -> tuple[set[str], dict[str, str]]:
+    """Session-Id-scoped chunk-subject matching -- the fallback leg
+    `_committed_chunk_shas` runs ONLY when its own `Deliverable-Id:` join
+    found zero evidence for this plan (2026-08-10, `docs/plans/2026-08-10-
+    a-commit-trailer-that-names-the-session.md` C6, finding 0; see that
+    function's own docstring for the zero-evidence gate this is called
+    behind -- this function itself performs NO gating of its own).
+
+    A separate `git log` from `_chunk_evidence_log_lines`'s shared query,
+    on purpose: that query's 3-field line shape (`sha\\tsubject\\t
+    deliverable-id`) is consumed by THREE other callers via
+    `line.split("\\t", 2)` (maxsplit 2) -- widening its format string to
+    also carry `Session-Id` would silently fold a fourth field into their
+    third, corrupting every one of them. Querying separately, over the
+    IDENTICAL `log_range` the Deliverable-Id leg already resolved (passed
+    in verbatim, never re-derived -- see this module's docstring § Range
+    choice for why two independently-derived ranges must never drift; this
+    verbatim-passing is enforced by `_committed_chunk_shas`, which threads
+    the range `_chunk_evidence_log_lines` itself resolved straight into this
+    call rather than re-invoking `_chunk_evidence_log_range` a second time --
+    Review: code-reviewer, Finding P1, 2026-08-10), costs one extra
+    `git log` call ONLY on the already-gated zero-evidence path.
+
+    Uses git's own trailer-parsing format directive
+    (`%(trailers:key=Session-Id,valueonly)`), no message-line fallback the
+    way `_resolve_deliverable_id` needs for `Deliverable-Id`: the trailer-
+    demotion defect that fallback exists for only ever pushed the CALLER-
+    supplied `Deliverable-Id:` line out of git's last-paragraph trailer scan
+    by inserting a blank line ahead of the pipeline's own trailing
+    `Commit-Token:`/`Session-Id:` block -- it never demoted `Session-Id`
+    itself, which stays inside that last paragraph (see
+    `_resolve_deliverable_id`'s own docstring for the defect this
+    distinguishes from).
+
+    A commit counts as fallback evidence only when its resolved
+    `Session-Id` trailer value equals `claim_holder_sid` (the session
+    `_plan_claim_holder_session_id` found currently holding a claim on this
+    plan) AND `_extract_chunk_ids(subject, spine_ids)` -- reused VERBATIM,
+    already bounded to cover one of `spine_ids` via
+    `_committed_id_covers_spine_id` internally, never re-cut here --
+    registers at least one chunk-id from the subject. Returns
+    `(committed_ids, committed_shas)`, the same shape
+    `_committed_chunk_shas`'s own Deliverable-Id leg produces, ready to
+    union straight in. A broken `git log` (git not on PATH, non-zero exit)
+    degrades to `(set(), {})` -- no fallback evidence, never a crash."""
+    result = _run_git(
+        [
+            "log",
+            "--format="
+            + _LOG_RECORD_SEP
+            + "%h"
+            + _LOG_FIELD_SEP
+            + "%s"
+            + _LOG_FIELD_SEP
+            + "%(trailers:key=Session-Id,valueonly)",
+            *log_range,
+        ],
+        repo_root,
+    )
+    if result.returncode != 0:
+        return set(), {}
+
+    committed: set[str] = set()
+    committed_shas: dict[str, str] = {}
+    for raw_record in (result.stdout or "").split(_LOG_RECORD_SEP):
+        if not raw_record.strip():
+            continue
+        fields = raw_record.split(_LOG_FIELD_SEP, 2)
+        if len(fields) < 3:
+            continue
+        sha = fields[0].strip()
+        if not sha:
+            continue
+        subject = fields[1]
+        session_id_value = fields[2].strip()
+        if not session_id_value or session_id_value != claim_holder_sid:
+            continue
+        for chunk_id in _extract_chunk_ids(subject, spine_ids):
+            committed.add(chunk_id)
+            committed_shas.setdefault(chunk_id, sha)
+    return committed, committed_shas
+
+
 def _committed_chunk_shas(
     repo_root: Path,
     deliverable_id: Optional[str],
     spine_ids: Optional[Iterable[str]] = None,
     plan_text: Optional[str] = None,
+    plan_path_rel: Optional[str] = None,
 ) -> tuple[bool, set[str], dict[str, str], DeliverableJoinStats]:
     """Chunk-ids with a landed commit BELONGING TO THIS PLAN, PLUS the
     covering commit's own (abbreviated) sha per id -- a one-capture-group
@@ -1408,8 +1733,32 @@ def _committed_chunk_shas(
     `git log` call. On a broken query (`query_ok` `False`), `join_stats` is
     a zeroed placeholder (`attempted` still reflects whether `deliverable_id`
     was truthy; the two counts are `0` since no commits were ever read) --
-    callers must check `query_ok` first, exactly as they already do."""
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
+    callers must check `query_ok` first, exactly as they already do.
+
+    Session-Id-scoped fallback (2026-08-10, `docs/plans/2026-08-10-a-
+    commit-trailer-that-names-the-session.md` C6, finding 0): when the
+    Deliverable-Id join above finds ZERO evidence for this plan
+    (`join_stats.matched_commit_count == 0` -- determined from the counts
+    this function already computed above, no re-query for the GATE itself),
+    `committed`/`committed_shas` degrade to a second join --
+    `_session_id_fallback_evidence` -- bounded to `spine_ids` and gated on a
+    commit's `Session-Id:` trailer naming the session
+    `_plan_claim_holder_session_id` finds currently holding a claim on THIS
+    plan (`plan_path_rel`, optional -- `None` skips the fallback entirely,
+    degrading to the pre-fix zero-evidence result exactly). ZERO-EVIDENCE-
+    GATED, NOT A GENERAL WIDENING: when `matched_commit_count > 0` this
+    fallback never runs at all, and the exact-equality Deliverable-Id path
+    above stands completely untouched -- this is the whole safety argument
+    (see this module's docstring § Deliverable scoping and its 2026-07-27
+    `C8b` false-positive incident: an unconditional Session-Id join would
+    re-admit the identical cross-plan chunk-id bleed that incident exists to
+    keep out). The gate is PER-PLAN (zero evidence for THIS plan's
+    `deliverable_id`), never per-commit or per-chunk-id. Same false-
+    negative-over-false-positive posture as everywhere else in this module:
+    a fallback that cannot resolve a claim, or whose own `git log` query
+    fails, degrades to no fallback evidence -- never a crash, never a
+    guess."""
+    query_ok, log_lines, log_range = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return (
             False,
@@ -1451,6 +1800,29 @@ def _committed_chunk_shas(
         trailered_commit_count=trailered_commit_count,
         matched_commit_count=matched_commit_count,
     )
+
+    # Session-Id-scoped fallback (2026-08-10, plan C6, finding 0) -- see
+    # this function's own docstring. ZERO-EVIDENCE-GATED: `committed` is
+    # guaranteed empty here whenever `matched_commit_count == 0` (both are
+    # only ever incremented together in the loop above), so this can only
+    # ADD evidence a genuine zero-evidence query never found, never touch or
+    # override an existing exact-equality match.
+    if matched_commit_count == 0 and plan_path_rel:
+        claim_holder_sid = _plan_claim_holder_session_id(repo_root, plan_path_rel)
+        if claim_holder_sid:
+            # Review: code-reviewer -- Finding P1, 2026-08-10, slice D. `log_range`
+            # is the SAME `_chunk_evidence_log_range` result the Deliverable-Id
+            # leg above queried against (threaded out of `_chunk_evidence_log_lines`
+            # itself), passed in verbatim rather than re-derived: a second,
+            # independent `_chunk_evidence_log_range` call is a live git query
+            # whose result can shift if a commit lands between the two calls.
+            fallback_committed, fallback_shas = _session_id_fallback_evidence(
+                repo_root, log_range, claim_holder_sid, spine_ids
+            )
+            committed |= fallback_committed
+            for chunk_id, sha in fallback_shas.items():
+                committed_shas.setdefault(chunk_id, sha)
+
     return True, committed, committed_shas, join_stats
 
 
@@ -1551,7 +1923,7 @@ def _deliverable_id_near_miss_diagnostics(
     if not deliverable_id:
         return []
 
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
+    query_ok, log_lines, _log_range = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return []
 
@@ -1685,7 +2057,7 @@ def _hyphen_range_subject_diagnostics(
     if not deliverable_id:
         return []
 
-    query_ok, log_lines = _chunk_evidence_log_lines(repo_root, plan_text)
+    query_ok, log_lines, _log_range = _chunk_evidence_log_lines(repo_root, plan_text)
     if not query_ok:
         return []
 
@@ -2002,6 +2374,22 @@ JOIN_PROVENANCE_KEY_MISMATCH = "key_mismatch"
 #: caller can choose not to treat that as attributed evidence of delivery.
 JOIN_PROVENANCE_NO_EVIDENCE_SOURCE = "no_evidence_source"
 
+#: Seventh join-provenance value (Review: code-reviewer, Finding P2,
+#: 2026-08-10, slice D): the Deliverable-Id leg found ZERO evidence
+#: (`matched_commit_count == 0`), but the Session-Id-scoped fallback
+#: `_committed_chunk_shas` runs behind that zero-evidence gate (see this
+#: module's docstring § Deliverable scoping) resolved evidence for at least
+#: one `missing_chunk_ids` row anyway. Both `JOIN_PROVENANCE_NO_JOIN_CANDIDATES`
+#: and `JOIN_PROVENANCE_KEY_MISMATCH` describe "nothing existed to compare
+#: against"/"never one equal to this plan's own value" -- true of the
+#: Deliverable-Id leg alone, but misleading once the fallback DID find
+#: comparable evidence for some chunks in the same range. This value never
+#: widens or replaces the exact-equality Deliverable-Id join itself (still
+#: computed identically above); it only reports honestly that the fallback,
+#: not that join, is why some (possibly not all) of `missing_chunk_ids`
+#: aren't uncommitted-by-mistake.
+JOIN_PROVENANCE_SESSION_FALLBACK_PARTIAL = "session_fallback_partial"
+
 #: Plain-language reason strings for every NON-`"joined"` provenance value --
 #: `close_out_and_stamp`'s own halted-branch `message` uses these so a reader
 #: sees WHY attribution failed, not just that it did. Deliberately excludes
@@ -2020,6 +2408,13 @@ _JOIN_PROVENANCE_REASON = {
         "commits in range carry a Deliverable-Id trailer, but never one "
         "equal to this plan's own frontmatter value, so the join could not "
         "match them"
+    ),
+    JOIN_PROVENANCE_SESSION_FALLBACK_PARTIAL: (
+        "the Deliverable-Id join found zero evidence, but a Session-Id-"
+        "scoped fallback resolved evidence for at least one chunk-id from "
+        "the session currently holding a claim on this plan -- some of the "
+        "listed chunk-ids may still be genuinely uncommitted, not merely "
+        "unattributable"
     ),
     JOIN_PROVENANCE_LEDGER_FALLBACK: (
         "this plan predates the ## Tasks spine -- completeness was decided "
@@ -2132,7 +2527,7 @@ def _determine_shipped(
     spine_ids = _all_spine_ids(rows)
     deliverable_id = _plan_deliverable_id(plan_text)
     query_ok, committed, _committed_shas, join_stats = _committed_chunk_shas(
-        repo_root, deliverable_id, spine_ids, plan_text=plan_text
+        repo_root, deliverable_id, spine_ids, plan_text=plan_text, plan_path_rel=plan_path_rel
     )
     if not query_ok:
         return (
@@ -2153,6 +2548,33 @@ def _determine_shipped(
         join_provenance = JOIN_PROVENANCE_JOINED
     else:
         join_provenance = JOIN_PROVENANCE_KEY_MISMATCH
+
+    # Review: code-reviewer -- Finding P2, 2026-08-10, slice D. `committed`
+    # here is `_committed_chunk_shas`'s own return, BEFORE the sibling-repo
+    # and disposition_ref unions below -- with `matched_commit_count == 0`
+    # (both `NO_JOIN_CANDIDATES` and `KEY_MISMATCH` branches above), the
+    # Deliverable-Id leg contributes nothing, so any non-empty `committed`
+    # here can only be the Session-Id-scoped fallback (`_committed_chunk_
+    # shas`'s own zero-evidence-gated leg). Scoped to the genuinely PARTIAL
+    # case -- fallback resolved evidence for at least one chunk-id but not
+    # all of them -- and not the fully-resolved case: when the fallback
+    # already covers every `chunk_ids` row, "no_join_candidates"/
+    # "key_mismatch" already read correctly as "the Deliverable-Id join
+    # found nothing, distinct from 'joined'", and every row is present in
+    # `committed` either way, so relabeling there would only manufacture a
+    # distinction with no user-facing difference (and dodges the
+    # cross-repo-scan/disposition_ref unions further below intentionally
+    # NOT being folded into this signal -- this checks against `chunk_ids`
+    # directly instead of relying on `missing`, which isn't computed until
+    # after those unions run). This does NOT touch the exact-equality join
+    # above, only the provenance label used for messaging.
+    if join_stats.matched_commit_count == 0 and committed:
+        fallback_leaves_some_uncovered = any(
+            not any(_committed_id_covers_spine_id(cid, chunk_id) for cid in committed)
+            for chunk_id in chunk_ids
+        )
+        if fallback_leaves_some_uncovered:
+            join_provenance = JOIN_PROVENANCE_SESSION_FALLBACK_PARTIAL
 
     # Cross-repo scope scanning (Defect fix, 2026-07-27 -- see this
     # module's docstring): union in every chunk-id found committed in a
@@ -3954,7 +4376,7 @@ def close_out_and_stamp(
     if rows:
         deliverable_id = _plan_deliverable_id(text)
         query_ok, _committed_ids, committed_shas, _join_stats = _committed_chunk_shas(
-            root, deliverable_id, spine_ids, plan_text=text
+            root, deliverable_id, spine_ids, plan_text=text, plan_path_rel=plan_path_rel
         )
         if query_ok and committed_shas:
             new_text, resolve_error = _auto_resolve_committed_open_rows(
@@ -4223,6 +4645,9 @@ def close_out_and_stamp(
         commit_result = {
             "committed_sha": None,
             "pushed": None,
+            "push_status": PUSH_STATUS_NOT_ATTEMPTED,
+            "pushed_range": None,
+            "pushed_count": None,
             "commit_failed": False,
             "diagnostics": [
                 f"dry_run: commit suppressed (would stage/commit {stage_paths!r})",
@@ -4244,6 +4669,9 @@ def close_out_and_stamp(
         commit_result = {
             "committed_sha": head_result.stdout.strip() if head_result.ok else None,
             "pushed": None,
+            "push_status": PUSH_STATUS_NOT_ATTEMPTED,
+            "pushed_range": None,
+            "pushed_count": None,
             "commit_failed": False,
             "diagnostics": [
                 "already committed by the stamp/auto-resolve write's own "
@@ -4275,6 +4703,34 @@ def close_out_and_stamp(
         commit_result = {
             "committed_sha": pipeline_result.committed_sha,
             "pushed": pipeline_result.pushed,
+            # C6a (docs/plans/2026-08-08-the-push-leg-that-never-asked-
+            # which-branch.md): surfaces the fully-disambiguated
+            # `push_status` alongside the legacy tristate `pushed` field --
+            # `pushed` is kept verbatim for compatibility (never removed or
+            # renamed), `push_status` is the richer companion a caller
+            # should read to tell "declined" apart from "no-remote" apart
+            # from "not-attempted" (all three read `pushed=None`). Every
+            # `PipelineResult` construction site sets `push_status` (C2), so
+            # a plain attribute read is correct -- a `getattr` fallback here
+            # would silently degrade a future missing-field bug into
+            # "not-attempted" instead of raising loud (C7b, docs/plans/
+            # 2026-08-08-the-push-leg-that-never-asked-which-branch.md).
+            "push_status": pipeline_result.push_status,
+            # AC7 (C3b): the pushed-extent fields belong on THIS payload,
+            # not buried in `diagnostics` prose -- this is the exact site
+            # the original memo pinned as reporting `"pushed": true` while
+            # example-doctrine-repo's stamp had actually advanced `origin/main` by
+            # three commits that were not its own; an operator reading
+            # `commit_result` needs the range/count alongside the bare
+            # boolean to see the extent of what landed. `None` unless a
+            # push actually landed (`push_status == PUSH_STATUS_PUSHED`) --
+            # mirrors `PipelineResult.pushed_range`/`pushed_count`'s own
+            # explicit-unknown-vs-not-applicable contract. Plain attribute
+            # reads, same reasoning as `push_status` above: C3b set these on
+            # every construction site, so a `getattr` fallback would only
+            # mask a future missing-field bug.
+            "pushed_range": pipeline_result.pushed_range,
+            "pushed_count": pipeline_result.pushed_count,
             "commit_failed": pipeline_result.commit_failed,
             # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
             # surfaced unconditionally, not just on the failure branch below --
@@ -4336,6 +4792,9 @@ def close_out_and_stamp(
         commit_result = {
             "committed_sha": None,
             "pushed": None,
+            "push_status": PUSH_STATUS_NOT_ATTEMPTED,
+            "pushed_range": None,
+            "pushed_count": None,
             "commit_failed": False,
             "diagnostics": [],
         }

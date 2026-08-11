@@ -119,6 +119,19 @@ def require_home(caller: str) -> str:
     )
 
 
+def _strip_trailing_sep(path: str) -> str:
+    r"""Trailing-separator strip that also sees a native Windows separator.
+
+    A bare ``rstrip("/")`` leaves ``C:\repo\`` untouched, so the join below
+    produced a mixed-separator root -- and this function's whole contract is
+    that its result matches, character for character, the paths baked into
+    settings.json by the hook generator. Never strips a lone root
+    (``/`` or ``C:\``).
+    """
+    stripped = path.rstrip("/\\")
+    return stripped if stripped else path
+
+
 def resolve_coordinator_root(
     coordinator_root_env: Optional[str] = None,
 ) -> str:
@@ -146,7 +159,7 @@ def resolve_coordinator_root(
 
     env_root = coordinator_root_env if coordinator_root_env is not None else os.environ.get("COORDINATOR_ROOT")
     if env_root:
-        root = env_root.rstrip("/")
+        root = _strip_trailing_sep(env_root)
 
     if not root:
         example_doctrine_repo = registry_get("repos.example_doctrine_repo")
@@ -155,10 +168,10 @@ def resolve_coordinator_root(
             if ml:
                 example_doctrine_repo = _run_quiet([ml, "get", "repos.example_doctrine_repo"])
         if example_doctrine_repo:
-            root = example_doctrine_repo.rstrip("/") + "/coordinator"
+            root = os.path.join(_strip_trailing_sep(example_doctrine_repo), "coordinator")
 
     if not root and os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO"):
-        root = os.environ["REPO_EXAMPLE_DOCTRINE_REPO"].rstrip("/") + "/coordinator"
+        root = os.path.join(_strip_trailing_sep(os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]), "coordinator")
 
     if not root:
         try:
@@ -178,9 +191,9 @@ def resolve_coordinator_root(
                     "— expected a single path",
                 )
                 example_doctrine_repo = ""
-            example_doctrine_repo = example_doctrine_repo.strip().rstrip("/")
+            example_doctrine_repo = _strip_trailing_sep(example_doctrine_repo.strip())
             if example_doctrine_repo:
-                root = example_doctrine_repo + "/coordinator"
+                root = os.path.join(example_doctrine_repo, "coordinator")
 
     if not root or not os.path.isdir(root):
         msg = [

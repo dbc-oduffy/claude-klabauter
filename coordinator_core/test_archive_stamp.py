@@ -138,6 +138,26 @@ def _seed_handoff(repo: Path, name: str, status: str, deployment_state: str, ext
     return path
 
 
+def _seed_ledger_claim(
+    repo: Path, handoff: Path, session_id: str, claimed_at: str, pid: str = "1"
+) -> Path:
+    """Seed a durable claim-ledger record for `handoff` under the repo's git dir.
+
+    The ledger is branch-independent (it lives inside `.git/`, not the
+    worktree), which is exactly why it survives the branch-switch revert that
+    empties the tracked frontmatter mirror — see
+    `coordinator_core.claim_state`'s module docstring for the incident.
+    """
+    from coordinator_core.claim_state import handoff_claim_dir
+
+    claim_dir = handoff_claim_dir(repo / ".git", handoff)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+    (claim_dir / "pid").write_text(pid, encoding="utf-8")
+    return claim_dir
+
+
 def _seed_memo(repo: Path, name: str, status: str, extra: str = "") -> Path:
     path = repo / "cross-repo" / "inbox" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2278,6 +2298,107 @@ class TestSupersedeArchiveHandoff:
         assert len(archived) == 1
         text = archived[0].read_text(encoding="utf-8")
         assert "continued_into: sup4-successor.md" in text
+
+    def test_shipped_predecessor_with_ledger_claim_is_stamped_with_its_holder(self, tmp_path):
+        """The holder-less `status: claimed` mirror, at the observed shape.
+
+        Measured 2026-08-10 in example-retrieval-repo: 34 of 231 archived `status: claimed`
+        handoffs carried NO holder field at all (and no `claimed_at`, which is
+        why the schema's `claimed + claimed_at => claimed_by` cross-field rule
+        never fired on them). Reproduced here: the op's DR-242 gate admits a
+        predecessor that is claimed OR SHIPPED, so a shipped predecessor whose
+        frontmatter mirror never received the claiming commit (the branch-
+        dependence desync `claim_state`'s module docstring opens with) reached
+        the supersede status flip with no holder on either side, and the flip
+        wrote `status: claimed` naming nobody. Once the ledger holder goes
+        non-live, such a record is unattributable to any consumer forever.
+
+        The durable ledger is the evidence that was already on disk the whole
+        time. Nothing here is inferred from the calling session.
+        """
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "ledger-holder.md", "open", "shipped",
+            extra="scope:\n  - state/handoffs/ledger-holder.md\n",
+        )
+        _seed_ledger_claim(repo, hp, "cf725a50-e1be-443e-957c-1c4be5ff964b", "2026-08-10T16:25:36Z")
+
+        rc = arstamp.cs_supersede_archive_handoff(str(hp), "ledger-holder-successor.md")
+        assert rc == 0
+        archived = list((repo / "archive" / "handoffs").rglob("ledger-holder.md"))
+        assert len(archived) == 1
+        text = archived[0].read_text(encoding="utf-8")
+        assert "status: claimed" in text
+        assert "claimed_by: cf725a50-e1be-443e-957c-1c4be5ff964b" in text
+        assert "2026-08-10T16:25:36Z" in text
+
+    def test_dead_ledger_holder_still_attributes_the_superseded_record(self, tmp_path):
+        """Superseding is retrospective — the holder's liveness is irrelevant to
+        who consumed the baton. A crashed/exited session is exactly the
+        population that produced the corpus defect, so the attribution must
+        survive it (`claim_state.resolve_historical_claim`'s own Negative-spec
+        explains why this does NOT weaken `resolve_claim_state`'s liveness
+        gate, which governs live-work decisions and is untouched)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "dead-holder.md", "open", "shipped",
+            extra="scope:\n  - state/handoffs/dead-holder.md\n",
+        )
+        _seed_ledger_claim(repo, hp, "dead-session-id", "2026-08-10T16:25:36Z", pid="999999999")
+
+        rc = arstamp.cs_supersede_archive_handoff(str(hp), "dead-holder-successor.md")
+        assert rc == 0
+        archived = list((repo / "archive" / "handoffs").rglob("dead-holder.md"))
+        text = archived[0].read_text(encoding="utf-8")
+        assert "claimed_by: dead-session-id" in text
+
+    def test_existing_mirror_holder_is_never_overwritten_by_the_ledger(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "mirror-wins.md", "claimed", "shipped",
+            extra=(
+                "claimed_by: mirror-session\n"
+                "claimed_at: 2026-08-01T00:00:00Z\n"
+                "scope:\n  - state/handoffs/mirror-wins.md\n"
+            ),
+        )
+        _seed_ledger_claim(repo, hp, "ledger-session", "2026-08-10T16:25:36Z")
+
+        rc = arstamp.cs_supersede_archive_handoff(str(hp), "mirror-wins-successor.md")
+        assert rc == 0
+        archived = list((repo / "archive" / "handoffs").rglob("mirror-wins.md"))
+        text = archived[0].read_text(encoding="utf-8")
+        assert "claimed_by: mirror-session" in text
+        assert "ledger-session" not in text
+
+    def test_silent_ledger_invents_no_holder_and_warns(self, tmp_path):
+        """A predecessor that was genuinely never claimed (shipped only) has no
+        honest holder to name. The calling session, and the `shipped_in`
+        commit's own `Session-Id:` trailer, are both available here and both
+        answer a DIFFERENT question — neither may be stamped as `claimed_by`.
+        The residual holder-less record is surfaced as a warning instead."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "no-evidence.md", "open", "shipped",
+            extra="scope:\n  - state/handoffs/no-evidence.md\n",
+        )
+
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = arstamp.cs_supersede_archive_handoff(str(hp), "no-evidence-successor.md")
+        assert rc == 0
+        archived = list((repo / "archive" / "handoffs").rglob("no-evidence.md"))
+        text = archived[0].read_text(encoding="utf-8")
+        assert "claimed_by:" not in text
+        assert _DEFAULT_TEST_SESSION_ID not in text
+        assert "no claimed_by" in buf.getvalue()
 
     def test_never_claimed_parent_with_successor_named_children_is_not_stamped(self, tmp_path):
         """AC10 (§ C5/C8, docs/plans/2026-07-28-handoff-close-path-fail-loud.md):

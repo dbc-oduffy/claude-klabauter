@@ -47,9 +47,11 @@ from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
     ParsedBlocks,
+    carry_gate,
     deletion_block_gate,
     dirty_tree_gate,
     has_step267_block,
+    op_scope_coverage_gate,
     parse_step267_blocks,
 )
 
@@ -565,3 +567,428 @@ def test_dirty_tree_gate_empty_gate_paths_scopes_to_nothing_and_passes(tmp_path)
     outcome = dirty_tree_gate(repo, gate_paths=[])
     assert outcome.passed is True
     assert outcome.unattributable == []
+
+
+# ---------------------------------------------------------------------------
+# carry_gate
+# ---------------------------------------------------------------------------
+
+
+def _seed_handoff(repo: Path, rel_path: str, frontmatter_body: str) -> None:
+    _seed_file(
+        repo,
+        rel_path,
+        f"---\nstatus: open\n{frontmatter_body}---\n\n# handoff\n",
+    )
+
+
+def test_carry_gate_skips_when_no_handoff_in_gate_paths(tmp_path):
+    """AC5: an empty filtered set (no `state/handoffs/*.md` in `gate_paths`)
+    skips entirely -- no file read at all."""
+    repo = _init_repo(tmp_path)
+    outcome = carry_gate(repo, gate_paths=["a/one.md", "state/other/x.md"])
+    assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+
+def test_carry_gate_empty_gate_paths_skips(tmp_path):
+    repo = _init_repo(tmp_path)
+    outcome = carry_gate(repo, gate_paths=[])
+    assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+
+def test_carry_gate_well_formed_carried_items_passes(tmp_path):
+    """AC4: well-formed carried_items (non-terminal `carried`, plus a
+    terminal `closed` WITH a disposition_detail) commits normally."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-x.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    description: still open\n"
+        "    disposition: carried\n"
+        "  - carry_id: c2\n"
+        "    description: done\n"
+        "    disposition: closed\n"
+        "    disposition_detail: closed -- superseded by c3\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-x.md"])
+    assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+
+def test_carry_gate_absent_carried_items_key_passes(tmp_path):
+    """AC4: a handoff with NO `carried_items` key at all is a legitimate
+    green -- absence is not the vacuous-pass hazard named in the plan's
+    Anti-scope (that hazard concerned authoring-time validation with no
+    staged-path precondition; this gate only ever fires on a staged
+    handoff)."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(repo, "state/handoffs/2026-08-10-y.md", "")
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-y.md"])
+    assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+
+def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path):
+    """AC1: a terminal disposition (`blocked`) with no disposition_detail is
+    a REFUSAL."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-z.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    description: stuck\n"
+        "    disposition: blocked\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-z.md"])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("disposition_detail" in line for line in outcome.diagnostics)
+
+
+def test_carry_gate_missing_carry_id_refuses(tmp_path):
+    """AC2: a missing carry_id refuses, delegating to evaluate_gate rather
+    than re-implementing the rule."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-a.md",
+        "carried_items:\n"
+        "  - description: no id\n"
+        "    disposition: carried\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-a.md"])
+    assert outcome.passed is False
+    assert any("carry_id" in line for line in outcome.diagnostics)
+
+
+def test_carry_gate_unrecognized_disposition_refuses(tmp_path):
+    """AC2: a disposition outside the sanctioned set refuses."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-b.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    description: weird\n"
+        "    disposition: not_a_real_disposition\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-b.md"])
+    assert outcome.passed is False
+    assert any("not_a_real_disposition" in line for line in outcome.diagnostics)
+
+
+def test_carry_gate_preserves_violation_lines_verbatim(tmp_path):
+    """AC3: `evaluate_gate`'s own violation text reaches `diagnostics`
+    unchanged, prefixed only with the handoff path -- no re-wording."""
+    from coordinator_core.ops.handoff_carry_gate import evaluate_gate
+
+    items = [{"description": "no id", "disposition": "carried"}]
+    expected_violation = evaluate_gate(items).violations[0]
+
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-c.md",
+        "carried_items:\n"
+        "  - description: no id\n"
+        "    disposition: carried\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-c.md"])
+    assert f"state/handoffs/2026-08-10-c.md: {expected_violation}" in outcome.diagnostics
+
+
+def test_carry_gate_refusal_includes_restage_hint(tmp_path):
+    """AC6: a refusal's diagnostics tell the operator the path is left
+    unstaged and must be re-staged after the fix."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-d.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    disposition: blocked\n",
+    )
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-d.md"])
+    assert outcome.passed is False
+    assert any("unstaged" in line.lower() for line in outcome.diagnostics)
+
+
+def test_carry_gate_pass_has_no_restage_hint(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_handoff(repo, "state/handoffs/2026-08-10-e.md", "")
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-e.md"])
+    assert outcome.diagnostics == []
+
+
+def test_carry_gate_unreadable_handoff_refuses(tmp_path):
+    """AC7: a staged handoff path that EXISTS on disk but cannot be read
+    (here: the path is a directory, not a readable file) is a REFUSAL, not
+    a silent pass -- fail-loud matches `evaluate_gate`'s own never-fail-open
+    contract. Deliberately NOT a missing path -- see
+    `test_carry_gate_staged_deletion_path_absent_from_worktree_passes`
+    below (AC8) for why an ABSENT path is a different case (a legitimate
+    skip, not this refusal) that must not be conflated with this one."""
+    repo = _init_repo(tmp_path)
+    handoff_as_dir = repo / "state" / "handoffs" / "2026-08-10-unreadable.md"
+    handoff_as_dir.mkdir(parents=True)
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-unreadable.md"])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("could not read handoff" in line for line in outcome.diagnostics)
+
+
+def test_carry_gate_staged_deletion_path_absent_from_worktree_passes(tmp_path):
+    """AC8: a `gate_paths` entry ABSENT from the worktree is the staged-
+    deletion signal, not a generic missing-file case -- `compute_gate_paths`
+    (`commit_message.py`) returns `[*commit_paths, *deleted_paths]`, so an
+    EM-authored `deleted_paths` entry reaches `gate_paths` with no file
+    behind it BY DESIGN (a `git rm state/handoffs/*.md`, e.g. `/distill`
+    disposal). Refusing here would make deliberate handoff deletion
+    impossible tree-wide -- there is nothing to carry-check about a file
+    being removed, so this is a legitimate pass, never a refusal. Must key
+    on the path genuinely not existing (checked BEFORE
+    `read_carried_items` runs), never on catching the `OSError`
+    `read_carried_items` itself would raise -- that would also swallow a
+    genuinely unreadable EXISTING file (see the AC7 test above) and
+    re-open AC7."""
+    repo = _init_repo(tmp_path)
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-deleted.md"])
+    assert outcome.passed is True
+    assert outcome.diagnostics == []
+
+
+def test_carry_gate_unparseable_frontmatter_refuses(tmp_path):
+    """AC7: a handoff with no parseable YAML frontmatter block is a
+    REFUSAL."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "state/handoffs/2026-08-10-f.md", "no frontmatter here\n")
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-f.md"])
+    assert outcome.passed is False
+    assert any("unparseable carried_items" in line for line in outcome.diagnostics)
+
+
+def test_carry_gate_only_filters_handoff_paths(tmp_path):
+    """Non-handoff paths in `gate_paths` are ignored -- only
+    `state/handoffs/*.md` entries are read."""
+    repo = _init_repo(tmp_path)
+    _seed_handoff(repo, "state/handoffs/2026-08-10-g.md", "")
+    outcome = carry_gate(
+        repo,
+        gate_paths=["some/other/file.py", "state/handoffs/2026-08-10-g.md"],
+    )
+    assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+
+# ---------------------------------------------------------------------------
+# op_scope_coverage_gate
+# ---------------------------------------------------------------------------
+
+_REGISTRY_RELPATH = "coordinator_core/ops/_registry_map.py"
+_OP_SCOPES_RELPATH = "coordinator_core/op_scopes.py"
+
+
+def _seed_registry_map(repo: Path, op_names, *, valid: bool = True) -> None:
+    p = repo / _REGISTRY_RELPATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if valid:
+        entries = "\n".join(f'    "{name}": "some.module",' for name in op_names)
+        p.write_text(
+            "from typing import Dict\n\n"
+            f"OP_MODULE_MAP: Dict[str, str] = {{\n{entries}\n}}\n",
+            encoding="utf-8",
+        )
+    else:
+        # A dict spelled via a name that isn't OP_MODULE_MAP, so the target
+        # binding is genuinely absent -- simulates a rename/restructure.
+        p.write_text("SOME_OTHER_NAME = {}\n", encoding="utf-8")
+
+
+def _seed_op_scopes(repo: Path, op_scope_pairs, *, valid: bool = True) -> None:
+    p = repo / _OP_SCOPES_RELPATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if valid:
+        entries = "\n".join(f'    "{name}": "{scope}",' for name, scope in op_scope_pairs)
+        p.write_text(
+            "from typing import Dict\n\n"
+            f"_OP_KEY_SCOPE: Dict[str, str] = {{\n{entries}\n}}\n",
+            encoding="utf-8",
+        )
+    else:
+        p.write_text("SOME_OTHER_NAME = {}\n", encoding="utf-8")
+
+
+def test_op_scope_gate_skips_when_registry_map_not_staged(tmp_path):
+    """Scope filter: `_registry_map.py` absent from `gate_paths` -> skip, no
+    file read at all -- a commit that doesn't touch the registry has nothing
+    to say."""
+    repo = _init_repo(tmp_path)
+    outcome = op_scope_coverage_gate(repo, gate_paths=["some/other/file.py"])
+    assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+
+def test_op_scope_gate_refuses_unclassified_op(tmp_path):
+    """Refuse: an op registered in OP_MODULE_MAP with no _OP_KEY_SCOPE entry."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["known.op", "unclassified.op"])
+    _seed_op_scopes(repo, [("known.op", "none")])
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("unclassified.op" in line for line in outcome.diagnostics)
+    assert not any("known.op" in line for line in outcome.diagnostics)
+
+
+def test_op_scope_gate_passes_when_all_classified(tmp_path):
+    """Pass: every registered op has an _OP_KEY_SCOPE entry -- a scope-table
+    entry with no registry counterpart (legacy/test-only) does not trip the
+    gate; direction is one-way."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["op.a", "op.b"])
+    _seed_op_scopes(
+        repo,
+        [("op.a", "none"), ("op.b", "common_dir"), ("legacy.only.in.scope.table", "none")],
+    )
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+
+def test_op_scope_gate_absence_class_registry_map_deleted_skips(tmp_path):
+    """Absence class 1: `_registry_map.py` staged in gate_paths but ABSENT from
+    the worktree (a staged deletion) -> skip, not refuse."""
+    repo = _init_repo(tmp_path)
+    # Never write the file at all -- mirrors a staged deletion where the
+    # worktree copy is already gone by gate time.
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+
+def test_op_scope_gate_absence_class_op_scopes_missing_refuses(tmp_path):
+    """Absence class 2: `op_scopes.py` absent from the worktree -> refuse,
+    never a silent pass -- the gate cannot verify coverage without it."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["op.a"])
+    # op_scopes.py deliberately never written.
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any(_OP_SCOPES_RELPATH in line for line in outcome.diagnostics)
+
+
+def test_op_scope_gate_absence_class_dict_not_found_in_registry_refuses(tmp_path):
+    """Absence class 3a: OP_MODULE_MAP not found by the AST walk (renamed/
+    restructured) -> refuse, naming which dict was not found -- a parse
+    failure must never read as 'no violations'."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, [], valid=False)
+    _seed_op_scopes(repo, [("op.a", "none")])
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("OP_MODULE_MAP" in line for line in outcome.diagnostics)
+
+
+def test_op_scope_gate_absence_class_dict_not_found_in_scopes_refuses(tmp_path):
+    """Absence class 3b: _OP_KEY_SCOPE not found by the AST walk -> refuse,
+    naming which dict was not found."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["op.a"])
+    _seed_op_scopes(repo, [], valid=False)
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("_OP_KEY_SCOPE" in line for line in outcome.diagnostics)
+
+
+def test_op_scope_gate_refuses_on_double_module_level_rebind(tmp_path):
+    """P2 hardening: two module-level rebinds of OP_MODULE_MAP (e.g. a
+    placeholder `= {}` followed by a later genuine `= {...}` rebind) -> the
+    gate cannot know which binding is authoritative and must refuse, naming
+    the variable, rather than silently reading the first one `ast.walk`
+    reaches."""
+    repo = _init_repo(tmp_path)
+    p = repo / _REGISTRY_RELPATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        "from typing import Dict\n\n"
+        "OP_MODULE_MAP: Dict[str, str] = {}\n\n"
+        'OP_MODULE_MAP = {"op.a": "some.module"}\n',
+        encoding="utf-8",
+    )
+    _seed_op_scopes(repo, [("op.a", "none")])
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any("OP_MODULE_MAP" in line and "more than once" in line for line in outcome.diagnostics)
+
+
+def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_path):
+    """A same-named local variable inside a function is NOT a module-level
+    binding and must not trip the multiplicity refusal -- only `tree.body`
+    (module-level statements) counts."""
+    repo = _init_repo(tmp_path)
+    p = repo / _REGISTRY_RELPATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        "from typing import Dict\n\n"
+        'OP_MODULE_MAP: Dict[str, str] = {"op.a": "some.module"}\n\n'
+        "def _helper():\n"
+        "    OP_MODULE_MAP = {}\n"
+        "    return OP_MODULE_MAP\n",
+        encoding="utf-8",
+    )
+    _seed_op_scopes(repo, [("op.a", "none")])
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+
+def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path, monkeypatch):
+    """Present-but-unreadable, not absent: `op_scopes.py` exists on disk but
+    raises `OSError` on read (permissions, encoding I/O failure, transient FS
+    error) -> refuse, naming the path or the read failure -- a predicate the
+    gate cannot evaluate must never fall through to 'no violations'."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["op.a"])
+    _seed_op_scopes(repo, [("op.a", "none")])
+
+    real_read_text = Path.read_text
+
+    def _flaky_read_text(self, *args, **kwargs):
+        if self == repo / _OP_SCOPES_RELPATH:
+            raise OSError("simulated unreadable file")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _flaky_read_text)
+
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any(
+        _OP_SCOPES_RELPATH in line and "simulated unreadable file" in line
+        for line in outcome.diagnostics
+    )
+
+
+def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, monkeypatch):
+    """Mirrored present-but-unreadable case on the registry-map side:
+    `_registry_map.py` exists but raises `OSError` on read -> refuse, naming
+    the path or the read failure, same as the op_scopes.py side."""
+    repo = _init_repo(tmp_path)
+    _seed_registry_map(repo, ["op.a"])
+
+    real_read_text = Path.read_text
+
+    def _flaky_read_text(self, *args, **kwargs):
+        if self == repo / _REGISTRY_RELPATH:
+            raise OSError("simulated unreadable file")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _flaky_read_text)
+
+    outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
+    assert outcome.passed is False
+    assert outcome.skipped is False
+    assert any(
+        _REGISTRY_RELPATH in line and "simulated unreadable file" in line
+        for line in outcome.diagnostics
+    )

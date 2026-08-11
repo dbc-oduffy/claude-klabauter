@@ -35,9 +35,19 @@ the grant module's own persistence semantics (already covered by
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
+
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
+# stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.spawns_process]
 
 
 def _payload(
@@ -115,6 +125,112 @@ class TestSubagentOriginatedDenied:
 
     def test_non_write_tool_allowed(self, monkeypatch):
         _allow(monkeypatch, "CLAUDE.md", tool_name="Read")
+
+
+# ---------------------------------------------------------------------------
+# AC8 regression pin -- an EM-acquired grant, written via the DEFAULT
+# env-driven acquisition path (``write_claude_md_write_grant`` with no
+# explicit ``session_id``), still authorizes a SUBAGENT-shaped payload on
+# this guard's real ``check_claude_md_write_grant`` predicate -- not the
+# module-monkeypatched shortcut every other test in this file uses. This is
+# the inheritance property the whole plan exists to preserve: EM and
+# dispatched-subagent turns resolve to the SAME session id, so the grant the
+# EM wrote is visible to the guard evaluation a subagent's own tool call
+# triggers, with no separate wiring. Paired with the identical payload
+# absent any grant, asserting DENY, so the allow leg cannot pass for the
+# wrong reason (a mis-shaped payload silently tripping an earlier allow
+# branch). ``test_subagent_write_allowed_with_live_grant`` above already
+# pins the ALLOW shape against a directly-monkeypatched
+# ``check_claude_md_write_grant`` -- what it does NOT cover is the real
+# acquisition path (``write_claude_md_write_grant`` -> disk ->
+# ``check_claude_md_write_grant``) nor the paired no-grant negative; this
+# class adds exactly that missing half.
+# ---------------------------------------------------------------------------
+
+
+def _make_repo(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    (tmp_path / "README.md").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=tmp_path)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    return tmp_path
+
+
+def _live_session(repo, sid):
+    from coordinator_core.session import core as session_core
+
+    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "meta.json").write_text(
+        json.dumps({"pid": "999", "last_activity": session_core.now_iso()}) + "\n",
+        encoding="utf-8",
+    )
+    return sdir
+
+
+class TestSubagentInheritsEmAcquiredGrant:
+    """AC8, respecified per Review Finding 1 off ``TestSubagentResolvability``
+    (module-level, green regardless of this guard) onto this guard's own
+    ``check()`` entrypoint -- the only surface where the acquisition-gate
+    regression this pin exists to catch could actually be observed."""
+
+    def test_em_acquired_grant_authorizes_subagent_write(self, tmp_path, monkeypatch):
+        from coordinator_core.session import claude_md_grant as cmg
+
+        repo = _make_repo(tmp_path)
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "ac8-inherit-session")
+        _live_session(repo, "ac8-inherit-session")
+
+        # EM-inline turn: default env-driven acquisition, no explicit
+        # session_id -- the exact call shape a granting EM makes.
+        granted = cmg.write_claude_md_write_grant(
+            "pm", "PM said go ahead this session", cwd=str(repo)
+        )
+        assert granted is True
+
+        # Restore the REAL predicate for this test only -- every other test
+        # in this file relies on the autouse ``_no_grant`` monkeypatch, but
+        # AC8 is specifically about the real acquisition -> resolution path.
+        monkeypatch.setattr(guard, "check_claude_md_write_grant", cmg.check_claude_md_write_grant)
+
+        target = repo / "CLAUDE.md"
+        target.write_text("short")
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "a much longer replacement body"},
+            "cwd": str(repo),
+            "agent_id": "aexecutor-teammate-1234567890abcdef",
+        }
+        result = guard.check(payload)
+        assert result is None, f"expected ALLOW (inherited EM grant), got {result!r}"
+
+    def test_subagent_write_denied_absent_the_grant(self, tmp_path, monkeypatch):
+        """Paired negative: identical payload, identical session/repo
+        shape, but NO grant written -- proves the allow above is not a
+        mis-shaped payload silently tripping an earlier allow leg."""
+        from coordinator_core.session import claude_md_grant as cmg
+
+        repo = _make_repo(tmp_path)
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "ac8-inherit-session-negative")
+        _live_session(repo, "ac8-inherit-session-negative")
+
+        monkeypatch.setattr(guard, "check_claude_md_write_grant", cmg.check_claude_md_write_grant)
+
+        target = repo / "CLAUDE.md"
+        target.write_text("short")
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "a much longer replacement body"},
+            "cwd": str(repo),
+            "agent_id": "aexecutor-teammate-1234567890abcdef",
+        }
+        result = guard.check(payload)
+        assert result is not None, "expected DENY absent any grant on disk"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +324,20 @@ class TestDenyTextNamesAlternativeAndOverride:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator_core.session.claude_md_grant grant pm" in reason
 
+    def test_deny_text_attributes_the_grant_command_to_the_em_not_the_reader(
+        self, monkeypatch
+    ):
+        """AC6/AC7: the rendered grant command is still present, but is NOT
+        framed as the reading subagent's own remediation -- it is
+        attributed as what the subagent's EM runs. "Report BLOCKED upward"
+        is the subagent-actionable path.
+        """
+        result = guard.check(_payload("CLAUDE.md"))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "Report BLOCKED to your EM" in reason
+        assert "EM runs this, not you" in reason
+        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+
     def test_deny_text_names_the_rare_use_env_override(self, monkeypatch):
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -278,12 +408,47 @@ class TestDenyTextNamesAlternativeAndOverride:
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
 
     def test_deny_text_never_dead_ends(self, monkeypatch):
-        """Nothing dead-ends -- state why, and give the override (binding,
-        design-as-offers). A bare NO with no alternative is a guard
-        fighting agent eagerness rather than redirecting it."""
+        """Nothing dead-ends -- state why, and give the reader a concrete
+        actionable path (binding, design-as-offers). AC7: the deny text
+        names the real path(s) -- report-BLOCKED-upward plus what the EM
+        runs to unblock -- rather than a bare NO with no alternative."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "Still want CLAUDE.md?" in reason
+        assert "Report BLOCKED to your EM" in reason
+        assert guard._OVERRIDE_ENV_VAR in reason
+
+    def test_deny_text_actionable_line_opens_the_shared_cue_window(self, monkeypatch):
+        """Regression pin for a P1 review-integration finding: the deny
+        text's own docstring claims the target path, grant command, and
+        grant precondition sit inside a cue window that exempts them from
+        the C8 byte-prose cap -- but that claim is only true if the actual
+        rendered text matches ``_CUE_WINDOW_RE``
+        (``coordinator_core.bash_guards._alternative_liveness``). A reword
+        that drops the matching phrase (as happened here once already)
+        silently moves ~150+ bytes of exempt content into the counted-prose
+        budget with no test failure anywhere else in this file to catch it.
+        """
+        from coordinator_core.bash_guards._alternative_liveness import _CUE_WINDOW_RE
+
+        result = guard.check(_payload("CLAUDE.md"))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        actionable_line = "Report BLOCKED to your EM instead:"
+        assert actionable_line in reason
+        assert _CUE_WINDOW_RE.search(actionable_line), (
+            "the deny text's actionable line no longer matches the shared "
+            "cue-window regex -- the target path/grant command/precondition "
+            "that follow it will render as counted prose, not exempt "
+            "cue-window content"
+        )
+
+    def test_deny_text_names_the_structural_reason(self, monkeypatch):
+        """AC6: the deny text names the governed surface it was trying to
+        write, and the structural reason (a property of every subagent on
+        every dispatch, not a judgment on this agent's work)."""
+        result = guard.check(_payload("coordinator/CLAUDE.md"))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "coordinator/CLAUDE.md" in reason
+        assert "needs a live CLAUDE.md write grant for this session" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +543,29 @@ class TestDirectionalDenyGrowthOnly:
         }
         result = guard.check(payload)
         reason = result["hookSpecificOutput"]["additionalContext"]
+        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+
+    def test_advisory_attributes_the_grant_command_to_the_em_not_the_reader(
+        self, monkeypatch, tmp_path
+    ):
+        """AC6/AC7 companion case on the advisory leg (the C18c reshape):
+        the advisory does not block, but that does not exempt it from the
+        same attribution standard AC6 sets for the deny leg -- the rendered
+        grant command is attributed to the EM, not framed as something the
+        reading subagent should itself run.
+        """
+        target = tmp_path / "CLAUDE.md"
+        target.write_text("a much longer original body")
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "short"},
+            "cwd": str(tmp_path),
+            "agent_id": "aexecutor-teammate-1234567890abcdef",
+        }
+        result = guard.check(payload)
+        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert "the EM runs" in reason
+        assert "not this agent's" in reason
         assert "coordinator_core.session.claude_md_grant grant pm" in reason
 
     def test_new_file_creation_is_always_growth_and_denied(self, monkeypatch, tmp_path):

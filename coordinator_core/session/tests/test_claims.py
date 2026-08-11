@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import claims, core, scope
+from coordinator_core.session import claims, core, scope, shape
 from coordinator_core.ops.session import safe_commit_offer
 
 
@@ -292,6 +292,62 @@ class TestClaimArtifact:
         assert (
             _claim_dir(repo, "handoff", "h-live") / "session_id"
         ).read_text().strip() == "other-sid"
+
+    def test_rename_relocates_the_claim_basename_key(self, tmp_path, monkeypatch):
+        """Fix-side regression net for the incident this test's old
+        `_KNOWN_DEFECT` name documented: the claim dir was keyed purely on
+        the CURRENT basename (module negative-spec, "BASENAME-ONLY"), with
+        no stable id surviving a rename. Renaming a handoff via a bare
+        `git mv` — with no relocation of its claim dir — let a second
+        session claim the artifact under its NEW basename cleanly, because
+        no claim dir sat there: the same baton held by two sessions
+        simultaneously.
+
+        Pinned incident: state/bug-backlog/2026-08-10-two-sessions-held-one-
+        baton-the-claim-di-1d9d62d1d8af.yaml (session fe113177 held
+        "2026-08-10-untitled.md" claimed+live; the file was renamed to
+        "...review-owed-close-boundary-fix-then-cap.md"; session e47b89 then
+        claimed the NEW basename cleanly and both sessions worked the same
+        baton concurrently).
+
+        FIX (this dispatch): a rename performed through the sanctioned
+        entrypoint (`claims.relocate_handoff_claim`, modeled on
+        `percolate/rewrite_basename.py::_do_rename` +
+        `session/scope.py::relocate_touched_path`) carries the claim dir
+        along with the basename change, so the second session's claim
+        attempt under the new basename now correctly collides with the
+        still-live first claim and is REJECTED. This does not retroactively
+        fix a rename performed OUTSIDE the entrypoint (a bare, un-tooled
+        `git mv`) — see `relocate_artifact_claim`'s own negative-spec.
+        """
+        repo = _make_repo(tmp_path)
+        old_basename = "2026-08-10-untitled.md"
+        new_basename = "2026-08-10-review-owed-close-boundary-fix-then-cap.md"
+
+        _set_me(monkeypatch, sid="fe113177")
+        assert claims.claim_artifact("handoff", old_basename, cwd=str(repo)) is True
+        _write_session(repo, "fe113177", _fresh())
+
+        # The file is renamed via the sanctioned entrypoint, which relocates
+        # the claim dir alongside the basename change.
+        assert claims.relocate_handoff_claim(old_basename, new_basename, cwd=str(repo)) is True
+
+        assert not _claim_dir(repo, "handoff", old_basename).exists()
+        assert _claim_dir(repo, "handoff", new_basename).is_dir()
+        assert (
+            _claim_dir(repo, "handoff", new_basename) / "session_id"
+        ).read_text().strip() == "fe113177"
+
+        # A second, DIFFERENT live session attempts to claim the artifact
+        # under its NEW basename — now correctly REJECTED, because the
+        # relocated claim dir is visible there.
+        _set_me(monkeypatch, sid="e47b898b")
+        assert claims.claim_artifact("handoff", new_basename, cwd=str(repo)) is False
+
+        # The original session's claim is untouched.
+        assert (
+            _claim_dir(repo, "handoff", new_basename) / "session_id"
+        ).read_text().strip() == "fe113177"
 
     def test_dead_holder_takeover(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
@@ -613,6 +669,62 @@ class TestReleaseArtifact:
             )
             is True
         )
+
+    def test_plan_release_clears_the_session_shape_pointer(
+        self, tmp_path, monkeypatch
+    ):
+        """`claim_plan` writes `plan.path` into session-shape.json; until this
+        landed, nothing unwrote it, so a released plan stayed resolvable via
+        `claimed_plan.resolve_claimed_plan_path`'s tier (a) and `/handoff`
+        after a shipped plan failed loud on a DivergentDeliverableIdError
+        (example-doctrine-repo-em memo, 2026-08-10)."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-shipped", session_id="me-sid")
+        shape.session_shape_set(
+            "me-sid",
+            {"plan": {"path": "docs/plans/p-shipped.md", "scope_mode": "feature"}},
+            str(repo),
+        )
+        assert claims.release_artifact("plan", "p-shipped", cwd=str(repo)) is True
+        assert not _claim_dir(repo, "plan", "p-shipped").exists()
+        parsed = json.loads(shape.session_shape_read("me-sid", str(repo)))
+        # Cleared to `{}`, NEVER `None` — ceremony.session_instructions does
+        # `setdefault("plan", {})[...]  = scope_override`, which subscripts an
+        # explicit null.
+        assert parsed["plan"] == {}
+
+    def test_plan_release_leaves_a_pointer_naming_a_different_plan(
+        self, tmp_path, monkeypatch
+    ):
+        """Releasing one plan must not blank a shape pointer that names
+        another — a session may hold several plan claims."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-one", session_id="me-sid")
+        shape.session_shape_set(
+            "me-sid", {"plan": {"path": "docs/plans/p-two.md"}}, str(repo)
+        )
+        assert claims.release_artifact("plan", "p-one", cwd=str(repo)) is True
+        parsed = json.loads(shape.session_shape_read("me-sid", str(repo)))
+        assert parsed["plan"]["path"] == "docs/plans/p-two.md"
+
+    def test_non_holder_plan_release_leaves_the_pointer_alone(
+        self, tmp_path, monkeypatch
+    ):
+        """The no-op release path (not the holder) must not reach the shape
+        write either — the claim is a live peer's, and so is the pointer's
+        meaning."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-peer", session_id="other-sid")
+        shape.session_shape_set(
+            "me-sid", {"plan": {"path": "docs/plans/p-peer.md"}}, str(repo)
+        )
+        assert claims.release_artifact("plan", "p-peer", cwd=str(repo)) is True
+        assert _claim_dir(repo, "plan", "p-peer").is_dir()
+        parsed = json.loads(shape.session_shape_read("me-sid", str(repo)))
+        assert parsed["plan"]["path"] == "docs/plans/p-peer.md"
 
 
 # ---------------------------------------------------------------------------
@@ -1935,3 +2047,41 @@ class TestReleasePhantomClaims:
 
         after = touched_path.read_text(encoding="utf-8") if touched_path.exists() else ""
         assert after == before
+
+    def test_untracked_phantom_claims_spawn_git_root_once_not_per_entry(
+        self, tmp_path, monkeypatch
+    ):
+        """C2 (docs/plans/2026-08-08-touched-path-normalize-spawn-diet.md):
+        ``release_phantom_claims`` already computes ``root =
+        core.git_root(cwd)`` once before its N-entry loop over claimed
+        paths; before C2, each loop iteration's
+        ``normalize_touch_path(raw_path, cwd)`` call re-derived that same
+        root itself on every untracked-path miss, so ``core.git_root`` spawn
+        count scaled with entry count (1 + N) rather than staying constant.
+        With the loop-known ``root`` now threaded through as
+        ``normalize_touch_path``'s ``root=`` parameter, ``core.git_root`` is
+        called exactly once for this call regardless of how many phantom
+        entries are claimed -- spawns scale with the number of DISTINCT
+        roots (one, here), not with entry count."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        for name in ("ghost1.py", "ghost2.py", "ghost3.py"):
+            scope.touch("mine", name, cwd=str(repo))
+            assert not (Path(repo) / name).exists()
+
+        calls = {"git_root": 0}
+        real_git_root = core.git_root
+
+        def _counted_git_root(cwd=None):
+            calls["git_root"] += 1
+            return real_git_root(cwd)
+
+        monkeypatch.setattr(scope.core, "git_root", _counted_git_root)
+
+        scope.release_phantom_claims("mine", cwd=str(repo))
+
+        assert calls["git_root"] == 1
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+        for name in ("ghost1.py", "ghost2.py", "ghost3.py"):
+            assert name not in offer["safe_paths"]

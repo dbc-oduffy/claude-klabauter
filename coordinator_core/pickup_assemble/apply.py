@@ -185,7 +185,14 @@ from coordinator_core.pickup_assemble import (
     resolve_artifact,
     validate_decisions_shape,
 )
-from coordinator_core.session.claims import claim_artifact, release_artifact
+from coordinator_core.session.claims import (
+    CLAIM_STAGE_APPLY,
+    CLAIM_STAGE_BRIEF,
+    claim_artifact,
+    claim_stage,
+    promote_claim_stage,
+    release_artifact,
+)
 
 # ---------------------------------------------------------------------------
 # Exit-code contract (AC9g, the Staff Engineer second-pass finding #7) — composed from
@@ -847,6 +854,11 @@ def apply(
             decisions if decisions is not None else _read_session_dispositions(root, resolved_sid, artifact_path)
         )
         try:
+            # Deliberately WITHOUT `claim_at_brief`: `apply` has no unguarded
+            # window to protect. Its own `d1` (`claim-artifact`) already takes
+            # the lock at `apply` stage for an `apply` run with no prior
+            # `brief`, and for the ordinary brief-then-apply path the lock is
+            # already self-held and only needs promoting (below).
             brief_result = brief(artifact_path, decisions=effective_decisions, repo_root=root)
         except Exception as exc:  # noqa: BLE001 - mirrors brief()'s own main() backstop
             return APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc)}
@@ -931,6 +943,16 @@ def apply(
             return compute_claim_grant(
                 root, class_, basename, artifact_path_value, cwd=str(root), fm=artifact.get("frontmatter")
             )
+
+        # Promote the pre-work reservation into a durable claim before any
+        # directive runs. Explicit rather than a side effect of d1: once
+        # `brief` takes the lock, `_claim_already_self_held` correctly marks
+        # d1 `already_satisfied`, so the `claim_artifact` call that would
+        # otherwise have written the stage never happens — and a claim left at
+        # `brief` stage keeps a lease it has outgrown, becoming takeable out
+        # from under a session that is mid-mutation. A no-op for a claim
+        # already at `apply` stage, and for one held by anybody else.
+        promote_claim_stage(class_, basename, cwd=str(root))
 
         exit_code, report = _execute_directives(
             directives,
@@ -1079,6 +1101,14 @@ def drop(
     invoked only for `class_ == "memo"` — each class inverts its OWN
     claim-stamp write, never the other's.
 
+    BRIEF-STAGE DROP IS LOCK-RELEASE ONLY. When the claim being dropped is
+    still at `brief` stage — reserved by `brief`, never promoted by an `apply`
+    — no frontmatter stamp was ever written, so neither class inverse is
+    invoked and `unclaimed` reports `None` alongside `claim_stage: "brief"`.
+    This is NOT a widening of `handoff_transition._unclaim`, which keeps its
+    in_flight -> ready_to_fire-only, fail-loud contract untouched; it is
+    simply not asking it to invert a write that never happened.
+
     PUT-DOWN CLEARS, REPARK LEAVES (C7 Part A design point): `drop` is the
     put-down path and always reverts the frontmatter claim-stamp
     (`claimed_by`/`picked_up_by`) back to unclaimed. Repark
@@ -1113,10 +1143,39 @@ def drop(
     artifact_path_value = artifact.get("path", "") or artifact_path
 
     with _session_identity(resolved_sid):
+        # Read the stage BEFORE releasing — `release_artifact` removes the
+        # dir the stage file lives in.
+        #
+        # A `brief`-stage claim has no frontmatter stamp behind it: the
+        # reservation was taken so the read-verify-draft window would be
+        # excluded, and `apply` (which is what stamps) never ran. Dropping it
+        # is therefore lock-release ONLY. Calling the class inverse anyway
+        # would hand `handoff_transition._unclaim` a `deployment_state` that
+        # is not `in_flight`, which it correctly fail-louds on (exit 1, no
+        # write) — turning an ordinary "briefed it, changed my mind" into a
+        # partial-mutation exit. Widening `_unclaim` to tolerate that is NOT
+        # the fix; not calling it is.
+        claim_is_brief_stage = (
+            claim_stage(
+                root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+            )
+            == CLAIM_STAGE_BRIEF
+        )
+
         # `release_artifact` always returns True (no-op success on every
         # non-holder / already-absent path — see its own docstring); nothing
         # here branches on its return value.
         release_artifact(class_, basename, cwd=str(root))
+
+        if claim_is_brief_stage:
+            return APPLY_EXIT_OK, {
+                "class": class_,
+                "basename": basename,
+                "released": True,
+                "unclaimed": None,
+                "claim_stage": CLAIM_STAGE_BRIEF,
+                "commit_sha": None,
+            }
 
         unclaimed: Optional[bool] = None
         # C13/DR-273 — memo release now commits its own terminal write; when
@@ -1157,6 +1216,7 @@ def drop(
         "basename": basename,
         "released": True,
         "unclaimed": unclaimed,
+        "claim_stage": CLAIM_STAGE_APPLY,
         "commit_sha": commit_sha,
     }
 

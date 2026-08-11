@@ -95,9 +95,9 @@ def main(argv: List[str], plugin_root: Optional[str] = None, site: str = "genera
     else:
         cmd = python_cmd + [generator] + list(argv)
 
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-    result = subprocess.run(cmd, **no_console_creationflags())
+    result = subprocess.run(cmd, **no_console_passthrough_kwargs())
     return result.returncode
 
 

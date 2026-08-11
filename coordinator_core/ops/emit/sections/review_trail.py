@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-
 
 from __future__ import annotations
 
+import functools
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,6 +32,25 @@ from coordinator_core.ops.list_review_trail_records import (
     ReviewTrailListError,
     list_paths as _native_list_paths,
 )
+
+
+@functools.lru_cache(maxsize=None)
+def _resolved_root(root_str: str) -> Path:
+    """Cache ``Path(root_str).resolve()`` — the Win32 ``_getfinalpathname`` cost.
+
+    2026-08-08 load-norm C3/lever-2: ``_relativize_path`` used to re-resolve the
+    (invariant, per-emission) root on every call — once per review-trail record,
+    ~3,000 redundant ``nt._getfinalpathname`` syscalls that bought nothing, since
+    the root never changes within a single ``collect()`` walk (or across the whole
+    process, which is spawn-per-call, not resident). Caching by the *unresolved*
+    root string is semantically identical to always resolving fresh: symlinks,
+    junctions, UNC paths and case-insensitive comparison are all still honoured —
+    ``Path.resolve()`` still runs, exactly once per distinct root string, and its
+    result is reused rather than its syscalls repeated. The per-*filepath* resolve
+    below is untouched (each file is a distinct real path and must still be
+    resolved individually for the same symlink/junction correctness reasons).
+    """
+    return Path(root_str).resolve()
 
 
 def _relativize_path(ctx: EmitContext, filepath: str) -> str:
@@ -52,7 +72,7 @@ def _relativize_path(ctx: EmitContext, filepath: str) -> str:
     """
     root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
     try:
-        return Path(filepath).resolve().relative_to(Path(root).resolve()).as_posix()
+        return Path(filepath).resolve().relative_to(_resolved_root(str(root))).as_posix()
     except ValueError:
         return filepath
 

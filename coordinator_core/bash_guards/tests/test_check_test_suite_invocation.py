@@ -366,7 +366,9 @@ def test_em_invoke_pester_path_directory_allowed_with_live_grant(grant_repo, fre
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    assert guard.check(_payload("Invoke-Pester -Path tests", grant_repo)) is None
+    assert guard.check(
+        _payload("with-suite-mutex -- Invoke-Pester -Path tests", grant_repo)
+    ) is None
 
 
 def test_invoke_pester_path_file_argument_still_scoped(repo, free_mutex):
@@ -578,7 +580,9 @@ def test_em_tox_nox_allowed_with_live_grant(grant_repo, free_mutex, command):
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    assert guard.check(_payload(command, grant_repo)) is None
+    assert guard.check(
+        _payload("with-suite-mutex -- " + command, grant_repo)
+    ) is None
 
 
 def test_runner_prefilter_matches_tox_and_nox():
@@ -599,11 +603,11 @@ def test_runner_recognized_true_for_tox_and_nox():
 # ---------------------------------------------------------------------------
 
 def test_top_level_em_allowed_when_mutex_free(repo, free_mutex):
-    assert guard.check(_payload("pytest", repo)) is None
+    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_top_level_em_denied_when_mutex_held(repo, held_mutex):
-    reason = _reason(guard.check(_payload("pytest", repo)))
+    reason = _reason(guard.check(_payload("with-suite-mutex -- pytest", repo)))
     assert reason.startswith("Wait for the in-flight suite run")
     assert "4242" in reason
     assert "em-session-abc" in reason
@@ -621,7 +625,7 @@ def test_mutex_leg_fails_open_when_module_lacks_holder(repo, monkeypatch):
     fake = types.ModuleType("coordinator_core.testing.suite_mutex")
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
     assert guard._mutex_holder() is None
-    assert guard.check(_payload("pytest", repo)) is None
+    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_mutex_leg_fails_open_when_holder_raises(repo, monkeypatch):
@@ -632,7 +636,7 @@ def test_mutex_leg_fails_open_when_holder_raises(repo, monkeypatch):
 
     fake.holder = _boom
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
-    assert guard.check(_payload("pytest", repo)) is None
+    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_subagent_leg_denies_even_when_mutex_raises(repo, monkeypatch):
@@ -648,6 +652,127 @@ def test_subagent_leg_denies_even_when_mutex_raises(repo, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# WRAPPER leg -- a granted Tier-U/F command must actually route through
+# with-suite-mutex, or it is denied naming the wrapped form of the caller's
+# own command. Sited strictly after identity and grant, strictly before
+# mutex (see check()'s own comment at the call site).
+# ---------------------------------------------------------------------------
+
+def test_bare_tier_u_em_command_denied_naming_wrapped_form(grant_repo, free_mutex):
+    """AC (bare Tier-U): a granted EM's bare, unscoped ``pytest`` is denied
+    -- naming the wrapped form of the EXACT command the caller typed."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "python3 -m pytest --collect-only -q"
+    out = guard.check(_payload(cmd, grant_repo))
+    reason = _reason(out)
+    assert "with-suite-mutex -- " + cmd in reason
+
+
+def test_wrapped_tier_u_em_command_allowed(grant_repo, free_mutex):
+    """AC (wrapped): the identical command, routed through
+    ``with-suite-mutex --``, clears this leg."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "with-suite-mutex -- python3 -m pytest --collect-only -q"
+    assert guard.check(_payload(cmd, grant_repo)) is None
+
+
+@pytest.mark.parametrize("wrapper", [
+    "with-suite-mutex",
+    "./coordinator/bin/with-suite-mutex",
+    "coordinator/bin/with-suite-mutex",
+    "with-suite-mutex.cmd",
+    "with-suite-mutex.ps1",
+    "C:\\repo\\coordinator\\bin\\with-suite-mutex.cmd",
+])
+def test_wrapper_spellings_all_recognized(grant_repo, free_mutex, wrapper):
+    """Every legitimate spelling -- bare, relative/absolute path, and the
+    .cmd/.ps1 shims (both path separators) -- clears the leg."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "%s -- pytest" % wrapper
+    assert guard.check(_payload(cmd, grant_repo)) is None
+
+
+def test_wrapper_leg_still_requires_a_live_grant_first(grant_repo, free_mutex):
+    """Ordering: an UNGRANTED caller is denied on the grant leg, never told
+    to wrap a command it has no standing to run at all."""
+    cmd = "with-suite-mutex -- pytest"
+    out = guard.check(_payload(cmd, grant_repo))
+    reason = _reason(out)
+    assert "authorization grant" in reason
+    assert "Route this through the suite mutex" not in reason
+
+
+def test_wrapper_leg_never_fires_for_a_subagent(grant_repo, free_mutex):
+    """A dispatched subagent's bare Tier-U command is denied on IDENTITY,
+    never told to wrap it -- that would read as an invitation to run the
+    suite anyway."""
+    out = guard.check(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
+    reason = _reason(out)
+    assert reason.startswith("Run the tests you actually touched:")
+    assert "with-suite-mutex" not in reason
+
+
+def test_wrapper_leg_never_fires_for_tier_t(repo, free_mutex):
+    """A scoped (Tier T) command is unaffected by this leg -- for the
+    granted EM and for a subagent alike."""
+    cmd = "pytest coordinator_core/frontmatter/tests/test_x.py"
+    assert guard.check(_payload(cmd, repo)) is None
+    assert guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)) is None
+
+
+def test_wrapper_leg_runs_before_mutex_leg(grant_repo, held_mutex):
+    """A bare (unwrapped) granted Tier-U command hits the WRAPPER deny, not
+    the mutex deny -- even while the mutex is held."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    out = guard.check(_payload("pytest", grant_repo))
+    reason = _reason(out)
+    assert "Route this through the suite mutex" in reason
+    assert "Wait for the in-flight suite run" not in reason
+
+
+def test_wrapper_leg_rejects_decoy_wrap_of_a_no_op_segment(grant_repo, free_mutex):
+    """Review: code-reviewer -- ``_command_wrapped_in_suite_mutex`` formerly
+    asked "is ANY segment of the chained command wrapped", not "is the
+    segment that actually invokes the suite wrapped". A granted EM could
+    wrap an inert decoy segment (``true``) and run the real ``pytest``
+    invocation two segments over completely bare, holding no mutex --
+    the exact hazard the WRAPPER leg exists to close. This must still deny,
+    naming the wrapped form of the REAL command, not the decoy."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "with-suite-mutex -- true && python -m pytest"
+    out = guard.check(_payload(cmd, grant_repo))
+    reason = _reason(out)
+    assert "Route this through the suite mutex" in reason
+    assert "Detected: python -m pytest" in reason
+
+
+def test_wrapper_leg_still_allows_a_legitimately_chained_wrap(grant_repo, free_mutex):
+    """A real chained command (a benign ``cd`` ahead of the wrapped suite
+    invocation) must keep working -- the decoy fix must not regress this."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "cd . && with-suite-mutex -- pytest"
+    assert guard.check(_payload(cmd, grant_repo)) is None
+
+
+# ---------------------------------------------------------------------------
 # Identity keying: presence of the TOP-LEVEL agent_id, nothing else
 # ---------------------------------------------------------------------------
 
@@ -655,14 +780,19 @@ def test_nested_tool_response_agent_id_is_not_an_identity(repo, free_mutex):
     """A nested ``tool_response.agent_id`` must not false-positive a main-loop
     call — only the top-level key is an identity."""
     payload = _payload(
-        "pytest", repo, extra={"tool_response": {"agent_id": _AGENT_ID}}
+        "with-suite-mutex -- pytest", repo,
+        extra={"tool_response": {"agent_id": _AGENT_ID}},
     )
     assert guard.check(payload) is None
 
 
 def test_empty_agent_id_is_not_a_subagent(repo, free_mutex):
-    assert guard.check(_payload("pytest", repo, agent_id="")) is None
-    assert guard.check(_payload("pytest", repo, agent_id="   ")) is None
+    assert guard.check(
+        _payload("with-suite-mutex -- pytest", repo, agent_id="")
+    ) is None
+    assert guard.check(
+        _payload("with-suite-mutex -- pytest", repo, agent_id="   ")
+    ) is None
 
 
 def test_workflow_shaped_agent_id_denied_without_any_backpointer(repo, free_mutex):
@@ -1010,7 +1140,9 @@ class TestGrantLeg:
         assert grant_module.write_tier_u_grant(
             "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
-        assert guard.check(_payload("pytest", grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- pytest", grant_repo)
+        ) is None
 
     def test_em_tier_f_no_grant_denied(self, grant_repo, free_mutex, monkeypatch):
         """AC-4 (2026-08-04 PM ruling, tier-f-is-grant-gated): the configured
@@ -1041,7 +1173,9 @@ class TestGrantLeg:
         assert grant_module.write_tier_u_grant(
             "pm", "yes, run the fast tier", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
-        assert guard.check(_payload("pytest tests/test_x.py", grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- pytest tests/test_x.py", grant_repo)
+        ) is None
 
     def test_em_tier_f_with_fast_tier_unscoped_declaration_still_denied(
         self, grant_repo, free_mutex, monkeypatch
@@ -1267,7 +1401,9 @@ class TestGrantLeg:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr("builtins.__import__", _fake_import)
-        assert guard.check(_payload("pytest", grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- pytest", grant_repo)
+        ) is None
 
     def test_grant_leg_does_not_fail_open_on_a_non_import_error(
         self, grant_repo, free_mutex, monkeypatch
@@ -1326,7 +1462,9 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        assert guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- " + _CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo)
+        ) is None
 
     def test_declared_unscoped_fast_tier_double_quoted_marker_expr_allowed(
         self, grant_repo, free_mutex, monkeypatch
@@ -1346,7 +1484,9 @@ class TestR6DeclaredUnscopedFastTier:
         double_quoted = (
             'python3 -m pytest -m "not cadence and not pending_fix and not designed_red" -n auto'
         )
-        assert guard.check(_payload(double_quoted, grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- " + double_quoted, grant_repo)
+        ) is None
 
     def test_declared_unscoped_fast_tier_extra_inner_whitespace_allowed(
         self, grant_repo, free_mutex, monkeypatch
@@ -1367,7 +1507,9 @@ class TestR6DeclaredUnscopedFastTier:
         extra_ws = (
             "python3 -m pytest  -m 'not cadence  and not pending_fix and  not designed_red'   -n auto"
         )
-        assert guard.check(_payload(extra_ws, grant_repo)) is None
+        assert guard.check(
+            _payload("with-suite-mutex -- " + extra_ws, grant_repo)
+        ) is None
 
     def test_absent_declaration_denies_the_same_unscoped_fast_test_cmd(
         self, grant_repo, free_mutex, monkeypatch
@@ -1459,7 +1601,9 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo))
+        out = guard.check(
+            _payload("with-suite-mutex -- " + _CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo)
+        )
         reason = _reason(out)
         assert "Wait for the in-flight suite run" in reason
 
@@ -1519,35 +1663,51 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "chained fast tier for demonstration purposes",
         )
-        out = guard.check(_payload(chained, grant_repo))
-        # A chained fast_test_cmd is still recognized by containment and,
-        # since the declaration covers it too, allowed here -- the DR-088
-        # single-command amendment forbids CONFIGURING a chained
-        # fast_test_cmd in the first place (a repo-config violation), it
-        # does not add a second guard-side prohibition on top of R6's
-        # shape/token match. Assert the containment leg still requires
-        # every segment (unchanged from the pre-R6 behaviour) by running
-        # only half the chain.
-        assert out is None
+        out = guard.check(
+            _payload("with-suite-mutex -- " + chained, grant_repo)
+        )
+        # Review: code-reviewer (WRAPPER-leg decoy-segment fix) -- prefixing
+        # ONLY the first sub-command with ``with-suite-mutex --`` never wraps
+        # the second: bash parses the top-level ``&&`` as a command
+        # separator BEFORE with-suite-mutex ever sees any argv, and
+        # with-suite-mutex execs its ``--`` operand via a bare ``Popen``,
+        # never a shell that would re-interpret ``&&`` inside it -- so
+        # ``pnpm run test`` genuinely ran unwrapped, holding no mutex. That
+        # is the exact WRAPPER-leg hazard the decoy-segment fix closes; a
+        # chained ``fast_test_cmd`` (already a DR-088 config violation per
+        # this test's own history) has no verbatim-chain form that
+        # legitimately satisfies the tightened WRAPPER leg, so this must now
+        # deny naming the still-unwrapped ``pnpm run test`` segment.
+        reason = _reason(out)
+        assert "Route this through the suite mutex" in reason
+        assert "Detected: pnpm test" in reason
         half = "pnpm run test"
         out_half = guard.check(_payload(half, grant_repo))
         reason_half = _reason(out_half)
         assert "Tier-U" in reason_half
 
-    def test_chained_declared_fast_test_cmd_verbatim_still_allowed(
+    def test_chained_declared_fast_test_cmd_verbatim_still_reaches_grant_exit(
         self, grant_repo, free_mutex, monkeypatch
     ):
         """Regression (EM prior art, tierf-s2-guards Finding 1 fix-up): a
         repo whose OWN declared ``fast_test_cmd`` is itself a two-segment
         chained command (cockpit's real case: ``pnpm run typecheck && pnpm
         run test``), invoked VERBATIM with the R6 declaration present and
-        no Tier-U grant, must stay ALLOWED -- this is the exact structural
-        lockout
+        no Tier-U grant, must still clear the GRANT leg via the declaration
+        -- this is the exact structural lockout
         ``cross-repo/archive/2026-07-25-example-cockpit-repo-em-tier-f-escape-
         hatch-unreachable-for-chained-fast-test-cmd.md`` (realized_by
         8d94ebb9) fixed, and the set-equality tightening for Finding 1 must
         not rebreak it: the invocation's segment set equals the declared
-        command's segment set here, so it still satisfies the exact match."""
+        command's segment set here, so it still satisfies the exact match.
+
+        Review: code-reviewer (WRAPPER-leg decoy-segment fix) -- this no
+        longer reaches ``None`` outright: prefixing only the FIRST
+        sub-command with ``with-suite-mutex --`` never wraps the second (see
+        the sibling test's own comment for why), so the tightened WRAPPER
+        leg now denies here too -- but on the WRAPPER leg, past the grant
+        exit this test exists to pin, never back on the GRANT leg the R6 fix
+        was written to keep reachable."""
         chained = "pnpm run typecheck && pnpm run test"
         monkeypatch.setattr(
             guard, "_configured_test_cmds",
@@ -1557,7 +1717,12 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        assert guard.check(_payload(chained, grant_repo)) is None
+        out = guard.check(
+            _payload("with-suite-mutex -- " + chained, grant_repo)
+        )
+        reason = _reason(out)
+        assert "Route this through the suite mutex" in reason
+        assert "authorization grant" not in reason
 
     def test_chained_declared_fast_test_cmd_plus_scoped_extra_segment_still_denied(
         self, grant_repo, free_mutex, monkeypatch
@@ -1690,7 +1855,9 @@ class TestConfiguredCmdReachability:
         live Tier-U grant is held -- one grant record covers both tiers."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
         assert guard.check(_payload(
-            "python -m pytest coordinator/tests", declared_repo)) is None
+            "with-suite-mutex -- python -m pytest coordinator/tests",
+            declared_repo,
+        )) is None
 
     @pytest.mark.parametrize("command", [
         "python -m pytest coordinator/tests/test_foo.py",
@@ -2277,3 +2444,226 @@ def test_pytest_directory_args_glob_covering_a_directory_is_returned(repo_with_t
     assert guard._pytest_directory_args([argv], str(repo_with_test_dir)) == [
         "coordinator_core/frontmatter/*/sub"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Dynamic prefilter leg (2026-08-10): a repo whose configured test command
+# invokes a runner ``_RUNNER_PREFILTER_RE`` has never heard of must still be
+# gated, without a per-repo hand-patch to the static regex. Pins the real
+# fleet shapes named in the incident report (example-retrieval-repo-ue-addon's
+# ``bin/run-fast-tests.py``/``bin/run-full-test-suite.py --yes``, and
+# example-retrieval-repo's ``run_tier_tests.py``, whose static-regex token was removed
+# by this fix).
+# ---------------------------------------------------------------------------
+
+class TestDynamicPrefilterLeg:
+
+    @pytest.fixture
+    def ue_addon_repo(self, tmp_path, monkeypatch):
+        """example-retrieval-repo-ue-addon's real ``coordinator.local.md`` shape."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "coordinator.local.md").write_text(
+            "---\n"
+            "project_type: game-dev\n"
+            'fast_test_cmd: "python3 bin/run-fast-tests.py"\n'
+            'full_test_cmd: "python3 bin/run-full-test-suite.py --yes"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
+        monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
+        monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+        monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+        monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+        return tmp_path
+
+    def test_ue_addon_static_regex_misses_both_configured_commands(self):
+        """Sanity precondition: neither configured command contains a token
+        the static regex alone recognizes -- if this ever starts passing, the
+        dynamic leg below is not the thing making the deny tests pass."""
+        assert not guard._RUNNER_PREFILTER_RE.search("python3 bin/run-fast-tests.py")
+        assert not guard._RUNNER_PREFILTER_RE.search(
+            "python3 bin/run-full-test-suite.py --yes"
+        )
+
+    @pytest.mark.parametrize("command", [
+        "python3 bin/run-fast-tests.py",
+        "python3 bin/run-full-test-suite.py --yes",
+    ])
+    def test_ue_addon_denies_for_subagent(self, ue_addon_repo, free_mutex, command):
+        reason = _reason(guard.check(
+            _payload(command, ue_addon_repo, agent_id=_AGENT_ID)))
+        assert "configured" in reason
+
+    @pytest.mark.parametrize("command", [
+        "python3 bin/run-fast-tests.py",
+        "python3 bin/run-full-test-suite.py --yes",
+    ])
+    def test_ue_addon_denies_for_em(self, ue_addon_repo, free_mutex, command):
+        reason = _reason(guard.check(_payload(command, ue_addon_repo)))
+        assert "authorization grant" in reason
+
+    def test_example_retrieval_repo_run_tier_tests_denies_without_static_token(
+            self, tmp_path, monkeypatch, free_mutex):
+        """example-retrieval-repo's shape, with the hand-added ``run_tier_tests`` static
+        token removed -- the dynamic leg alone must reach the same deny."""
+        assert not guard._RUNNER_PREFILTER_RE.search(
+            "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient"
+        )
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "coordinator.local.md").write_text(
+            "---\n"
+            'fast_test_cmd: "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient"\n'
+            'full_test_cmd: "python -m pytest --timeout=300"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
+        monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
+        monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+        monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+        reason = _reason(guard.check(_payload(
+            "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient",
+            tmp_path, agent_id=_AGENT_ID,
+        )))
+        assert "configured" in reason
+
+    def test_env_var_configured_bespoke_runner_denies(self, tmp_path, monkeypatch, free_mutex):
+        """The env-var source (``resolve_validation_cmd`` Step 1) widens the
+        prefilter too, independent of ``coordinator.local.md`` and of
+        ``cwd``/repo-root resolution.
+
+        Uses an ARGUMENT-bearing configured command (``--all``), not a bare
+        single-token one -- ``_segment_contains`` deliberately never matches
+        a zero-argument configured segment (see that function's own
+        docstring: a bare runner name is left to the generic shape
+        classifier instead), which is orthogonal to this dynamic-prefilter
+        fix and would fail this test for a pre-existing reason unrelated to
+        it."""
+        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
+        monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
+        monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "bin/run-the-suite.sh --all")
+        monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+        assert not guard._RUNNER_PREFILTER_RE.search("bin/run-the-suite.sh --all")
+        reason = _reason(guard.check(
+            _payload("bin/run-the-suite.sh --all", tmp_path, agent_id=_AGENT_ID)))
+        assert "configured" in reason
+
+    def test_non_test_command_still_allowed(self, ue_addon_repo, free_mutex):
+        """A command sharing no token with either configured tier stays
+        allowed -- the dynamic leg must not widen the gate open for
+        everything just because a repo has configured commands."""
+        assert guard.check(_payload("git status", ue_addon_repo)) is None
+        assert guard.check(_payload("echo hello", ue_addon_repo)) is None
+
+    def test_scoped_pytest_still_allowed_in_dynamic_repo(self, ue_addon_repo, free_mutex):
+        """A Tier-T-scoped ``pytest`` invocation stays allowed even in a repo
+        whose dynamic leg is populated -- ``pytest`` itself still matches the
+        STATIC regex and is classified/scoped exactly as before; this pins
+        that the new leg does not change that pre-existing behavior."""
+        command = "pytest bin/test_x.py::test_y"
+        assert guard.check(_payload(command, ue_addon_repo, agent_id=_AGENT_ID)) is None
+
+    def test_cheap_repo_root_never_shells_out(self, tmp_path, monkeypatch):
+        """``_cheap_repo_root`` must not spawn a subprocess -- pins the
+        hot-path-cost constraint directly by making any subprocess spawn
+        raise."""
+        def _boom(*a, **k):
+            raise AssertionError("subprocess spawned by _cheap_repo_root")
+        monkeypatch.setattr(subprocess, "run", _boom)
+        monkeypatch.setattr(subprocess, "Popen", _boom)
+        (tmp_path / "a" / "b" / "c").mkdir(parents=True)
+        (tmp_path / ".git").mkdir()
+        assert guard._cheap_repo_root(str(tmp_path / "a" / "b" / "c")) == str(tmp_path)
+
+    def test_cheap_repo_root_returns_none_outside_a_repo(self, tmp_path):
+        assert guard._cheap_repo_root(str(tmp_path)) is None
+
+    def test_local_md_head_tokens_drops_interpreter_names(self, tmp_path):
+        (tmp_path / "coordinator.local.md").write_text(
+            "---\n"
+            'fast_test_cmd: "python3 bin/run-fast-tests.py"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        tokens = guard._local_md_head_tokens(str(tmp_path))
+        assert "run-fast-tests.py" in tokens
+        assert "python3" not in tokens
+
+    def test_tokens_from_cmd_value_reaches_stopwords_constant_without_crashing(self):
+        """Regression for a ``NameError: _DYNAMIC_PREFILTER_TOKEN_STOPWORDS``
+        crash reported live (two independent agents, one via a ``python3 -c``
+        invocation, one via a PowerShell ``[DateTimeOffset]`` call) while this
+        module carried a forward reference to that constant -- exercises the
+        REAL call path (``_tokens_from_cmd_value``, the same helper
+        ``_dynamic_prefilter_hit`` -> ``_env_head_tokens``/
+        ``_local_md_head_tokens`` reach on every dynamic-prefilter-leg call),
+        not merely an existence assertion on the constant (which would have
+        passed even with the forward reference broken, since a plain
+        same-process import always finishes executing the whole module before
+        any function is callable -- the crash's real trigger was a
+        concurrently-edited copy of this source file on the shared tree, not
+        a within-process ordering bug; source-order is still the right fix
+        because it closes the window a partial/mid-write read of this file
+        can land in, and it is what the structural test below pins)."""
+        assert guard._tokens_from_cmd_value("python3 bin/run-fast-tests.py") == [
+            "run-fast-tests.py"
+        ]
+        assert guard._tokens_from_cmd_value("sh -c") == []
+
+    def test_dynamic_prefilter_stopwords_constant_defined_before_first_use(self):
+        """Structural pin: ``_DYNAMIC_PREFILTER_TOKEN_STOPWORDS`` (and the
+        ``_WRAPPER_WORDS``/``_SHELL_C_INTERPRETERS`` sets it composes) must be
+        ASSIGNED at module scope before the source line of its first use
+        inside a function body -- catches a reintroduced forward reference
+        (the module docstring comment this repo carried, "defined further
+        below") via source position rather than via runtime behavior, since
+        a same-process import can never observe the NameError a forward
+        reference risks (the whole module finishes executing before any of
+        its functions are callable) -- only a partial/concurrent read of the
+        file on disk can, which this test cannot simulate directly."""
+        import ast
+        import inspect
+
+        source = inspect.getsource(guard)
+        tree = ast.parse(source)
+
+        def_lines = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id in (
+                    "_DYNAMIC_PREFILTER_TOKEN_STOPWORDS",
+                    "_WRAPPER_WORDS",
+                    "_SHELL_C_INTERPRETERS",
+                ):
+                    def_lines.setdefault(target.id, node.lineno)
+
+        assert set(def_lines) == {
+            "_DYNAMIC_PREFILTER_TOKEN_STOPWORDS",
+            "_WRAPPER_WORDS",
+            "_SHELL_C_INTERPRETERS",
+        }
+
+        first_use_line = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_tokens_from_cmd_value":
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Name)
+                        and inner.id == "_DYNAMIC_PREFILTER_TOKEN_STOPWORDS"
+                        and isinstance(inner.ctx, ast.Load)
+                    ):
+                        first_use_line = inner.lineno
+                        break
+
+        assert first_use_line is not None, (
+            "expected _tokens_from_cmd_value to reference "
+            "_DYNAMIC_PREFILTER_TOKEN_STOPWORDS"
+        )
+        for name, lineno in def_lines.items():
+            assert lineno < first_use_line, (
+                f"{name} defined at line {lineno}, at or after its first use "
+                f"at line {first_use_line} -- reintroduces the forward-"
+                f"reference ordering bug"
+            )

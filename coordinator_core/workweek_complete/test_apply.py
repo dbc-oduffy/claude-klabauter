@@ -43,17 +43,20 @@ def _directive(
     *,
     depends_on: Optional[str] = None,
     already_satisfied: bool = False,
+    best_effort: bool = False,
 ) -> dict[str, Any]:
     """Mirrors `brief._directive`'s output shape without importing brief —
     this file tests the apply-side consumer of that shape, not the
     assembler that builds it (that's `test_workweek_complete_contract.py`'s
-    job)."""
+    job). `best_effort` defaults `False` to match the frozen contract: an
+    absent key means today's behaviour, unchanged."""
     return {
         "id": id,
         "cli": cli,
         "args": [],
         "depends_on": depends_on,
         "already_satisfied": already_satisfied,
+        "best_effort": best_effort,
     }
 
 
@@ -178,6 +181,171 @@ def test_execute_directives_landing_directive_reports_empty_stderr(
     result = next(r for r in report["results"] if r["id"] == "d_ok")
     assert result["stderr"] == ""
     assert exit_code == int(wwc_apply.WorkweekApplyExitCode.SUCCESS)
+
+
+# ---------------------------------------------------------------------------
+# best_effort / degraded — 2026-08-08 fix (plan "A best-effort directive
+# cannot fail a ceremony", defects A and B). A `best_effort` directive's
+# non-zero exit must land in `report["degraded"]`, never `report["failed"]`,
+# and must not move the ceremony's exit code off SUCCESS when every other
+# directive is clean. Asserted against the real `_execute_directives` with a
+# stub CLI module, never a mocked runner — reverting the `best_effort` branch
+# in apply.py must fail these tests.
+# ---------------------------------------------------------------------------
+
+
+def test_best_effort_directive_failure_lands_in_degraded_not_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_cadence", "fake-cli", best_effort=True)]
+    exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert report["landed"] == []
+
+
+def test_best_effort_directive_failure_alone_still_reports_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: a run where every non-best_effort directive is clean and only a
+    best_effort directive fails must return SUCCESS, not PARTIAL_MUTATION —
+    a degraded-only run must never read as "reconcile before re-running"."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {
+        "fake-cadence": _fake_module(failing_main, "fake_cadence"),
+        "fake-ok": _fake_module(ok_main, "fake_ok"),
+    }
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [
+        _directive("d_ok", "fake-ok"),
+        _directive("d_cadence", "fake-cadence", best_effort=True),
+    ]
+    exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    assert exit_code == int(wwc_apply.WorkweekApplyExitCode.SUCCESS)
+    assert report["landed"] == ["d_ok"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert report["failed"] == []
+
+
+def test_non_best_effort_directive_failure_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: a directive without `best_effort: True` keeps today's behaviour
+    — still `failed`, still moves the exit code."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    assert [entry["id"] for entry in report["failed"]] == ["d_plain"]
+    assert report["degraded"] == []
+    assert exit_code == int(wwc_apply.WorkweekApplyExitCode.DIRECTIVE_FAILED)
+
+
+def test_degraded_entry_error_folds_in_captured_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4: the captured stderr must appear in the `degraded[].error`
+    string, appended after the existing `"<cli> exited <n> (args=[...])"`
+    prefix three inbound memos quote."""
+
+    def failing_main(argv: list[str]) -> int:
+        print("ValueError: unrecognized handoff deployment_state 'record'", file=sys.stderr)
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_cadence", "fake-cli", best_effort=True)]
+    _exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    entry = report["degraded"][0]
+    assert entry["error"].startswith("fake-cli exited 3 (args=[])")
+    assert "unrecognized handoff deployment_state" in entry["error"]
+
+
+def test_failed_entry_error_still_folds_in_captured_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4's other half: the stderr fold applies on the `failed` path too,
+    not only `degraded`."""
+
+    def failing_main(argv: list[str]) -> int:
+        print("diagnostic detail", file=sys.stderr)
+        return 2
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    _exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    entry = report["failed"][0]
+    assert entry["error"].startswith("fake-cli exited 2 (args=[])")
+    assert "diagnostic detail" in entry["error"]
+
+
+def test_clean_directive_error_has_no_trailing_stderr_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing directive with empty stderr must not append an empty
+    trailing block — the fold is conditional on non-empty, stripped text."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    _exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    entry = report["failed"][0]
+    assert entry["error"] == "fake-cli exited 2 (args=[])"
+
+
+def test_execute_directives_ignores_hard_block_key_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local wrinkle guard (own-file scope): `hard_block` is workweek-only
+    render bookkeeping `brief.py` stamps onto every directive (C4's
+    surface, not this file's) — `_execute_directives`' `best_effort`
+    branch must not read, derive from, or otherwise touch it. A directive
+    carrying both keys with divergent values dispatches purely on
+    `best_effort`; `hard_block` is inert here."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directive = _directive("d_cadence", "fake-cli", best_effort=True)
+    directive["hard_block"] = True  # deliberately divergent from best_effort
+    _exit_code, report = wwc_apply._execute_directives([directive], [], {})
+
+    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert report["failed"] == []
 
 
 # ---------------------------------------------------------------------------

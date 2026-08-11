@@ -19,47 +19,124 @@ shell parsing seam forcing the Bash-side split in the first place (see
 "SIMPLER BY CONSTRUCTION" below).
 
 THIS MODULE REBUILDS, ON THE SAME SURFACE, SOMETHING THIS FLEET ALREADY
-TRIED AND REMOVED. `write_guards/engine.py:32-37` (DR-054-adjacent,
+TRIED AND REMOVED -- BUT THE COMPARISON'S OUTCOME CHANGED (bug
+`2026-08-10-cross-repo-write-boundary-denies-on-bash-b6fd16ed9ab9`,
+verified live in-session). `write_guards/engine.py:32-37` (DR-054-adjacent,
 2026-07-15) records that the prior `coordinator_core.subagent_sandbox`
-tool-surface write-sandbox confinement was removed from this engine because
-it surprised EMs and dispatched subagents by HARD-DENYING legitimate writes
-outside a narrow sandbox. A reader who finds that note after this guard
-lands, without this citation, will read this module as an unreviewed
-re-introduction and remove it again -- it is not. Three concrete
-differences from what was removed:
+tool-surface write-sandbox confinement was removed because it surprised EMs
+and dispatched subagents by hard-denying legitimate writes outside a narrow
+sandbox. This module's ORIGINAL authoring (chunk C7) read that precedent as
+grounds to stay `CLASS = "advisory"` forever, on the theory that the
+Bash-surface sibling guards (`bump_foreign_repo_write.py` [C4],
+`bump_outside_repo_write.py` [C5]) were ALSO advisory-only, so parity meant
+staying soft. That theory was never actually true: `bump_foreign_repo_write.
+check_bump_foreign_repo_write` composes its own `_deny()` envelope --
+`permissionDecision: "deny"`, a REAL block -- for exactly the payload shape
+this module handles, verified by driving both surfaces through the live
+seam (example-doctrine-repo repo's `coordinator/hooks/scripts/preuse-write-dispatch.py`
+-- abs-path-ok: illustrative prose naming the verification entry point, not
+a runtime path reference) with an identical foreign-repo target in the SAME
+session. `GuardBand.
+ADVISORY_REWRITE` (the band `dispatch.py` registers both Bash bump guards
+into) governs SEQUENCING ONLY -- which phase a guard's own crash-handling
+and short-circuit precedence run in -- never the SHAPE of the envelope a
+successful check() is allowed to return; nothing enforces "this band's
+guards may only emit `additionalContext`", and `bump_foreign_repo_write.py`
+does not. The asymmetry the bug names (`git checkout` on a peer repo
+DENIED; the identical peer-repo `Edit` ALLOWED) is exactly this module
+staying soft while its Bash siblings were never actually soft. Three
+concrete differences from what was removed by DR-054 still hold, and still
+matter -- none of them required staying advisory:
 
-  1. It BUMPS rather than hard-denies -- `CLASS = "advisory"`, never
-     `"hard-deny"`. A passable, deny-then-clear bump is the whole point of
-     this plan; `"hard-deny"` would silently invert the design on the one
-     line that decides it (mirrors the Bash-side `fail_closed=False` choice
-     in C4/C5 -- same posture, expressed in this engine's own vocabulary).
-  2. It is PASSABLE BY AN ORDINARY FILE, with no unforgeability machinery --
+  1. It is PASSABLE BY AN ORDINARY FILE, with no unforgeability machinery --
      see `_write_bump_marker.py` [C3]. No sentinel-creation guard, no paired
      write-guard, no identity gating protects the marker this module reads.
-  3. It FAILS OPEN ON EVERY UNCERTAIN BRANCH -- an unresolvable anchor, an
+     A `touch` clears it; the removed confinement had no such escape hatch.
+  2. It FAILS OPEN ON EVERY UNCERTAIN BRANCH -- an unresolvable anchor, an
      unreadable registry, a missing session record, an unresolvable target
      git root all ALLOW, exactly like C2/C3's own fail-open contracts. The
      removed confinement's defect was hard-denying on exactly this kind of
-     ambiguity; this module never does.
+     ambiguity; this module (like its Bash siblings) never does -- it hard
+     DENIES only once every fail-open branch above it has already resolved
+     the target with confidence.
+  3. It runs through `write_guards.engine`'s hard-deny phase, which carries
+     an in-session operator UNLOCK ESCAPE (`coordinator_core.session.
+     guard_unlock_sentinel`, appended to every hard-deny's
+     `permissionDecisionReason` at that engine's single seam) that the
+     removed confinement never had -- a second, independent clear path
+     beyond the marker `touch` below.
 
 CLASS/MATCHERS/PRIORITY are pinned explicitly (the Director of Engineering finding 3), not left to
 copy a neighbour or default ordering:
-  - `CLASS = "advisory"` -- see point 1 above. Do NOT "fix" this to
-    `"hard-deny"`; that is a straight regression on this plan's own stated
-    goal, not a hardening.
+  - `CLASS = "hard-deny"` (changed from `"advisory"` by the bug fix cited
+    above) -- matches what the Bash-surface siblings ACTUALLY do, not what
+    their own `ADVISORY_REWRITE` band name suggests. Do NOT revert this to
+    `"advisory"` without first re-verifying (via the live seam, not a code
+    read) that `bump_foreign_repo_write.py` has ALSO been downgraded to a
+    genuine advisory -- reverting only this module's `CLASS` re-opens the
+    exact asymmetry this fix closes.
   - `MATCHERS` covers `Write`, `Edit`, `MultiEdit`, AND `NotebookEdit` --
     `write_guards.engine._VALID_MATCHERS` includes `NotebookEdit`, and this
     guard's job is the full tool surface a well-meaning agent can reach for,
     not a subset with no stated reason for the gap.
-  - `PRIORITY = 180` -- next free slot in the advisory/deny-offer band after
-    170 (`nudge_prose_queue_append.py`), a numbering convention this
-    package's advisory guards already follow (100..170 taken; see sibling
-    modules' own `PRIORITY = ...` comments for the running tally). Advisory
-    guards short-circuit on first non-`None` winner in `PRIORITY` order, so
-    this module's exact slot only matters relative to other advisories that
-    could ALSO fire on the same payload -- none currently do, but the slot
-    is pinned rather than left to the `PRIORITY = 100` default so a future
-    sibling addition has a real number to sequence against.
+  - `PRIORITY = 135` -- hard-deny band, next free slot after 132
+    (`block_oss_mirror_memo_delivery.py`); see that package's own sibling
+    `PRIORITY = ...` comments (5..132 taken) for the running tally. Hard-deny
+    guards run in `PRIORITY` order with first-non-`None`-wins, so this
+    module's exact slot only matters relative to other hard-deny guards that
+    could ALSO fire on the same payload -- pinned rather than left to the
+    `PRIORITY = 100` default so a future sibling addition has a real number
+    to sequence against.
+
+TWO UNLOCK MARKERS, TWO SCOPES, BOTH DELIBERATE -- NOT UNIFIED BY THIS FIX.
+This module's marker lives at the SESSION'S OWN gitdir (see "MARKER
+LOCATION" below); `bump_foreign_repo_write.py`'s marker lives at the
+TARGET's own gitdir (narrowed per-(session, target), chunk C3 of
+`docs/plans/2026-08-03-narrow-write-confinement-bump.md`). The two do NOT
+authorize the same thing and are not made to: this module's marker clears
+EVERY foreign target for the Write/Edit/MultiEdit/NotebookEdit surface, for
+the rest of the session, in one `touch` -- broad-by-target, narrow-by-
+surface. The Bash marker clears ONE target for the Bash surface only --
+narrow-by-target, and (because Bash commands can target any repo a `git -C`
+or write-sink can reach, with no single "the session's own tool surface" to
+scope against) there is no broader location to narrow FROM. An operator (or
+an EM clearing on a dispatched subagent's behalf) who wants both surfaces
+stood down for one foreign repo therefore still needs two `touch` commands
+today -- one per surface -- and this fix does not change that. Unifying the
+two into one marker location was considered and rejected for this fix:
+doing so would mean either (a) this module's marker also narrows to
+per-target, losing the "one clear covers every target" property AC6 of the
+governing plan explicitly wanted for the tool surface, or (b) the Bash
+guard's marker widens to session-own-gitdir, a change to a sibling module
+this fix's declared surface does not include and a sibling session may be
+concurrently touching (see `bump_foreign_repo_write.py`'s own "PARITY"
+section for a live example of exactly that concurrent-edit hazard). Both
+markers remain ordinary, unforgeable-by-design files per `_write_bump_
+marker.py`'s own doctrine -- this fix does not add gating to either.
+
+VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
+`check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
+anchor` gate the Bash siblings use (see "ONE CLEAR, ONE SET OF HATCHES"
+below): a hand-typed `session_id` that was never passed through the
+SessionStart hook (`session-start-write-bump-anchor.py`, example-doctrine-repo repo)
+has no anchor record and no live `CLAUDE_PROJECT_DIR`, so `resolve_launch_
+anchor` returns `None` and this guard ALLOWS -- correctly, by the same
+fail-open contract every function in `_write_bump_applicability.py`/
+`_write_bump_marker.py` documents, and verified identical on the Bash
+sibling for the same unanchored `session_id` (2026-08-10 verification
+transcript). This is NOT specific to `Write`/`Edit` and is NOT a hole this
+module's `CLASS = "hard-deny"` fix needed to close: every REAL session
+(EM or dispatched subagent alike) gets its anchor record written
+automatically at SessionStart, before any tool call can happen. A manual
+probe that skips SessionStart is testing a state a live session can never
+actually be in -- write the anchor record first (`_write_bump_session_
+start.write_session_start_record(session_id, launch_cwd=cwd)`, exactly as
+this package's own test suite does for every non-fail-open test in
+`write_guards/tests/test_bump_out_of_repo_tool_write.py`) before drawing
+any conclusion from a hand-constructed payload. See that test file's own
+`test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_
+parity` / `test_em_repro_payload_denies_once_session_has_its_real_anchor_
+record` pair for both halves pinned as tests.
 
 ONE CLEAR, ONE SET OF HATCHES, THREE GUARDS. This module consumes the SAME
 C2 applicability (`_write_bump_applicability.bump_applies`,
@@ -98,13 +175,19 @@ live payload `cwd` -- see C2's own docstring for why an in-session `cd`
 cannot be trusted as an anchor) and the write's TARGET resolved git-dir (via
 `resolve_gitdir` against the target file's containing directory):
 
-  - Session anchor has NO git repo (`own_gitdir is None`): mirrors C5's
-    "outside-repo" no-bump condition -- a write into an unregistered, freshly
-    scaffolded tree never bumps. A write landing inside a git repo that IS
-    registered in the machine-local registry (`target_is_registered_repo`)
-    still bumps -- mirrors C4's cross-repo condition, applied to the same
-    anchor-outside-any-repo case C2 documents under "Where the bump does not
-    fire".
+  - Session anchor has NO git repo (`own_gitdir is None`): a target that
+    ALSO resolves to no git repo never bumps -- mirrors C5's "outside-repo"
+    no-bump condition (no gitdir anywhere to site a clearable marker; see
+    `anchor_subtree_contains`'s own docstring for why Narrow does not touch
+    this cell). A write landing inside a git repo that IS registered in the
+    machine-local registry (`target_is_registered_repo`) still bumps
+    unconditionally, as it always has -- mirrors C4's cross-repo condition.
+    Narrow (PM ruling 2026-08-10, `state/bug-backlog/2026-08-10-a-session-
+    anchored-outside-any-git-repo-88ca86c1f8bf.yaml`): an UNREGISTERED
+    target now ALSO bumps unless it sits at or under the session's own
+    anchor-directory SUBTREE (`anchor_subtree_contains`) -- confining a
+    rootless session to its own launch-directory subtree rather than
+    leaving every unregistered checkout writable.
   - Session anchor DOES have a git repo: a target resolving to the SAME
     git-dir (resolved + case-folded, both operands -- see "PATH COMPARISON"
     below) never bumps. A target resolving to NO git-dir, or to a
@@ -269,9 +352,11 @@ Negative-spec:
   - Does NOT add a creation guard, a paired write-guard, or identity gating
     around the marker this module reads -- see C3's own docstring; that
     decision is shared, not re-litigated per surface.
-  - Does NOT return `permissionDecision: "deny"` -- `CLASS = "advisory"`
-    means the ONLY envelope shape this module ever returns is
-    `additionalContext`, matching this package's other advisory guards.
+  - DOES return `permissionDecision: "deny"` (changed by the bug fix cited
+    above, "THIS MODULE REBUILDS...") -- `CLASS = "hard-deny"` now, matching
+    what `bump_foreign_repo_write.py` actually does on the Bash surface. Do
+    NOT revert this bullet or the envelope shape below it without also
+    re-verifying the Bash sibling has not itself changed in the meantime.
   - Does NOT enumerate evasions of this guard itself. Coverage is calibrated
     to the shapes a well-meaning agent reaches for (an absolute or
     repo-relative `file_path` outside its own repo), not to adversarial
@@ -300,6 +385,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from coordinator_core.bash_guards._write_bump_applicability import (
     _is_under,
+    anchor_subtree_contains,
     bump_applies,
     is_agent_memory_store_path,
     publish_destination_owner,
@@ -308,9 +394,11 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     target_is_bare_temp_scratch,
     target_is_publish_destination,
     target_is_registered_repo,
+    target_is_under_claude_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     effective_session_id,
+    marker_gitdir_is_writable,
     marker_present,
     resolve_gitdir,
 )
@@ -323,6 +411,7 @@ from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
+    SURFACE_TOOL,
     render_bump_message,
     resolve_agent_class,
 )
@@ -332,9 +421,9 @@ from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 180  # advisory/deny-offer band; next slot after 170 (see nudge_prose_queue_append.py)
+PRIORITY = 135  # hard-deny band; next free slot after 132 (see block_oss_mirror_memo_delivery.py)
 
 #: Sibling of `_write_bump_marker.resolve_gitdir` -- this module also needs
 #: the human-readable repo ROOT (`git rev-parse --show-toplevel`) for the
@@ -719,20 +808,30 @@ def _verdict_bumps(
     """
     if own_gitdir is None:
         # Session anchor is in no git repo -- mirrors C5's outside-repo
-        # no-bump condition, except a REGISTERED target still bumps
-        # (mirrors C4's cross-repo condition applied to this anchor shape).
+        # no-bump condition when the target ALSO has no repo (never bumps;
+        # no gitdir anywhere to site a clearable marker). A target that DOES
+        # resolve to a repo mirrors C4's cross-repo condition, narrowed by
+        # Narrow (PM ruling 2026-08-10): a REGISTERED target still bumps
+        # unconditionally, as it always has; an UNREGISTERED target now
+        # ALSO bumps unless it sits at or under the session's own anchor
+        # SUBTREE -- see `anchor_subtree_contains`'s own docstring.
         if target_gitdir is None:
             return False
         if target_dir is None:
             return False
-        return target_is_registered_repo(target_dir)
+        if target_is_registered_repo(target_dir):
+            return True
+        return not anchor_subtree_contains(anchor, target_dir)
     return not _same_gitdir(own_gitdir, target_gitdir)
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the tool-surface out-of-repo bump against a PreToolUse
-    payload. Returns `None` (allow) or the advisory `additionalContext`
-    envelope. Fails open, unconditionally -- see module docstring."""
+    payload. Returns `None` (allow) or a `permissionDecision: "deny"` /
+    `permissionDecisionReason` envelope (Review: coordinator:code-reviewer
+    -- this docstring still described the pre-hard-deny advisory envelope
+    shape after CLASS flipped to hard-deny, finding P3). Fails open,
+    unconditionally -- see module docstring."""
     try:
         tool_name = payload.get("tool_name") or ""
         if tool_name not in MATCHERS:
@@ -788,6 +887,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if is_agent_memory_store_path(translated_file_path or ""):
             return None
 
+        # ~/.claude carve-out (docs/plans/2026-08-10-carve-claude-out-and-
+        # close-the-backslash-bypass.md, C1, AC1/AC3). Checked unconditionally
+        # (not gated on `target_gitdir`), same reasoning as the agent-memory
+        # exemption immediately above: `~/.claude` IS a real git checkout on
+        # this fleet, so a check gated on `target_gitdir is not None` (the
+        # `_target_is_under_settings_home` shape) would never fire for it --
+        # see `target_is_under_claude_home`'s own docstring.
+        if target_is_under_claude_home(translated_file_path or ""):
+            return None
+
         # NOTE: correctness here depends on `target_gitdir` already
         # reflecting the ancestor-walked resolution above (example-doctrine-repo finding #1) --
         # this conjunctive exemption and that resolution order are described
@@ -840,9 +949,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if agent_class == AGENT_CLASS_SUBAGENT:
             sandbox_root = _resolve_sandbox_root(own_git_root or target_repo, session_id)
 
-        if marker_gitdir is None:
-            # Nothing to compose a clear line against -- fail open (allow)
-            # rather than advise with a marker path that cannot exist.
+        if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+            # Nothing to compose a clear line against, OR the marker
+            # location exists but is not writable/readable (STAFF-ENG
+            # F0/AC5, mirrored from `bump_foreign_repo_write.
+            # _evaluate_foreign_repo_candidate`) -- fail open (allow) in
+            # BOTH cases rather than advertise a `touch` that can never
+            # succeed. Under the pre-hard-deny `advisory` CLASS this was an
+            # unsatisfiable suggestion; under `hard-deny` it would be an
+            # unclearable wall.
             return None
 
         # C1 -- classify the target as a registered PUBLISH destination or
@@ -876,6 +991,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             destination_class=destination_class,
             destination_owner=destination_owner,
             raw_target=file_path if file_path != target_repo else "",
+            surface=SURFACE_TOOL,
         )
 
         record_applicability_event(
@@ -889,7 +1005,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": message,
+                "permissionDecision": "deny",
+                "permissionDecisionReason": message,
             }
         }
     except Exception:

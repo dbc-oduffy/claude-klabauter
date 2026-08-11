@@ -106,6 +106,51 @@ Precedent (persistence-shape cross-check, per C5's own instruction):
     against. ``grant.py`` remains the sole applicable persistence-shape
     precedent for a NEW per-session grant artifact.
 
+NEGATIVE SPEC — why this module does NOT self-discriminate its caller
+(per docs/plans/2026-08-08-discriminate-the-caller-on-the-write-grant.md
+§ C6, and do NOT reopen this): the CLI defined above takes no hook payload
+— no ``agent_id``, no tool-call context of any kind — so there is nothing
+inside this process for it to check against. A future reader tempted to
+add "verify the caller is an EM, not a subagent" HERE will find no signal
+to verify. That check does not belong in this module; it belongs upstream,
+at the two places that actually see caller identity:
+
+  1. ``coordinator_core/bash_guards/block_subagent_grant_acquisition.py``
+     — gates the Bash-tool invocation shape (``-m`` module form and the
+     widened ``-c`` inline-import form) that would reach this CLI's
+     ``grant`` subcommand, denying when a dispatched subagent's
+     ``agent_id`` is present (fail-closed when unresolvable).
+  2. ``coordinator_core/write_guards/block_subagent_grant_record_write.py``
+     — gates a subagent's direct Write/Edit/MultiEdit/NotebookEdit against
+     this module's own artifact path
+     (``.git/coordinator-sessions/<sid>/claude-md-write-grant.json``),
+     independent of how the write was reached.
+
+``_VALID_GRANTED_BY`` stays ``frozenset({"pm"})`` — the plan considered and
+rejected adding an honest ``em-dispatch`` value recording the delegation
+chain. That value would be truthful in a way a subagent-minted ``"pm"``
+record is not (a subagent CAN observe "an EM dispatched me"; it cannot
+observe "a PM ratified this"), but honesty of the label was never the
+failing criterion — self-mintability was. A subagent minting
+``em-dispatch`` still clears its own gate unconditionally on every
+dispatch, so the ledger becomes truthful and the gate stays advisory,
+which is the exact defect being closed. ``granted_by: "pm"`` means "a PM
+authorized this, with the EM relaying" — not "a human typed this command."
+The ``note`` field carries the verbatim PM utterance; that contract is
+sound and unchanged by this plan.
+
+Named residual (not closed by either guard leg above — state this
+honestly, do not claim completeness): a Bash route that the acquisition
+guard's token-shape classifier does not recognise — e.g. a subagent that
+writes a script to disk and then executes it, or reaches this module
+through some other indirection the classifier does not tokenize for —
+still reaches this file and its CLI. The write-guard leg cannot see that
+route either, because the resulting artifact write happens *inside the
+spawned Python process itself* and never surfaces as a Write-tool call for
+that guard to match. See the plan's "Complementarity and the residual that
+survives both legs" subsection: both legs together raise the cost of
+self-acquisition, they do not eliminate it.
+
 Negative-spec (path-scoped read — NEVER glob):
     Do NOT enumerate ``.git/coordinator-sessions/*/claude-md-write-grant.json``
     (or any other glob) to answer "is there a live grant." Resolve the

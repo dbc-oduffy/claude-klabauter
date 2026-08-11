@@ -279,6 +279,85 @@ def test_ac10_bump_does_not_apply_under_claude_home_nested_subdir(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
+# -- `target_is_under_claude_home`, the TARGET-side counterpart of the
+# `_anchor_is_under_claude_home` predicate AC10 pins above. AC1/AC3/AC4.
+# ---------------------------------------------------------------------------
+
+
+def test_c1_target_is_under_claude_home_true_for_settings_json(tmp_path):
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    target = fake_home / ".claude" / "settings.json"
+    target.write_text("{}", encoding="utf-8")
+
+    assert applicability.target_is_under_claude_home(
+        str(target), env={"HOME": str(fake_home)}
+    )
+
+
+def test_c1_target_is_under_claude_home_takes_no_gitdir_short_circuit(tmp_path):
+    """AC3: unlike a predicate modeled on `_target_is_under_settings_home`
+    (which short-circuits `False` whenever the caller's own `target_gitdir`
+    is already resolved), this predicate's SIGNATURE accepts no `target_
+    gitdir` parameter at all and never calls `resolve_gitdir` itself --
+    proven directly against the source rather than a real `git init` fixture
+    (`~/.claude` being a genuine checkout on this fleet is exercised
+    end-to-end by the guard-level C1 tests in `test_bump_foreign_repo_
+    write.py`/`test_bump_out_of_repo_tool_write.py`, which build a real
+    repo there)."""
+    import inspect
+
+    params = inspect.signature(applicability.target_is_under_claude_home).parameters
+    assert "target_gitdir" not in params
+    assert "resolve_gitdir" not in inspect.getsource(applicability.target_is_under_claude_home)
+
+
+def test_c1_target_is_under_claude_home_false_elsewhere(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    elsewhere = tmp_path / "some-repo" / "README.md"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_text("x", encoding="utf-8")
+
+    assert applicability.target_is_under_claude_home(
+        str(elsewhere), env={"HOME": str(home)}
+    ) is False
+
+
+def test_c1_target_is_under_claude_home_resolves_from_injected_env_not_os_environ(
+    tmp_path, monkeypatch
+):
+    """AC3: a single verdict must not resolve the anchor from live
+    `os.environ` while resolving this predicate from an injected mapping --
+    proven by setting a REAL `os.environ["HOME"]` that would NOT match, and
+    an injected `env` that DOES, and asserting the injected mapping wins."""
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    injected_home = tmp_path / "injected-home"
+    (injected_home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(real_home))
+    monkeypatch.setenv("USERPROFILE", str(real_home))
+
+    target = injected_home / ".claude" / "settings.json"
+    target.write_text("{}", encoding="utf-8")
+
+    assert applicability.target_is_under_claude_home(
+        str(target), env={"HOME": str(injected_home)}
+    )
+
+
+def test_c1_target_is_under_claude_home_false_when_home_unresolvable():
+    assert applicability.target_is_under_claude_home("/some/path", env={}) is False
+
+
+def test_c1_target_is_under_claude_home_false_when_target_empty(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    assert applicability.target_is_under_claude_home("", env={"HOME": str(home)}) is False
+
+
+# ---------------------------------------------------------------------------
 # AC11 -- cwd anchor in no git repo: outside-repo never bumps, a registered
 # cross-repo target still does, an unregistered fresh scaffold does not.
 # ---------------------------------------------------------------------------
@@ -345,6 +424,60 @@ def test_ac11_enumerates_all_repos_star_entries_not_just_two_named_keys(tmp_path
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     assert applicability.target_is_registered_repo(str(third_party_root)) is True
+
+
+# ---------------------------------------------------------------------------
+# Narrow (PM ruling 2026-08-10, `state/bug-backlog/2026-08-10-a-session-
+# anchored-outside-any-git-repo-88ca86c1f8bf.yaml`) -- `anchor_subtree_contains`.
+# Confirms allow at/below the anchor, bump above it, bump in a prefix-
+# colliding sibling, and that Windows-style / case-insensitive spellings of
+# the SAME path still compare equal.
+# ---------------------------------------------------------------------------
+
+
+def test_narrow_anchor_subtree_contains_true_at_the_anchor_itself(tmp_path):
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+
+    assert applicability.anchor_subtree_contains(str(anchor), str(anchor)) is True
+
+
+def test_narrow_anchor_subtree_contains_true_below_the_anchor(tmp_path):
+    anchor = tmp_path / "anchor"
+    nested = anchor / "scaffold" / "new-project"
+    nested.mkdir(parents=True)
+
+    assert applicability.anchor_subtree_contains(str(anchor), str(nested)) is True
+
+
+def test_narrow_anchor_subtree_contains_false_above_the_anchor(tmp_path):
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+    outside = tmp_path
+
+    assert applicability.anchor_subtree_contains(str(anchor), str(outside)) is False
+
+
+def test_narrow_anchor_subtree_contains_false_for_a_prefix_colliding_sibling(tmp_path):
+    """`C:\\work` must not admit `C:\\workspace` -- a sibling directory
+    merely starting with the anchor's own name is not contained."""
+    anchor = tmp_path / "work"
+    sibling = tmp_path / "workspace"
+    anchor.mkdir()
+    sibling.mkdir()
+
+    assert applicability.anchor_subtree_contains(str(anchor), str(sibling)) is False
+
+
+def test_narrow_anchor_subtree_contains_fails_open_on_unresolvable_anchor():
+    assert applicability.anchor_subtree_contains("", "/some/target") is True
+
+
+def test_narrow_anchor_subtree_contains_fails_open_on_unresolvable_target(tmp_path):
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+
+    assert applicability.anchor_subtree_contains(str(anchor), "") is True
 
 
 # ---------------------------------------------------------------------------

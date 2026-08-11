@@ -147,7 +147,7 @@ def _resolve_rc_path(override: Optional[str]) -> str:
     env_override = os.environ.get("COORDINATOR_SHIM_RC")
     if env_override:
         return env_override
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
     shell = os.path.basename(os.environ.get("SHELL", "/bin/bash"))
     if shell == "zsh":
         return os.path.join(home, ".zshrc")

@@ -116,6 +116,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "memo.check_addressee":                   "coordinator_core.ops.fleet.memo_check_addressee",
     "deliverable.rollup":                     "coordinator_core.ops.deliverable_rollup",
     "deliverable.cascade_terminal":            "coordinator_core.ops.deliverable_cascade",
+    "sizing.decline":                          "coordinator_core.ops.sizing_decline",
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "ceremony.wsc_tail":                      "coordinator_core.ops.ceremony.wsc_tail",
@@ -253,6 +254,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "session.resolve_chain_terminal_disposition": "coordinator_core.ops.session.resolve_chain_terminal_disposition",
     "baton.resolve_path_and_repo":            "coordinator_core.ops.resolve_baton_path",
     "fanout.poll_scratch_dir":                "coordinator_core.ops.poll_scratch_dir",
+    "scratchpad.sweep":                       "coordinator_core.ops.scratchpad_sweep",
     "distill.curation_status":                "coordinator_core.ops.distill_curation_status",
     "distill.assemble_disposal_manifest":     "coordinator_core.ops.distill_disposal_manifest",
     "distill.stamp_disposal":                 "coordinator_core.ops.distill_stamp_disposal",
@@ -270,4 +272,5 @@ OP_MODULE_MAP: Dict[str, str] = {
     "diagnostics.always_succeeds":            "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_refuses":             "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_structural_pin":      "coordinator_core.ops.diagnostics_probes",
+    "ceremony.chunk_commits":                 "coordinator_core.ops.ceremony.chunk_commits",
 }

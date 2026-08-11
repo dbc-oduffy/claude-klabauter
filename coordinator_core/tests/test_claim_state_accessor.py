@@ -254,6 +254,47 @@ def test_disagreement_flag_narrower_than_full_holder_mismatch(workspace):
     assert state.ledger_holder != state.mirror_holder
 
 
+def test_historical_claim_ignores_holder_liveness(workspace):
+    """`resolve_historical_claim` answers "was this ever claimed, and by whom",
+    so a DEAD holder is still the correct attribution — the exact case
+    `resolve_claim_state` correctly degrades to None on
+    (test_ledger_holder_dead_degrades_to_mirror above)."""
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-dead", "2026-08-07T14:00:00Z")
+    _write_handoff(handoff, status="open")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=False):
+        assert claim_state.resolve_claim_state(handoff, common_dir=common_dir).ledger_holder is None
+        record = claim_state.resolve_historical_claim(handoff, common_dir=common_dir)
+
+    assert record == ("sess-dead", "2026-08-07T14:00:00Z")
+
+
+def test_historical_claim_absent_ledger_is_none(workspace):
+    common_dir, handoff = workspace
+    _write_handoff(handoff, claimed_by="sess-mirror", status="claimed")
+
+    assert claim_state.resolve_historical_claim(handoff, common_dir=common_dir) is None
+
+
+def test_historical_claim_never_consults_the_mirror(workspace):
+    """Negative-spec: the value of this accessor is the ledger half of the
+    pair. A mirror-only claim is not a ledger record and must not be reported
+    as one."""
+    common_dir, handoff = workspace
+    _write_handoff(handoff, claimed_by="sess-mirror", claimed_at="2026-08-07T09:00:00Z", status="claimed")
+
+    assert claim_state.resolve_historical_claim(handoff, common_dir=common_dir) is None
+
+
+def test_historical_claim_missing_claimed_at_still_names_the_holder(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-noat")
+    _write_handoff(handoff, status="open")
+
+    assert claim_state.resolve_historical_claim(handoff, common_dir=common_dir) == ("sess-noat", None)
+
+
 def test_import_cycle_stays_broken():
     """Slice A P3: the C1 commit message claims an explicit import-cycle
     smoke test was verified; no such test existed. This is that test — import

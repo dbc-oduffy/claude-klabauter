@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
+from coordinator_core.session.claimed_plan import list_held_plan_claims
 from coordinator_core.win_portability import no_console_creationflags
 
 _SID = "12121212-1212-4121-8121-121212121212"
@@ -56,6 +57,42 @@ def _write_plan(repo: Path, rel_path: str, fm_extra: str = 'deliverable_id: "dlv
         f"---\ntitle: example plan\n{fm_extra}---\n\n# Example plan\n",
         encoding="utf-8",
     )
+
+
+def _write_plan_with_scope(
+    repo: Path,
+    rel_path: str,
+    deliverable_id: str,
+    scope_paths: list,
+) -> None:
+    """Same shape as ``_write_plan``, plus a ``scope:`` frontmatter block
+    (``coordinator_core.ops.extract_scope_paths``'s ``  - <path>`` list
+    shape) -- the input the scope-match tier
+    (``resolve_deliverable_id_from_scope_match``) reads via
+    ``_read_plan_scope_paths``."""
+    plan_path = repo / rel_path
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    scope_block = "\n".join(f"  - {p}" for p in scope_paths)
+    plan_path.write_text(
+        f"---\ntitle: example plan\ndeliverable_id: \"{deliverable_id}\"\n"
+        f"scope:\n{scope_block}\n---\n\n# Example plan\n",
+        encoding="utf-8",
+    )
+
+
+def _write_plan_claim(repo: Path, sid: str, plan_stem: str, claimed_at: str) -> None:
+    """Write a durable plan-claim record at the exact path
+    ``coordinator_core.session.claimed_plan.list_held_plan_claims`` scans:
+    ``<repo>/.git/coordinator-sessions/plan-claims/<plan_stem>/{session_id,
+    claimed_at}`` (``plan_claim_dir``'s convention -- keyed on the plan's
+    filename minus ``.md``). ``list_held_plan_claims`` reports the held plan
+    back as ``docs/plans/<plan_stem>.md`` unconditionally, so callers of this
+    helper must place their plan fixture at that same path via
+    ``_write_plan``/``_write_plan_with_scope``."""
+    claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / plan_stem
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(sid, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
 
 
 def _msg_file(repo: Path, text: str = "chore: land trailers\n") -> Path:
@@ -252,9 +289,29 @@ def test_no_paths_arg_is_byte_identical_to_before_the_fix(tmp_path, monkeypatch)
 def test_artifact_tier_falls_back_to_session_when_paths_carry_no_deliverable_id(
     tmp_path, monkeypatch
 ):
+    """Re-cut (C3, AC5/AC6): this fixture's session-fallback assertion is
+    correct ONLY because the session holds AT MOST ONE plan claim -- when
+    ``session_holds_multiple_plan_claims`` is True, this same commit shape
+    must OMIT the trailer instead (see
+    ``test_two_claims_code_only_commit_omits_deliverable_id_keeps_session_id``
+    below). Prior to this re-cut, that precondition held only because the
+    fixture wrote zero plan claims at all and the ambiguity gate was never
+    exercised -- this version claims exactly ONE plan explicitly, so the
+    single-claim precondition is asserted rather than merely accidental."""
     repo = _init_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
     _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    # Exactly ONE plan claim held -- the precondition under which the
+    # session-keyed pickup tier is even reachable (`session_holds_multiple_
+    # plan_claims` is False for a single claim). Its scope deliberately does
+    # NOT cover the committed paths below, so the scope-match tier abstains
+    # too, exercising the fall-through to the pickup tier specifically.
+    _write_plan_with_scope(
+        repo, "docs/plans/only-claim.md", "dlv-only-claim", ["some/unrelated/path.md"]
+    )
+    _write_plan_claim(repo, _SID, "only-claim", "2026-08-01T00:00:00Z")
+    assert len(list_held_plan_claims(repo)) == 1, "precondition: exactly one plan claim held"
+
     # A committed path with no frontmatter at all, and one that does not
     # exist on disk -- neither carries a deliverable_id, so tier 0 must
     # yield nothing and the session tier must still answer.
@@ -267,6 +324,100 @@ def test_artifact_tier_falls_back_to_session_when_paths_carry_no_deliverable_id(
 
     joined = " ".join(args)
     assert "Deliverable-Id: dlv-from-pickup" in joined
+
+
+# ---------------------------------------------------------------------------
+# (vii) multi-claim coverage that did not exist anywhere in the tree (C3,
+# AC7): a session holding TWO plan claims and the scope-match tier (C2 § (1),
+# `resolve_deliverable_id_from_scope_match`) and ambiguity gate (C2 § (2),
+# `session_holds_multiple_plan_claims`) it feeds.
+# ---------------------------------------------------------------------------
+
+
+def test_two_claims_code_only_commit_omits_deliverable_id_keeps_session_id(
+    tmp_path, monkeypatch
+):
+    """AC7: a session holding two plan claims, committing a code-only
+    pathspec that falls inside NEITHER plan's scope -- no tier can
+    disambiguate, so the ambiguity gate fires: NO Deliverable-Id trailer is
+    emitted, while Session-Id still is (the gate is scoped to
+    Deliverable-Id resolution only, never Session-Id)."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["docs/plans/claim-a-scope.md"]
+    )
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-b.md", "dlv-claim-b", ["docs/plans/claim-b-scope.md"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+    _write_plan_claim(repo, _SID, "claim-b", "2026-08-02T00:00:00Z")
+    assert len(list_held_plan_claims(repo)) == 2, "precondition: two plan claims held"
+
+    (repo / "some_code.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["some_code.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {_SID}" in joined
+
+
+def test_two_claims_scope_match_covered_by_exactly_one_plan_wins(tmp_path, monkeypatch):
+    """Scope-match tier (C2 § (1)): two claims held, the committed pathspec
+    is strictly covered by exactly ONE plan's ``scope:`` -- that plan's own
+    ``deliverable_id`` wins, even though the session holds multiple claims
+    (the scope-match tier runs BEFORE the ambiguity gate)."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["src/only_in_a.py"]
+    )
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-b.md", "dlv-claim-b", ["src/only_in_b.py"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+    _write_plan_claim(repo, _SID, "claim-b", "2026-08-02T00:00:00Z")
+
+    (repo / "src").mkdir()
+    (repo / "src" / "only_in_a.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["src/only_in_a.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-claim-a" in joined
+
+
+def test_two_claims_scope_match_covered_by_both_plans_omits(tmp_path, monkeypatch):
+    """Scope-match ambiguity: two claims whose scopes BOTH cover the
+    committed pathspec -- the scope-match tier abstains (never picks among
+    multiple covering plans), and since the session holds more than one
+    claim, the ambiguity gate then omits the trailer entirely rather than
+    falling through to a session-keyed tier."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["src/shared.py"]
+    )
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-b.md", "dlv-claim-b", ["src/shared.py"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+    _write_plan_claim(repo, _SID, "claim-b", "2026-08-02T00:00:00Z")
+
+    (repo / "src").mkdir()
+    (repo / "src" / "shared.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["src/shared.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {_SID}" in joined
 
 
 def test_artifact_tier_raises_on_genuinely_divergent_multi_artifact_commit(
@@ -367,6 +518,83 @@ def test_sentinel_no_session_dir_no_trailers(tmp_path, monkeypatch):
     args = compute_missing_trailer_args(msg, repo)
 
     assert args == []
+
+
+# ---------------------------------------------------------------------------
+# (viii) `_has_trailer_line` must agree with git's own trailer parser --
+# state/bug-backlog/2026-08-10-a-hand-written-deliverable-id-line-in-th-
+# b56f7e4630fe.yaml: a hand-written `Deliverable-Id:` line sitting in the
+# message BODY (separated from the trailing trailer block by a blank line)
+# must NOT suppress the engine's own emission.
+# ---------------------------------------------------------------------------
+
+
+def _git_trailer_value(repo: Path, msg_file: Path, key: str) -> str:
+    cp = subprocess.run(
+        ["git", "interpret-trailers", "--parse", str(msg_file)],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
+    for line in cp.stdout.splitlines():
+        if line.startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def test_body_mention_does_not_suppress_emission(tmp_path, monkeypatch):
+    """A hand-written `Deliverable-Id:` line in the message BODY (blank line
+    before the real trailing trailer block) must not be treated as "already
+    present" -- the engine still emits its own trailer, and git's own
+    trailer parser (not a substring check) finds it."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-real"}})
+    msg = _msg_file(
+        repo,
+        "chore: land trailers\n\n"
+        "Deliverable-Id: dlv-hand-written-in-body\n\n"
+        "Co-Authored-By: Someone <someone@example.com>\n",
+    )
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-real" in joined
+
+    # Confirm against git's own parser, not merely our own predicate.
+    cp = subprocess.run(
+        ["git", "interpret-trailers", *args, str(msg)],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
+    out_msg = tmp_path / "OUT_MSG"
+    out_msg.write_text(cp.stdout, encoding="utf-8")
+    assert _git_trailer_value(repo, out_msg, "Deliverable-Id") == "dlv-real"
+
+
+def test_trailer_block_id_still_deduplicates(tmp_path, monkeypatch):
+    """A `Deliverable-Id` already correctly present INSIDE the trailing
+    trailer block must not be emitted twice."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-real"}})
+    msg = _msg_file(
+        repo,
+        "chore: land trailers\n\n"
+        "Deliverable-Id: dlv-real\n"
+        "Co-Authored-By: Someone <someone@example.com>\n",
+    )
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
 
 
 def test_env_var_tiers_win_regardless_of_sentinel(tmp_path, monkeypatch):

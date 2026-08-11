@@ -224,12 +224,16 @@ def test_finding4_no_repo_anchor_bumps_against_registered_target(tmp_path, monke
     )
 
 
-def test_finding4_no_repo_anchor_does_not_bump_against_unregistered_target(
+def test_finding4_no_repo_anchor_bumps_against_an_unregistered_target_outside_its_subtree(
     tmp_path, monkeypatch
 ):
-    """Same shape as above, but the target is NOT a registered repo -- per
-    `target_is_registered_repo`'s own fail-open contract, this must not
-    bump (a fresh, unregistered scaffold tree writes freely)."""
+    """Narrow (PM ruling 2026-08-10, `state/bug-backlog/2026-08-10-a-session-
+    anchored-outside-any-git-repo-88ca86c1f8bf.yaml`) -- superseding this
+    test's own prior "unregistered never bumps" assertion: an unregistered
+    target OUTSIDE the session's own anchor subtree (here, a sibling
+    directory under `tmp_path`, not nested under `scratch_anchor`) now
+    bumps, since a clearable marker can be sited at the target's own
+    (confirmed-real) gitdir."""
     scratch_anchor = tmp_path / "scratch-anchor"
     scratch_anchor.mkdir()
     unregistered_repo = _init_repo(tmp_path, "unregistered")
@@ -257,6 +261,43 @@ def test_finding4_no_repo_anchor_does_not_bump_against_unregistered_target(
     cmd = f"git -C {_posix(unregistered_repo)} commit --allow-empty -m x"
     result = guard.check_bump_foreign_repo_write(
         cmd, "sess-f4b", str(scratch_anchor), {}
+    )
+
+    assert result is not None
+
+
+def test_narrow_no_repo_anchor_does_not_bump_against_an_unregistered_target_inside_its_own_subtree(
+    tmp_path, monkeypatch
+):
+    """Companion to the test above -- the one legitimate class Narrow
+    preserves (the design's own named "scaffold a brand-new project" case):
+    an unregistered repo created AT OR UNDER the session's own anchor
+    subtree still writes freely, exactly as before this fix."""
+    scratch_anchor = tmp_path / "scratch-anchor"
+    scratch_anchor.mkdir()
+    nested_repo = _init_repo(scratch_anchor, "new-project")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    for var in (
+        "CLAUDE_PROJECT_DIR",
+        "CLAUDE_HOME",
+        "HOME",
+        "USERPROFILE",
+        "MACHINE_LOCAL_REGISTRY_DIR",
+        "COORDINATOR_SETTINGS_HOME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    settings_home = tmp_path / "settings-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+    session_start.write_session_start_record("sess-f4c", launch_cwd=str(scratch_anchor))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-registry-here"))
+
+    cmd = f"git -C {_posix(nested_repo)} commit --allow-empty -m x"
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-f4c", str(scratch_anchor), {}
     )
 
     assert result is None

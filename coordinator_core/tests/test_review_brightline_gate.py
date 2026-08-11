@@ -570,6 +570,9 @@ def test_session_id_invalid_chars_exits_1(tmp_path, capsys, monkeypatch):
 
 
 def test_session_id_zero_match_is_vacuous_not_fatal(tmp_path, capsys, monkeypatch):
+    """AC5 regression: a zero-match session-scoped scan must not fabricate
+    a permissive verdict on zero examined commits. Fails against pre-fix
+    code, which emitted `VERDICT=single-reviewer-ok` here."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit_file(repo, "b.py", "y = 2\n", "add b")
@@ -580,7 +583,99 @@ def test_session_id_zero_match_is_vacuous_not_fatal(tmp_path, capsys, monkeypatc
 
     assert rc == 0
     assert "filtered_to=0" in captured.out
+    assert "VERDICT=indeterminate" in captured.out
+    assert "VERDICT=single-reviewer-ok" not in captured.out
+    assert "VERDICT=PARTITION-MANDATORY" not in captured.out
+    assert "gate vacuous" in captured.err
+
+
+def test_session_id_recovers_via_session_aware_floor_past_peer_commits(
+    tmp_path, capsys, monkeypatch
+):
+    """C2 regression: the session's own trailer-carrying commit sits BEFORE
+    the passed-in range's start (modeling a shared-branch merge-base that
+    has advanced past this session's own commits as a peer pushed after
+    it) — the initial range-scoped filter matches zero, but the
+    session-aware floor (an unbounded trailer search) must recover this
+    session's own commit and measure it, rather than reporting
+    `indeterminate` or picking up the peer's commit."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    # This session's own commit — carries the trailer, comes FIRST.
+    (repo / "own.py").write_text("mine = 1\n", encoding="utf-8")
+    _git(repo, "add", "own.py")
+    _git(repo, "commit", "-q", "-m", "own change\n\nSession-Id: session-under-test")
+    own_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    # A peer's commit, pushed AFTER this session's own commit, carrying a
+    # DIFFERENT session's trailer — this is what "range" below will start
+    # from, modeling a merge-base that has advanced past `own_sha`.
+    (repo / "peer.py").write_text("theirs = 1\n", encoding="utf-8")
+    _git(repo, "add", "peer.py")
+    _git(repo, "commit", "-q", "-m", "peer change\n\nSession-Id: some-peer-session")
+    peer_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    monkeypatch.chdir(repo)
+
+    # range = peer_sha..HEAD (== peer_sha..peer_sha, empty) models the
+    # merge-base-advanced-past-own-commits scenario: the passed range does
+    # not contain own_sha at all.
+    rc = main(["--session-id", "session-under-test", f"{peer_sha}..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "commits=1" in captured.out
+    assert "VERDICT=indeterminate" not in captured.out
     assert "VERDICT=single-reviewer-ok" in captured.out
+    assert "session-aware floor" in captured.err
+
+
+def test_session_id_floor_at_repo_root_degrades_to_indeterminate(
+    tmp_path, capsys, monkeypatch
+):
+    """Reviewer P3 (coordinatorcode-reviewer-168fdc70, Finding 1): when the
+    session's own earliest commit reachable from HEAD IS the repo root
+    commit, `_resolve_session_floor` returns `f"{root_sha}^"` — unresolvable,
+    since the root commit has no parent. The retry's
+    `git log floor..HEAD` then exits non-zero with empty stdout;
+    `_session_scoped` discards that return code and only checks
+    `if retry_shas:`, so this must degrade cleanly to VERDICT=indeterminate
+    (exit 0) rather than crash or fabricate a permissive verdict.
+
+    Deliberately does NOT reuse `_init_repo` — that helper always creates a
+    preceding "init" commit first, so `own_sha^` always resolves and this
+    gap goes unexercised."""
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+
+    # The session's own commit IS the repo root — no parent exists.
+    (repo / "root.py").write_text("root = 1\n", encoding="utf-8")
+    _git(repo, "add", "root.py")
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        "root change\n\nSession-Id: root-only-session",
+    )
+    root_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    monkeypatch.chdir(repo)
+
+    # range = root_sha..HEAD (== root_sha..root_sha, empty) so the initial
+    # range-scoped filter matches zero, forcing the session-aware-floor
+    # retry path — whose floor (root_sha^) is unresolvable.
+    rc = main(["--session-id", "root-only-session", f"{root_sha}..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=indeterminate" in captured.out
+    assert "VERDICT=single-reviewer-ok" not in captured.out
+    assert "VERDICT=PARTITION-MANDATORY" not in captured.out
     assert "gate vacuous" in captured.err
 
 
@@ -984,3 +1079,393 @@ def test_compute_chain_oracle_shares_one_dag_context_across_batons(
         "all batons must share ONE context object; distinct objects mean the "
         "context is being rebuilt per baton and nothing is amortised"
     )
+
+
+# ---------------------------------------------------------------------------
+# C2 (2026-08-08) — discriminate a previous close's batons from the ones
+# THIS close is capping. Spec backlink:
+# docs/plans/2026-08-08-discriminate-a-previous-close-s-batons-f.md
+# ---------------------------------------------------------------------------
+
+
+def test_ac4_gate_directive_carries_no_depends_on_and_precedes_tail_in_build_order():
+    """AC4: assert the ordering by test, not by inheriting it from the plan
+    prose. `d-run-chain-plan-brightline-gate` (this gate) must carry no
+    `depends_on`, and its directive-list append site
+    (`coordinator_core.workstream_complete.__init__.build_directives`) must
+    place it strictly BEFORE `d-run-wsc-tail` — the stamp-and-archive step
+    that writes `deployment_state`/`shipped_in` onto a baton. If either half
+    of this does not hold, the C2 predicate's premise (the baton this close
+    is capping is not yet terminal-stamped at gate-scan time) is false and
+    the chunk must stop and report rather than ship the predicate."""
+    from coordinator_core.workstream_complete.directives_review import (
+        build_chain_plan_brightline_gate_directive,
+    )
+
+    gate_directive = build_chain_plan_brightline_gate_directive("seed.md")
+    assert gate_directive["id"] == "d-run-chain-plan-brightline-gate"
+    assert gate_directive["depends_on"] is None, (
+        "the gate directive carrying a depends_on would mean it can be "
+        "deferred past the tail's stamp — the C2 predicate assumes it never is"
+    )
+
+    import inspect
+
+    import coordinator_core.workstream_complete as wsc_module
+
+    build_directives_src = inspect.getsource(wsc_module.build_directives)
+    gate_call_idx = build_directives_src.index(
+        "build_chain_plan_brightline_gate_directive(gate.consumed_handoff)"
+    )
+    tail_call_idx = build_directives_src.index(
+        "build_wsc_tail_directive(gate.sid, effective_decisions)"
+    )
+    assert gate_call_idx < tail_call_idx, (
+        "d-run-chain-plan-brightline-gate must be appended to the directive "
+        "list strictly before d-run-wsc-tail — if this ever inverts, the "
+        "baton this close is capping may already be terminal-stamped by the "
+        "time the gate scans it, and the C2 predicate below is wrong"
+    )
+
+
+def test_capped_by_earlier_close_true_for_terminal_deployment_state_with_shipped_in():
+    """The core predicate: terminal deployment_state + a plausible shipped_in
+    sha together mean an EARLIER close already capped this baton."""
+    from coordinator_core.ops.review_brightline_gate import _capped_by_earlier_close
+
+    assert _capped_by_earlier_close(
+        {"deployment_state": "shipped", "shipped_in": "df8ccac3"}
+    ) is True
+    assert _capped_by_earlier_close(
+        {"deployment_state": "abandoned", "shipped_in": "d2ea184c1234"}
+    ) is True
+
+
+def test_ac2_baton_stamped_during_this_same_close_still_counted():
+    """AC2 (write first): the regression AC17/AC20 exist to protect. A baton
+    archived during THIS close has NOT yet had its stamp-and-archive step's
+    deployment_state/shipped_in land at gate-scan time (per AC4's ordering) —
+    it reads a non-terminal deployment_state (or none at all), so the
+    predicate must NOT exclude it. A naive "exclude anything terminal"
+    predicate would destroy this property; assert directly against the
+    predicate function so this test fails first if that regression reappears."""
+    from coordinator_core.ops.review_brightline_gate import _capped_by_earlier_close
+
+    # In-flight, not yet stamped — the ordinary "this close is capping it" shape.
+    assert _capped_by_earlier_close({"deployment_state": "in_flight"}) is False
+    # Archived mid-ceremony (AC20 fixture shape) but no shipped_in yet either.
+    assert _capped_by_earlier_close({"claimed_by": "sid", "status": "claimed"}) is False
+
+
+def _recording_plan_oracle(seen_plan_batons):
+    def _inner(repo_root, owned_batons):
+        seen_plan_batons.append(list(owned_batons))
+        return {
+            "plan_oracle": 1,
+            "plan_steps": 0,
+            "plan_surfaces": set(),
+            "plan_repos": set(),
+            "matched_plan_paths": set(),
+        }
+
+    return _inner
+
+
+def test_ac3_single_baton_session_chain_owned_batons_identical_to_owned_batons(
+    tmp_path, monkeypatch
+):
+    """AC3: a session owning exactly one baton (the ordinary case) must
+    compute BOTH chain_oracle and plan_oracle over the SAME owned set as
+    before this change — the single, non-terminal, not-yet-shipped baton is
+    never filtered out of either."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    seed = repo / "state" / "handoffs" / "seed.md"
+    _write_baton(seed, "closing-sid-ac3")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "closing-sid-ac3")
+    monkeypatch.setattr(rbg, "_resolve_cross_repo_roots", lambda repo_root: {})
+
+    seen_batons = []
+    seen_plan_batons = []
+
+    def _recording_chain_oracle(repo_root, owned_batons, closing_session_id):
+        seen_batons.append(list(owned_batons))
+        return {
+            "chain_oracle": 1,
+            "chain_loc": 0,
+            "chain_commits": 0,
+            "chain_surfaces": set(),
+            "chain_shas": set(),
+            "indeterminate": False,
+            "notes": [],
+        }
+
+    monkeypatch.setattr(rbg, "_compute_chain_oracle", _recording_chain_oracle)
+    monkeypatch.setattr(rbg, "_compute_plan_oracle", _recording_plan_oracle(seen_plan_batons))
+
+    rc = rbg.main(["--from-handoff", str(seed), "HEAD~1..HEAD"])
+    assert rc == 0
+    assert len(seen_batons) == 1
+    owned_paths = {p for p, _fm in seen_batons[0]}
+    assert seed in owned_paths
+    assert len(seen_batons[0]) == 1
+
+    assert len(seen_plan_batons) == 1
+    plan_owned_paths = {p for p, _fm in seen_plan_batons[0]}
+    assert plan_owned_paths == owned_paths, (
+        "plan_oracle must see the same single-baton owned set as chain_oracle"
+    )
+
+
+def test_ac1_chain_oracle_excludes_baton_capped_by_earlier_close(tmp_path, monkeypatch):
+    """AC1: a session owning 2 batons, one already terminal-stamped by an
+    EARLIER close (terminal deployment_state + shipped_in), computes BOTH
+    the chain oracle and the plan oracle only over the baton THIS close is
+    capping — narrowing one side and not the other would manufacture
+    spurious plan_oracle!=chain_oracle disagreement (tier=B)."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    sid = "closing-sid-ac1"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+    monkeypatch.setattr(rbg, "_resolve_cross_repo_roots", lambda repo_root: {})
+
+    capped_earlier = repo / "archive" / "completed" / "2026-07" / "earlier-close.md"
+    capping_now = repo / "state" / "handoffs" / "this-close.md"
+    monkeypatch.setattr(
+        rbg,
+        "_enumerate_owned_batons",
+        lambda repo_root, closing_sid: (
+            [
+                (
+                    capped_earlier,
+                    {
+                        "claimed_by": sid,
+                        "deployment_state": "shipped",
+                        "shipped_in": "df8ccac3",
+                    },
+                ),
+                (capping_now, {"claimed_by": sid, "deployment_state": "in_flight"}),
+            ],
+            [],
+        ),
+    )
+    seen_plan_batons = []
+    monkeypatch.setattr(rbg, "_compute_plan_oracle", _recording_plan_oracle(seen_plan_batons))
+
+    seen_batons = []
+
+    def _recording_chain_oracle(repo_root, owned_batons, closing_session_id):
+        seen_batons.append(list(owned_batons))
+        return {
+            "chain_oracle": 1,
+            "chain_loc": 0,
+            "chain_commits": 0,
+            "chain_surfaces": set(),
+            "chain_shas": set(),
+            "indeterminate": False,
+            "notes": [],
+        }
+
+    monkeypatch.setattr(rbg, "_compute_chain_oracle", _recording_chain_oracle)
+
+    seed = capping_now
+    seed.parent.mkdir(parents=True, exist_ok=True)
+    _write_baton(seed, sid)
+
+    rc = rbg.main(["--from-handoff", str(seed), "HEAD~1..HEAD"])
+    assert rc == 0
+    assert len(seen_batons) == 1
+    owned_paths = {p for p, _fm in seen_batons[0]}
+    assert owned_paths == {capping_now}, (
+        f"expected only the baton this close is capping ({capping_now}); "
+        f"got {owned_paths}"
+    )
+
+    assert len(seen_plan_batons) == 1
+    plan_owned_paths = {p for p, _fm in seen_plan_batons[0]}
+    assert plan_owned_paths == {capping_now}, (
+        "plan_oracle must exclude the same earlier-close-capped baton as "
+        f"chain_oracle; expected {{capping_now}}, got {plan_owned_paths}"
+    )
+
+
+def test_p1_seed_baton_stamped_by_own_earlier_pass_still_counted(tmp_path, monkeypatch):
+    """P1 regression (review-integrator, 2026-08-08): `_capped_by_earlier_close`'s
+    ordering premise (gate strictly precedes `d-run-wsc-tail`) holds only
+    WITHIN one `build_directives()` call, not across a second pass of the
+    SAME close. If `/workstream-complete` re-derives directives for this
+    close after `d-run-wsc-tail` already stamped the seed baton, the seed
+    reads its OWN terminal deployment_state + shipped_in at gate-scan time —
+    it must still be counted by both oracles, never read as "capped by an
+    earlier close." The seed IS the baton this close is capping, by
+    definition, whatever its stamp state."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    sid = "closing-sid-p1-rerun"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+    monkeypatch.setattr(rbg, "_resolve_cross_repo_roots", lambda repo_root: {})
+
+    seed = repo / "state" / "handoffs" / "this-close-seed.md"
+    seed.parent.mkdir(parents=True, exist_ok=True)
+    _write_baton(seed, sid)
+
+    # Ownership index reflects the RE-RUN state: this pass's own tail
+    # (`d-run-wsc-tail`) already stamped the seed terminal + shipped_in
+    # during pass 1, and the ownership index resolves it via the ARCHIVE
+    # path (as it would post-archive), while the seed argument passed to
+    # `--from-handoff` is still the pre-archive `state/handoffs/` path — the
+    # comparison must be by resolved path identity, not raw path equality.
+    monkeypatch.setattr(
+        rbg,
+        "_enumerate_owned_batons",
+        lambda repo_root, closing_sid: (
+            [
+                (
+                    seed,
+                    {
+                        "claimed_by": sid,
+                        "deployment_state": "shipped",
+                        "shipped_in": "df8ccac3",
+                    },
+                ),
+            ],
+            [],
+        ),
+    )
+
+    seen_plan_batons = []
+    monkeypatch.setattr(rbg, "_compute_plan_oracle", _recording_plan_oracle(seen_plan_batons))
+
+    seen_chain_batons = []
+
+    def _recording_chain_oracle(repo_root, owned_batons, closing_session_id):
+        seen_chain_batons.append(list(owned_batons))
+        return {
+            "chain_oracle": 1,
+            "chain_loc": 0,
+            "chain_commits": 0,
+            "chain_surfaces": set(),
+            "chain_shas": set(),
+            "indeterminate": False,
+            "notes": [],
+        }
+
+    monkeypatch.setattr(rbg, "_compute_chain_oracle", _recording_chain_oracle)
+
+    rc = rbg.main(["--from-handoff", str(seed), "HEAD~1..HEAD"])
+    assert rc == 0
+
+    assert len(seen_chain_batons) == 1
+    chain_owned_paths = {p for p, _fm in seen_chain_batons[0]}
+    assert seed in chain_owned_paths, (
+        "the seed baton must never be excluded by _capped_by_earlier_close "
+        "— it is, by definition, the baton THIS close is capping, even when "
+        "already stamped terminal by this close's own earlier pass"
+    )
+
+    assert len(seen_plan_batons) == 1
+    plan_owned_paths = {p for p, _fm in seen_plan_batons[0]}
+    assert seed in plan_owned_paths, (
+        "plan_oracle must retain the seed baton on the same re-run shape as "
+        "chain_oracle"
+    )
+
+
+def test_ac2_baton_stamped_during_this_same_close_still_counted_by_plan_oracle(
+    tmp_path, monkeypatch
+):
+    """AC2, plan-oracle side: a baton archived and stamped during THIS same
+    close (non-terminal at gate-scan time, per AC4's ordering) must still be
+    counted by plan_oracle, not only chain_oracle — the same AC17/AC20
+    property, asserted against the other oracle."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    sid = "closing-sid-ac2-plan"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+    monkeypatch.setattr(rbg, "_resolve_cross_repo_roots", lambda repo_root: {})
+
+    archived_this_close = repo / "archive" / "completed" / "2026-08" / "this-close.md"
+    monkeypatch.setattr(
+        rbg,
+        "_enumerate_owned_batons",
+        lambda repo_root, closing_sid: (
+            [
+                (
+                    archived_this_close,
+                    {"claimed_by": sid, "deployment_state": "in_flight"},
+                ),
+            ],
+            [],
+        ),
+    )
+
+    seen_plan_batons = []
+    monkeypatch.setattr(rbg, "_compute_plan_oracle", _recording_plan_oracle(seen_plan_batons))
+
+    def _stub_chain_oracle(repo_root, owned_batons, closing_session_id):
+        return {
+            "chain_oracle": 1,
+            "chain_loc": 0,
+            "chain_commits": 0,
+            "chain_surfaces": set(),
+            "chain_shas": set(),
+            "indeterminate": False,
+            "notes": [],
+        }
+
+    monkeypatch.setattr(rbg, "_compute_chain_oracle", _stub_chain_oracle)
+
+    seed = archived_this_close
+    seed.parent.mkdir(parents=True, exist_ok=True)
+    _write_baton(seed, sid)
+
+    rc = rbg.main(["--from-handoff", str(seed), "HEAD~1..HEAD"])
+    assert rc == 0
+    assert len(seen_plan_batons) == 1
+    plan_owned_paths = {p for p, _fm in seen_plan_batons[0]}
+    assert archived_this_close in plan_owned_paths
+
+
+def test_ac5_ambiguous_deployment_state_or_shipped_in_keeps_baton():
+    """AC5: any ambiguity — absent field, malformed sha, unparseable
+    frontmatter — resolves toward KEEPING the baton, never dropping it."""
+    from coordinator_core.ops.review_brightline_gate import _capped_by_earlier_close
+
+    # Absent deployment_state entirely.
+    assert _capped_by_earlier_close({"shipped_in": "df8ccac3"}) is False
+    # Absent shipped_in entirely, despite terminal deployment_state.
+    assert _capped_by_earlier_close({"deployment_state": "shipped"}) is False
+    # Non-terminal deployment_state with a well-formed shipped_in.
+    assert _capped_by_earlier_close(
+        {"deployment_state": "awaiting_gate", "shipped_in": "df8ccac3"}
+    ) is False
+    # Malformed shipped_in (not hex).
+    assert _capped_by_earlier_close(
+        {"deployment_state": "shipped", "shipped_in": "not-a-sha!!"}
+    ) is False
+    # shipped_in wrong type.
+    assert _capped_by_earlier_close(
+        {"deployment_state": "shipped", "shipped_in": 12345}
+    ) is False
+    # deployment_state wrong type.
+    assert _capped_by_earlier_close(
+        {"deployment_state": None, "shipped_in": "df8ccac3"}
+    ) is False
+    # Empty dict (unparseable/empty frontmatter).
+    assert _capped_by_earlier_close({}) is False

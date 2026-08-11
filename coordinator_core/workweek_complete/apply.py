@@ -274,16 +274,31 @@ def _execute_directives(
     `exit_code` (2026-07-26 arg-mismatch audit, systemic finding 1 — mirrors
     `workday_complete.apply`'s identical fix: a directive previously joined
     `landed` after any dispatch that did not *raise*, so an argparse usage
-    error or a gate's business-fail read as ceremony success). Exit code:
+    error or a gate's business-fail read as ceremony success);
+    `report["degraded"]` names directive ids whose dispatch returned a
+    non-zero `exit_code` but which carry `best_effort: True` — a tolerated
+    failure the operator still sees, but which never joins `failed` and
+    therefore never moves the exit code below (2026-08-08 fix: cadence
+    emission is documented best-effort per AC5 of the plan this fix
+    backlinks, but nothing implemented that tolerance — a non-zero exit
+    from it read as a `PARTIAL_MUTATION` whose own contract tells the
+    operator to stop and reconcile a ceremony that in fact fully
+    succeeded). An absent `best_effort` key is `False`, so every directive
+    that predates this fix keeps today's behaviour unchanged. Both
+    `failed[].error` and `degraded[].error` fold in the dispatch's captured
+    stderr (2026-07-27 finding B) when the CLI produced any, appended after
+    the existing `"<cli> exited <n> (args=[...])"` prefix. Exit code:
     `HALTED_AT_JUDGMENT` when anything was blocked and nothing failed;
     `PARTIAL_MUTATION` when something failed but something else also
     landed; `DIRECTIVE_FAILED` when something failed and nothing landed at
-    all; `SUCCESS` only when every directive fired clean.
+    all; `SUCCESS` when every directive either landed or merely degraded —
+    `degraded` never moves the exit code off `SUCCESS`.
     """
     jp_by_id = _judgment_points_by_id(judgment_points)
     landed: list[str] = []
     blocked: list[str] = []
     failed: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
 
     for directive in directives:
@@ -304,15 +319,18 @@ def _execute_directives(
             failed.append({"id": directive["id"], "error": str(exc)})
             continue
         if result.get("exit_code", 0) != 0:
-            failed.append(
-                {
-                    "id": directive["id"],
-                    "error": (
-                        f"{directive['cli']} exited {result['exit_code']} "
-                        f"(args={result.get('args', [])})"
-                    ),
-                }
+            error = (
+                f"{directive['cli']} exited {result['exit_code']} "
+                f"(args={result.get('args', [])})"
             )
+            stderr_text = (result.get("stderr") or "").strip()
+            if stderr_text:
+                error = f"{error} — stderr: {stderr_text}"
+            entry = {"id": directive["id"], "error": error}
+            if directive.get("best_effort"):
+                degraded.append(entry)
+            else:
+                failed.append(entry)
             results.append(result)
             continue
         results.append(result)
@@ -322,6 +340,7 @@ def _execute_directives(
         "landed": landed,
         "blocked": blocked,
         "failed": failed,
+        "degraded": degraded,
         "results": results,
     }
 

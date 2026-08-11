@@ -302,6 +302,76 @@ class TestIdempotencyGuard:
         # No new file should have been written.
         assert len(list(completed.glob("*.md"))) == 1
 
+    def test_stand_down_refuses_a_live_foreign_holders_entry(self, tmp_path, monkeypatch):
+        """Regression for the session-shape-misdetection hazard: a misdetected
+        session must not stand down onto (and later have
+        d-reconcile-completion-commits write into) a LIVE PEER session's
+        completion entry, keyed on `authored_by`, not `chain_slug`."""
+        repo = _make_repo(tmp_path)
+
+        completed = repo / "archive" / "completed" / "2026-07"
+        completed.mkdir(parents=True)
+        existing = completed / "2026-07-01-my-plan-peer12.md"
+        existing.write_text(
+            '---\nchain: "2026-07-06-my-plan"\nauthored_by: "peer-session-peer12"\n---\n',
+            encoding="utf-8",
+        )
+
+        import coordinator_core.session.liveness as _liveness_mod
+
+        monkeypatch.setattr(_liveness_mod, "session_live", lambda sid, cwd=None: sid == "peer-session-peer12")
+
+        rc, out, err = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 1
+        assert str(existing) not in out
+        assert "foreign" in err.lower() or "LIVE" in err
+        # No new file should have been written, and the foreign entry is untouched.
+        assert len(list(completed.glob("*.md"))) == 1
+        assert 'authored_by: "peer-session-peer12"' in existing.read_text(encoding="utf-8")
+
+    def test_stand_down_proceeds_when_foreign_holder_is_dead(self, tmp_path, monkeypatch):
+        """Terminal-safe: a foreign `authored_by` whose session is NOT live
+        must still stand down normally (ambiguity/absence-of-evidence
+        proceeds, per the guard's own docstring)."""
+        repo = _make_repo(tmp_path)
+
+        completed = repo / "archive" / "completed" / "2026-07"
+        completed.mkdir(parents=True)
+        existing = completed / "2026-07-01-my-plan-dead12.md"
+        existing.write_text(
+            '---\nchain: "2026-07-06-my-plan"\nauthored_by: "dead-session-dead12"\n---\n',
+            encoding="utf-8",
+        )
+
+        import coordinator_core.session.liveness as _liveness_mod
+
+        monkeypatch.setattr(_liveness_mod, "session_live", lambda sid, cwd=None: False)
+
+        rc, out, err = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        assert out.strip() == str(existing)
+        assert "stand-down" in err
+
     def test_legacy_entries_excluded_from_idempotency_scan(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
 

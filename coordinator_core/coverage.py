@@ -245,15 +245,23 @@ _NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 _REVLIST_MAX_WORKERS = 16
 
 
-def _run(cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
-    """Run cmd; return (returncode, stdout.strip(), stderr). Never raises."""
+def _run(
+    cmd: List[str], cwd: Optional[str] = None, input_text: Optional[str] = None
+) -> Tuple[int, str, str]:
+    """Run cmd; return (returncode, stdout.strip(), stderr). Never raises.
+
+    `input_text`, when given, is fed to the child's stdin (used by callers
+    like `git diff-tree --stdin`); otherwise stdin is DEVNULL as before — nt:
+    inherited invalid stdin + CREATE_NO_WINDOW hangs _execute_child.
+    """
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             cwd=cwd,
-            stdin=subprocess.DEVNULL,  # nt: inherited invalid stdin + CREATE_NO_WINDOW hangs _execute_child
+            input=input_text,
+            stdin=subprocess.DEVNULL if input_text is None else None,
             **_NO_CONSOLE,
         )
         return result.returncode, result.stdout.strip(), result.stderr
@@ -915,6 +923,49 @@ class _OutOfWindowCache:
         self.hex_existence.update(_batch_check_hex_tokens(uncached, cwd))
 
 
+def _out_of_window_hex_tokens(
+    sha_ranges: "Set[str]", parent_map: Dict[str, List[str]]
+) -> Set[str]:
+    """Every distinct hex BASE token cited by `sha_ranges` (across both endpoints
+    of each range) that a zero-spawn prefix-scan against `parent_map` already
+    shows is NOT in-window — i.e. exactly the tokens `_probe_out_of_window`
+    would otherwise resolve with one `git rev-parse` spawn EACH.
+
+    Pure in-memory; the caller feeds the result to
+    `_OutOfWindowCache.preload_hex_tokens` for a single batched resolution.
+
+    Shared by BOTH graph-walk consumers — `_reviewed_via_graph_walk` (the
+    crediting path) and `_make_chain_range_resolver` (the open-review-loop
+    diagnosis path). It is deliberately ONE helper rather than an inline scan
+    per consumer: the second consumer originally had no pre-scan at all, and
+    that omission alone cost 1402 `git rev-parse` spawns / ~30s on a
+    1700-record review-trail corpus, which pushed `coverage.gate` past the
+    engine's 30s dispatch timeout so it returned no verdict at all. A
+    corpus-scaled per-token spawn in either consumer is the defect shape; a
+    new consumer must call this, not re-derive it.
+
+    Negative-spec: does NOT decide whether a token is genuinely out-of-window —
+    only that the in-window graph cannot answer, so a probe is owed. The
+    ancestor-of-base vs foreign classification stays entirely in
+    `_classify_out_of_window`.
+    """
+    needs_probe: Set[str] = set()
+    for sha_range in sha_ranges:
+        sep = "..." if "..." in sha_range else (".." if ".." in sha_range else None)
+        if sep is None:
+            continue
+        left, right = sha_range.split(sep, 1)
+        for token in (left, right):
+            m = _ENDPOINT_SUFFIX.match(token)
+            base = m.group(1) if m else token
+            if not _HEX_TOKEN.match(base):
+                continue
+            b = base.lower()
+            if not any(k.startswith(b) for k in parent_map):
+                needs_probe.add(base)
+    return needs_probe
+
+
 def _batch_check_hex_tokens(tokens: List[str], cwd: str) -> Dict[str, Optional[str]]:
     """Resolve existence + canonical full SHA for MANY hex tokens (full or
     abbreviated) in ONE `git cat-file --batch-check` spawn, feeding all tokens
@@ -1356,17 +1407,9 @@ def _reviewed_via_graph_walk(
     # repeats) — without this pre-scan, each would cost its own `git rev-parse`
     # spawn in _probe_out_of_window. Pure in-memory work; zero spawns if every
     # endpoint turns out to be in-window.
-    _needs_probe: Set[str] = set()
-    for _sha_range, _artifact, _scope, _session_id, _kind in distinct_ranges:
-        _sep = "..." if "..." in _sha_range else ".."
-        _left, _right = _sha_range.split(_sep, 1)
-        for _token in (_left, _right):
-            _m = _ENDPOINT_SUFFIX.match(_token)
-            _base = _m.group(1) if _m else _token
-            if _HEX_TOKEN.match(_base):
-                _b = _base.lower()
-                if not any(_k.startswith(_b) for _k in parent_map):
-                    _needs_probe.add(_base)
+    _needs_probe = _out_of_window_hex_tokens(
+        {_entry[0] for _entry in distinct_ranges}, parent_map
+    )
     if _needs_probe:
         oow_cache.preload_hex_tokens(_needs_probe, cwd)
 
@@ -1495,6 +1538,14 @@ def _reviewed_via_graph_walk(
 #: addition greps to one obvious spot.
 _UNRESTRICTED_CREDIT_KINDS: Tuple[str, ...] = ("diff",)
 
+#: `scope_kind` values Phase 1 resolves into a credit-bearing `kind` — "diff"
+#: (legacy/explicit) and "plan"; "integration" is a recognized-but-skipped
+#: shape (see the Phase 1 loop above) and never reaches here. Mirrors
+#: review-trail.schema.json's `scope_kind` enum — a schema value outside this
+#: set is a per-record zero-credit degrade (WARN, not a global fatal), never
+#: an AssertionError; see `_credit_from_kind_partition`.
+_RECOGNIZED_SCOPE_KINDS: Tuple[str, ...] = ("diff", "plan", "integration")
+
 
 def _credit_from_kind_partition(
     reviewed_by_kind: Dict[str, Set[str]],
@@ -1525,20 +1576,18 @@ def _credit_from_kind_partition(
     Any other kind (there are none yet reachable here — "integration" is
     skipped in Phase 1 and never reaches Phase 2) credits nothing, fail-closed.
 
-    Review: code-reviewer — the fail-closed-by-omission property above was
-    previously implicit (an unrecognized kind is simply never read from
-    `reviewed_by_kind`); this assertion makes it self-verifying so a future
-    kind added to Phase 1's `scope_kind` handling without a corresponding
-    credit branch here fails LOUD at this call site instead of silently
-    losing its credit and only being noticed via a downstream false
-    UNCOVERED.
+    2026-08-10: this used to `assert set(reviewed_by_kind) <= {"diff", "plan"}`
+    — self-verifying, but fatal to the WHOLE gate the moment one review-trail
+    record anywhere in the corpus carried an unrecognized scope_kind (the
+    schema had no enum, so nothing stopped one being hand-authored). A single
+    stray record could then block every PARTITION-MANDATORY close on a repo
+    from ever reaching a VERDICT line. Per-record degrade replaces it: the
+    WARN for an unrecognized kind is emitted upstream, at Phase 1
+    classification (where the record's artifact/path are still in scope) —
+    this function's fail-closed-by-omission (an unrecognized kind is simply
+    never read from `reviewed_by_kind`) is left to do the crediting work
+    silently, same as before the assertion existed.
     """
-    assert set(reviewed_by_kind) <= {"diff", "plan"}, (
-        f"_credit_from_kind_partition: unrecognized kind(s) "
-        f"{set(reviewed_by_kind) - {'diff', 'plan'}!r} — add an explicit "
-        f"credit branch (or extend _UNRESTRICTED_CREDIT_KINDS) before "
-        f"widening Phase 1's scope_kind handling"
-    )
     credited: Set[str] = set()
     for kind in _UNRESTRICTED_CREDIT_KINDS:
         credited |= reviewed_by_kind.get(kind, set())
@@ -1716,6 +1765,22 @@ def build_reviewed_set(
                     continue
                 if not sha_range:
                     continue  # diff/plan record with empty range — skip silently
+                if scope_kind not in _RECOGNIZED_SCOPE_KINDS:
+                    # Per-record degrade, not global fatal (2026-08-10 coverage-
+                    # gate wedge: a single unrecognized scope_kind anywhere in
+                    # the trail corpus used to AssertionError the whole gate
+                    # before it ever reached a VERDICT — see
+                    # cross-repo/inbox/2026-08-10-example-retrieval-repo-ue-addon-em-
+                    # coverage-gate-crashes-on-chunk-and-inline-dispatch-
+                    # kinds.md). The record still flows through so its shape is
+                    # resolved like any other, but `_credit_from_kind_partition`
+                    # never reads an unrecognized kind's bucket, so it earns
+                    # zero credit — fail-closed, unchanged safety direction.
+                    print(
+                        f"WARN: unrecognized scope_kind {scope_kind!r} — record "
+                        f"credits nothing: {artifact} ({path})",
+                        file=sys.stderr,
+                    )
                 kind = scope_kind
             else:
                 # Legacy record — no scope_kind; use ".." inference. Always "diff".
@@ -2246,20 +2311,43 @@ def _filter_shas_by_scope_paths(
 ) -> Tuple[Optional[FrozenSet[str]], Optional[str]]:
     """Return (subset of `shas` that touch >=1 scope_paths path, diagnostic_note).
 
-    Uses git's own pathspec matcher via batched `git log --no-walk --format=%H
-    <shas>... -- <scope_paths>` calls rather than a hand-rolled prefix/glob
-    match in Python — scope_paths entries are git pathspecs (directory
-    prefixes, globs, negation, magic prefixes) and reimplementing that
-    semantics here would be subtly wrong. `--no-walk` scopes each call to
-    exactly the given commits (no history traversal); git filters that list to
-    the ones whose own diff touches the pathspec, which is also why a commit
-    touching both an in-scope and an out-of-scope path is retained — touching
-    ANY scoped path is sufficient, matching flat mode's `git rev-list --
-    scope_paths` semantics.
+    Uses git's own pathspec matcher via batched `git diff-tree --stdin
+    --name-only -r -- <scope_paths>` calls rather than a hand-rolled
+    prefix/glob match in Python — scope_paths entries are git pathspecs
+    (directory prefixes, globs, negation, magic prefixes) and reimplementing
+    that semantics here would be subtly wrong.
 
-    Batched in chunks of _SCOPE_FILTER_CHUNK_SIZE SHAs per git invocation
-    (argv-length ceiling), not one call per SHA — mirrors _commit_touched_paths'
-    batched-call shape.
+    `git diff-tree` (not `git log --no-walk`) is load-bearing here: `--no-walk`
+    disables git log's pathspec-based history simplification entirely (it is a
+    walk-time feature), so `git log --no-walk <shas>... -- <scope_paths>`
+    silently returns every given SHA unfiltered regardless of whether its diff
+    touches the pathspec — a real defect this function used to carry (see
+    test_coverage_dag_scope_paths.py, the tests this function exists to
+    satisfy). `diff-tree --stdin` diffs each commit against its own parent
+    individually and only ever prints a commit-id line for a commit whose
+    per-commit diff matches the pathspec — but only for FULL 40-char object
+    names fed on stdin. Review: code-reviewer — an ABBREVIATED sha is
+    echoed back verbatim even on a no-match (out-of-scope) commit instead
+    of being suppressed (probed live: full-sha/out-of-scope prints nothing;
+    full-sha/in-scope prints the id + touched paths; abbreviated-sha/
+    out-of-scope prints the bare abbreviation with no names). Left alone,
+    that echoed abbreviation lands right back in `chunk_set` (fed in the
+    same shape) and gets credited as "matched" — the same unfiltered-
+    passthrough bypass the `--no-walk` defect above already illustrates,
+    wearing a different command. This function therefore resolves every
+    input token to its full object name via the existence-check
+    `cat-file --batch-check` call below (which already returns one) BEFORE
+    feeding anything to `diff-tree`, and matches diff-tree's output only
+    against those full shas.
+
+    Batched in chunks of _SCOPE_FILTER_CHUNK_SIZE SHAs fed over stdin per git
+    invocation (argv-length ceiling avoided by using stdin rather than argv),
+    not one call per SHA — mirrors _commit_touched_paths' batched-call shape.
+    A commit-id line in the output is matched against the set of FULL shas
+    resolved for THIS chunk (not treated as a bare hex-looking string, and
+    never an unresolved abbreviation) before being credited, so an
+    adversarial path that happens to be 40 hex characters cannot be misread
+    as a commit boundary.
 
     Returns (None, note) on any git failure. Fail-closed: the caller must
     neither fall back to the unfiltered set (would silently defeat scoping)
@@ -2272,18 +2360,62 @@ def _filter_shas_by_scope_paths(
     matched: Set[str] = set()
     for i in range(0, len(shas), _SCOPE_FILTER_CHUNK_SIZE):
         chunk = shas[i : i + _SCOPE_FILTER_CHUNK_SIZE]
-        rc, out, err = _run(
-            ["git", "log", "--no-walk", "--format=%H"] + chunk + ["--"] + scope_paths,
+
+        # `git diff-tree --stdin` silently no-ops an unresolvable SHA (exit 0,
+        # empty output, no stderr) rather than erroring — indistinguishable
+        # from "resolved but touches nothing in scope_paths" without this
+        # explicit existence check. Fail-closed requires catching that case
+        # before it is misread as a scoping decision. This same call also
+        # resolves each token's FULL object name (%(objectname)) — reused
+        # below (Review: code-reviewer) so an abbreviated input sha is never
+        # fed to diff-tree, and never matched against, in its abbreviated
+        # form: diff-tree echoes an unmatched abbreviation back verbatim
+        # instead of suppressing it, which would otherwise be misread as a
+        # scope match.
+        rc_check, out_check, err_check = _run(
+            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
             cwd=cwd,
+            input_text="\n".join(chunk) + "\n",
+        )
+        if rc_check != 0 or any(
+            line.strip().endswith(" missing") for line in out_check.splitlines()
+        ):
+            return None, (
+                "coverage: DAG-mode scope_paths filter failed — could not "
+                f"resolve one or more of {len(chunk)} commit(s): "
+                f"{err_check.strip() or 'unresolvable SHA'}"
+            )
+
+        # Map each input token to its resolved full object name — positional,
+        # mirroring `_batch_check_hex_tokens`' own empirically-verified
+        # order-preserving contract for this exact git subcommand (see that
+        # function's docstring). Any line that doesn't cleanly resolve to a
+        # full 40-char sha degrades that token out of this chunk (fail-closed
+        # — never fed to diff-tree unresolved, never matched).
+        full_shas: List[str] = []
+        for token, line in zip(chunk, out_check.splitlines()):
+            parts = line.split()
+            if len(parts) == 2 and parts[1] in _GIT_OBJECT_TYPES and _FULL_SHA.match(parts[0]):
+                full_shas.append(parts[0])
+        chunk_set = set(full_shas)
+        if not full_shas:
+            continue
+
+        rc, out, err = _run(
+            ["git", "diff-tree", "--stdin", "--name-only", "-r", "--"]
+            + scope_paths,
+            cwd=cwd,
+            input_text="\n".join(full_shas) + "\n",
         )
         if rc != 0:
             return None, (
-                "coverage: DAG-mode scope_paths filter failed — git log errored "
-                f"for a batch of {len(chunk)} commit(s): {err.strip() or 'unknown error'}"
+                "coverage: DAG-mode scope_paths filter failed — git diff-tree "
+                f"errored for a batch of {len(chunk)} commit(s): "
+                f"{err.strip() or 'unknown error'}"
             )
         for line in out.splitlines():
             sha = line.strip()
-            if sha:
+            if sha in chunk_set:
                 matched.add(sha)
     return frozenset(matched), None
 
@@ -2322,12 +2454,42 @@ class _DagNodeAttribution:
                      Session-Id segment, or (when deliverable_id is set) the
                      union of legs (a) and (b) from the deliverable-attribution
                      rule. Empty for a node whose attribution was skipped.
+    authored_session_id: the node's own add-commit Session-Id trailer,
+                     resolved the same way the `else` branch always has,
+                     even for the `closing_abs` node where `session_id`
+                     above may take the closing_session_id shortcut. None
+                     when not resolved (e.g. the `else` branch already
+                     performed this exact derivation, so this simply mirrors
+                     `session_id` there).
+    attribution_disagrees: True only when `authored_session_id` was
+                     resolved, is non-empty, and differs from the running
+                     session — i.e. the closing_abs node was authored by a
+                     DIFFERENT session than the one closing it: the
+                     "picked-up handoff" case.
+
+    READER: `_render_dag_ancestry_notes` — when `attribution_disagrees` is
+    True for a node, its rendered ancestry line appends a "picked up
+    (authored by <authored_session_id>)" marker, surfacing the DR-286
+    detected-pickup case in the operator-facing artifact rather than only in
+    a transient `result.notes` line.
+
+    An earlier revision of this docstring said "OBSERVATION ONLY (C1)" and
+    "Does not affect `session_id`, `shas`, or any verdict". That was true of
+    C1 alone and is now FALSE: on the claim-gated pickup path (DR-286),
+    `authored_session_id`'s underlying resolution becomes the attributed
+    `sid`, so `session_id`, `shas` and the verdict all can change on exactly
+    the condition `attribution_disagrees` records. A code reviewer and a
+    review integrator disagreed about whether these fields were dead; the
+    integrator was right, and this block exists so the next reader does not
+    have to re-run that argument.
     """
 
     path: str
     session_id: str = ""
     deliverable_id: Optional[str] = None
     shas: FrozenSet[str] = field(default_factory=frozenset)
+    authored_session_id: Optional[str] = None
+    attribution_disagrees: bool = False
 
 
 @dataclass
@@ -2748,43 +2910,152 @@ def _derive_dag_chain_set(
             shared_context.did_to_shas = did_to_shas
             shared_context.sha_to_did = sha_to_did
 
+    def _resolve_add_commit_session_id(node_path: str) -> Tuple[str, str]:
+        """Resolve (add_sha, Session-Id) for the commit that originally added
+        `node_path` — the exact two-`git log`-call derivation the `else`
+        branch below has always performed. Factored out so the `closing_abs`
+        branch reuses it verbatim instead of a second, divergent copy.
+        Returns ("", "") when either call fails or the add-commit/trailer
+        cannot be resolved.
+
+        Used for TWO purposes on the `closing_abs` path, not one: it detects
+        the pickup (author != runner, recorded on
+        `_DagNodeAttribution.attribution_disagrees`), AND on the claim-gated
+        branch its resolved Session-Id becomes the attributed `sid` (DR-286).
+        An earlier revision of this docstring said "observation path", which
+        was true of C1 alone and understated the helper's role after C2.
+
+        COST, stated because the obvious summary understates it: the
+        `closing_abs` branch calls this UNCONDITIONALLY whenever
+        `closing_session_id` is truthy — not only on a detected pickup — so
+        every ordinary DAG-mode gate run now pays these two `git log` spawns,
+        where it previously took a zero-spawn shortcut. The cost is O(1) per
+        gate run, NOT O(nodes): "no new PER-NODE spawn" is true but is a
+        weaker claim than "no new spawn", and the difference is this. Accepted
+        deliberately — detecting a pickup requires resolving the author, and
+        there is no cheaper signal that is also trustworthy (frontmatter
+        `authoring_session` is self-declared; the add-commit trailer is
+        git-truth). Revisit only if gate-run frequency makes a fixed
+        two-spawn tax material on this machine's load norm.
+        """
+        rc, add_sha_out, _ = _run(
+            [
+                "git", "log", "--follow", "-M100%",
+                "--diff-filter=A", "--format=%H", "--", node_path,
+            ],
+            cwd=repo_root,
+        )
+        add_sha_lines = (
+            [s.strip() for s in add_sha_out.splitlines() if s.strip()]
+            if rc == 0
+            else []
+        )
+        # Take the OLDEST add-commit (last line — git log is newest-first)
+        add_sha = add_sha_lines[-1] if add_sha_lines else ""
+        if rc != 0 or not add_sha:
+            return "", ""
+        rc2, sid_raw, _ = _run(
+            ["git", "log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", add_sha],
+            cwd=repo_root,
+        )
+        resolved_sid = sid_raw.strip().strip("\r\n") if rc2 == 0 else ""
+        return add_sha, resolved_sid
+
     seen_sha: Set[str] = set()
     for node in closing_set:
         sid = ""
+        authored_sid: Optional[str] = None
+        attribution_disagrees = False
 
         if node == closing_abs and closing_session_id:
             # D3 case 3: the closing handoff's session is the currently-active session.
             # The add-commit trailer trail might not yet exist (unpublished handoff).
             sid = closing_session_id
+            # Resolve the node's own add-commit Session-Id (the same
+            # derivation the `else` branch performs) and record whether it
+            # disagrees with the closing_session_id shortcut above — a
+            # disagreement IS a detected pickup. See
+            # _DagNodeAttribution.attribution_disagrees.
+            #
+            # `sid` is reassigned below ONLY on the claim-gated pickup path
+            # (DR-286). When author == runner — the ordinary close, and the
+            # overwhelming majority — this block records nothing and `sid`
+            # keeps `closing_session_id`, so attribution, `result.shas`, and
+            # the verdict are byte-identical to pre-C1 behaviour. That
+            # byte-identity is asserted by
+            # test_same_session_author_runner_control_MUST_NOT_CHANGE; if it
+            # ever fails, this code is wrong, not the test.
+            _add_sha_obs, authored_sid_raw = _resolve_add_commit_session_id(node)
+            if authored_sid_raw:
+                authored_sid = authored_sid_raw
+                if authored_sid_raw != closing_session_id:
+                    attribution_disagrees = True
+                    # DR-286: a detected pickup (disagreement above) attributes
+                    # the handoff's authoring session — gated on the pickup
+                    # claim record. Fail closed on any non-positive resolution
+                    # (unreadable/absent/ambiguous/third-party claim): `sid`
+                    # stays `closing_session_id`, today's behaviour. Only a
+                    # claim positively held by `closing_session_id` flips it.
+                    # `_get_handoff_consumed_by` already degrades read/parse
+                    # failures to `None` (conservative), which is the correct
+                    # fail-closed direction for this gate too — a failure must
+                    # never widen attribution.
+                    claim_holder = _get_handoff_consumed_by(
+                        node, repo_root=repo_root
+                    )
+                    if claim_holder == closing_session_id:
+                        sid = authored_sid_raw
+                        result.notes.append(
+                            f"{node}: pickup detected — claim on this handoff "
+                            f"held by running session {closing_session_id!r}; "
+                            f"attributing authoring session {authored_sid_raw!r} "
+                            "(DR-286)"
+                        )
+                    else:
+                        result.notes.append(
+                            f"{node}: OBSERVATION — add-commit Session-Id "
+                            f"{authored_sid_raw!r} disagrees with closing_session_id "
+                            f"{closing_session_id!r} (attribution unchanged this run)"
+                        )
         else:
             # Find the commit that originally added this handoff file.
             # tail -1 equivalent: git log outputs newest→oldest; last line = oldest = add-commit.
-            rc, add_sha_out, _ = _run(
-                [
-                    "git", "log", "--follow", "-M100%",
-                    "--diff-filter=A", "--format=%H", "--", node,
-                ],
-                cwd=repo_root,
-            )
-            if rc != 0 or not add_sha_out.strip():
-                result.indeterminate = True
-                result.notes.append(f"{node}: no add-commit found (attribution gap)")
-                return result
-
-            # Take the OLDEST add-commit (last line — git log is newest-first)
-            add_sha_lines = [s.strip() for s in add_sha_out.splitlines() if s.strip()]
-            add_sha = add_sha_lines[-1] if add_sha_lines else ""
+            add_sha, sid = _resolve_add_commit_session_id(node)
+            authored_sid = sid or None
             if not add_sha:
-                result.indeterminate = True
-                result.notes.append(f"{node}: no add-commit found (attribution gap)")
-                return result
+                if node == closing_abs:
+                    # Preserved safety guard: the CLOSING/current session's own
+                    # node must still hard-fail INDETERMINATE when its own
+                    # add-commit is unresolvable — this is the node THIS run
+                    # is responsible for reviewing, not an inherited
+                    # ancestor's segment.
+                    result.indeterminate = True
+                    result.notes.append(f"{node}: no add-commit found (attribution gap)")
+                    return result
+                # Inherited ANCESTOR node whose add-commit cannot be resolved
+                # (e.g. `--follow` broken by a provenance-losing move/rename,
+                # or history predating this clone) does NOT poison the whole
+                # chain verdict — mirrors the untrailered-add-commit carve-out
+                # below. Skip this node's segment attribution (it contributes
+                # nothing to `covered`/`shas` — never a falsely-COVERED
+                # verdict) and continue the walk; the gap is recorded in
+                # `notes`, never silently absorbed into "walked and clean".
+                result.notes.append(
+                    f"{node}: no add-commit found (attribution gap) — "
+                    "ancestor segment skipped (attributed to its own closing session)"
+                )
+                result.node_attribution[node] = _DagNodeAttribution(
+                    path=node,
+                    session_id="",
+                    deliverable_id=_parse_handoff_deliverable_id(node),
+                    shas=frozenset(),
+                )
+                continue
 
-            # Extract Session-Id trailer from the add-commit.
-            rc2, sid_raw, _ = _run(
-                ["git", "log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", add_sha],
-                cwd=repo_root,
-            )
-            sid = sid_raw.strip().strip("\r\n") if rc2 == 0 else ""
+            # Session-Id trailer already resolved by
+            # _resolve_add_commit_session_id above (`sid`) — no second
+            # extraction call here (that would double the per-node spawn
+            # count the batched-git-surface tests police).
             if not sid:
                 if node == closing_abs:
                     # Preserved safety guard: the CLOSING/current session's own
@@ -2886,6 +3157,8 @@ def _derive_dag_chain_set(
                 session_id=sid,
                 deliverable_id=None,
                 shas=frozenset(seg),
+                authored_session_id=authored_sid,
+                attribution_disagrees=attribution_disagrees,
             )
             continue
 
@@ -2940,6 +3213,8 @@ def _derive_dag_chain_set(
             session_id=sid,
             deliverable_id=deliverable_id,
             shas=frozenset(node_shas),
+            authored_session_id=authored_sid,
+            attribution_disagrees=attribution_disagrees,
         )
 
     result.shas = list(seen_sha)
@@ -3183,6 +3458,8 @@ def _render_dag_ancestry_notes(
         name = Path(node).stem
         deliv = attrib.deliverable_id or "no deliverable_id"
         marker = "  <- closing (you)" if node == closing_abs else ""
+        if attrib.attribution_disagrees:
+            marker += f"  <- picked up (authored by {attrib.authored_session_id})"
         lines.append(f"  [{label}] {name}    {deliv}{marker}")
 
     lines.append("uncovered, by originating baton:")
@@ -3266,6 +3543,7 @@ def _make_chain_range_resolver(
     cwd: str,
     chain_set: Set[str],
     graph_range: Optional[str],
+    prescan_ranges: Optional["Set[str]"] = None,
 ) -> Optional[Any]:
     """Build a `Callable[[str], Optional[Set[str]]]` resolving a trail record's
     sha_range to its CHAIN-RESTRICTED SHA set, for injection into
@@ -3327,7 +3605,22 @@ def _make_chain_range_resolver(
 
     def parent_map() -> Optional[Dict[str, List[str]]]:
         if "map" not in graph:
-            graph["map"] = _build_parent_map(cwd, graph_range)
+            built = _build_parent_map(cwd, graph_range)
+            graph["map"] = built
+            # Batched out-of-window pre-scan, the exact counterpart of
+            # `_reviewed_via_graph_walk`'s (see `_out_of_window_hex_tokens`):
+            # ONE `git cat-file --batch-check` resolves every token this
+            # resolver will be asked about but cannot answer from the in-window
+            # graph, instead of `_probe_out_of_window` paying a `git rev-parse`
+            # spawn PER token. Deferred to here rather than run at construction
+            # time so the "corpus with no pending record spawns nothing at all"
+            # laziness this function's docstring promises survives — the map and
+            # the pre-scan are built together, on the first range actually asked
+            # for, or never.
+            if built is not None and prescan_ranges:
+                needs_probe = _out_of_window_hex_tokens(prescan_ranges, built)
+                if needs_probe:
+                    oow_cache.preload_hex_tokens(needs_probe, cwd)
         return graph["map"]
 
     def resolve_via_fanout(sha_range: str) -> Optional[Set[str]]:
@@ -3609,7 +3902,23 @@ def _diagnose_open_review_loop(
                     continue
                 all_records.append((path, rec))
 
-        resolver = _make_chain_range_resolver(cwd, chain_set, graph_range)
+        # Hand the resolver the full set of ranges `classify_pending_records`
+        # can ask it about (it resolves BOTH the pending records and every
+        # candidate closer), so its out-of-window pre-scan is one batched
+        # spawn rather than one `git rev-parse` per distinct token. A range
+        # this set misses still resolves correctly — `_probe_out_of_window`
+        # falls back to its per-token probe — so this is a spawn-count
+        # optimisation with no bearing on any resolved value.
+        resolver = _make_chain_range_resolver(
+            cwd,
+            chain_set,
+            graph_range,
+            prescan_ranges={
+                str(rec.get("sha_range") or "")
+                for _path, rec in all_records
+                if rec.get("sha_range")
+            },
+        )
         pending_entries = classify_pending_records(
             all_records, resolve_range=resolver, cwd=cwd
         )
@@ -3903,6 +4212,13 @@ def run_coverage_gate(
                 notes=notes,
             )
         chain_set = set(dag_result.shas)
+        # Review: code-reviewer P1 — dag_result.notes (e.g. the ancestor-skip
+        # note) was previously merged into the outer `notes` list ONLY on the
+        # indeterminate short-circuit above. On every other path (COVERED,
+        # WARN) it was silently dropped, contradicting the "recorded in
+        # notes, never silently absorbed" claim this fixpoint's docstring
+        # makes. Merge unconditionally here so it survives every return.
+        notes.extend(dag_result.notes)
 
         if scope_paths:
             filtered, filter_note = _filter_shas_by_scope_paths(
@@ -4225,11 +4541,12 @@ def run_coverage_gate(
         notes.append(
             "coverage: "
             f"WARN — code-partition coverage ratio {coverage_ratio:.2f} is below "
-            f"the {threshold:.2f} threshold. This is an OFFER, not a halt: "
-            "dispatch coordinator:review-code over the uncovered commits listed "
-            "above, then re-run this gate. Nothing in this gate blocks on its "
-            "own — see coordinator_core.coverage's module-level hard-block "
-            "decision note."
+            f"the {threshold:.2f} threshold. Nothing in this gate blocks on its "
+            "own (see coordinator_core.coverage's module-level hard-block "
+            "decision note) — but not blocking is not the same as not owed: "
+            "the uncovered commits above are this chain's inheritance, and the "
+            "remedy is to dispatch coordinator:review-code over them, then "
+            "re-run this gate."
         )
 
     vline = (

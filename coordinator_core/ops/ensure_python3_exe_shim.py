@@ -163,6 +163,36 @@ def _is_appx_stub(path: Path) -> bool:
     return path.exists() and not path.is_file()
 
 
+def _exe_basename_pth_trap(py_exe: Path, py3_exe: Path) -> Optional[Path]:
+    """Detect the `._pth` executable-basename trap.
+
+    `._pth` files are looked up by the *executable's own basename*, not by
+    the DLL name. If `py_exe.parent` carries an executable-named
+    `python._pth` (python.org's normal embeddable-adjacent shape keys
+    isolation off `python.exe`'s own name), the freshly-hardlinked/copied
+    `python3.exe` will look for a `python3._pth` that does not exist — and
+    silently falls back to full registry + env + `site` path resolution
+    instead of raising. Isolated mode turns off with no error.
+
+    A DLL-named `pythonXX._pth` (e.g. `python312._pth`, the official
+    embeddable-distribution shape) is unaffected — that is looked up by DLL
+    name, so it applies identically to `python.exe` and `python3.exe`. Only
+    the executable-basename form is a trap; this must not flag the DLL-named
+    form.
+
+    Detection is entirely a function of `py_exe` (its parent dir + stem
+    build the `._pth` candidate); `py3_exe` is not inspected on disk here —
+    it supplies only the shim's name for the operator-facing message text at
+    the call site.
+
+    Returns the offending path if the trap is present, else None.
+    """
+    candidate = py_exe.parent / f"{py_exe.stem}._pth"
+    if candidate.is_file():
+        return candidate
+    return None
+
+
 def _install_shim(python_bin: str, check_only: bool) -> int:
     """Core shim logic, ported 1:1 from the bash oracle's post-PYTHON_BIN-
     resolution body. Returns the process exit code."""
@@ -199,6 +229,34 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
 
     # Pre-shim state guards.
     #
+    # (0) The `._pth` executable-basename trap. See _exe_basename_pth_trap()
+    #     docstring: shimming here would silently produce a python3.exe that
+    #     is NOT isolated the way python.exe is, with no error at all. Fail
+    #     loud instead of installing a differently-behaving interpreter.
+    #
+    #     Review: code-reviewer (P2) — this preflight is deliberately ahead
+    #     of the `already_valid` idempotency early-return below, not an
+    #     oversight of where it belongs. A byte-identical existing shim is
+    #     still wrongly isolated when the trap is present: the shim was
+    #     created before the trap-file appeared (or before this guard
+    #     existed), and a byte match only proves the shim mirrors
+    #     python.exe's bytes, not that it mirrors python.exe's isolation
+    #     behavior. Returning 0 on that byte match would restore exactly the
+    #     silent isolation-off failure this guard exists to catch, so it
+    #     must fire before, not after, the idempotency check.
+    pth_trap = _exe_basename_pth_trap(py_exe, py3_exe)
+    if pth_trap is not None:
+        print(
+            f"{_LOG_PREFIX} ERROR: {pth_trap} pins isolation to {py_exe.name}'s own "
+            "basename ('._pth' files are looked up by executable basename, not DLL "
+            f"name); shimming {py3_exe.name} here would look for a nonexistent "
+            f"{py3_exe.stem}._pth and silently fall back to full registry+env+site "
+            "path resolution -- isolated mode would be off with no error. Refusing "
+            "to shim.",
+            file=sys.stderr,
+        )
+        return 1
+
     # (a) AppX zero-byte reparse-point stub at the shim path (left over from
     #     a Store Python install). Detect via _is_appx_stub() and direct the
     #     operator to install-substrate.sh's AppX stub cleanup before

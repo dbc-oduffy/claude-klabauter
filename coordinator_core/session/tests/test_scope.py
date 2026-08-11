@@ -40,7 +40,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -325,11 +327,693 @@ class TestTouchNormalization:
         outside = "/totally/outside/xyz.py"
         assert scope.normalize_touch_path(outside, cwd=str(repo)) is None
 
+    def test_normalize_touch_path_non_ascii_tracked_name_via_git_ls_files(
+        self, tmp_path
+    ):
+        """Regression for bug-backlog
+        2026-08-08-core-quotepath-corrupts-touched-txt-for-9b099a0360ca:
+        with the caller's ``core.quotePath`` left at its default (true), a
+        tracked non-ASCII filename must normalize to its real name, NOT
+        git's C-quoted-and-octal-escaped form."""
+        repo = _make_repo(tmp_path)
+        target = repo / "café.md"
+        target.write_text("y", encoding="utf-8")
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+        )
+        result = scope.normalize_touch_path(str(target), cwd=str(repo))
+        assert result == "café.md"
+
+    def test_normalize_touch_path_extended_length_prefix_normalizes(self, tmp_path):
+        """Regression for bug-backlog
+        2026-08-08-extended-length-paths-bypass-absolute-re-3e7b2e5a95ff:
+        a Windows extended-length-prefixed absolute path must be recognized
+        as absolute (prefix stripped first) and normalized to a repo-
+        relative result, not returned unchanged/still-absolute."""
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        prefixed = "\\\\?\\" + str(target)
+        result = scope.normalize_touch_path(prefixed, cwd=str(repo))
+        assert result == "src/new.py"
+        assert not scope._is_absolute(result)
+
     def test_is_absolute_predicate(self):
         assert scope._is_absolute("/etc/passwd") is True
         assert scope._is_absolute("C:/Users/x") is True  # abs-path-ok: synthetic drive-letter literal exercising the predicate, not a real machine path
         assert scope._is_absolute("src/foo.py") is False
         assert scope._is_absolute("") is False
+
+
+class TestNormalizeTouchPathSpawnCount:
+    """Spawn-COUNT coverage for the ``root``-supplied ``core.git_root(cwd)``
+    skip added 2026-08-08 (docs/plans/2026-08-08-touched-path-normalize-
+    spawn-diet.md, chunk C1) -- narrowed post-review from an initial
+    ``relpath``-first reorder that diverged from git's recorded path via
+    in-worktree symlinks/junctions (see ``normalize_touch_path``'s
+    docstring negative-spec). ``git ls-files`` now runs FIRST,
+    unconditionally, exactly as before this change; ``root`` only skips the
+    ``core.git_root(cwd)`` re-derivation on the miss path. Gated on
+    subprocess call counts, never wall-clock -- this box runs 50-70
+    concurrent LLMs and wall-clock is unusable here.
+
+    Monkeypatches ``scope._git_run`` (the sole subprocess seam for
+    ``ls-files``) and ``core.git_root`` (the sole subprocess seam for the old
+    worktree-root re-derivation) to plain counters, so a call count of 0
+    proves no ``git`` process was spawned at all — not merely that its
+    result went unused.
+    """
+
+    def _spy(self, monkeypatch):
+        calls = {"git_run": 0, "git_root": 0}
+
+        real_git_run = scope._git_run
+
+        def _counted_git_run(args, cwd=None):
+            calls["git_run"] += 1
+            return real_git_run(args, cwd)
+
+        real_git_root = core.git_root
+
+        def _counted_git_root(cwd=None):
+            calls["git_root"] += 1
+            return real_git_root(cwd)
+
+        monkeypatch.setattr(scope, "_git_run", _counted_git_run)
+        monkeypatch.setattr(scope.core, "git_root", _counted_git_root)
+        return calls
+
+    def test_tracked_path_with_root_spawns_ls_files_only(self, tmp_path, monkeypatch):
+        """AC1 (C2 update, plan chunk C2a): a tracked file inside the
+        worktree, with ``root`` supplied, is now proved eligible for the
+        zero-spawn fast arm by :func:`scope._touch_path_fast_arm_eligible`
+        (C1's five-clause guard) — ZERO spawns, not one. This test used to
+        assert the pre-guard shape (``{"git_run": 1, "git_root": 0}``,
+        docstring claiming "root never saves the ls-files spawn") before C1
+        landed the guard at ``b1e0881d3``; that claim is no longer true for
+        an eligible tracked path, and updating this assertion is exactly what
+        C2a's brief calls out as expected (one of the three spawn-count tests
+        C1 broke)."""
+        repo = _make_repo(tmp_path)
+        calls = self._spy(monkeypatch)
+        target = repo / "README.md"
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "README.md"
+        assert calls == {"git_run": 0, "git_root": 0}
+
+    def test_untracked_path_with_root_spawns_ls_files_only(self, tmp_path, monkeypatch):
+        """AC2 (C2 update): an untracked file inside the worktree, with
+        ``root`` supplied, is ALSO proved eligible for the fast arm — the
+        five-clause guard does not distinguish tracked from untracked, only
+        that the pure-Python ``relpath`` candidate is provably what
+        ``ls-files`` would have produced (agreeing for an untracked file too,
+        since ``ls-files`` would miss and the relpath fallback would run
+        anyway). Previously asserted 1 spawn (ls-files miss only); now 0."""
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        calls = self._spy(monkeypatch)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "src/new.py"
+        assert calls == {"git_run": 0, "git_root": 0}
+
+    def test_untracked_path_without_root_spawns_as_before(self, tmp_path, monkeypatch):
+        """Legacy shape (no ``root``) is unchanged: ls-files (miss) +
+        core.git_root, exactly as before ``root`` existed as a parameter."""
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        calls = self._spy(monkeypatch)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo))
+        assert result == "src/new.py"
+        assert calls == {"git_run": 1, "git_root": 1}
+
+    def test_tracked_path_without_root_spawns_as_before(self, tmp_path, monkeypatch):
+        """Legacy shape (no ``root``) for a tracked file: ls-files alone
+        resolves it, exactly as before ``root`` existed as a parameter."""
+        repo = _make_repo(tmp_path)
+        calls = self._spy(monkeypatch)
+        target = repo / "README.md"
+        result = scope.normalize_touch_path(str(target), cwd=str(repo))
+        assert result == "README.md"
+        assert calls == {"git_run": 1, "git_root": 0}
+
+    def test_outside_worktree_with_root_falls_back_and_spawns_ls_files_only(
+        self, tmp_path, monkeypatch
+    ):
+        """A path genuinely outside the worktree, with ``root`` supplied:
+        ls-files misses (classified benign via the supplied root), the
+        relpath fallback runs against ``root`` without re-deriving it, and
+        the result is dropped as outside-repo -- one spawn total, zero
+        ``core.git_root`` calls."""
+        repo = _make_repo(tmp_path)
+        outside_dir = tmp_path.parent / "sibling-repo-scratch"
+        outside_dir.mkdir(exist_ok=True)
+        outside = outside_dir / "xyz.py"
+        outside.write_text("z")
+        calls = self._spy(monkeypatch)
+        result = scope.normalize_touch_path(str(outside), cwd=str(repo), root=str(repo))
+        assert result is None
+        assert calls["git_run"] == 1
+        assert calls["git_root"] == 0
+
+    def test_diagnostic_latch_arms_on_ls_files_failure_with_root_supplied(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression for review finding P2, UPDATED for C1's fast-arm guard
+        (C2a, plan chunk C2): a tracked, guard-eligible path with ``root``
+        supplied now takes the ZERO-SPAWN fast arm and never reaches
+        ``ls-files`` at all, so a broken ``ls-files`` mock is never invoked
+        and the latch correctly does NOT fire for this input — this is one
+        of the three spawn-count-adjacent tests C1's guard changed the shape
+        of (named in C2a's brief). The regression this test protects (a
+        non-benign ``ls-files`` failure must still arm the latch) is now
+        exercised via a guard-INeligible, still-IN-worktree input (a
+        directory-shaped path, which fails ``_clause_not_a_directory`` and
+        always falls through to the unchanged ``ls-files``-first body) so the
+        ``ls-files`` mock is actually reached AND the failure is not
+        classified benign (an out-of-worktree path would be classified
+        benign via ``_path_is_outside_worktree`` regardless of the mocked
+        ``ls-files`` failure, which would make this regression untestable)."""
+        repo = _make_repo(tmp_path)
+        target = repo / "src"
+        target.mkdir()
+
+        def _broken_ls_files(args, cwd=None):
+            return scope.GitRun(returncode=128, stdout="", stderr="fatal: index corrupt")
+
+        monkeypatch.setattr(scope, "_git_run", _broken_ls_files)
+        monkeypatch.setattr(scope, "_normalize_diag_fired", False)
+        scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert scope.normalize_diagnostic_fired() is True
+
+
+def _spawn_spy(monkeypatch):
+    """Module-level twin of :meth:`TestNormalizeTouchPathSpawnCount._spy`,
+    reused (not re-invented) by the C2a guard-clause and differential test
+    classes below so every spawn-count assertion in this file shares one
+    counting dialect. See that method's own docstring for the zero-spawn
+    proof shape this exists to give a test."""
+    calls = {"git_run": 0, "git_root": 0}
+
+    real_git_run = scope._git_run
+
+    def _counted_git_run(args, cwd=None):
+        calls["git_run"] += 1
+        return real_git_run(args, cwd)
+
+    real_git_root = core.git_root
+
+    def _counted_git_root(cwd=None):
+        calls["git_root"] += 1
+        return real_git_root(cwd)
+
+    monkeypatch.setattr(scope, "_git_run", _counted_git_run)
+    monkeypatch.setattr(scope.core, "git_root", _counted_git_root)
+    return calls
+
+
+def _clauses_without(name):
+    """:data:`scope._GUARD_CLAUSES` with the named clause removed — the
+    slice a C2a clause-pinning test monkeypatches in to prove that clause,
+    and only that clause, is what declines a given input (plan AC3)."""
+    return tuple(pair for pair in scope._GUARD_CLAUSES if pair[0] != name)
+
+
+def _can_create_symlink(tmp_path):
+    """True iff this process can create a directory symlink at ``tmp_path``
+    — false on a Windows host lacking Developer Mode / SeCreateSymbolicLink
+    privilege. Used to gate the clause-1 symlink sub-case behind an explicit
+    ``pytest.mark.skipif``-style guard (plan AC3, clause 1) rather than
+    letting the whole test fail on a permissions error unrelated to the
+    guard clause under test."""
+    target = tmp_path / "_symlink_probe_target"
+    link = tmp_path / "_symlink_probe_link"
+    target.mkdir(exist_ok=True)
+    try:
+        os.symlink(str(target), str(link), target_is_directory=True)
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        if link.is_symlink() or link.exists():
+            try:
+                link.unlink()
+            except OSError:
+                pass
+        try:
+            target.rmdir()
+        except OSError:
+            pass
+
+
+class TestFastArmGuardClausesPinned:
+    """AC3 — pin each of C1's five zero-spawn-fast-arm guard clauses with a
+    test that FAILS when that clause alone is removed from
+    :data:`scope._GUARD_CLAUSES` (plan chunk C2, docs/plans/2026-08-08-
+    prove-the-arms-agree-then-stop-asking-gi.md). Each test below:
+
+      1. builds an input that (with the FULL, unmodified guard) the target
+         clause alone declines,
+      2. asserts :func:`scope._touch_path_fast_arm_eligible` returns
+         ``False`` (or, for clause 5's positive sub-case, ``True``) against
+         the full guard,
+      3. monkeypatches :data:`scope._GUARD_CLAUSES` to the target clause's
+         removal (:func:`_clauses_without`), re-runs the SAME predicate
+         against the SAME input, and asserts the verdict FLIPS.
+
+    This proves, per-clause, that the clause is load-bearing — an artifact a
+    later re-run of this suite can re-verify, not a prose "I watched it go
+    red" attestation.
+    """
+
+    def test_clause4_candidate_non_empty_pinned(self, tmp_path, monkeypatch):
+        """Clause 4 (``candidate_non_empty``) — an out-of-worktree path
+        yields an empty ``candidate`` from :func:`scope._relpath_candidate`;
+        every OTHER clause passes vacuously or trivially against an empty
+        string, so only this clause's removal can flip eligibility. Also
+        asserts the call-site level: ``normalize_touch_path`` falls back and
+        classifies the failure (does not silently swallow it) — one spawn,
+        entry dropped (``None``)."""
+        repo = _make_repo(tmp_path)
+        outside_dir = tmp_path.parent / "clause4-outside-scratch"
+        outside_dir.mkdir(exist_ok=True)
+        outside = outside_dir / "xyz.py"
+        outside.write_text("z")
+
+        candidate, _exc = scope._relpath_candidate(str(outside), str(repo))
+        assert candidate == ""
+        assert scope._touch_path_fast_arm_eligible(str(outside), str(repo), candidate) is False
+
+        monkeypatch.setattr(scope, "_GUARD_CLAUSES", _clauses_without("candidate_non_empty"))
+        assert scope._touch_path_fast_arm_eligible(str(outside), str(repo), candidate) is True
+        monkeypatch.undo()
+
+        calls = _spawn_spy(monkeypatch)
+        result = scope.normalize_touch_path(str(outside), cwd=str(repo), root=str(repo))
+        assert result is None
+        assert calls == {"git_run": 1, "git_root": 0}
+
+    def test_clause2_ascii_safe_pinned(self, tmp_path, monkeypatch):
+        """Clause 2 (``ascii_safe``, module numbering ``_GUARD_CLAUSES[1]``;
+        plan brief numbers this "clause 3") — a tracked non-ASCII filename
+        produces a non-empty candidate containing a character outside
+        :data:`scope._SAFE`; every other clause passes for this input. With
+        the ``core.quotePath`` defect fixed at ``5a1c79035``, the fast arm's
+        answer for this input is now IDENTICAL to the ``ls-files`` arm's, so
+        the call-site assertion below can ONLY prove the FALLBACK WAS TAKEN
+        (spawn count), the same weakened shape as the directory-shaped
+        clause-2(``not_a_directory``) case below — not that the return value
+        would otherwise have been wrong."""
+        repo = _make_repo(tmp_path)
+        target = repo / "café.md"
+        target.write_text("y", encoding="utf-8")
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+        )
+
+        candidate, _exc = scope._relpath_candidate(str(target), str(repo))
+        assert candidate == "café.md"
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is False
+
+        monkeypatch.setattr(scope, "_GUARD_CLAUSES", _clauses_without("ascii_safe"))
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is True
+        monkeypatch.undo()
+
+        calls = _spawn_spy(monkeypatch)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "café.md"
+        assert calls["git_run"] >= 1  # fallback was taken -- see docstring above
+
+    @pytest.mark.parametrize("via", ["symlink", "junction"])
+    def test_clause1_relpath_agrees_pinned(self, tmp_path, monkeypatch, via):
+        """Clause 1 (``relpath_agrees``) — a tracked file reached through a
+        symlinked or junctioned directory INSIDE the worktree: ``git
+        ls-files`` returns git's recorded (unresolved) path, but
+        ``os.path.realpath`` resolves through the link, so
+        ``realpath(fpath) != abspath(fpath)``. Every other clause passes for
+        this input. The symlink sub-case is skipped, naming the reason,
+        where this host lacks the privilege to create one -- the junction
+        sub-case does not depend on that privilege and always runs."""
+        repo = _make_repo(tmp_path)
+        real_dir = repo / "actual"
+        real_dir.mkdir()
+        (real_dir / "foo.py").write_text("y")
+        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True
+        )
+        link_dir = repo / "linked"
+
+        if via == "symlink":
+            if not _can_create_symlink(tmp_path):
+                pytest.skip(
+                    "host lacks privilege to create a directory symlink "
+                    "(no Developer Mode / SeCreateSymbolicLink) -- junction "
+                    "sub-case covers this clause instead"
+                )
+            os.symlink(str(real_dir), str(link_dir), target_is_directory=True)
+        else:
+            if sys.platform != "win32":
+                pytest.skip("junction creation is Windows-only")
+            import _winapi
+
+            _winapi.CreateJunction(str(real_dir), str(link_dir))
+
+        target = link_dir / "foo.py"
+        candidate, _exc = scope._relpath_candidate(str(target), str(repo))
+        assert candidate != ""
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is False
+
+        monkeypatch.setattr(scope, "_GUARD_CLAUSES", _clauses_without("relpath_agrees"))
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is True
+
+    def test_clause_not_a_directory_pinned(self, tmp_path, monkeypatch):
+        """Clause (``not_a_directory``, plan brief's "clause 2") — a
+        directory-shaped ``fpath``: ``realpath(dir) == abspath(dir)`` so
+        clause 1 passes, and the candidate is a non-empty ASCII repo-relative
+        string, so only this clause declines. NOTE the pre-existing defect
+        filed at ``2026-08-08-a-directory-shaped-input-to-normalize-to-
+        3779939b507e`` -- ``git ls-files -- <dir>`` lists everything under
+        it and the fallback keeps only ``lines[0]``, an unrelated sibling
+        file. The call-site assertion below is therefore DELIBERATELY
+        WEAKENED to "the fallback was taken" (spawn count), NOT "the return
+        value is correct" -- do not strengthen this without first fixing
+        that filed defect."""
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        (repo / "src" / "a.py").write_text("y")
+        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True)
+        target = repo / "src"
+
+        candidate, _exc = scope._relpath_candidate(str(target), str(repo))
+        assert candidate == "src"
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is False
+
+        monkeypatch.setattr(scope, "_GUARD_CLAUSES", _clauses_without("not_a_directory"))
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is True
+        monkeypatch.undo()
+
+        calls = _spawn_spy(monkeypatch)
+        scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert calls["git_run"] >= 1  # fallback was taken -- see defect note above
+
+    def test_clause5_root_is_worktree_root_pinned_declining(self, tmp_path, monkeypatch):
+        """Clause 5 (``root_is_worktree_root``) — ``root`` is a real,
+        existing SUBDIRECTORY of the worktree (no ``.git`` entry at it), not
+        the worktree root itself. Every other clause passes for this input.
+        Call-site assertion is weakened to "fallback was taken" (spawn
+        count) -- a subdirectory ``root`` is a caller precondition
+        violation, not a class this function can correct for."""
+        repo = _make_repo(tmp_path)
+        sub = repo / "sub"
+        sub.mkdir()
+        (sub / "file.txt").write_text("y")
+        target = sub / "file.txt"
+
+        candidate, _exc = scope._relpath_candidate(str(target), str(sub))
+        assert candidate == "file.txt"
+        assert scope._touch_path_fast_arm_eligible(str(target), str(sub), candidate) is False
+
+        monkeypatch.setattr(scope, "_GUARD_CLAUSES", _clauses_without("root_is_worktree_root"))
+        assert scope._touch_path_fast_arm_eligible(str(target), str(sub), candidate) is True
+        monkeypatch.undo()
+
+        calls = _spawn_spy(monkeypatch)
+        scope.normalize_touch_path(str(target), cwd=str(repo), root=str(sub))
+        assert calls["git_run"] >= 1  # fallback was taken -- root was not the worktree root
+
+    def test_clause5_root_is_worktree_root_pinned_positive(self, tmp_path, monkeypatch):
+        """Clause 5 positive case: ``root`` genuinely has a ``.git`` entry
+        (is the real worktree root) -- the fast arm IS taken, zero spawns,
+        so this clause is exercised in its ACCEPTING direction too, not only
+        its declining one."""
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+
+        candidate, _exc = scope._relpath_candidate(str(target), str(repo))
+        assert scope._touch_path_fast_arm_eligible(str(target), str(repo), candidate) is True
+
+        calls = _spawn_spy(monkeypatch)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "README.md"
+        assert calls == {"git_run": 0, "git_root": 0}
+
+
+class TestFastArmFailOpen:
+    """AC5 — the guard's OWN operations failing must not raise out of
+    :func:`scope.normalize_touch_path`; it must fall back to today's
+    (pre-guard) body. Each clause callable catches ``OSError`` ONLY (see
+    each clause's own docstring in scope.py) -- this class monkeypatches the
+    exact ``os.path`` call each clause makes to raise ``OSError`` for the
+    guarded path only, leaving every other path (fixture setup, the
+    fallback body itself) unaffected."""
+
+    def test_isdir_oserror_falls_back_not_raises(self, tmp_path, monkeypatch):
+        """``_clause_not_a_directory``'s ``os.path.isdir`` raising."""
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        real_isdir = scope.os.path.isdir
+
+        def _boom_isdir(path):
+            if os.path.abspath(path) == os.path.abspath(str(target)):
+                raise OSError("simulated stat failure")
+            return real_isdir(path)
+
+        monkeypatch.setattr(scope.os.path, "isdir", _boom_isdir)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "README.md"
+
+    def test_realpath_oserror_falls_back_not_raises(self, tmp_path, monkeypatch):
+        """``_clause_relpath_agrees``'s ``os.path.realpath`` raising."""
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        real_realpath = scope.os.path.realpath
+        call_count = {"n": 0}
+
+        def _boom_realpath(path):
+            call_count["n"] += 1
+            # First N calls come from _relpath_candidate (must succeed so a
+            # non-empty candidate reaches the guard); only the clause's OWN
+            # realpath calls -- made AFTER _relpath_candidate has already
+            # run at the call site -- need to raise.
+            if call_count["n"] > 2:
+                raise OSError("simulated realpath failure")
+            return real_realpath(path)
+
+        monkeypatch.setattr(scope.os.path, "realpath", _boom_realpath)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "README.md"
+
+    def test_exists_oserror_falls_back_not_raises(self, tmp_path, monkeypatch):
+        """``_clause_root_is_worktree_root``'s ``os.path.exists`` raising."""
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        real_exists = scope.os.path.exists
+
+        def _boom_exists(path):
+            if os.path.abspath(path) == os.path.abspath(str(repo / ".git")):
+                raise OSError("simulated exists failure")
+            return real_exists(path)
+
+        monkeypatch.setattr(scope.os.path, "exists", _boom_exists)
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result == "README.md"
+
+
+_PRE_C1_SCOPE_SHA = "5a1c79035"
+
+
+def _load_pre_c1_scope_module():
+    """Import the pre-C1 (guardless) ``scope.py`` body at
+    :data:`_PRE_C1_SCOPE_SHA` into a fresh module namespace, for AC2's
+    differential test -- preferred over a hand-captured expected-value table
+    per this chunk's brief, since a captured table re-encodes today's
+    answers through this test's own reading rather than actually running the
+    pre-change code. ``5a1c79035`` already carries BOTH bug fixes
+    (``core.quotepath=false`` and the extended-length-prefix strip) that
+    predate C1's guard -- see scope.py's own module docstring -- so this is
+    genuinely "guard absent", not "bugs present"."""
+    repo_root = Path(__file__).resolve().parents[3]
+    result = subprocess.run(
+        ["git", "show", f"{_PRE_C1_SCOPE_SHA}:coordinator_core/session/scope.py"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    source = result.stdout
+    module_name = "_pre_c1_scope_for_differential_test"
+    module = types.ModuleType(module_name)
+    module.__dict__["__name__"] = module_name
+    # dataclasses' string-annotation resolution looks the defining module up
+    # via sys.modules[cls.__module__] -- register before exec so the
+    # dataclass decorators inside this source find it there.
+    sys.modules[module_name] = module
+    try:
+        exec(compile(source, f"<git-show:{_PRE_C1_SCOPE_SHA}:scope.py>", "exec"), module.__dict__)
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
+
+
+@pytest.fixture(scope="module")
+def pre_c1_scope():
+    return _load_pre_c1_scope_module()
+
+
+class TestNormalizeTouchPathDifferential:
+    """AC2 -- the highest-value test in this chunk: for a table of input
+    classes, the guarded (current) ``normalize_touch_path`` must return
+    EXACTLY what the pre-guard implementation at ``5a1c79035`` returned.
+    Runs the REAL pre-change body (:func:`_load_pre_c1_scope_module`), not a
+    hand-captured expected-value table, for every class except the ones
+    named explicitly below as unrunnable.
+
+    No class in this table uses a captured value -- every comparison below
+    runs both implementations live. The nominally "unrunnable" classes named
+    in this chunk's brief (different-drive) are instead exercised for real:
+    this dev box's worktree lives on ``X:``, and the machine's scratchpad
+    directory lives on ``C:``, so a genuine cross-drive absolute path is
+    available without simulation.
+    """
+
+    def test_tracked_file(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old == "README.md"
+
+    def test_untracked_file(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old == "src/new.py"
+
+    def test_outside_worktree(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        outside_dir = tmp_path.parent / "differential-outside-scratch"
+        outside_dir.mkdir(exist_ok=True)
+        target = outside_dir / "xyz.py"
+        target.write_text("z")
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old is None
+
+    def test_different_drive(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        other_drive_dir = Path(os.environ.get("TEMP") or os.environ.get("TMP") or r"C:\Windows\Temp")
+        if os.path.splitdrive(str(repo))[0].lower() == os.path.splitdrive(str(other_drive_dir))[0].lower():
+            pytest.skip("no second drive letter available on this host to exercise cross-drive")
+        # PID-qualified: `other_drive_dir` is the SHARED machine temp, not a
+        # per-run sandbox, and this box carries 50-70 concurrent sessions — a
+        # fixed name lets a peer's run of this same test unlink the file out
+        # from under this one mid-assert.
+        target = other_drive_dir / f"differential-cross-drive-probe-{os.getpid()}.py"
+        target.write_text("z")
+        try:
+            old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+            new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+            assert new == old is None
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_directory_shaped(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        (repo / "src" / "a.py").write_text("y")
+        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True)
+        target = repo / "src"
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old
+
+    def test_non_ascii_tracked(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        target = repo / "café.md"
+        target.write_text("y", encoding="utf-8")
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+        )
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old == "café.md"
+
+    def test_extended_length_prefixed(self, tmp_path, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        (repo / "src").mkdir()
+        target = repo / "src" / "new.py"
+        target.write_text("y")
+        prefixed = "\\\\?\\" + str(target)
+        old = pre_c1_scope.normalize_touch_path(prefixed, cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(prefixed, cwd=str(repo), root=str(repo))
+        assert new == old == "src/new.py"
+
+    def test_still_absolute_after_attempt_returns_none(self, tmp_path, monkeypatch, pre_c1_scope):
+        repo = _make_repo(tmp_path)
+        outside = "/totally/outside/differential-xyz.py"
+
+        def _boom(*a, **k):
+            raise ValueError("simulated relpath failure")
+
+        monkeypatch.setattr(pre_c1_scope.os.path, "relpath", _boom)
+        old = pre_c1_scope.normalize_touch_path(outside, cwd=str(repo), root=str(repo))
+        monkeypatch.undo()
+
+        monkeypatch.setattr(scope.os.path, "relpath", _boom)
+        new = scope.normalize_touch_path(outside, cwd=str(repo), root=str(repo))
+        assert new == old is None
+
+    @pytest.mark.parametrize("via", ["symlink", "junction"])
+    def test_symlink_or_junction_traversed(self, tmp_path, monkeypatch, pre_c1_scope, via):
+        """The one class where the guard's OWN documented negative-spec
+        (see ``normalize_touch_path``'s docstring: "Do not re-attempt an
+        UNGUARDED reorder without this guard") says the two arms CAN
+        legitimately disagree for an unguarded fast arm -- proving they do
+        NOT disagree here, for the actual guarded implementation, is exactly
+        what this differential test exists to pin."""
+        repo = _make_repo(tmp_path)
+        real_dir = repo / "actual"
+        real_dir.mkdir()
+        (real_dir / "foo.py").write_text("y")
+        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True
+        )
+        link_dir = repo / "linked"
+
+        if via == "symlink":
+            if not _can_create_symlink(tmp_path):
+                pytest.skip(
+                    "host lacks privilege to create a directory symlink "
+                    "(no Developer Mode / SeCreateSymbolicLink) -- junction "
+                    "sub-case covers this class instead"
+                )
+            os.symlink(str(real_dir), str(link_dir), target_is_directory=True)
+        else:
+            if sys.platform != "win32":
+                pytest.skip("junction creation is Windows-only")
+            import _winapi
+
+            _winapi.CreateJunction(str(real_dir), str(link_dir))
+
+        target = link_dir / "foo.py"
+        old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert new == old == "actual/foo.py"
 
 
 class TestRelpathFailureBenignPredicate:

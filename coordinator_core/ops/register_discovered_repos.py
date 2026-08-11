@@ -75,7 +75,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "register-discovered-repos.sh"  # literal program-name prefix — see negative-spec
 
@@ -261,7 +261,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         set_rc = subprocess.run(
             [ml_bin, "set", f"repos.{key}", path],
             check=False,
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         ).returncode
         if set_rc != 0:
             print(f"{_PROG}: WARNING: failed to register repos.{key} — skipping.", file=sys.stderr)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from pathlib import PureWindowsPath
 
 import pytest
@@ -34,11 +35,45 @@ from coordinator_core.win_portability import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "POSIX-only: needs a REAL exec bit on disk. NTFS stores no POSIX mode "
+        "bits, so os.chmod(+x) is a silent no-op here and st_mode never carries "
+        "S_IXUSR -- the host filesystem, not is_executable, is what cannot "
+        "satisfy this. The mode-bit predicate itself is covered on every "
+        "platform by test_is_executable_posix_true_for_exec_mode_bits."
+    ),
+)
 def test_is_executable_posix_true_for_chmod_plus_x_file(tmp_path, monkeypatch):
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     target = tmp_path / "a-script"
     target.write_text("#!/bin/sh\necho hi\n")
     target.chmod(target.stat().st_mode | stat.S_IEXEC)
+    assert is_executable(target) is True
+
+
+def test_is_executable_posix_true_for_exec_mode_bits(tmp_path, monkeypatch):
+    """Platform-independent cover of the POSIX branch's mode-bit predicate.
+
+    Injects the exec bit at the ``os.stat`` seam rather than via ``chmod`` so
+    the assertion holds on hosts whose filesystem cannot store one (NTFS).
+    """
+    monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
+    target = tmp_path / "a-script"
+    target.write_text("#!/bin/sh\necho hi\n")
+
+    real_stat = os.stat
+
+    def _stat_with_exec_bit(p, *args, **kwargs):
+        st = real_stat(p, *args, **kwargs)
+        if os.path.abspath(os.fspath(p)) == os.path.abspath(os.fspath(target)):
+            return os.stat_result(
+                (st.st_mode | stat.S_IXUSR,) + tuple(st)[1:]
+            )
+        return st
+
+    monkeypatch.setattr(win_portability.os, "stat", _stat_with_exec_bit)
     assert is_executable(target) is True
 
 

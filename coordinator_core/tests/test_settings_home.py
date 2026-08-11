@@ -16,8 +16,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core._settings_home import (
+    ClaudeConfigDivergenceError,
     SettingsHomeDivergenceError,
+    check_claude_config_divergence,
     check_machine_local_divergence,
+    claude_config_dir,
     home_dir,
     legacy_machine_local_dir,
     machine_local_dir,
@@ -257,3 +260,76 @@ def test_divergence_raises_when_both_exist_and_resolve_unequal(tmp_path, monkeyp
 
     with pytest.raises(SettingsHomeDivergenceError, match="DIVERGENT MACHINE-LOCAL HOMES"):
         check_machine_local_divergence()
+
+
+def test_claude_config_dir_uses_override_when_set(tmp_path, monkeypatch):
+    override = tmp_path / "explicit-config-dir"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(override))
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    assert claude_config_dir() == override
+
+
+def test_claude_config_dir_rejects_relative_override(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative-config-dir")
+    with pytest.raises(ValueError, match="absolute path"):
+        claude_config_dir()
+
+
+def test_claude_config_dir_falls_back_to_home_dir_slash_claude(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", "/tmp/fake-claude-home")
+    assert claude_config_dir() == Path("/tmp/fake-claude-home/.claude")
+
+
+def test_claude_config_dir_unset_matches_todays_default(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: Path("/tmp/fake-home"))
+    assert claude_config_dir() == Path("/tmp/fake-home/.claude")
+
+
+def test_claude_config_divergence_noop_when_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
+    check_claude_config_divergence()  # must not raise
+
+
+def test_claude_config_divergence_noop_when_configured_absent(tmp_path, monkeypatch):
+    claude_home = tmp_path / "claude-home"
+    _populated_dir(claude_home / ".claude")
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config-dir-absent"))
+    check_claude_config_divergence()  # must not raise
+
+
+def test_claude_config_divergence_noop_when_default_is_empty_husk(tmp_path, monkeypatch):
+    claude_home = tmp_path / "claude-home"
+    (claude_home / ".claude").mkdir(parents=True)  # husk: exists, empty
+    configured = _populated_dir(tmp_path / "config-dir")
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
+    check_claude_config_divergence()  # must not raise
+
+
+def test_claude_config_divergence_noop_when_symlink_resolves_equal(tmp_path, monkeypatch):
+    claude_home = tmp_path / "claude-home"
+    real = _populated_dir(tmp_path / "real-config-dir")
+    configured = claude_home / ".claude"
+    configured.parent.mkdir(parents=True, exist_ok=True)
+    configured.symlink_to(real, target_is_directory=True)
+
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
+    check_claude_config_divergence()  # symlink resolves equal — must not raise
+
+
+def test_claude_config_divergence_raises_on_genuine_divergence(tmp_path, monkeypatch):
+    claude_home = tmp_path / "claude-home"
+    _populated_dir(claude_home / ".claude")
+    configured = _populated_dir(tmp_path / "config-dir")
+
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
+
+    with pytest.raises(ClaudeConfigDivergenceError, match="DIVERGENT CLAUDE CONFIG DIRS"):
+        check_claude_config_divergence()

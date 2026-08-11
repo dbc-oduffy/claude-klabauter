@@ -1039,7 +1039,6 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/test_push_failure_verdict.py',
         'coordinator_core/ops/test_reap_stale_locks.py',
         'coordinator_core/ops/test_refresh_roadmap_callout.py',
-        'coordinator_core/ops/test_register_discovered_repos.py',
         'coordinator_core/ops/test_release_tagging.py',
         'coordinator_core/ops/test_renormalize_index.py',
         'coordinator_core/ops/test_repo_bootstrap.py',
@@ -1233,7 +1232,7 @@ _BASELINE: frozenset[str] = frozenset(
     }
 )
 
-_BASELINE_COUNT = 622
+_BASELINE_COUNT = 618
 
 
 _ALTERNATIVE_MSG_RULE1 = (

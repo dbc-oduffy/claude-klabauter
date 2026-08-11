@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/initiative.schema.json",
   "x-schema-name": "initiative",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 vendors example-doctrine-repo's `deliverable_id` addition (example-doctrine-repo@2bb7bae42, coordinator/schemas/initiative.schema.json 1.0.0 -> 1.1.0) — the receive side of DR-097's push-side notification duty (their memo landed, DR-097 ping cross-repo/inbox/2026-08-10-example-doctrine-repo-em-c2-c9-landed-vendor-ping-and-our-ask-was-wrong.md). One new optional nullable top-level scalar, `deliverable_id`, taken verbatim from example-doctrine-repo's bytes: every document valid under 1.0.0 still validates. Structural merge, not a byte copy — see docs/plans/2026-08-10-sizing-objects-join-the-deliverable-spine.md § C0.",
   "applies_to": "state/initiatives/*.yaml",
   "description": "Lightweight initiative entity — the parent container for a fleet deliverable spine. A cross-repo bet, feature area, or goal that groups related work artifacts. Artifacts carry initiative: <id> as a nullable FK. Roadmaps attach to an initiative as one kind of initiative; a cross-repo bet with no formal roadmap is still a first-class initiative. Stored per-initiative in state/initiatives/<id>.yaml. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2",
   "type": "object",
@@ -33,6 +35,10 @@
       "items": {"type": "string"},
       "default": [],
       "description": "Optional many-to-many list of goal-ids this initiative contributes to. A goal-id pointing nowhere is a soft tag — no referential enforcement. Absent or empty means no goal linkage declared."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string", "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"}, {"type": "null"}],
+      "description": "The durable deliverable join key, minted once at the earliest artifact and carried verbatim by every downstream artifact. Null or absent when this record predates the spine. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
     }
   }
 }

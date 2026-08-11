@@ -135,10 +135,18 @@ from typing import Any, Awaitable, Callable, Optional
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_SYNC
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_SYNC,
+    PUSH_STATUS_DECLINED,
+    PUSH_STATUS_FAILED,
+    PUSH_STATUS_NO_REMOTE,
+    PUSH_STATUS_NOT_ATTEMPTED,
+    PUSH_STATUS_PUSHED,
+    derive_push_status,
+    push_with_retry,
+)
 from coordinator_core.ops.ceremony.git_native import (
     commit_scoped,
-    push,
     rev_parse_head,
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -192,7 +200,7 @@ def _compose_origin_stub_close_message(closed_paths: list[str], committed_sha: s
 
 def _commit_and_push_origin_stub_close(
     worktree_root: Path, closed_paths: list[str], committed_sha: str, push_mode: str = PUSH_MODE_SYNC
-) -> tuple[Optional[str], Optional[bool], Optional[str]]:
+) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism follow-up commit (`git_native.commit_scoped`) for
     the closed origin-stub file(s) -- its OWN small commit, a sibling to
     `consumed_handoff_stamp`'s AC17 follow-up commit, never left as an
@@ -201,16 +209,43 @@ def _commit_and_push_origin_stub_close(
     commit_scoped/rev-parse/[push] shape, same `push_mode`
     gating -- DEC-1) -- not reused directly since that function's
     message/label are stamp-specific. The COMMIT is unconditional; the PUSH
-    is gated by ``push_mode``: `"sync"` pushes here directly, `"deferred"`/
-    `"none"` skip it (`pushed=None`, no attempt) -- the caller spawns ONE
-    detached push for the whole tail after it completes.
+    is gated by ``push_mode``: `"sync"` attempts a push here directly
+    (via `commit_pipeline.push_with_retry`, so the same branch-policy gate
+    the main ceremony commit's push obeys also governs this follow-up push);
+    `"deferred"`/`"none"` skip it entirely (`pushed=None`,
+    `push_status=PUSH_STATUS_NOT_ATTEMPTED`, no attempt) -- the caller spawns
+    ONE detached push for the whole tail after it completes.
 
-    Returns (follow_up_sha, pushed, error) -- an error here is a soft-fail
-    (see `_run_origin_stub_close`'s caller): the origin-stub mutation already
-    landed on disk via the composed op call; only the COMMIT of that mutation
-    can fail here, and a failure leaves it as a working-tree edit for the next
-    ceremony pass (or the lvv-09 cadence backstop) to pick up -- it does not
-    unwind the already-landed main ceremony commit.
+    Returns (follow_up_sha, pushed, push_status, error) -- an ``error`` here
+    is a soft-fail (see `_run_origin_stub_close`'s caller): the origin-stub
+    mutation already landed on disk via the composed op call; only the COMMIT
+    of that mutation can fail here, and a failure leaves it as a working-tree
+    edit for the next ceremony pass (or the lvv-09 cadence backstop) to pick
+    up -- it does not unwind the already-landed main ceremony commit.
+
+    ``follow_up_sha`` is captured via `rev_parse_head` -- Review: code-
+    reviewer, Finding 1 (P1): captured a SECOND time, AFTER a landed push,
+    because `push_with_retry` can fetch+rebase-onto this very commit on a
+    rejected push before re-pushing, which rewrites its SHA. The pre-push
+    capture is only ever the RETURNED value on a decline/no-remote/
+    not-attempted/failed push -- none of which rewrite anything; on a
+    landed push the post-push re-read is authoritative, with the pre-push
+    value as fallback only if that re-read itself fails (never silently
+    downgraded to None).
+
+    ``push_status`` is the canonical `commit_pipeline.PUSH_STATUS_*` vocabulary
+    (`derive_push_status`) -- it is the ONLY reliable way to tell a genuine
+    push failure (`PUSH_STATUS_FAILED`, carried in ``error`` too) apart from a
+    `branch_gate()` POLICY DECLINE (`PUSH_STATUS_DECLINED`) or a missing
+    remote (`PUSH_STATUS_NO_REMOTE`): a decline is neither a landed push
+    (``pushed`` stays falsy/None) nor a failure (``error`` stays `None`) --
+    routing it through the error channel would surface a soft-fail for
+    behaviour that is exactly correct, the same false-alarm class this plan
+    removed from `integrity_breach`. Do not collapse `push_status ==
+    PUSH_STATUS_NOT_ATTEMPTED` (this function's own `push_mode != "sync"`
+    no-attempt case) with `PUSH_STATUS_DECLINED`/`PUSH_STATUS_NO_REMOTE`
+    (a `"sync"` attempt that `push_with_retry` itself chose not to land) --
+    two distinct reasons for "no push happened".
 
     A returned ``error`` is the ONLY success signal a caller may trust -- do not
     corroborate it against the branch tip. On a shared worktree an `index.lock`
@@ -245,18 +280,40 @@ def _commit_and_push_origin_stub_close(
             pass
 
     if not commit_result.ok:
-        return None, False, f"git commit failed: {commit_result.stderr}"
+        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {commit_result.stderr}"
 
     rev_result = rev_parse_head(worktree_root)
     follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
 
     if push_mode != PUSH_MODE_SYNC:
-        return follow_up_sha, None, None
+        return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
-    push_result = push(worktree_root)
-    pushed = push_result.ok
-    push_error = None if pushed else f"git push failed: {push_result.stderr}"
-    return follow_up_sha, pushed, push_error
+    push_outcome = push_with_retry(worktree_root)
+    push_status = derive_push_status(push_outcome)
+
+    if push_status == PUSH_STATUS_PUSHED:
+        # Review: code-reviewer — Finding 1 (P1): `push_with_retry` can
+        # fetch+`git rebase --onto` this follow-up commit on a rejected
+        # push before re-pushing, which REWRITES its SHA. The pre-push
+        # `follow_up_sha` captured above is therefore stale in exactly the
+        # retry case this ladder exists to handle. Re-resolve HEAD now,
+        # after the push actually landed, so the reported SHA names the
+        # commit that is really on the remote. Only the landed path pays
+        # this second `rev-parse` — decline/no-remote/not-attempted/failure
+        # paths below never rewrite anything, so they keep the pre-push
+        # value untouched. If the re-read itself fails, fall back to the
+        # pre-push SHA rather than downgrading a known-good value to None.
+        post_push = rev_parse_head(worktree_root)
+        landed_sha = post_push.stdout.strip() if post_push.ok else follow_up_sha
+        return landed_sha, True, push_status, None
+    if push_status == PUSH_STATUS_FAILED:
+        reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
+        return follow_up_sha, False, push_status, f"git push failed: {reason}"
+    # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE / PUSH_STATUS_NOT_ATTEMPTED
+    # -- no push landed, but this is NOT an error (see docstring above): a
+    # policy decline or a missing remote is `push_with_retry`'s own honest
+    # "did not push, on purpose/by environment" outcome.
+    return follow_up_sha, None, push_status, None
 
 
 async def _run_origin_stub_close(
@@ -378,7 +435,7 @@ async def _run_origin_stub_close(
         }
 
     closed_paths = list(closed_by_stub.keys())
-    follow_up_sha, _pushed, follow_up_error = await _to_thread_commit_and_push(
+    follow_up_sha, _pushed, follow_up_push_status, follow_up_error = await _to_thread_commit_and_push(
         worktree_root, closed_paths, committed_sha, push_mode
     )
     if follow_up_error:
@@ -387,6 +444,12 @@ async def _run_origin_stub_close(
         # Should be unreachable (commit_result.ok implies a resolvable HEAD),
         # but never silently drop a genuine no-sha outcome as a clean success.
         failed.append("follow-up: commit landed but HEAD sha unresolved")
+    elif follow_up_push_status in (PUSH_STATUS_DECLINED, PUSH_STATUS_NO_REMOTE):
+        # A policy decline (or missing remote) is NOT an error -- see
+        # `_commit_and_push_origin_stub_close`'s docstring. Named here
+        # (skipped, never failed) purely for observability: the commit
+        # itself landed, the push was deliberately withheld.
+        skipped.append(f"follow-up:push:{follow_up_push_status}")
 
     return {"acted": closed_paths, "skipped": skipped, "failed": failed}
 
@@ -472,7 +535,7 @@ async def _run_deliverable_cascade(
 
 async def _to_thread_commit_and_push(
     worktree_root: Path, closed_paths: list[str], committed_sha: str, push_mode: str
-) -> tuple[Optional[str], Optional[bool], Optional[str]]:
+) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """`asyncio.to_thread` wrapper around `_commit_and_push_origin_stub_close`
     -- split out purely so the import stays local to this call (AC6 event-
     loop hygiene, same rationale as `wsc_tail.py`'s own `to_thread` calls)."""

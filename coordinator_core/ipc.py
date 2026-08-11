@@ -1176,7 +1176,7 @@ def _handler_exception_error(exc: BaseException) -> dict:
     return {"code": INTERNAL_ERROR, "message": f"Internal error: {type(exc).__name__}"}
 
 
-async def dispatch_message(msg: dict) -> dict:
+async def _dispatch_message_impl(msg: dict) -> dict:
     """Validate a pre-parsed JSON-RPC 2.0 message dict and invoke the registered handler.
 
     Purpose: shared core for the dispatch pipeline — takes an ALREADY-PARSED dict
@@ -1404,7 +1404,12 @@ async def dispatch_message(msg: dict) -> dict:
             raise
         except BaseException as exc:
             _log().error(
-                "coordinator_core.ipc: op %r raised %s: %r", method, type(exc).__name__, exc,
+                # %s, not %r, on exc: repr() re-escapes an already-quoted
+                # message, so a Windows path in an op's own error text reaches
+                # the operator with doubled separators
+                # ("X:\\repo\\docs\\..."). The exception TYPE is already
+                # carried by the preceding %s, so nothing is lost.
+                "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                 exc_info=True,
             )
             return {
@@ -1436,7 +1441,12 @@ async def dispatch_message(msg: dict) -> dict:
             raise
         except BaseException as exc:
             _log().error(
-                "coordinator_core.ipc: op %r raised %s: %r", method, type(exc).__name__, exc,
+                # %s, not %r, on exc: repr() re-escapes an already-quoted
+                # message, so a Windows path in an op's own error text reaches
+                # the operator with doubled separators
+                # ("X:\\repo\\docs\\..."). The exception TYPE is already
+                # carried by the preceding %s, so nothing is lost.
+                "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                 exc_info=True,
             )
             return {
@@ -1463,6 +1473,122 @@ async def dispatch_message(msg: dict) -> dict:
         result[_SCOPE_TOUCH_PATHS_KEY] = deduped
     result = _record_self_reported_touches(result, str(request_repo) if request_repo else None)
     return {"jsonrpc": "2.0", "id": id_, "result": result}
+
+
+async def dispatch_message(msg: dict) -> dict:
+    """Validate + dispatch ``msg``, recording a durable per-op wall-clock sample.
+
+    Thin timing wrapper around ``_dispatch_message_impl`` (which retains this
+    function's original name in every doc comment/backlink above and does the
+    actual JSON-RPC validation/dispatch work unchanged). This is the SOLE
+    process-level dispatch chokepoint every CLI-routed
+    (coordinator_core.invoke.__main__) and hook-routed (dispatch_from_hook)
+    call passes through — wrapping here captures every invocation exactly
+    once, with no risk of double-counting a call that goes through both a
+    CLI wrapper and this function.
+
+    Records via coordinator_core.telemetry.op_latency.record_op_latency —
+    see that module's own docstring for the sink, concurrency, kill-switch,
+    and fail-open guarantees. A telemetry failure here can never fail the
+    op: the record call is unconditionally wrapped to swallow every
+    exception, and this wrapper itself never raises anything the impl
+    function did not already raise (asyncio.CancelledError re-raises through
+    unchanged — recording best-effort completes first via `finally`).
+
+    Also appends a "started" row (op_latency.record_op_started) BEFORE
+    `_dispatch_message_impl` is awaited, wrapped in the same unconditional
+    swallow-everything contract. A process killed after that point (e.g. a
+    caller-side `subprocess.run(timeout=)` in cc_invoke, which kills the
+    child before this `finally` block ever runs) still leaves the started
+    row on disk — the vanished-invocation case op_latency's module docstring
+    now documents. The started and completion rows share a `corr_id` minted
+    once at entry via `op_latency.new_correlation_id()`.
+
+    outcome classification (measurement only — see module's own
+    DISPATCH_TIMEOUT_SECS negative-spec above for what "timeout" does and
+    does NOT mean):
+        "timeout" — the impl's own per-invocation asyncio.wait_for fired
+                    (detected via the error message's "op timed out after"
+                    prefix — that string is authored a few lines above in
+                    this same module, not translated/localized, so matching
+                    it here is stable). Means the CALLER gave up; the
+                    handler thread may still be running to completion.
+        "error"   — any other JSON-RPC error response, or an exception that
+                    escapes the impl call entirely.
+        "ok"      — a success response (no "error" key).
+
+    Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md
+                   docs/wiki/machine-load-norm.md
+    """
+    import time as _time
+
+    method = msg.get("method") if isinstance(msg, dict) else None
+    request_repo = resolve_request_repo(msg) if isinstance(msg, dict) else None
+
+    t_start = _time.time()
+    perf_start = _time.perf_counter()
+    outcome = "ok"
+
+    corr_id = None
+    # Review: code-reviewer (Finding 2, P2) — sid is resolved once here, in the
+    # entry block, not independently re-resolved in the `finally` block below.
+    # If the entry block raises after this point but before `sid` is assigned
+    # (or `record_op_started` itself raises), the completion row inherits
+    # whatever `sid` value survived rather than getting its own resolve-at-exit
+    # attempt — deliberate coupling, safe today only because
+    # `resolve_session_id()` never raises (coordinator_core/session/core.py,
+    # no exception paths per its own docstring). If `resolve_session_id` ever
+    # grows a raising branch, the completion row's `sid` degrades silently
+    # wherever that raise wasn't already caught upstream of this function.
+    sid = None
+    try:
+        from coordinator_core.telemetry.op_latency import new_correlation_id, record_op_started
+        from coordinator_core.session.core import resolve_session_id
+
+        corr_id = new_correlation_id()
+        sid = resolve_session_id() or None
+        record_op_started(
+            op=method if isinstance(method, str) else "<unknown>",
+            t_start=t_start,
+            corr_id=corr_id,
+            repo_root=request_repo,
+            sid=sid,
+        )
+    except Exception:
+        _log().debug(
+            "coordinator_core.ipc: op-started recording failed for %r", method,
+            exc_info=True,
+        )
+
+    try:
+        response = await _dispatch_message_impl(msg)
+        error = response.get("error") if isinstance(response, dict) else None
+        if error is not None:
+            message = error.get("message", "") if isinstance(error, dict) else ""
+            outcome = "timeout" if isinstance(message, str) and message.startswith("op timed out after") else "error"
+        return response
+    except BaseException:
+        outcome = "error"
+        raise
+    finally:
+        elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
+        try:
+            from coordinator_core.telemetry.op_latency import record_op_latency
+
+            record_op_latency(
+                op=method if isinstance(method, str) else "<unknown>",
+                t_start=t_start,
+                elapsed_ms=elapsed_ms,
+                outcome=outcome,
+                repo_root=request_repo,
+                sid=sid,
+                corr_id=corr_id,
+            )
+        except Exception:
+            _log().debug(
+                "coordinator_core.ipc: op-latency recording failed for %r", method,
+                exc_info=True,
+            )
 
 
 class HookDispatchError(Exception):

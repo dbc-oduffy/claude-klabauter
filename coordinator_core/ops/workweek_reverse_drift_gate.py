@@ -76,7 +76,7 @@ import os
 import re
 import shlex
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 import sys
 from typing import List, Optional, Tuple
 
@@ -222,7 +222,7 @@ def run_gate(scope_repo: Optional[str], *, override: Optional[bool] = None) -> T
             argv,
             cwd=source_path,
             check=False,
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
         if result.returncode != 0:
             any_failed = True

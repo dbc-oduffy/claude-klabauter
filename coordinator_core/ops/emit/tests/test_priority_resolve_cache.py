@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import dag
 from coordinator_core.ops.emit import priority_resolve as pr_mod
 from coordinator_core.ops.emit.priority_resolve import (
     PriorityResolveCache,
@@ -310,3 +311,131 @@ def test_id_shaped_predecessor_ref_cached_and_uncached_agree(node_dir_generic: P
         "origin": "none",
         "source_id": None,
     }
+
+
+def test_build_parent_map_git_history_only_ref_matches_include_history_tier_true(
+    node_dir_generic: Path, monkeypatch
+):
+    """Regression pin for the claim's own un-exercised edge (P3 nit, code
+    review of commit 2993c608f398aac91221dd82e0b4adc9e2371b4c): a ref that
+    WOULD resolve via tier 3 (git-history-only presence — genuinely
+    deleted/relocated, ``ever_tracked() == True``) must produce the SAME
+    ``parent_map`` under ``_build_parent_map``'s ``include_history_tier=False``
+    call as it would under ``include_history_tier=True`` — i.e. the
+    ``'git-history'`` sentinel is discarded identically to ``None`` by the
+    ``if target and target != "git-history"`` check either way, so skipping
+    tier 3 entirely never changes the resulting parent set.
+
+    ``test_build_parent_map_skips_git_history_tier`` (above) only covers the
+    guaranteed-miss shape (``ever_tracked()`` would be False regardless); this
+    test constructs the complementary shape where tier 3 WOULD have hit.
+    """
+    d = node_dir_generic
+    repo_root = str(d.parent.parent)
+    orphaned_ref = "genuinely-relocated-ref.md"
+    c_path = _write_node(d, "C.md", handoff_id="C_id", predecessor=orphaned_ref)
+
+    # Simulate git-history-only presence: no on-disk candidate exists for
+    # orphaned_ref (tiers 1/2 miss), but git history says it was once
+    # tracked (tier 3 would hit).
+    monkeypatch.setattr(
+        "coordinator_core.dag._git_path_ever_tracked",
+        lambda *a, **k: True,
+    )
+
+    # Confirm the premise: with include_history_tier=True, this ref DOES
+    # resolve to the 'git-history' sentinel (tier 3 would have fired).
+    with_history = dag.resolve_target(
+        orphaned_ref, str(d), repo_root, include_history_tier=True
+    )
+    assert with_history == "git-history"
+
+    # And the production call shape (include_history_tier=False, as
+    # _build_parent_map always passes) resolves to None instead — tier 3
+    # never runs.
+    without_history = dag.resolve_target(
+        orphaned_ref, str(d), repo_root, include_history_tier=False
+    )
+    assert without_history is None
+
+    # Both are discarded identically by _build_parent_map's own consumption
+    # check, so the resulting parent_map entry for C is empty either way.
+    assert not (with_history and with_history != "git-history")
+    assert not (without_history and without_history != "git-history")
+
+    # End-to-end: the real _build_parent_map (always include_history_tier=False)
+    # produces an empty parent list for C — same as the guaranteed-miss case —
+    # confirming resolve_priority's actual output is unaffected by this edge.
+    ledger = _ledger()
+    result = resolve_priority(str(c_path), "C_id", ledger_entries=ledger)
+    assert result == {"effective_priority": None, "origin": "none", "source_id": None}
+
+
+def test_build_parent_map_skips_git_history_tier(node_dir_generic: Path, monkeypatch):
+    """Regression pin: ``_build_parent_map``'s ``resolve_target()`` call
+    discards the ``'git-history'`` sentinel identically to ``None`` (see
+    ``if target and target != "git-history"`` in its loop), so tier 3 (the
+    ``git log --all -- <path>`` subprocess fallback) has never produced a
+    distinguishable outcome for this call site — see the dispatch brief for
+    the full accounting (~210 of ~239 tier-3 spawns on this corpus were
+    well-formed ``predecessor_id`` handoff-ids reaching a path oracle for a
+    guaranteed miss, because this call site omits ``id_index``).
+
+    Pins the fix at the call site: every ``resolve_target()`` call made
+    while building the parent map must pass ``include_history_tier=False``,
+    and ``dag._git_path_ever_tracked`` (the actual subprocess spawn) must
+    never fire even for a predecessor ref with zero on-disk match — asserts
+    the CALL SHAPE / subprocess-reachability, not wall-clock, per this
+    module's own convention (machine-load-norm makes timing assertions
+    worthless here).
+    """
+    d = node_dir_generic
+    # A predecessor ref that resolves in neither of tiers 1/2 (no matching
+    # file anywhere under handoff_dir/state/handoffs/archive/handoffs) — the
+    # exact shape that, pre-fix, fell through to a tier-3 git-history spawn.
+    c_path = _write_node(
+        d, "C.md", handoff_id="C_id", predecessor="totally-orphaned-ref.md"
+    )
+
+    ledger = _ledger()
+
+    ever_tracked_calls = []
+    monkeypatch.setattr(
+        "coordinator_core.dag._git_path_ever_tracked",
+        lambda *a, **k: (ever_tracked_calls.append((a, k)), False)[1],
+    )
+
+    resolve_target_calls = []
+    orig_resolve_target = pr_mod.resolve_target
+
+    def _recording_resolve_target(*args, **kwargs):
+        resolve_target_calls.append(kwargs)
+        return orig_resolve_target(*args, **kwargs)
+
+    monkeypatch.setattr(pr_mod, "resolve_target", _recording_resolve_target)
+
+    resolve_priority(str(c_path), "C_id", ledger_entries=ledger)
+
+    assert resolve_target_calls, "expected at least one resolve_target call while building the parent map"
+    assert all(
+        kwargs.get("include_history_tier") is False for kwargs in resolve_target_calls
+    ), "_build_parent_map must opt every resolve_target() call out of the git-history tier"
+
+    # Mechanism-level pin, isolated from dag.walk_forward's own (separate,
+    # out-of-scope) internal resolve_target() call for the same ref: with
+    # include_history_tier=False, dag.resolve_target itself must never reach
+    # tier 3 for a path absent from every on-disk candidate — i.e. the flag
+    # asserted above actually short-circuits the ever_tracked()/subprocess
+    # path, not just a passthrough kwarg nobody reads.
+    ever_tracked_calls.clear()
+    result = dag.resolve_target(
+        "totally-orphaned-ref.md",
+        str(d),
+        str(d.parent.parent),
+        include_history_tier=False,
+    )
+    assert result is None
+    assert not ever_tracked_calls, (
+        "tier-3 git-history subprocess path must be unreached when "
+        "include_history_tier=False, even for a guaranteed-miss ref"
+    )

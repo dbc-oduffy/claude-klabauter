@@ -65,7 +65,11 @@ from typing import Any, Optional
 import pytest
 
 from coordinator_core.ops.ceremony import consumed_handoff_stamp as m
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_NONE,
+    PUSH_MODE_SYNC,
+    PUSH_STATUS_DECLINED,
+)
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
 
@@ -154,8 +158,8 @@ class StampRepo:
     def head_sha(self) -> str:
         return self._git("rev-parse", "HEAD").stdout.strip()
 
-    def log_messages(self, remote: bool = False) -> str:
-        ref = "origin/main" if remote else "HEAD"
+    def log_messages(self, remote: bool = False, remote_branch: str = "main") -> str:
+        ref = f"origin/{remote_branch}" if remote else "HEAD"
         return self._git("log", "--oneline", ref).stdout
 
 
@@ -178,11 +182,35 @@ def repo(tmp_path) -> StampRepo:
 @pytest.fixture
 def repo_with_remote(tmp_path, repo) -> StampRepo:
     """repo + a bare 'origin' remote, with an initial push (so a later
-    follow-up push has something real to land against)."""
+    follow-up push has something real to land against).
+
+    C7c (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+    checked out onto `work/test/consumed-handoff-stamp` rather than staying
+    on the base `repo` fixture's `main` -- both tests that consume this
+    fixture (`test_post_commit_happy_path_stamps_and_follow_up_commits_pushed`,
+    `test_ship_drift_regression_full_pass`) assert the push itself LANDING
+    (`follow_up_pushed is True`, the sha reaching `origin/main`'s log), which
+    the real `work/*`-only push-leg branch policy (commit_pipeline.py, same
+    plan) would otherwise decline on `main` -- repair (a): move the fixture
+    onto an allowed branch rather than invert the assertion, since the push
+    landing is the tests' own subject, not the branch-policy contract.
+
+    The remote-side ref is pushed under the SAME name (`work/test/consumed-
+    handoff-stamp`), not renamed to `main` on the remote -- git's default
+    `push.default=simple` refuses a bare `git push` (the exact call the
+    follow-up-push leg under test makes) when the local and remote branch
+    names differ, even with `-u` tracking configured; matching names is what
+    the tests' own subject (a bare push landing) actually requires.
+    `log_messages(remote=...)` takes an explicit `remote_branch` for this
+    reason. `repo_with_remote` is consumed only by these two tests (grepped)
+    -- no ripple onto any fixture shared with a currently-green test.
+    """
+    branch = "work/test/consumed-handoff-stamp"
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
+    repo._git("checkout", "-b", branch)
     repo._git("remote", "add", "origin", str(bare))
-    result = repo._git("push", "-u", "origin", "main")
+    result = repo._git("push", "-u", "origin", branch)
     assert result.returncode == 0, result.stderr
     return repo
 
@@ -752,6 +780,14 @@ def test_row6_peer_write_between_stamp_and_ship_aborts_not_lost(repo, monkeypatc
 
 
 def test_post_commit_happy_path_stamps_and_follow_up_commits_pushed(repo_with_remote):
+    """AC17 end-to-end: the follow-up commit lands and is really pushed.
+
+    C7c: this test's subject is the push itself LANDING -- it used to run on
+    the fixture's `main`, which the real `work/*`-only push-leg branch
+    policy now correctly declines; `repo_with_remote` was moved onto
+    `work/test/consumed-handoff-stamp` (repair (a)) so this test still
+    exercises what it names, rather than inverting the assertion to a
+    decline that isn't this test's point."""
     repo = repo_with_remote
     sid = "sess-happy-1"
     repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
@@ -779,7 +815,7 @@ def test_post_commit_happy_path_stamps_and_follow_up_commits_pushed(repo_with_re
     # The follow-up commit really landed (local HEAD) and really pushed
     # (remote main advanced to the same sha).
     assert repo.head_sha() == outcome.follow_up_committed_sha
-    remote_log = repo.log_messages(remote=True)
+    remote_log = repo.log_messages(remote=True, remote_branch="work/test/consumed-handoff-stamp")
     assert outcome.follow_up_committed_sha[:7] in remote_log
 
 
@@ -798,13 +834,14 @@ def test_follow_up_commit_preserves_peer_staged_divergence(tmp_path):
         repo, "state/handoffs/some-handoff.md", staged_content="STAGED\n", worktree_content="WORKTREE\n"
     )
 
-    follow_up_sha, pushed, error = m._commit_and_push_follow_up(
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
         repo, ["state/handoffs/some-handoff.md"], "deadbeef", push_mode=PUSH_MODE_NONE
     )
 
     assert error is None, error
     assert follow_up_sha is not None
     assert pushed is None  # push_mode="none" -- no attempt, not a failure
+    assert push_status == m.PUSH_STATUS_NOT_ATTEMPTED
     result = subprocess.run(
         ["git", "show", "HEAD:state/handoffs/some-handoff.md"],
         cwd=str(repo), capture_output=True, text=True, check=True,
@@ -816,6 +853,87 @@ def test_follow_up_commit_preserves_peer_staged_divergence(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C6e -- branch-policy decline is carried as a distinct signal, never routed
+# through the error channel. (docs/plans/2026-08-08-the-push-leg-that-never-
+# asked-which-branch.md, chunk C6e)
+# ---------------------------------------------------------------------------
+
+
+def test_follow_up_push_declined_by_branch_policy_not_reported_as_error(tmp_path):
+    """A sync push attempted on a non-`work/*` branch (the fixture's default
+    branch here) is declined by `branch_gate()` -- reported via a distinct
+    `push_status`, not through `error`."""
+    repo = real_git_repo(tmp_path)
+    # A configured remote, so `push_with_retry` reaches the branch-policy
+    # gate rather than short-circuiting on its own earlier no-remote check
+    # -- this test isolates the POLICY decline, not a missing remote.
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(tmp_path / "does-not-exist.git")],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    (repo / "seed.txt").write_text("declined\n", encoding="utf-8")
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
+        repo, ["seed.txt"], "deadbeef", push_mode=PUSH_MODE_SYNC
+    )
+
+    assert follow_up_sha is not None
+    # A decline is NEVER `pushed=False` -- that shape reads as "attempted
+    # and did not land" to every other reader in the repo (integrity_breach,
+    # _resolve_push_report). `None` matches the no-attempt shape;
+    # `push_status` is what disambiguates a decline from a genuine no-attempt.
+    assert pushed is None
+    assert push_status == PUSH_STATUS_DECLINED
+    assert error is None  # decline is NEVER routed through the error channel
+
+
+def test_follow_up_push_genuine_failure_still_routes_through_error(tmp_path):
+    """A push attempted on a `work/*` branch (passes the policy gate), with a
+    remote configured but unreachable, fails for a real reason and still
+    routes through `error` exactly as before -- only a POLICY decline (or a
+    missing remote) is carried separately, never as `pushed=False`+`error`."""
+    repo = real_git_repo(tmp_path)
+    subprocess.run(
+        ["git", "checkout", "-b", "work/test/c6e"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    # A configured-but-unreachable remote: `git remote` reports non-empty
+    # (so `push_with_retry` does NOT take its no-remote skip), but the push
+    # itself fails for a genuine reason.
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(tmp_path / "does-not-exist.git")],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    (repo / "seed.txt").write_text("failure\n", encoding="utf-8")
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
+        repo, ["seed.txt"], "deadbeef", push_mode=PUSH_MODE_SYNC
+    )
+
+    assert follow_up_sha is not None
+    assert pushed is False
+    assert push_status == m.PUSH_STATUS_FAILED
+    assert error is not None  # a genuine git failure, still an error
+
+
+def test_follow_up_push_mode_none_keeps_distinct_not_attempted_shape(tmp_path):
+    """`push_mode="none"` keeps its own prior, distinct shape -- `pushed=None`
+    (no attempt at all, never considered), never conflated with a
+    considered-then-declined push."""
+    repo = real_git_repo(tmp_path)
+    (repo / "seed.txt").write_text("no-attempt\n", encoding="utf-8")
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
+        repo, ["seed.txt"], "deadbeef", push_mode=PUSH_MODE_NONE
+    )
+
+    assert follow_up_sha is not None
+    assert pushed is None
+    assert push_status == m.PUSH_STATUS_NOT_ATTEMPTED
+    assert error is None
+
+
+# ---------------------------------------------------------------------------
 # Full ship-drift regression
 # ---------------------------------------------------------------------------
 
@@ -824,14 +942,19 @@ def test_ship_drift_regression_full_pass(repo_with_remote):
     """A chain-terminal close whose real predecessor was claimed_by:sid
     shortly before ends with that predecessor at deployment_state: shipped
     AND shipped_in: <the real committed_sha> — no branch-tip fallback, no
-    sibling-correction (Position A)."""
+    sibling-correction (Position A).
+
+    C7c: also asserts the follow-up push LANDING (`follow_up_pushed is
+    True`) -- `repo_with_remote` moved onto `work/test/consumed-handoff-
+    stamp` for the same repair-(a) reason as the sibling AC17 test above;
+    see that fixture's own docstring."""
     repo = repo_with_remote
     sid = "sess-regression-1"
     repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
 
     # Simulate the ceremony's main commit landing (C4's job — the seeded
     # handoff's own commit stands in for it here) and being pushed.
-    repo._git("push", "origin", "main")
+    repo._git("push", "origin", "work/test/consumed-handoff-stamp")
     real_committed_sha = repo.head_sha()
 
     # Post-commit stamp+ship, inside the (simulated-held) ceremony_lock.

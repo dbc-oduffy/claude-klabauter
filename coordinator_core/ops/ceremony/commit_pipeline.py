@@ -58,18 +58,18 @@ Negative-spec (hard-won):
     `commit_scoped()` takes the private-index branch, `committed_sha` is its
     own CAS-verified `stdout` (the exact sha `update-ref` landed). When it
     takes the agree branch, `committed_sha` is resolved by matching a
-    per-commit `Commit-Nonce: <uuid4().hex>` trailer -- minted inside
+    per-commit `Commit-Token: <uuid4().hex>` trailer -- minted inside
     `commit()` and appended to the message before it is written to the temp
-    file -- against a pathspec-scoped `git log --grep=<nonce> --fixed-strings
+    file -- against a pathspec-scoped `git log --grep=<token> --fixed-strings
     --format=%H <pre-commit-HEAD>..HEAD -- <commit_paths>` (docs/plans/
     2026-08-08-a-landed-commit-reported-as-failed.md, W1: the prior subject-
     substring match could spuriously match a peer commit whose message merely
     *contained* this call's subject -- a revert, a rollup, a memo quoting it
-    -- since no peer can ever author this exact nonce string, the match is
+    -- since no peer can ever author this exact token string, the match is
     collision-free by construction), failing loud (non-zero `exit_code`,
     `committed_sha=None`) rather than guessing when no unambiguous match is
     found -- see `commit()`'s own docstring. A verification failure on this
-    path (HEAD unresolvable, empty subject, or zero/ambiguous nonce match)
+    path (HEAD unresolvable, empty subject, or zero/ambiguous token match)
     still sets `CommitOutcome.landed=True`: `git commit` already created the
     commit at that point, so the caller must not treat it as a no-op --
     see `CommitOutcome.landed`'s own docstring and `commit()`'s.
@@ -119,10 +119,13 @@ from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
+    carry_gate,
     deletion_block_gate,
     dirty_tree_gate,
+    op_scope_coverage_gate,
 )
 from coordinator_core.ops.ceremony.commit_message import (
+    _ends_with_trailer_block,
     compose_message,
     compute_commit_paths,
     compute_gate_paths,
@@ -143,7 +146,7 @@ PUSH_MODE_SYNC = "sync"
 PUSH_MODE_DEFERRED = "deferred"
 PUSH_MODE_NONE = "none"
 
-from coordinator_core.hooks.auto_push import classify_error
+from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolve_branch
 
 #: Retry-worthy `auto_push.classify_error()` classifications for THIS
 #: pipeline's specific recovery shape (fetch + `git rebase --onto` +
@@ -191,6 +194,13 @@ from coordinator_core.hooks.auto_push import classify_error
 #: classification ladder (never importing `ops.ceremony`) would avoid even
 #: that, but splitting `auto_push` for this one function is out of this
 #: fix's two-file scope.
+#:
+#: `branch_gate`/`resolve_branch` (push-leg branch-policy fix, 2026-08-08)
+#: ride the same import and the same rationale above: same module, same
+#: acyclic direction, same already-paid `hooks/__init__.py` side effect.
+#: `push_with_retry()` below consults `branch_gate` as a read-only oracle --
+#: it does not extend it (see that function's own docstring for the
+#: `work/*`-only policy this module now enforces on its own push leg).
 _PUSH_RETRY_CLASSES = frozenset({"non-fast-forward"})
 _PUSH_MAX_RETRIES = 3
 
@@ -292,6 +302,45 @@ class StageOutcome:
     ignored_caller_paths: List[str] = field(default_factory=list)
 
 
+_MAX_DIAGNOSTIC_CHARS = 2000
+
+_GIT_NOISE_LINE_RE = re.compile(r"^\s*(?:warning|hint):", re.IGNORECASE)
+
+
+def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) -> str:
+    """Reduce a raw git stdout/stderr blob to the part that names the failure.
+
+    2026-08-10 fix (live incident: four consecutive `scoped-git-commit`
+    refusals reported nothing but CRLF line-ending warnings, hiding a
+    `detect-staged-rollback` pre-commit BLOCK that was the actual cause).
+    Two properties of git's output defeat a naive head-truncation:
+
+      - It leads with per-path advisory noise. `git add` on a batch of N
+        LF-in-worktree files emits N `warning: ... LF will be replaced by
+        CRLF` lines BEFORE anything diagnostic, so the first 200 characters
+        of a large batch's stderr are noise by construction.
+      - The diagnosis lands LAST. `fatal:`/`error:` from git, and a
+        pre-commit hook's own BLOCKED verdict, are the final lines -- so
+        when a blob must be cut, the tail is the half worth keeping.
+
+    Hence: drop advisory lines when any non-advisory line survives (never
+    return empty -- an all-advisory blob is preserved verbatim, since an
+    empty reason is what the incident produced), then keep the TAIL under
+    *limit*, marking the cut so a reader knows output preceded it.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+
+    lines = stripped.splitlines()
+    signal = [ln for ln in lines if not _GIT_NOISE_LINE_RE.match(ln)]
+    condensed = "\n".join(signal if signal else lines).strip()
+
+    if len(condensed) <= limit:
+        return condensed
+    return "...(truncated) " + condensed[-limit:]
+
+
 def _reason_from_git_result(result: "git_native.GitResult", *, attempted: Sequence[str]) -> str:
     """Compose a real failure diagnosis, never a bare `exit_code=N`.
 
@@ -306,16 +355,16 @@ def _reason_from_git_result(result: "git_native.GitResult", *, attempted: Sequen
     `attempted` path list (never a bare code alone) when BOTH streams are
     silent, so the report always names what this call was trying to do.
     """
-    detail = result.stderr.strip() or result.stdout.strip()
+    detail = condense_git_diagnostic(result.stderr) or condense_git_diagnostic(result.stdout)
     if detail:
-        return detail[:200]
+        return detail
     paths_preview = ", ".join(attempted[:5])
     if len(attempted) > 5:
         paths_preview += f", ... ({len(attempted)} total)"
     return (
         f"exit_code={result.returncode} (no diagnostic output on stdout/stderr "
         f"-- attempted paths: {paths_preview})"
-    )[:200]
+    )[:_MAX_DIAGNOSTIC_CHARS]
 
 
 def _parse_rename_line(line: str) -> Optional[Tuple[str, str]]:
@@ -779,7 +828,7 @@ def explicit_stage(
             f"git add: {reason}",
             "explicit_stage: post-failure residue check indeterminate -- "
             "cannot confirm whether any of this call's paths were "
-            f"partially staged ({(residue_result.stderr.strip() or f'exit_code={residue_result.returncode}')[:200]})",
+            f"partially staged ({condense_git_diagnostic(residue_result.stderr) or f'exit_code={residue_result.returncode}'})",
         ]
 
     return StageOutcome(
@@ -832,6 +881,14 @@ def explicit_stage(
 #: perfectly. See `commit()`'s own docstring for the full mechanism.
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 
+#: `_ends_with_trailer_block` and its `_TRAILER_LINE_RE` now live in
+#: `commit_message.py` (imported above) -- shared with `compose_message()`'s
+#: own trailer-append logic, which hit the identical hazard this module's
+#: `commit()` token mint was built to avoid (staff-eng R1 F1,
+#: state/review-trail/2026-08-08-landed-commit-close-review/r1-w1.md). Do
+#: not redefine a second copy here; see that module's docstring for the
+#: full five-shape predicate contract.
+
 
 @dataclass(frozen=True)
 class CommitOutcome:
@@ -842,9 +899,9 @@ class CommitOutcome:
         committed_sha -- the VERIFIED landed commit sha (C11,
             docs/plans/2026-08-07-excise-the-ceremony-lock.md): the
             private-index branch's own CAS-verified `stdout`, or -- for the
-            agree branch -- a `git log --grep=<nonce> --fixed-strings
+            agree branch -- a `git log --grep=<token> --fixed-strings
             <pre-sha>..HEAD` match against this call's own minted
-            `Commit-Nonce:` trailer (docs/plans/2026-08-08-a-landed-commit-
+            `Commit-Token:` trailer (docs/plans/2026-08-08-a-landed-commit-
             reported-as-failed.md, W1). None on any commit failure OR on a
             failed/ambiguous verification -- never a blind
             `git rev-parse HEAD`, which could return a concurrent sibling's
@@ -857,19 +914,34 @@ class CommitOutcome:
             sha-resolved success returns AND all three post-success
             verification-failure returns (HEAD unresolvable on an
             unborn-branch first commit, empty message subject, zero-or-
-            ambiguous nonce match) -- because in every one of those cases
+            ambiguous token match) -- because in every one of those cases
             `git commit` already created the commit; only `committed_sha`
             is unknown. False on a genuine `git commit` failure, including
             the ordinary "nothing to commit" empty-commit-set no-op --
             history did not change on that path, and this flag must not
             invert that into a phantom commit.
-        stderr -- git's stderr on a non-zero exit, "" on success.
+        stderr -- git's stderr on a non-zero exit, "" on success. Exception:
+            the private-index branch's success return (see
+            `worktree_excluded` below) also carries a loud stderr message
+            here even though `exit_code == 0` -- a staged-only commit is a
+            legitimate SUCCESS, not a failure, but the operator still needs
+            to see why.
+        worktree_excluded -- (state/bug-backlog/2026-08-10-scoped-git-commit-
+            reports-success-while-334e90d707f9.yaml) mirrors
+            `git_native.GitResult.worktree_excluded` verbatim on the
+            private-index success branch: repo-relative paths whose
+            WORKING-TREE content was NOT included in this commit because it
+            diverged from the staged (index) content that was committed
+            instead. Empty tuple (default) on every other outcome, including
+            the agree branch's own success -- never populated there because
+            the agree branch never diverges by construction.
     """
 
     exit_code: int
     committed_sha: Optional[str] = None
     landed: bool = False
     stderr: str = ""
+    worktree_excluded: Tuple[str, ...] = ()
 
 
 def _write_commit_message_tempfile(
@@ -915,6 +987,7 @@ def commit(
     message: str,
     commit_paths: Sequence[str],
     common_dir: Optional[Path] = None,
+    deliverable_id: Optional[str] = None,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
 
@@ -954,14 +1027,14 @@ def commit(
     change here, by design -- see this chunk's own scope note). The agree
     branch's `stdout` is `git commit`'s human-readable summary text, not a
     sha, so its `committed_sha` is instead resolved by matching a
-    per-commit `Commit-Nonce: <uuid4().hex>` trailer -- minted HERE, inside
+    per-commit `Commit-Token: <uuid4().hex>` trailer -- minted HERE, inside
     this function, and appended to `message` before it is written to the
     temp file (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md,
-    W1) -- against a pathspec-scoped `git log --grep=<nonce> --fixed-strings
+    W1) -- against a pathspec-scoped `git log --grep=<token> --fixed-strings
     --format=%H <pre-commit-HEAD>..HEAD`, bounded to commits since this
     call's own pre-commit HEAD, scoped to `commit_paths` -- and failing loud
     (non-zero `exit_code`, `committed_sha=None`) on zero or more-than-one
-    matches rather than guessing. The nonce (not the prior subject
+    matches rather than guessing. The token (not the prior subject
     substring) is the match target because no peer can ever author this
     exact string, so the match is collision-free even against a peer commit
     whose message merely *contains* this call's subject (a revert, a
@@ -974,7 +1047,7 @@ def commit(
     `CommitOutcome.landed` (W1, same plan): every one of these three
     verification-failure returns below -- HEAD unresolvable on an
     unborn-branch first commit, empty message subject, zero-or-ambiguous
-    nonce match -- sets `landed=True` alongside `committed_sha=None` and
+    token match -- sets `landed=True` alongside `committed_sha=None` and
     `exit_code=1`, because in every one of them `commit_scoped()` already
     returned `ok`: `git commit` created a commit, only its sha is unknown.
     The earlier `not result.ok` return above is the ONLY commit()-internal
@@ -984,22 +1057,54 @@ def commit(
     `common_dir` -- optional pre-resolved git common dir, passed straight
     through to `_write_commit_message_tempfile` (see there); purely a spawn
     dedup, never an outcome input.
+
+    `deliverable_id` (C7b, docs/plans/2026-08-10-a-commit-trailer-that-names-
+    the-session.md) -- optional, passed straight through to
+    `git_native.commit_scoped()`'s own parameter of the same name. `None`
+    (the default) leaves every existing caller's behaviour unchanged; a
+    caller that already holds a provenance-bearing id (sourced from the
+    plan it is executing against) may pass it here to have it land as this
+    commit's `Deliverable-Id:` trailer. Not sourced or defaulted here --
+    `commit()` performs no discovery of its own.
     """
     root = Path(worktree_root)
-    # Mint a per-commit nonce (W1) and append it as a `Commit-Nonce:` trailer
-    # BEFORE the message is written to the temp file, following the same
+    # Mint a per-commit token (W1) and append it as a `Commit-Token:` trailer
+    # BEFORE the message is written to the temp file. Review: staff-eng R1
+    # F1 -- when `message` already ends in a trailer block (the common
+    # `wsc_tail` case: `compose_message()` appended `Nature:`/`Plan:`/
+    # `Plan-Id:`), the token MUST join that same block (a single "\n", no
+    # blank-line paragraph break) rather than start a new paragraph --
+    # starting a new one demotes every pre-existing trailer to body prose
+    # for git's trailer parser (see `_ends_with_trailer_block`'s own
+    # docstring). Only when `message` does NOT already end in a trailer
+    # block does the token start its own paragraph, using the original
     # blank-line-before-trailers convention `commit_message.compose_message`
-    # already implements (`"\n" + trailers + "\n"`) so the message stays
-    # well-formed regardless of what `message` already ends with.
-    nonce = uuid.uuid4().hex
-    nonce_trailer = f"Commit-Nonce: {nonce}"
-    if message.endswith("\n\n"):
-        message_with_nonce = message + nonce_trailer + "\n"
+    # itself implements (`"\n" + trailers + "\n"`).
+    token = uuid.uuid4().hex
+    token_trailer = f"Commit-Token: {token}"
+    if _ends_with_trailer_block(message):
+        # Normalize to EXACTLY one trailing newline before joining. A bare
+        # `endswith("\n")` test is not enough: `compose_message()` returns
+        # `subject + "\n"`, so a caller whose `subject` already carried its
+        # own trailing newline -- every `-F <file>` caller, since
+        # `scoped-git-commit` passes the file's whole text as `subject` --
+        # yields a message ending "\n\n". Retaining both newlines here puts a
+        # BLANK line before the token, which is precisely the paragraph break
+        # this branch exists to avoid: git's trailer parser then reads only
+        # the token's own paragraph as trailers and demotes every trailer the
+        # caller wrote to body prose. Observed on b1e0881d39a7 and 3301a8d1f68c,
+        # whose `Deliverable-Id:` reads empty to
+        # `%(trailers:key=Deliverable-Id,valueonly)` and so cannot be joined to
+        # its plan by `close_out_and_stamp`.
+        base = message.rstrip("\n") + "\n"
+        message_with_token = base + token_trailer + "\n"
+    elif message.endswith("\n\n"):
+        message_with_token = message + token_trailer + "\n"
     elif message.endswith("\n"):
-        message_with_nonce = message + "\n" + nonce_trailer + "\n"
+        message_with_token = message + "\n" + token_trailer + "\n"
     else:
-        message_with_nonce = message + "\n\n" + nonce_trailer + "\n"
-    msg_file = _write_commit_message_tempfile(root, message_with_nonce, common_dir)
+        message_with_token = message + "\n\n" + token_trailer + "\n"
+    msg_file = _write_commit_message_tempfile(root, message_with_token, common_dir)
     try:
         # Pre-commit HEAD, captured BEFORE `commit_scoped()` runs -- the
         # lower bound `committed_sha`'s post-commit verification (below)
@@ -1010,7 +1115,9 @@ def commit(
         pre_sha_result = git_native.rev_parse_head(root)
         pre_sha = pre_sha_result.stdout.strip() if pre_sha_result.ok else None
 
-        result = git_native.commit_scoped(commit_paths, msg_file, root)
+        result = git_native.commit_scoped(
+            commit_paths, msg_file, root, deliverable_id=deliverable_id
+        )
         if not result.ok:
             # Deliberately NOT `_reason_from_git_result()` here (2026-08-03
             # research note, kept for the next reader): `git commit -F ... --
@@ -1032,7 +1139,10 @@ def commit(
             # call site has no such prefix, so bare is the load-bearing shape.
             return CommitOutcome(
                 exit_code=result.returncode or 1,
-                stderr=(result.stderr.strip() or f"exit_code={result.returncode}")[:200],
+                stderr=(
+                    condense_git_diagnostic(result.stderr)
+                    or f"exit_code={result.returncode}"
+                ),
             )
 
         stdout = result.stdout.strip()
@@ -1040,13 +1150,19 @@ def commit(
             # Private-index branch (C11) -- `stdout` IS the CAS-verified new
             # commit sha; no further verification needed, and no risk of
             # picking up a peer's commit (see `commit()`'s own docstring).
-            return CommitOutcome(exit_code=0, committed_sha=stdout, landed=True)
+            return CommitOutcome(
+                exit_code=0,
+                committed_sha=stdout,
+                landed=True,
+                stderr=result.stderr,
+                worktree_excluded=result.worktree_excluded,
+            )
 
         # Agree branch (C11) -- `result.stdout` is `git commit`'s summary
         # text, not a sha. Resolve `committed_sha` by matching this call's
-        # own minted `Commit-Nonce:` trailer against the bounded,
+        # own minted `Commit-Token:` trailer against the bounded,
         # pathspec-scoped range instead of a blind `git rev-parse HEAD` (W1
-        # -- nonce, not subject substring; see `commit()`'s own docstring).
+        # -- token, not subject substring; see `commit()`'s own docstring).
         subject = message.splitlines()[0] if message else ""
         if pre_sha is None:
             # Unborn-branch edge case (this repo's very first commit): a
@@ -1081,7 +1197,7 @@ def commit(
 
         match_result = git_native.log_grep(
             root,
-            nonce_trailer,
+            token_trailer,
             extra_args=[
                 "--fixed-strings",
                 "--format=%H",
@@ -1103,14 +1219,14 @@ def commit(
         )
         if len(candidates) != 1:
             # `git commit` already created this commit (`result.ok` above) --
-            # only the nonce match came back zero-or-ambiguous. W1:
+            # only the token match came back zero-or-ambiguous. W1:
             # `landed=True` alongside `committed_sha=None`.
             return CommitOutcome(
                 exit_code=1,
                 landed=True,
                 stderr=(
                     f"commit: landed but sha verification found {len(candidates)} "
-                    f"candidate(s) matching this call's nonce trailer in {pre_sha}..HEAD -- "
+                    f"candidate(s) matching this call's token trailer in {pre_sha}..HEAD -- "
                     "refusing to guess (never falling back to a bare rev-parse HEAD)"
                 )[:200],
             )
@@ -1133,19 +1249,147 @@ class PushOutcome:
     """Typed result of `push_with_retry()`.
 
     Fields:
-        exit_code -- 0 iff the push genuinely LANDED on the remote (or was
-            skipped because no remote is configured).
+        exit_code -- 0 iff the push genuinely LANDED on the remote, or was
+            skipped because no remote is configured, or was DECLINED by
+            branch policy. `exit_code == 0` no longer by itself implies
+            "landed or nothing to sync" -- a policy decline is also 0, and
+            is a genuinely new "did not push, on purpose" outcome. Check
+            `skipped` to tell the three apart.
         acted -- `["push"]` on a landed push, else empty.
-        skipped -- `["push:no-remote"]` when no remote is configured, else
-            empty.
+        skipped -- now has more than one member: `["push:no-remote"]` when
+            no remote is configured; `["push:branch-policy"]` when
+            `auto_push.branch_gate()` declined the current branch;
+            `["push:branch-unresolvable"]` when the branch itself could not
+            be resolved (detached HEAD, or the git call failed) -- treated
+            as a decline, not a silent proceed-to-push, because a push leg
+            that cannot name its own branch is exactly the case the policy
+            gate exists to catch. Otherwise empty.
         failed -- non-empty only on a genuine push failure (rejected after
             exhausting retries, or a fetch/rebase step itself failed).
+        message -- the verbatim `branch_gate()` skip message on a
+            `push:branch-policy` decline, carried unaltered so a later
+            consumer can print exactly what `branch_gate` produced without
+            regenerating or rewording it (the two surfaces must not drift).
+            `None` on every other outcome, including
+            `push:branch-unresolvable` (there is no `branch_gate` message
+            to carry -- the branch was never resolved to hand it one).
+        pushed_range -- (C3b, AC7) on a landed push (`acted == ["push"]`),
+            the `<old-sha>..<new-sha>` range this call actually pushed,
+            where `<old-sha>` is the upstream tip resolved AFTER the branch
+            policy/no-remote checks passed but BEFORE this call's first
+            `git push` -- or, if a reject triggered the fetch+rebase retry
+            loop, the upstream tip as re-resolved right after that fetch
+            (see `push_with_retry`'s own docstring for why: commits between
+            the original pre-loop tip and the freshly-fetched one already
+            reached the remote via someone else's push and were not landed
+            by THIS call). `None` when the range could not be resolved --
+            most notably a first push with no upstream tracking ref yet --
+            which is a distinct, explicit "unknown", never a stand-in for
+            "nothing pushed" (that case is `acted == []`, not this field).
+            Always `None` on every non-landed outcome.
+        pushed_count -- (C3b, AC7) the commit count for `pushed_range`
+            (`git rev-list --count <pushed_range>`), or `None` under the
+            exact same "unknown, not zero, not omitted" rule as
+            `pushed_range` -- read together, never independently.
     """
 
     exit_code: int
     acted: List[str] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)
     failed: List[str] = field(default_factory=list)
+    message: Optional[str] = None
+    pushed_range: Optional[str] = None
+    pushed_count: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Canonical push_status vocabulary
+#
+# Disk already carries two prior vocabularies for this idea before this
+# module claims ownership: `scoped_git_commit.py`'s `PUSH_STATE_*` constants
+# (`PUSH_STATE_PUSHED = "pushed"`, `PUSH_STATE_FAILED = "push-failed"` --
+# kebab-case, NOT `"failed"` -- `PUSH_STATE_UNCONFIRMED = "unconfirmed"`,
+# `PUSH_STATE_NO_REMOTE = "no-remote"`) and `wsc_tail.py`'s own `push_status`
+# field (`"deferred" | "pushed" | "failed" | "unknown_resumed"`, snake_case
+# on the last member). This module owns the canonical set below; both of
+# those modules import from here rather than re-deriving their own spelling.
+#
+# Mapping table (the spec C5/C6 execute against, not a suggestion):
+#
+#   canonical PUSH_STATUS_*  | scoped_git_commit.PUSH_STATE_*  | wsc_tail.push_status
+#   ------------------------ | -------------------------------- | ---------------------
+#   "pushed"                 | PUSH_STATE_PUSHED                | "pushed"
+#   "push-failed"            | PUSH_STATE_FAILED                | "failed"
+#   "declined"               | PUSH_STATE_DECLINED (new, C5)     | new member (C6b)
+#   "no-remote"               | PUSH_STATE_NO_REMOTE            | no counterpart today (C6b adds one)
+#   "not-attempted"           | PUSH_STATE_UNCONFIRMED (closest existing meaning --
+#                               NOT identical: PUSH_STATE_UNCONFIRMED also covers the
+#                               detached-auto-push-race remote-probe outcome, which
+#                               "not-attempted" never does)
+#                                                                | "deferred" (under the
+#                                                                  async push_mode contract)
+#
+# `wsc_tail.py`'s `"unknown_resumed"` (any resumed/crash-recovered pass) has
+# NO counterpart in this canonical set -- it is preserved as its own member
+# on that module's side, derived from resumption bookkeeping this pipeline
+# does not have visibility into, not from `push_status`. It must not be
+# silently dropped when C6 reconciles that module's vocabulary against this
+# one.
+# ---------------------------------------------------------------------------
+
+PUSH_STATUS_PUSHED = "pushed"
+PUSH_STATUS_FAILED = "push-failed"
+PUSH_STATUS_DECLINED = "declined"
+PUSH_STATUS_NO_REMOTE = "no-remote"
+PUSH_STATUS_NOT_ATTEMPTED = "not-attempted"
+
+
+def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
+    """Derive the canonical `push_status` from a `PushOutcome` (or None).
+
+    This is the supported way to map a `PushOutcome` onto the canonical
+    `push_status` vocabulary -- promoted from a leading-underscore private
+    (2026-08-08, C7a) once `post_commit_tail.py` and `consumed_handoff_
+    stamp.py` were found importing it across the module boundary despite the
+    underscore; a private name crossing a module boundary is a contract
+    with no name.
+
+    Rule: `push:branch-policy` or `push:branch-unresolvable` in `skipped` ->
+    `declined`; `push:no-remote` in `skipped` -> `no-remote`; `acted ==
+    ["push"]` -> `pushed`; non-empty `failed` -> `push-failed`; push never
+    reached (outcome is `None`) -> `not-attempted`.
+    """
+    if push_outcome is None:
+        return PUSH_STATUS_NOT_ATTEMPTED
+    if "push:branch-policy" in push_outcome.skipped or (
+        "push:branch-unresolvable" in push_outcome.skipped
+    ):
+        return PUSH_STATUS_DECLINED
+    if "push:no-remote" in push_outcome.skipped:
+        return PUSH_STATUS_NO_REMOTE
+    if push_outcome.failed:
+        return PUSH_STATUS_FAILED
+    if "push" in push_outcome.acted:
+        return PUSH_STATUS_PUSHED
+    return PUSH_STATUS_NOT_ATTEMPTED
+
+
+def _pushed_range_diagnostic(push_outcome: PushOutcome) -> str:
+    """Format the AC7 landed-push diagnostics line from a `PushOutcome`.
+
+    Only called when `derive_push_status(push_outcome) == PUSH_STATUS_PUSHED`
+    -- i.e. `push_outcome.pushed_range`/`pushed_count` are the landed-push
+    fields, not the always-`None` defaults every other outcome carries.
+    """
+    if push_outcome.pushed_range is None:
+        return "run_commit_pipeline: push landed -- pushed range could not be resolved"
+    count_part = (
+        str(push_outcome.pushed_count) if push_outcome.pushed_count is not None else "unknown"
+    )
+    return (
+        f"run_commit_pipeline: push landed -- {count_part} commit(s), "
+        f"range {push_outcome.pushed_range}"
+    )
 
 
 def _is_push_reject(reason: str) -> bool:
@@ -1201,7 +1445,7 @@ def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[in
 
     mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
     if not mb_result.ok:
-        reason = (mb_result.stderr.strip() or "merge-base failed")[:200]
+        reason = condense_git_diagnostic(mb_result.stderr) or "merge-base failed"
         return mb_result.returncode or 1, f"git merge-base: {reason}"
     merge_base_sha = mb_result.stdout.strip()
     if not merge_base_sha:
@@ -1211,31 +1455,190 @@ def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[in
     if rebase_result.ok:
         return 0, ""
     reason = (
-        rebase_result.stderr.strip()
-        or rebase_result.stdout.strip()
+        condense_git_diagnostic(rebase_result.stderr)
+        or condense_git_diagnostic(rebase_result.stdout)
         or f"exit_code={rebase_result.returncode}"
-    )[:200]
+    )
     git_native.rebase_abort(worktree_root)
     return rebase_result.returncode or 1, f"git rebase: {reason}"
 
 
-def push_with_retry(worktree_root: Union[str, Path]) -> PushOutcome:
+def _emit_push_policy_line(
+    kind: str,
+    *,
+    branch: Optional[str] = None,
+    message: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Single owner of every push-policy operator-visible stderr line (C3, AC6/AC14).
+
+    `push_with_retry()`'s branch-policy decisions used to be a boolean the
+    operator may never read -- `PushOutcome.skipped`/`message`, inspected
+    only if a caller happens to log it. `auto_push.main()` already prints
+    its own `branch_gate()` skip message to stderr at the moment of the
+    decision (see that module's `main()`); this function gives
+    `commit_pipeline`'s push leg the same "print at decision time" shape,
+    with one arm per case rather than scattering `print(..., file=sys.
+    stderr)` calls across `push_with_retry()`:
+
+      "declined-policy" -- `branch_gate()` declined the current branch.
+          `message` is REQUIRED and is printed VERBATIM -- the exact string
+          `branch_gate()` produced, never rebuilt or reworded here. If this
+          module regenerated its own phrasing instead of carrying the
+          gate's own text through, the two surfaces would drift in wording
+          while agreeing in policy -- the failure this function exists to
+          prevent (see `PushOutcome.message`'s own docstring).
+      "declined-unresolvable" -- the branch itself could not be resolved
+          (detached HEAD, or the `git` call failed), so there was no branch
+          to hand `branch_gate()` and therefore no gate message to carry.
+          Authors its own line naming that condition -- the ONLY arm that
+          does not pass along someone else's exact text, because no such
+          text exists on this path.
+      "override-exercised" -- NOT YET CALLED as of C3 (this chunk). C4a
+          introduces `allow_protected_branch=True`, which skips
+          `branch_gate()` entirely and pushes a protected branch on
+          purpose; when it lands, its call site fires this arm, naming
+          `branch` and the caller-supplied `reason` (if any). Authored now,
+          as a real callable arm with real tests, specifically so C4a does
+          not have to invent this from scratch -- this is judged the MORE
+          serious of the two silences this helper closes: an unlogged
+          push TO a protected branch, not merely an unlogged decision not
+          to push one. Leaving it for a later chunk to bolt on ad hoc is
+          exactly how it would end up silent in practice.
+
+    Every arm prints to stderr only -- this module never blocks a commit or
+    a push on operator visibility, matching `auto_push`'s own "always exits
+    0" posture for the equivalent decision.
+    """
+    if kind == "declined-policy":
+        # Review: coordinator:code-reviewer -- message is documented REQUIRED
+        # for this arm; enforce the precondition instead of letting a future
+        # caller silently print the literal string "None" to stderr.
+        if message is None:
+            raise ValueError(
+                "_emit_push_policy_line: kind='declined-policy' requires message"
+            )
+        print(message, file=sys.stderr)
+    elif kind == "declined-unresolvable":
+        print(
+            "coordinator-ceremony: push declined -- current branch could not be "
+            "resolved (detached HEAD, or git failed to report it), so the "
+            "work/*-only branch policy could not be evaluated; push manually "
+            "if intended.",
+            file=sys.stderr,
+        )
+    elif kind == "override-exercised":
+        reason_part = f" -- reason: {reason}" if reason else ""
+        print(
+            f"coordinator-ceremony: pushing {branch} -- branch policy gate "
+            f"OVERRIDDEN for this push{reason_part}",
+            file=sys.stderr,
+        )
+    else:
+        raise ValueError(f"_emit_push_policy_line: unknown kind {kind!r}")
+
+
+def push_with_retry(
+    worktree_root: Union[str, Path],
+    *,
+    allow_protected_branch: bool = False,
+    protected_branch_override_reason: Optional[str] = None,
+) -> PushOutcome:
     """Push with reject-detect -> fetch -> rebase --onto -> re-push, bounded.
 
     No `--force` at any point. Bounded to `_PUSH_MAX_RETRIES` attempts. When
     no remote is configured, the push is skipped (`exit_code == 0`, nothing
-    to sync -- not a failure). On a rejected push, fetches the remote,
-    rebases this session's own commit range onto the updated ref (never a
-    bare rebase on the shared branch), and re-pushes. If the rebase itself
-    refuses, or retries are exhausted while still rejected, returns a hard
-    non-zero failure -- never a silent skip that lets the caller believe the
-    push landed.
+    to sync -- not a failure). Before ever calling `git_native.push()`, the
+    current branch is resolved and checked against `auto_push.branch_gate()`
+    (imported as a read-only oracle, never extended here) -- `work/*`
+    proceeds, everything else (`main` included) is declined with
+    `exit_code == 0` and a `push:branch-policy` skip marker carrying the
+    gate's own message; an unresolvable branch (detached HEAD, or the git
+    call failed) is declined too, under a distinct `push:branch-unresolvable`
+    marker, rather than silently proceeding to push a branch it cannot name.
+    On a rejected push, fetches the remote, rebases this session's own
+    commit range onto the updated ref (never a bare rebase on the shared
+    branch), and re-pushes. If the rebase itself refuses, or retries are
+    exhausted while still rejected, returns a hard non-zero failure -- never
+    a silent skip that lets the caller believe the push landed.
+
+    C3b (AC7): on a landed push, resolves what was actually pushed --
+    `PushOutcome.pushed_range`/`pushed_count` -- from the upstream tip
+    resolved just before this call's first `git push` and the post-push
+    `HEAD`. That resolve happens ONLY after both the no-remote check and the
+    branch-policy gate above have passed -- never at the top of this
+    function -- so a decline or a no-remote skip never pays for a `rev-parse`
+    whose answer they will never report (`auto_push.run_push_with_retry`'s
+    `cockpit_script` stat models the same "gate first, pay for extra state
+    only once you know you need it" ordering).
+
+    A rejected-and-retried push complicates the lower bound: the tip
+    captured before the loop began is no longer the right "old" sha once a
+    fetch has run, because commits between that original tip and the
+    freshly-fetched one already reached the remote via someone else's push
+    -- THIS call did not land them, so they must not appear in its own
+    reported range. The tracked lower bound is therefore re-pointed at the
+    freshly-fetched upstream tip immediately after each successful fetch,
+    so the range finally reported on a landed retry names only the commits
+    this call itself pushed.
+
+    `allow_protected_branch`/`protected_branch_override_reason` (C4a, AC8/
+    AC14) -- a keyword-only, per-call override that, when `True`, skips the
+    `branch_gate()` predicate above entirely and lets the push proceed on a
+    non-`work/*` branch. NEVER ambient (no env var, no module-level flag --
+    see the plan's Anti-scope); the caller must pass it explicitly on the
+    one call that needs it. The ONE sanctioned consumer, as of this chunk,
+    is example-doctrine-repo's `merging-to-main` SKILL, Step 10 item 5 (the
+    post-merge, on-`main`, release-notes bookkeeping commit) -- see
+    `run_commit_pipeline`'s own docstring for the full citation. No op in
+    this repo passes it. Every exercised override -- the gate actually
+    skipped and a push to a protected branch actually attempted -- prints
+    via `_emit_push_policy_line("override-exercised", ...)` (C3/AC14); a
+    `work/*` branch that would have passed the gate anyway does NOT print
+    that line, since nothing was in fact overridden (see that call site
+    below for the reasoning).
     """
     root = Path(worktree_root)
 
     remote_check = git_native.remote(root)
     if not remote_check.stdout.strip():
         return PushOutcome(exit_code=0, skipped=["push:no-remote"])
+
+    branch = resolve_branch(str(root))
+    if branch is None:
+        _emit_push_policy_line("declined-unresolvable")
+        return PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
+
+    should_push, skip_message = branch_gate(branch)
+    if not should_push:
+        if allow_protected_branch:
+            # AC14 -- the gate would have declined this branch, and the
+            # caller explicitly overrode it: this is a genuinely exercised
+            # override, so it prints, and the push proceeds below rather
+            # than returning the decline outcome.
+            _emit_push_policy_line(
+                "override-exercised",
+                branch=branch,
+                reason=protected_branch_override_reason,
+            )
+        else:
+            _emit_push_policy_line("declined-policy", message=skip_message)
+            return PushOutcome(
+                exit_code=0,
+                skipped=["push:branch-policy"],
+                message=skip_message,
+            )
+
+    # AC7 -- resolved only now, after both gates above passed. `None` (no
+    # upstream tracking ref, e.g. a genuine first push) is the explicit
+    # "unknown" sentinel `PushOutcome.pushed_range`/`pushed_count` document.
+    pre_push_upstream_sha: Optional[str] = None
+    pre_push_upstream_result = git_native.rev_parse_upstream(root)
+    if pre_push_upstream_result.ok and pre_push_upstream_result.stdout.strip():
+        pre_push_upstream_name = pre_push_upstream_result.stdout.strip()
+        pre_push_sha_result = git_native.rev_parse(root, pre_push_upstream_name)
+        if pre_push_sha_result.ok and pre_push_sha_result.stdout.strip():
+            pre_push_upstream_sha = pre_push_sha_result.stdout.strip()
 
     upstream_ref: Optional[str] = None
     last_reason = ""
@@ -1244,9 +1647,21 @@ def push_with_retry(worktree_root: Union[str, Path]) -> PushOutcome:
     for attempt in range(_PUSH_MAX_RETRIES):
         push_result = git_native.push(root)
         if push_result.ok:
-            return PushOutcome(exit_code=0, acted=["push"])
+            new_sha: Optional[str] = None
+            head_result = git_native.rev_parse_head(root)
+            if head_result.ok and head_result.stdout.strip():
+                new_sha = head_result.stdout.strip()
+            pushed_range, pushed_count = _resolve_pushed_range(
+                root, pre_push_upstream_sha, new_sha
+            )
+            return PushOutcome(
+                exit_code=0,
+                acted=["push"],
+                pushed_range=pushed_range,
+                pushed_count=pushed_count,
+            )
 
-        reason = (push_result.stderr.strip() or f"exit_code={push_result.returncode}")[:200]
+        reason = condense_git_diagnostic(push_result.stderr) or f"exit_code={push_result.returncode}"
         last_reason = reason
         last_exit_code = push_result.returncode or 1
 
@@ -1265,10 +1680,18 @@ def push_with_retry(worktree_root: Union[str, Path]) -> PushOutcome:
         remote_name = upstream_ref.split("/", 1)[0] if "/" in upstream_ref else "origin"
         fetch_result = git_native.fetch(root, remote_name)
         if not fetch_result.ok:
-            fetch_reason = (fetch_result.stderr.strip() or "fetch failed")[:200]
+            fetch_reason = condense_git_diagnostic(fetch_result.stderr) or "fetch failed"
             last_reason = f"git fetch: {fetch_reason}"
             last_exit_code = fetch_result.returncode or 1
             break
+
+        # AC7 rebase-retry range fix (see docstring above): re-point the
+        # lower bound at the tip this fetch just observed, so a landed
+        # retry's reported range excludes commits that reached the remote
+        # via someone else's push, not this call's.
+        refetched_sha_result = git_native.rev_parse(root, upstream_ref)
+        if refetched_sha_result.ok and refetched_sha_result.stdout.strip():
+            pre_push_upstream_sha = refetched_sha_result.stdout.strip()
 
         rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(root, upstream_ref)
         if rebase_exit_code != 0:
@@ -1279,19 +1702,70 @@ def push_with_retry(worktree_root: Union[str, Path]) -> PushOutcome:
     return PushOutcome(exit_code=last_exit_code, failed=[f"git push: {last_reason}"])
 
 
+def _resolve_pushed_range(
+    root: Path, old_sha: Optional[str], new_sha: Optional[str]
+) -> Tuple[Optional[str], Optional[int]]:
+    """Resolve `(pushed_range, pushed_count)` for a landed push (C3b, AC7).
+
+    Returns `(None, None)` -- the documented explicit-unknown sentinel,
+    never `("", 0)` or a silently-omitted value -- when either endpoint
+    could not be resolved (most notably a first push with no upstream
+    tracking ref). When both endpoints resolve but `git rev-list --count`
+    itself fails or returns unparseable output, `pushed_range` is still
+    reported and only `pushed_count` comes back `None` -- the count is
+    unknown, not the range.
+    """
+    if old_sha is None or new_sha is None:
+        return None, None
+    pushed_range = f"{old_sha}..{new_sha}"
+    count_result = git_native.rev_list_count(root, pushed_range)
+    if not count_result.ok or not count_result.stdout.strip():
+        return pushed_range, None
+    try:
+        pushed_count = int(count_result.stdout.strip())
+    except ValueError:
+        return pushed_range, None
+    return pushed_range, pushed_count
+
+
 def derive_pushed_tristate(push_outcome: Optional[PushOutcome]) -> Optional[bool]:
     """Derive the `pushed` tri-state from a `PushOutcome` (or None -- never attempted).
 
+    Kept as `Optional[bool]` for existing readers; `push_status` (see
+    `derive_push_status` / `PipelineResult.push_status`) is the fully
+    disambiguated field and should be preferred by new code.
+
     True  -- the push genuinely synced this run.
-    False -- attempted and did not land, or the pipeline never reached the
-              push step (a gate or the commit itself failed first).
-    None  -- no remote configured -- must NOT be conflated with a failed push.
+    False -- attempted and did not land (a genuine push failure, i.e.
+              `push_status == "push-failed"`).
+    None  -- NOT SYNCED, and NOT A FAILURE -- read `push_status` for which of
+              its several reasons applies. `None` is shared by (at least)
+              THREE distinct meanings, and this function cannot tell them
+              apart on its own:
+                (a) no remote configured (`push_status == "no-remote"`);
+                (b) a branch-policy decline, or an unresolvable branch,
+                    added by this plan (`push_status == "declined"`);
+                (c) the pipeline never reached this function at all, most
+                    notably `run_commit_pipeline`'s nothing-to-commit no-op
+                    (the `if not commit_paths:` early-return) -- that call
+                    site never constructs a `PushOutcome` and sets `pushed`
+                    to `None` directly, without going through this
+                    function, for the same "nothing to push, no invariant
+                    violated" reason.
+              This amends the prior docstring, which named ONLY (a) --
+              `None` was already double-booked with (c) before this plan
+              touched the contract, and (b) is the meaning this plan adds
+              on top of both.
     """
     if push_outcome is None:
         return False
     if push_outcome.exit_code != 0:
         return False
     if "push:no-remote" in push_outcome.skipped:
+        return None
+    if "push:branch-policy" in push_outcome.skipped or (
+        "push:branch-unresolvable" in push_outcome.skipped
+    ):
         return None
     return True
 
@@ -1312,41 +1786,79 @@ class PipelineResult:
             itself returned non-zero. The pipeline never reaches the push
             step when this is True.
         pushed -- see `derive_pushed_tristate`.
-        integrity_breach -- True iff the commit LANDED locally
-            (`committed_sha` is not None) but did NOT land on the remote
-            (`pushed is False`) -- a state where the local ceremony
-            invariant "every commit this op makes is pushed" no longer
-            holds and a human/EM must resolve the divergence. A skipped
-            push (`pushed is None`, no remote configured) is NOT a breach --
-            there is no remote invariant to violate. Deliberately NOT
-            widened to include `sha_unverified` (W2, docs/plans/2026-08-08-
-            a-landed-commit-reported-as-failed.md): this predicate answers
-            "did a commit we can NAME fail to reach the remote" -- the
-            thing a human/EM would need to resolve is a divergence between
-            a known local sha and a known remote state. On the
-            `sha_unverified` path there is no known local sha to diverge
-            FROM; the actionable fact is entirely captured by
-            `sha_unverified=True` itself (surfaced separately, alongside a
-            loud diagnostic), and the push is attempted exactly as normal
-            (see `sha_unverified`'s own docstring) -- so by the time this
-            predicate would be evaluated, either the push succeeded (no
-            divergence) or it failed for an ordinary push reason unrelated
-            to the sha being unknown, which the existing `pushed is False`
-            arm already covers once `committed_sha` is resolved by a peer
-            read later. Widening this predicate to fire on `sha_unverified`
-            would only duplicate an already-loud signal under a name that
-            implies a resolvable-sha divergence that was never true here.
+        integrity_breach -- True iff the commit LANDED locally but did NOT
+            land on the remote (`pushed is False`) -- a state where the
+            local ceremony invariant "every commit this op makes is
+            pushed" no longer holds and a human/EM must resolve the
+            divergence. A skipped push (`pushed is None`, no remote
+            configured) is NOT a breach -- there is no remote invariant to
+            violate. Widened to include `sha_unverified` (Review: staff-eng
+            R2, state/review-trail/2026-08-08-landed-commit-close-review/
+            r2-w2.md, finding 0): the predicate previously fired only when
+            `committed_sha is not None`, which meant a landed-but-
+            unverified commit whose push then failed reported
+            `integrity_breach=False` -- a durable, UNPUSHED commit on a
+            shared branch, whose sha nobody can name, is strictly WORSE
+            than the named-sha breach this predicate exists to raise (there
+            is no peer read anywhere in this pipeline or its consumers that
+            ever back-fills `committed_sha` after the fact -- the prior
+            docstring's claim that one does was false). The naming half of
+            the old argument was right (there genuinely is no sha to name
+            on the `sha_unverified` path) but the conclusion did not follow
+            -- the breach is the divergence itself, not this pipeline's
+            ability to spell it. Now True whenever the commit landed
+            (`committed_sha is not None` OR `sha_unverified`) AND
+            `push_status == "push-failed"` (C2, this plan) -- re-derived off
+            `push_status` rather than `pushed is False`, because a
+            branch-policy decline is also `pushed is False` under the old
+            predicate and is emphatically NOT a breach: nothing was
+            attempted that policy did not itself refuse. Only a genuine
+            push failure raises this.
         sha_unverified -- True iff `git commit` landed a real commit but
             this pipeline could not resolve its sha (W2, same plan) --
             `commit_outcome.landed=True` with `commit_outcome.exit_code !=
             0`. `commit_failed` is False on this path (history changed;
             nothing here failed the caller's request) and the push still
             runs normally.
+        push_status -- the fully-disambiguated companion to `pushed` (see
+            the canonical-vocabulary comment above `PUSH_STATUS_PUSHED`):
+            one of `"pushed"`, `"push-failed"`, `"declined"`, `"no-remote"`,
+            `"not-attempted"`. Prefer this over `pushed` in new code --
+            `pushed`'s `None` is shared by three distinct reasons (see
+            `derive_pushed_tristate`'s docstring); `push_status` names which
+            one applies without a second lookup.
+        pushed_range -- (C3b, AC7) mirrors `PushOutcome.pushed_range` --
+            the `<old-sha>..<new-sha>` range this pass actually pushed when
+            `push_status == "pushed"`, else `None`. On a landed push, `None`
+            is the explicit "could not resolve" sentinel (e.g. a first push
+            with no upstream tracking ref yet), never a stand-in for "did
+            not push".
+        pushed_count -- (C3b, AC7) mirrors `PushOutcome.pushed_count`, same
+            explicit-unknown rule as `pushed_range`.
+
+    Fields (non-tri-state):
+        committed_sha -- the landed commit's sha, as best this pipeline can
+            still name it. Normally `commit_outcome.committed_sha`, captured
+            BEFORE the push -- but `push_with_retry()` can fetch + `git
+            rebase --onto` this very commit on a rejected push before
+            re-pushing, which REWRITES its sha (same hazard as
+            `consumed_handoff_stamp._commit_and_push_follow_up` and
+            `post_commit_tail._commit_and_push_origin_stub_close` -- see
+            those call sites' own Finding-1 comments). On the
+            `push_status == "pushed"` landed-push path this pipeline
+            re-resolves HEAD AFTER the push lands and reports that instead,
+            falling back to the pre-push value only if the re-read itself
+            fails -- never downgrading a known-good value to `None`. Every
+            other outcome (decline, no-remote, not-attempted, a genuine push
+            failure, or `sha_unverified=True`) reports the pre-push value
+            unchanged, paying no second `rev-parse`.
     """
 
     stage: StageOutcome
     deletion_gate: Optional[GateOutcome]
     dirty_gate: Optional[DirtyTreeOutcome]
+    carry_gate: Optional[GateOutcome]
+    op_scope_gate: Optional[GateOutcome]
     commit: Optional[CommitOutcome]
     push: Optional[PushOutcome]
     committed_sha: Optional[str]
@@ -1354,6 +1866,9 @@ class PipelineResult:
     commit_failed: bool
     integrity_breach: bool
     sha_unverified: bool = False
+    push_status: str = PUSH_STATUS_NOT_ATTEMPTED
+    pushed_range: Optional[str] = None
+    pushed_count: Optional[int] = None
     diagnostics: List[str] = field(default_factory=list)
 
 
@@ -1411,8 +1926,38 @@ def run_commit_pipeline(
     caller_paths: Optional[Set[str]] = None,
     on_committed: Optional[Callable[[str], None]] = None,
     push_mode: str = PUSH_MODE_SYNC,
+    allow_protected_branch: bool = False,
+    protected_branch_override_reason: Optional[str] = None,
+    deliverable_id: Optional[str] = None,
 ) -> PipelineResult:
     """Run the full stage -> gate -> commit -> [push] critical section.
+
+    `allow_protected_branch` (C4a, AC8/AC15) -- keyword-only, per-call
+    override threaded straight to `push_with_retry()`'s own argument of the
+    same name; default `False` leaves every existing caller's push
+    behaviour unchanged (none in this repo passes `True`). When `True`, a
+    non-`work/*` branch that `auto_push.branch_gate()` would otherwise
+    decline is pushed anyway, and the decision is never silent --
+    `push_with_retry()` prints an `"override-exercised"` line (C3/AC14)
+    naming the branch and `protected_branch_override_reason`. Never an env
+    var or a module-level flag (see the plan's Anti-scope) -- the ONE
+    sanctioned consumer of this argument, as of this chunk, is
+    example-doctrine-repo's `merging-to-main` SKILL (`coordinator/skills/merging-to-
+    main/SKILL.md`), Step 10 ("Completion-Log Status Flip") item 5: the
+    post-merge, on-`main`, release-notes bookkeeping commit that runs
+    AFTER a PR has already merged via `gh pr merge` -- never the work
+    itself, which lands via a PR and must never push `main` directly. No
+    op in this repo has a sanctioned reason to pass it; do not add one
+    "just in case".
+
+    `protected_branch_override_reason` -- the caller-supplied justification
+    printed verbatim in the override-exercised line. Optional; `None`
+    prints the line without a reason clause rather than failing the call.
+
+    `deliverable_id` (C7b) -- optional, passed straight through to `commit()`
+    (and from there to `git_native.commit_scoped()`); `None` by default,
+    unchanged behaviour for every existing caller. Not sourced or validated
+    here -- the caller must already hold a provenance-bearing id.
 
     Purpose: the C4 orchestration entry point. Used to acquire `ceremony_lock`
     for the duration of the entire critical section -- that mutex was deleted
@@ -1554,12 +2099,15 @@ def run_commit_pipeline(
             stage=StageOutcome(exit_code=-1, failed=list(pre_stage_diagnostics)),
             deletion_gate=None,
             dirty_gate=None,
+            carry_gate=None,
+            op_scope_gate=None,
             commit=None,
             push=None,
             committed_sha=None,
             pushed=False,
             commit_failed=True,
             integrity_breach=False,
+            push_status=PUSH_STATUS_NOT_ATTEMPTED,
             diagnostics=diagnostics,
         )
 
@@ -1609,12 +2157,16 @@ def run_commit_pipeline(
                 stage=stage,
                 deletion_gate=None,
                 dirty_gate=None,
+                carry_gate=None,
+                op_scope_gate=None,
                 commit=None,
                 push=None,
                 committed_sha=None,
                 pushed=False,
                 commit_failed=True,
                 integrity_breach=False,
+                sha_unverified=False,
+                push_status=PUSH_STATUS_NOT_ATTEMPTED,
                 diagnostics=diagnostics,
             )
 
@@ -1673,12 +2225,16 @@ def run_commit_pipeline(
                 stage=stage,
                 deletion_gate=None,
                 dirty_gate=None,
+                carry_gate=None,
+                op_scope_gate=None,
                 commit=None,
                 push=None,
                 committed_sha=None,
                 pushed=None,
                 commit_failed=False,
                 integrity_breach=False,
+                sha_unverified=False,
+                push_status=PUSH_STATUS_NOT_ATTEMPTED,
                 diagnostics=diagnostics,
             )
 
@@ -1692,6 +2248,8 @@ def run_commit_pipeline(
 
         deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
         dirty_gate = dirty_tree_gate(root, gate_paths)
+        carry_outcome = carry_gate(root, gate_paths)
+        op_scope_outcome = op_scope_coverage_gate(root, gate_paths)
 
         if not deletion_gate.passed:
             diagnostics.extend(deletion_gate.diagnostics)
@@ -1699,18 +2257,31 @@ def run_commit_pipeline(
             diagnostics.append(
                 "dirty-tree gate: unattributable paths: " + ", ".join(dirty_gate.unattributable)
             )
+        if not carry_outcome.passed:
+            diagnostics.extend(carry_outcome.diagnostics)
+        if not op_scope_outcome.passed:
+            diagnostics.extend(op_scope_outcome.diagnostics)
 
-        if not deletion_gate.passed or not dirty_gate.passed:
+        if (
+            not deletion_gate.passed
+            or not dirty_gate.passed
+            or not carry_outcome.passed
+            or not op_scope_outcome.passed
+        ):
             return PipelineResult(
                 stage=stage,
                 deletion_gate=deletion_gate,
                 dirty_gate=dirty_gate,
+                carry_gate=carry_outcome,
+                op_scope_gate=op_scope_outcome,
                 commit=None,
                 push=None,
                 committed_sha=None,
                 pushed=False,
                 commit_failed=True,
                 integrity_breach=False,
+                sha_unverified=False,
+                push_status=PUSH_STATUS_NOT_ATTEMPTED,
                 diagnostics=diagnostics,
             )
 
@@ -1719,8 +2290,8 @@ def run_commit_pipeline(
             message=message,
             commit_paths=commit_paths,
             common_dir=common_dir,
+            deliverable_id=deliverable_id,
         )
-        sha_unverified = False
         if commit_outcome.exit_code != 0:
             if not commit_outcome.landed:
                 # Unchanged in every respect (W2, docs/plans/2026-08-08-a-
@@ -1740,12 +2311,16 @@ def run_commit_pipeline(
                     stage=stage,
                     deletion_gate=deletion_gate,
                     dirty_gate=dirty_gate,
+                    carry_gate=carry_outcome,
+                    op_scope_gate=op_scope_outcome,
                     commit=commit_outcome,
                     push=None,
                     committed_sha=None,
                     pushed=False,
                     commit_failed=True,
                     integrity_breach=False,
+                    sha_unverified=False,
+                    push_status=PUSH_STATUS_NOT_ATTEMPTED,
                     diagnostics=diagnostics,
                 )
 
@@ -1754,7 +2329,7 @@ def run_commit_pipeline(
             # `commit()`'s own verification of WHICH sha it landed
             # failed (HEAD unresolvable on an unborn-branch first commit,
             # an empty message subject, or a zero-or-ambiguous
-            # `Commit-Nonce:` match), not the commit itself. Set the
+            # `Commit-Token:` match), not the commit itself. Set the
             # local `landed` flag True BEFORE any return so the `finally`
             # below skips the rollback for the STATED reason (history
             # already changed -- there is nothing index-only left to
@@ -1763,8 +2338,10 @@ def run_commit_pipeline(
             # here would have produced. `commit_failed` stays False --
             # nothing about the caller's request failed -- and
             # `sha_unverified=True` carries the actionable fact forward.
+            # (Review: staff-eng R2 nitpick/maintainability -- passed as
+            # a literal at both use sites below rather than through a
+            # local, since it is constant at both reads.)
             landed = True
-            sha_unverified = True
             diagnostics.append(
                 "run_commit_pipeline: commit landed but its sha could not be "
                 f"verified -- {commit_outcome.stderr}"
@@ -1775,13 +2352,16 @@ def run_commit_pipeline(
                     stage=stage,
                     deletion_gate=deletion_gate,
                     dirty_gate=dirty_gate,
+                    carry_gate=carry_outcome,
+                    op_scope_gate=op_scope_outcome,
                     commit=commit_outcome,
                     push=None,
                     committed_sha=None,
                     pushed=None,
                     commit_failed=False,
                     integrity_breach=False,
-                    sha_unverified=sha_unverified,
+                    sha_unverified=True,
+                    push_status=PUSH_STATUS_NOT_ATTEMPTED,
                     diagnostics=diagnostics,
                 )
 
@@ -1792,28 +2372,42 @@ def run_commit_pipeline(
             # unresolvable, is the worse failure. `on_committed` is
             # deliberately NOT invoked below (see the guard immediately
             # after this block for why that is correct, not incidental).
-            push_outcome = push_with_retry(root)
+            push_outcome = push_with_retry(
+                root,
+                allow_protected_branch=allow_protected_branch,
+                protected_branch_override_reason=protected_branch_override_reason,
+            )
             if push_outcome.failed:
                 diagnostics.extend(push_outcome.failed)
             pushed = derive_pushed_tristate(push_outcome)
+            push_status = derive_push_status(push_outcome)
+            if push_status == PUSH_STATUS_PUSHED:
+                diagnostics.append(_pushed_range_diagnostic(push_outcome))
             return PipelineResult(
                 stage=stage,
                 deletion_gate=deletion_gate,
                 dirty_gate=dirty_gate,
+                carry_gate=carry_outcome,
+                op_scope_gate=op_scope_outcome,
                 commit=commit_outcome,
                 push=push_outcome,
                 committed_sha=None,
                 pushed=pushed,
                 commit_failed=False,
-                # `committed_sha is None` here unconditionally, so this
-                # formula is always False on this path regardless of
-                # `pushed` -- see `PipelineResult.integrity_breach`'s own
-                # docstring for why that is the right answer, not a gap:
-                # there is no known local sha to diverge FROM, so there is
-                # no divergence this predicate exists to name; the
-                # actionable fact is `sha_unverified=True` itself.
-                integrity_breach=False,
-                sha_unverified=sha_unverified,
+                # Review: staff-eng R2 finding 0 -- `committed_sha is None`
+                # here unconditionally, but `sha_unverified=True` means the
+                # commit DID land; widened per `PipelineResult.
+                # integrity_breach`'s own docstring so a failed push on this
+                # path (durable local commit, unpushed, unnameable) reports
+                # a breach instead of silently passing as `False`.
+                # C2: re-derived off `push_status == "push-failed"` rather
+                # than `pushed is False` -- a branch-policy decline is also
+                # `pushed is False` and must NOT report a breach.
+                integrity_breach=(push_status == PUSH_STATUS_FAILED),
+                sha_unverified=True,
+                push_status=push_status,
+                pushed_range=push_outcome.pushed_range,
+                pushed_count=push_outcome.pushed_count,
                 diagnostics=diagnostics,
             )
 
@@ -1858,6 +2452,8 @@ def run_commit_pipeline(
                 stage=stage,
                 deletion_gate=deletion_gate,
                 dirty_gate=dirty_gate,
+                carry_gate=carry_outcome,
+                op_scope_gate=op_scope_outcome,
                 commit=commit_outcome,
                 push=None,
                 committed_sha=commit_outcome.committed_sha,
@@ -1865,6 +2461,7 @@ def run_commit_pipeline(
                 commit_failed=False,
                 integrity_breach=False,
                 sha_unverified=False,
+                push_status=PUSH_STATUS_NOT_ATTEMPTED,
                 diagnostics=diagnostics,
             )
 
@@ -1872,19 +2469,55 @@ def run_commit_pipeline(
         if push_outcome.failed:
             diagnostics.extend(push_outcome.failed)
         pushed = derive_pushed_tristate(push_outcome)
-        integrity_breach = commit_outcome.committed_sha is not None and pushed is False
+        push_status = derive_push_status(push_outcome)
+        final_committed_sha = commit_outcome.committed_sha
+        if push_status == PUSH_STATUS_PUSHED:
+            diagnostics.append(_pushed_range_diagnostic(push_outcome))
+            # `push_with_retry()` can fetch + `git rebase --onto` THIS
+            # commit on a rejected push before re-pushing, which rewrites
+            # its sha (same hazard as `consumed_handoff_stamp.
+            # _commit_and_push_follow_up` and `post_commit_tail.
+            # _commit_and_push_origin_stub_close` -- see those call sites'
+            # own Finding-1 comments for the full mechanism). The
+            # pre-push `commit_outcome.committed_sha` captured above is
+            # therefore stale in exactly the retry case this ladder
+            # exists to handle. Re-resolve HEAD now, after the push
+            # actually landed, so `committed_sha` names the commit that
+            # is really on the remote. Only the landed path pays this
+            # second `rev-parse` -- decline/no-remote/not-attempted/
+            # failure paths below never rewrite anything and keep the
+            # pre-push value untouched. If the re-read itself fails,
+            # fall back to the pre-push sha rather than downgrading a
+            # known-good value to None -- it is correct unless a
+            # rebase-retry actually fired, and a stale-but-real sha is a
+            # better audit trail than a hole.
+            post_push = git_native.rev_parse_head(root)
+            if post_push.ok and post_push.stdout.strip():
+                final_committed_sha = post_push.stdout.strip()
+        # C2: re-derived off `push_status == "push-failed"` rather than
+        # `pushed is False` -- a branch-policy decline is also `pushed is
+        # False` and must NOT report a breach; nothing was breached, the
+        # engine did what doctrine says.
+        integrity_breach = (
+            commit_outcome.committed_sha is not None and push_status == PUSH_STATUS_FAILED
+        )
 
         return PipelineResult(
             stage=stage,
             deletion_gate=deletion_gate,
             dirty_gate=dirty_gate,
+            carry_gate=carry_outcome,
+            op_scope_gate=op_scope_outcome,
             commit=commit_outcome,
             push=push_outcome,
-            committed_sha=commit_outcome.committed_sha,
+            committed_sha=final_committed_sha,
             pushed=pushed,
             commit_failed=False,
             integrity_breach=integrity_breach,
             sha_unverified=False,
+            push_status=push_status,
+            pushed_range=push_outcome.pushed_range,
+            pushed_count=push_outcome.pushed_count,
             diagnostics=diagnostics,
         )
     finally:

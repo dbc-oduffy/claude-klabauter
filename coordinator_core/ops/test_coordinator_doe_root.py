@@ -123,16 +123,13 @@ def test_t4_memo_idempotency_second_call_skips_machine_local(tmp_path, monkeypat
 
     assert first == "/x/example-doctrine-repo"
     assert second == "/x/example-doctrine-repo"
-    # C1B: the codename-free ladder's rung (d) also calls
-    # `machine-local get plugin.mirrors.coordinator-claude.live_path` ahead of
-    # rung 2's `repos.example_doctrine_repo` call -- this stub doesn't branch on the key
-    # argument, so BOTH calls append a sentinel line on the one outer
-    # resolution that actually reaches machine-local (rung (d)'s candidate,
-    # "/x/example-doctrine-repo", is not a real directory, so it fails the ladder's
-    # isdir+manifest gate and falls through). The property this test actually
-    # guards -- a SECOND outer call makes zero further stub calls -- still
-    # holds: the count below is unchanged between one outer call and two.
-    assert sentinel.read_text().count("called\n") == 2
+    # B1 review fix (2026-08-08): the stub resolves rung 2 (repos.example_doctrine_repo)
+    # immediately, so neither the codename-free ladder (now rung 2.75, tried
+    # only when rungs 2/2.5 both fail) nor rung 2.5 itself is ever reached on
+    # this stub. The property this test guards -- exactly one machine-local
+    # call per outer resolution, and zero further calls on the memoized
+    # second call -- now holds with the count it always should have had: 1.
+    assert sentinel.read_text().count("called\n") == 1
 
 
 def test_t5_rung3_pointer_file_fallback_via_clone_root_script(tmp_path, monkeypatch):
@@ -349,9 +346,207 @@ def test_c1e_plugin_root_content_root_normalized_to_repo_root(tmp_path, monkeypa
     )
 
 
+def test_b5_plugin_root_normalizes_without_marketplace_marker(tmp_path):
+    """B5 review fix (2026-08-08): the private example-doctrine-repo repo root may not carry
+    `.claude-plugin/plugin.json` (the C1E fix's marker was an unverified
+    premise). With no marketplace marker ANYWHERE, a candidate whose basename
+    is "coordinator" and whose parent has the manifest at
+    `<parent>/coordinator/schemas/coordinator-registry.manifest.json` must
+    still normalize to the parent (repo root), not fall through to the
+    unnormalized content root."""
+    repo_root = tmp_path / "b5-doe-repo"
+    content_root = repo_root / "coordinator"
+    (content_root / "schemas").mkdir(parents=True)
+    (content_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    result = mod._cf_repo_root_from_plugin_root_candidate(str(content_root))
+
+    assert result == str(repo_root)
+
+
+def test_b7_plugin_root_candidate_case_insensitive_basename(tmp_path):
+    """B7 review fix (2026-08-08): the "coordinator" basename comparison
+    must be case-insensitive on Windows, where a registry value or env var
+    can carry any casing that resolves to the same path."""
+    repo_root = tmp_path / "b7-doe-repo"
+    content_root = repo_root / "Coordinator"
+    (repo_root / ".claude-plugin").mkdir(parents=True)
+    (repo_root / ".claude-plugin" / "plugin.json").write_text("{}")
+    content_root.mkdir()
+
+    result = mod._cf_repo_root_from_plugin_root_candidate(str(content_root))
+
+    assert result == str(repo_root)
+
+
+def test_b7_plugin_root_candidate_bare_drive_root_not_truncated():
+    """B7 review fix (2026-08-08): rstrip("/\\\\") must not silently turn a
+    bare drive root into a drive-relative path.
+    abs-path-ok: drive-root syntax fixture, not a hardcoded host path."""
+    drive_root = "C:" + "\\"
+
+    result = mod._cf_repo_root_from_plugin_root_candidate(drive_root)
+
+    assert result == drive_root
+
+
+def test_f1_marketplace_cache_rung_resolves_real_marketplace_layout(tmp_path, monkeypatch):
+    """F1 regression (2026-08-08, hermetic-ac-reverify) -- Claude Code's REAL
+    marketplace-install location (`<claude_home>/plugins/cache/coordinator-
+    claude/coordinator/<version>/`) must resolve via `coordinator_doe_root()`
+    the same way it already did for the two bin/-side twins
+    (`coordinator_registry.py::_mp_marketplace_cache_rung`,
+    `coordinator/bin/lib/coordinator_data_root.py::_cdr_marketplace_cache_rung`).
+    Registry unreachable (empty PATH), no `.doe-root` pointer, no
+    CLAUDE_PLUGIN_ROOT -- only the marketplace-cache rung is live."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "f1-mktcache-fake-home"
+    version_dir = fake_home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
+    (version_dir / "schemas").mkdir(parents=True)
+    (version_dir / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    result = mod.coordinator_doe_root()
+
+    assert result == str(version_dir)
+
+
+def test_f1_marketplace_cache_rung_newest_version_wins(tmp_path, monkeypatch):
+    """F1 regression: multiple installed versions under the cache -- the
+    numerically-newest version dir must win (DR-148-safe compare), mirroring
+    both bin/-side twins' own version-compare tests."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "f1-mktcache-multi-fake-home"
+    cache_parent = fake_home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator"
+    for version in ("1.2.0", "4.0.0", "3.9.9"):
+        version_dir = cache_parent / version
+        (version_dir / "schemas").mkdir(parents=True)
+        (version_dir / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    result = mod.coordinator_doe_root()
+
+    assert result == str(cache_parent / "4.0.0")
+
+
+def test_f1_marketplace_cache_rung_ordered_ahead_of_flat_layout(tmp_path, monkeypatch):
+    """F1: the marketplace-cache rung must be tried BEFORE the flat-layout
+    rung (matching both bin/-side twins' rung order: pointer -> marketplace
+    cache -> flat layout -> plugin root -> live_path) so a box carrying both
+    a real marketplace-cache install AND a flat dev-install clone prefers the
+    real one."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "f1-order-fake-home"
+
+    version_dir = fake_home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
+    (version_dir / "schemas").mkdir(parents=True)
+    (version_dir / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    flat_root = fake_home / ".claude" / "plugins" / "coordinator-claude"
+    (flat_root / ".claude-plugin").mkdir(parents=True)
+    (flat_root / ".claude-plugin" / "plugin.json").write_text("{}")
+    (flat_root / "schemas").mkdir()
+    (flat_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    result = mod.coordinator_doe_root()
+
+    assert result == str(version_dir)
+
+
 def test_main_cli_success_prints_no_trailing_newline(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/tmp/some-doe-root")
     rc = mod.main([])
     captured = capsys.readouterr()
     assert rc == 0
     assert captured.out == "/tmp/some-doe-root"
+
+
+# ---------------------------------------------------------------------------
+# Characterisation tests for repo_root_from_plugin_root_candidate(), the
+# single-sourced helper (state/debt-backlog/2026-08-08-three-divergent-
+# copies-of-the-plugin-roo-8d584d3b90d3.yaml). This module's own
+# _cf_repo_root_from_plugin_root_candidate() is a thin default-args wrapper,
+# already covered by the b5/b7 tests above. These tests pin the OTHER call
+# shape -- coordinator_registry.py's historical parameters -- reproduced via
+# the shared function directly, so a future edit cannot silently change
+# either call site's behaviour without a test failing.
+# ---------------------------------------------------------------------------
+
+
+def test_shared_helper_normpath_guard_bare_drive_root_falls_through_unchanged():
+    """drive_root_guard="normpath" (coordinator_registry.py's shape) and
+    drive_root_guard="preserve" (this module's B7-fixed default) return the
+    SAME thing for a bare drive-root-syntax candidate with no marketplace
+    marker present -- the unmatched-fallback branch returns the original
+    `candidate`, not either guard's internal (possibly truncated) working
+    value. See the function's "KNOWN CROSS-COPY DIVERGENCE" docstring note
+    for the latent, not-unit-testable-here case where they would differ.
+    abs-path-ok: drive-root syntax fixture, not a hardcoded host path."""
+    drive_root = "C:" + "\\"
+
+    result = mod.repo_root_from_plugin_root_candidate(drive_root, drive_root_guard="normpath")
+
+    assert result == drive_root
+
+
+def test_shared_helper_casefold_basename_compare_is_case_insensitive_everywhere(tmp_path):
+    """coordinator_registry.py's basename_compare="casefold" shape is
+    case-insensitive regardless of platform, unlike this module's own
+    normcase-based default."""
+    repo_root = tmp_path / "doe-repo"
+    content_root = repo_root / "COORDINATOR"
+    content_root.mkdir(parents=True)
+    (repo_root / ".claude-plugin").mkdir()
+    (repo_root / ".claude-plugin" / "plugin.json").write_text("{}")
+
+    result = mod.repo_root_from_plugin_root_candidate(str(content_root), basename_compare="casefold")
+
+    assert result == str(repo_root)
+
+
+def test_shared_helper_manifest_relpath_fallback_disabled_matches_registry_copy(tmp_path):
+    """coordinator_registry.py's copy never carried the B5 manifest-relpath
+    fallback -- manifest_relpath_fallback=False must fall through
+    unnormalized even though the manifest-relpath shape is present."""
+    repo_root = tmp_path / "doe-repo"
+    content_root = repo_root / "coordinator"
+    (content_root / "schemas").mkdir(parents=True)
+    (content_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    result = mod.repo_root_from_plugin_root_candidate(str(content_root), manifest_relpath_fallback=False)
+
+    assert result == str(content_root)
+
+
+def test_shared_helper_allow_unchanged_fallback_false_returns_empty(tmp_path):
+    candidate = str(tmp_path / "unrecognized")
+    tmp_path_target = tmp_path / "unrecognized"
+    tmp_path_target.mkdir()
+
+    result = mod.repo_root_from_plugin_root_candidate(candidate, allow_unchanged_fallback=False)
+
+    assert result == ""
+
+
+def test_shared_helper_unknown_drive_root_guard_raises():
+    with pytest.raises(ValueError):
+        mod.repo_root_from_plugin_root_candidate("x", drive_root_guard="bogus")
+
+
+def test_shared_helper_unknown_basename_compare_raises(tmp_path):
+    # Must reach the basename-compare branch: no marketplace marker directly
+    # under candidate, so isfile() short-circuit doesn't return first.
+    candidate = str(tmp_path / "coordinator")
+    (tmp_path / "coordinator").mkdir()
+    with pytest.raises(ValueError):
+        mod.repo_root_from_plugin_root_candidate(candidate, basename_compare="bogus")

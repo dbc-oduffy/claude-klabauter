@@ -104,7 +104,7 @@ import logging
 import os
 import re
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags, same_path
 import sys
 import tempfile
 from pathlib import Path
@@ -674,8 +674,13 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _same_path(a: str, b: str) -> bool:
-    """Return True if ``a`` and ``b`` resolve to the same filesystem path."""
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
+    consolidated primitive (state/sizings/2026-08-07-path-equality-
+    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
+    samefile-then-fallback semantics: broader (junction-aware) equality is
+    correct here since this call site only checks "is caller_worktree the
+    meta-repo home", where a junction-aliased home must compare equal."""
+    return same_path(a, b)
 
 
 # ---------------------------------------------------------------------------
@@ -1256,7 +1261,7 @@ def append_queue_entry(
 
 
 @register_op("queue.append")
-async def _queue_append_handler(
+def _queue_append_handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
     """JSON-RPC ``queue.append`` handler — write a queue YAML entry.

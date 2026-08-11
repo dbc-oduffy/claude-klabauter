@@ -310,8 +310,13 @@ def main(argv: List[str]) -> int:
         print("Usage: migrate-state-to-claude-klabauter.sh --populate | --finalize", file=sys.stderr)
         return 1
 
+    # Negative-spec: the HOME rung is load-bearing, not redundant with the
+    # expanduser terminal. Drop it and a harness that overrides HOME without
+    # also setting USERPROFILE falls through to the real machine home, with
+    # no error -- the isolated-env test shape this repo uses everywhere.
     claude_home = os.environ.get("CLAUDE_HOME") or os.path.join(
-        os.path.expanduser("~"), ".claude"
+        os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~"),
+        ".claude",
     )
     if not os.path.isdir(claude_home):
         print(f"ERROR: CLAUDE_HOME not found at: {claude_home}", file=sys.stderr)

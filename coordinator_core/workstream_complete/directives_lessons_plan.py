@@ -295,17 +295,39 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     `d-claim-plan-execution-lock` (spec backlink:
     `docs/plans/2026-06-26-cs-claim-plan-execution-lock.md` § C4) is
     re-entrant at the CLI level (D2) — no `already_satisfied` short-circuit
-    needed here. `d-stamp-plan-implemented` fires unconditionally once the
-    predicate holds, independent of whether the ALLOWLIST reconcile
-    judgment (`plan-vs-reality-reconcile`, `judgments.py`) produced any
-    corrections — the census's own disposition: "Fires unconditionally on
-    the predicate already resolved... status-matrix logic lives in the CLI
-    itself." Both directives therefore carry `depends_on=None`; the
-    predicate gate is expressed structurally (no governing plan -> the
-    list is empty), matching how the existing `d-claim-plan` in
-    `__init__.py`'s `build_directives` already gates on
-    `decisions.get("governing_plan_slug")` via a plain `if`, not a
-    `depends_on` edge.
+    needed here. `d-stamp-plan-implemented` DEPENDS ON that claim landing.
+    The `depends_on="d-claim-plan-execution-lock"` field documents that
+    intent and is read by other tooling, but — like every `depends_on`
+    naming a SIBLING DIRECTIVE ID rather than a judgment-point id —
+    `apply_halt.py::_directive_gate_open` does NOT gate on it (it hits a
+    bare `continue` for non-judgment-point ids); by itself it is inert.
+    The actual enforcement is the trailing `{d-claim-plan-execution-lock.
+    landed}` arg token below, resolved by `apply.py::_resolve_arg_tokens`:
+    it substitutes the empty string when the claim landed this pass, and
+    fails `d-stamp-plan-implemented` loud into `report["failed"]` when the
+    claim never landed (denied, blocked, or failed) — the same idiom
+    `directives_commit_tail.py`'s `build_release_plan_claim_directive` /
+    `build_emit_cadence_directive` already use for their own
+    `{d-run-wsc-tail.landed}` tokens. `archive-stamp-cli`'s
+    `stamp-plan-implemented` verb reads only `rest[0]` (the plan path) and
+    silently ignores any trailing argv, so appending the token as an extra
+    positional is safe — it never reaches `cs_stamp_plan_implemented` as a
+    real argument, it only participates in `_resolve_arg_tokens`'
+    pre-dispatch substitution/failure check.
+
+    This closes a defence-in-depth gap surfaced by a live incident — a
+    session-shape misdetection caused `plan-status-transition` to stamp a
+    LIVE PEER's `approved` plan `implemented` and commit it (cross-repo
+    memo `2026-08-10-example-retrieval-repo-em-wsc-misdetection-wrote-to-a-live-peers-
+    plan.md`) — because the stamp directive fired independent of whether
+    the claim actually succeeded. `d-claim-plan-execution-lock` itself
+    still carries `depends_on=None` — nothing gates the claim attempt
+    itself; only the stamp that follows it is now conditioned on it
+    landing. The predicate gate (no governing plan -> the list is empty)
+    is unchanged and still expressed structurally, matching how the
+    existing `d-claim-plan` in `__init__.py`'s `build_directives` already
+    gates on `decisions.get("governing_plan_slug")` via a plain `if`, not
+    a `depends_on` edge.
     """
     if not governing_plan_predicate(governing_plan):
         return []
@@ -314,7 +336,12 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     plan_rel = f"docs/plans/{slug}.md"
     return [
         _directive("d-claim-plan-execution-lock", "wsc-coverage-gate-runner", ["claim-plan", slug]),
-        _directive("d-stamp-plan-implemented", "archive-stamp-cli", ["stamp-plan-implemented", plan_rel]),
+        _directive(
+            "d-stamp-plan-implemented",
+            "archive-stamp-cli",
+            ["stamp-plan-implemented", plan_rel, "{d-claim-plan-execution-lock.landed}"],
+            depends_on="d-claim-plan-execution-lock",
+        ),
     ]
 
 

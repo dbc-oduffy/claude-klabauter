@@ -36,21 +36,28 @@ import json
 import logging
 import os
 import re
+import subprocess
 from pathlib import Path
-from typing import FrozenSet, Optional
+from typing import FrozenSet, Optional, Sequence
 
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.resolve_chain_terminal_disposition import (
     classify_chain_terminal_disposition,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 logger = logging.getLogger(__name__)
 
 #: state/review-trail/ subdirectory holding permanent, idempotent,
-#: chain-scoped waivers minted by the coverage gate at HALT (C2) — kept
-#: physically separate from DR-243's `pm-vouches/` so a gate-derived waiver
-#: and a PM-granted one are never confused on disk (AC3's audit distinction
-#: lives in the directory name, not in a shared reader).
+#: chain-scoped waivers minted by the coverage gate (C2) whenever a caller
+#: passes `mint_chain_waivers=True` and `from_handoff` and the gate's
+#: `result.uncovered_shas` is non-empty — NOT gated on `result.verdict`
+#: (that leg was dropped 2026-08-07,
+#: state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md;
+#: "minted at HALT" is stale prose from before that fix). Kept physically
+#: separate from DR-243's `pm-vouches/` so a gate-derived waiver and a
+#: PM-granted one are never confused on disk (AC3's audit distinction lives
+#: in the directory name, not in a shared reader).
 CHAIN_ANCESTRY_WAIVER_DIRNAME = "chain-ancestry-waivers"
 
 #: Directory-name-safety guard for `chain_id` (expected value: the closing
@@ -158,16 +165,151 @@ def repo_relative_source_handoff(cwd: str, source_handoff: Optional[str]) -> Opt
         return source_handoff
 
 
+def _session_id_trailers_batch(cwd: str, shas: Sequence[str]) -> dict[str, list[str]]:
+    """Map each sha in `shas` to the non-empty lines of its own commit-message
+    `Session-Id:` trailer, resolved in ONE `git log --no-walk` over every sha
+    rather than one spawn per sha.
+
+    Framing is NUL-delimited (`%x00%H%x00<trailers>`) precisely because a
+    trailer value is not guaranteed to be single-line: a multi-valued trailer
+    renders as several lines, and a newline-delimited format could not tell
+    "second line of this commit's trailer" from "next commit's record". Callers
+    read a len != 1 line list as ambiguous, so mis-framing here would silently
+    change a verdict.
+
+    Returns `{}` on any git failure, and omits any sha git did not report. Both
+    are read by the caller as "no evidence" -> PROCEED, preserving
+    `_refuse_if_live_foreign_chain_sha`'s terminal-safe contract: a single
+    unresolvable sha makes `git log` fail for the whole batch, which degrades
+    every sha to proceed, exactly as the per-sha form degraded each one
+    individually.
+
+    Keys are git's own full object names (`%H`). An abbreviated input sha is
+    re-attached by unique prefix, and a prefix matching more than one reported
+    commit is dropped rather than guessed.
+    """
+    if not shas:
+        return {}
+    try:
+        proc = subprocess.run(
+            [
+                "git", "log", "--no-walk",
+                "--format=%x00%H%x00%(trailers:key=Session-Id,valueonly)",
+                *shas,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return {}
+    if proc.returncode != 0:
+        return {}
+
+    by_full_sha: dict[str, list[str]] = {}
+    fields = proc.stdout.split("\x00")
+    for i in range(1, len(fields) - 1, 2):
+        full_sha = fields[i].strip()
+        if full_sha:
+            by_full_sha[full_sha] = [ln.strip() for ln in fields[i + 1].splitlines() if ln.strip()]
+
+    resolved: dict[str, list[str]] = {}
+    for sha in shas:
+        if sha in by_full_sha:
+            resolved[sha] = by_full_sha[sha]
+            continue
+        matches = [full for full in by_full_sha if full.startswith(sha)]
+        if len(matches) == 1:
+            resolved[sha] = by_full_sha[matches[0]]
+    return resolved
+
+
+def _refusal_from_trailer_lines(
+    cwd: str, sha: str, chain_id: str, lines: Optional[list[str]]
+) -> Optional[str]:
+    """The refusal DECISION for one sha, given its already-resolved trailer
+    lines (`None` when git could not report them). Split out of
+    `_refuse_if_live_foreign_chain_sha` so the decision can be applied over a
+    batched trailer read without one git spawn per sha; the terminal-safe rules
+    live here and are shared by both the single and batched entry points."""
+    if lines is None or len(lines) != 1:
+        # Absent (untrailered/unreported) or ambiguous (multi-valued trailer,
+        # which `%(trailers:valueonly)` renders as more than one line) — cannot
+        # positively establish a foreign owner, proceed.
+        return None
+    from coordinator_core.session.liveness import session_live
+
+    trailer_sid = lines[0]
+    if not trailer_sid or trailer_sid == chain_id:
+        return None
+    if not session_live(trailer_sid, cwd=cwd):
+        return None
+    return (
+        f"sha {sha} carries Session-Id trailer {trailer_sid!r}, a LIVE "
+        f"session different from the minting chain {chain_id!r} — refusing "
+        "to mint a chain-ancestry waiver that would self-relax ancestry "
+        "review for a foreign in-flight commit"
+    )
+
+
+def _refuse_if_live_foreign_chain_sha(cwd: str, sha: str, chain_id: str) -> Optional[str]:
+    """Refuse to mint a chain-ancestry waiver for `sha` under `chain_id` when
+    `sha`'s own commit-message `Session-Id:` trailer names a DIFFERENT
+    session that is currently LIVE — defence-in-depth for the same
+    session-shape-misdetection incident `plan_status_transition._refuse_
+    if_live_foreign_holder` and `coordinator_complete_entry._refuse_if_live_
+    foreign_entry_holder` guard against (cross-repo memo `2026-08-10-
+    example-retrieval-repo-em-wsc-misdetection-wrote-to-a-live-peers-plan.md`): a
+    misclassified session would otherwise mint a PERMANENT per-(sha,
+    chain_id) waiver under ITS OWN `chain_id` for a commit it does not own
+    — self-relaxing ancestry review (`coverage.py::_narrow_foreign_session_
+    scope`) for a live peer's own in-flight commit, under the closing
+    session's own chain identity. Waivers are already chain-scoped
+    (`chain_ancestry_waived_shas` matches by exact `chain_id` equality, so
+    a waiver minted under chain A cannot relax chain B) — this closes the
+    remaining gap: a session self-relaxing review for commits it does not
+    own, under its own chain.
+
+    Returns a human-readable refusal reason (non-None -> caller must skip
+    minting THIS sha) or `None` (proceed). TERMINAL-SAFE by construction,
+    mirroring both sibling guards exactly: a git failure, an unresolvable
+    log, an absent/ambiguous (merge, multi-valued) trailer, self-authorship
+    (trailer == `chain_id`), or a dead holder all proceed — this only fires
+    on a POSITIVELY-established LIVE foreign owner, never on absence of
+    evidence. A guard that blocked on absence would wedge the ordinary
+    halt->disposition->re-run path this revert exists to restore.
+    """
+    return _refusal_from_trailer_lines(
+        cwd, sha, chain_id, _session_id_trailers_batch(cwd, [sha]).get(sha)
+    )
+
+
 def record_chain_ancestry_waiver(
     cwd: str,
     shas: FrozenSet[str],
     chain_id: str,
     source_handoff: Optional[str] = None,
     em_disposition: Optional[str] = None,
-) -> None:
+) -> FrozenSet[str]:
     """Persist an idempotent, PERMANENT per-(sha, chain_id) waiver under
     `state/review-trail/chain-ancestry-waivers/<chain_id>/<sha>.json` for
-    each sha in `shas`.
+    each sha in `shas`, and return the (possibly empty) subset of `shas`
+    REFUSED — never minted — because `_refuse_if_live_foreign_chain_sha`
+    positively established a LIVE foreign owner for that sha (2026-08-10,
+    see that function's own docstring for the incident and the
+    terminal-safe discriminator). This is the sole write site for this
+    artifact (every caller — `coordinator_core.ops.coverage_gate`, the
+    ceremony-close subcommands in `coordinator/bin/wsc-coverage-gate-
+    runner.py` — routes through this one function), so the refusal is
+    enforced here rather than at any individual caller, and cannot be
+    bypassed by a caller that forgets to re-check ownership itself. Refused
+    shas are logged loudly (`logger.warning`, one line per sha) so an
+    operator relying on silence == "minted everything" is never misled —
+    callers that want this surfaced further (e.g. into a ceremony's own
+    stderr/notes) should inspect the returned set, not just this function's
+    log output.
 
     `em_disposition` is the closing EM's stated disposition toward the
     ancestry this mint waives, or None when none was recorded. It is written
@@ -220,7 +362,9 @@ def record_chain_ancestry_waiver(
     A `chain_id` failing the directory-name-safety shape check
     (`chain_waiver_dir` returning None) skips the WHOLE `shas` set for
     that call, with a warning — never partially resolved, never a path
-    escape.
+    escape. That case still returns `frozenset(shas)` (every sha refused)
+    rather than an empty set — a caller inspecting the return value must
+    not read it as "everything minted cleanly."
     """
     chain_dir = chain_waiver_dir(cwd, chain_id)
     if chain_dir is None:
@@ -228,7 +372,7 @@ def record_chain_ancestry_waiver(
             "chain_ancestry_waivers: refusing to mint — chain_id %r fails "
             "the directory-name-safety shape check", chain_id,
         )
-        return
+        return frozenset(shas)
     try:
         chain_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -238,9 +382,23 @@ def record_chain_ancestry_waiver(
             "the waived-for commit(s) for chain %r without a waiver file",
             chain_dir, exc, chain_id,
         )
-        return
+        return frozenset(shas)
     written_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    for sha in sorted(shas):
+    refused: set[str] = set()
+    ordered_shas = sorted(shas)
+    # One git read for the whole mint, not one per sha: the ownership refusal
+    # needs every sha's Session-Id trailer, and `git log --no-walk` takes them
+    # all in a single invocation. Gate:
+    # coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py.
+    trailers_by_sha = _session_id_trailers_batch(cwd, ordered_shas)
+    for sha in ordered_shas:
+        refusal_reason = _refusal_from_trailer_lines(
+            cwd, sha, chain_id, trailers_by_sha.get(sha)
+        )
+        if refusal_reason is not None:
+            logger.warning("chain_ancestry_waivers: %s", refusal_reason)
+            refused.add(sha)
+            continue
         target = chain_dir / f"{sha}.json"
         if target.exists():
             continue
@@ -270,6 +428,7 @@ def record_chain_ancestry_waiver(
                 "credit this commit for chain %r without a waiver file",
                 target, exc, chain_id,
             )
+    return frozenset(refused)
 
 
 def chain_reached_terminal_close(cwd: str, chain_id: str) -> bool:

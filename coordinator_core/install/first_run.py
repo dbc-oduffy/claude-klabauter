@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.install._shared import env_overlay
+from coordinator_core.launchable import resolve_launchable
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -367,7 +368,12 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
         _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
         return
 
+    # `is_executable` passes the bare extension-less name on Windows because a
+    # PATHEXT sibling (`machine-local.cmd`) is delivered alongside it — but the
+    # bare file is not what CreateProcess can launch (WinError 193), so the argv
+    # must name the sibling. `resolve_launchable` is that mapping.
     machine_local_bin = claude_klabauter_root / "coordinator" / "bin" / "machine-local"
+    machine_local_argv = resolve_launchable(str(machine_local_bin))
 
     if not is_executable(machine_local_bin):
         print(f"[post-toolchain] WARNING: machine-local CLI not found/executable at {machine_local_bin}", file=sys.stderr)
@@ -413,7 +419,7 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
         registry_key = f"{_ML_REPOS_KEY_PREFIX}{repo_key}"
         print(f"[post-toolchain] Registering {registry_key} = {repo_path}")
         try:
-            set_proc = _run([str(machine_local_bin), "set", registry_key, repo_path], timeout=30)
+            set_proc = _run([*machine_local_argv, "set", registry_key, repo_path], timeout=30)
             if set_proc.returncode != 0:
                 print(f"[post-toolchain] WARNING: failed to register {registry_key} — skipping.", file=sys.stderr)
                 continue

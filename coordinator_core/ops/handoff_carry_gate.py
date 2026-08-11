@@ -127,7 +127,15 @@ def _item_label(raw_item: Any, idx: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_carried_items(handoff_path: str) -> List[Dict[str, Any]]:
+def read_carried_items(handoff_path: str) -> List[Dict[str, Any]]:
+    """Read and parse the `carried_items` frontmatter array off `handoff_path`.
+
+    Public (no leading underscore) because `coordinator_core.baton_assemble.apply`'s
+    `_dispatch_handoff_carry_gate` calls this directly rather than re-implementing
+    the same read/parse/validate sequence -- see Review:
+    coordinatorcode-reviewer-625ab891 finding 1 for why the duplicate existed and
+    why this is the fix.
+    """
     import yaml
 
     from coordinator_core.frontmatter.primitives import split_frontmatter
@@ -158,7 +166,7 @@ def main(argv: List[str]) -> int:
         return 2
 
     try:
-        items = _read_carried_items(handoff_path)
+        items = read_carried_items(handoff_path)
     except CarryGateError as exc:
         print(f"{_PROG}: {exc}", file=sys.stderr)
         return 2

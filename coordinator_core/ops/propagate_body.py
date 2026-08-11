@@ -304,11 +304,24 @@ def _build_propagated_block(
     return f"{marker}\n{audit}\n\n{note}\n"
 
 
+def _heading_present(text: str, heading: str) -> bool:
+    """True only where ``heading`` occurs as a REAL ATX heading line.
+
+    Line-anchored, not a substring test. These markers are strings that
+    reviewers, integrators, and docs quote in running prose while explaining
+    the mechanism they drive, and a bare ``heading in text`` cannot tell the
+    heading from a mention of it. Both failure directions are silent — see
+    ``ops/append_integrator_dispositions._find_heading`` for the live 2026-08-10
+    case that motivated line-anchoring every consumer of these markers.
+    """
+    return re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text) is not None
+
+
 def _append_propagated_section(body: str, block: str) -> str:
     """Append `block` under the canonical `## Propagated` heading, creating
     the heading once and appending to it thereafter — never a new heading
     per delivery (AC7)."""
-    if _PROPAGATED_SECTION_HEADING in body:
+    if _heading_present(body, _PROPAGATED_SECTION_HEADING):
         if not body.endswith("\n"):
             body += "\n"
         return body + "\n" + block

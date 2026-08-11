@@ -29,6 +29,14 @@ import pytest
 
 import coordinator_core.ops.ceremony.wsc_tail as wsc_tail_mod
 from coordinator_core.ops.ceremony import commit_pipeline as commit_pipeline_mod
+from .fixtures.pipeline_result import make_pipeline_result
+
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
+# stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.spawns_process]
 
 
 def _git(args, cwd) -> subprocess.CompletedProcess:
@@ -72,16 +80,8 @@ def _landed_sha_unverified_outcome() -> commit_pipeline_mod.PipelineResult:
     """The exact shape `run_commit_pipeline` (W2) returns for a commit that
     landed with an unresolvable sha: `commit_failed=False`,
     `committed_sha=None`, `sha_unverified=True`, pushed proceeds."""
-    return commit_pipeline_mod.PipelineResult(
-        stage=None,
-        deletion_gate=None,
-        dirty_gate=None,
-        commit=None,
-        push=None,
-        committed_sha=None,
-        pushed=None,
+    return make_pipeline_result(
         commit_failed=False,
-        integrity_breach=False,
         sha_unverified=True,
         diagnostics=[
             "commit_pipeline: commit landed but its sha is unresolvable "

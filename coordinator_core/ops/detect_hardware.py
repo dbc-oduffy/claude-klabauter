@@ -79,7 +79,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
 try:
     import psutil
@@ -391,7 +391,7 @@ def _ml_set(ml_bin: str, key: str, value: str) -> int:
         result = subprocess.run(
             [ml_bin, "set", "--concern", "hardware", key, value],
             check=False,
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
     except OSError:
         print(f"skip: _ml_set: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

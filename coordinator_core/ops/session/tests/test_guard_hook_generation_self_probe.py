@@ -111,6 +111,68 @@ def test_inline_install_with_empty_content_root_stays_silent(tmp_path: Path, mon
     assert not marker.is_file()
 
 
+def test_sentinel_records_why_an_empty_content_root_is_or_is_not_expected(
+    tmp_path: Path, monkeypatch
+):
+    """The sentinel is a human-facing breadcrumb, and `resolved_ok=false` alone
+    is ambiguous: it is the EXPECTED steady state on a `--plugin-dir` or
+    marketplace-live box and a genuine fault on a generating one. Read bare, it
+    reads as a fault on a healthy machine — that ambiguity cost a real
+    investigation (state/audits/2026-08-10-guard-script-fleet-reach-is-not-a-
+    publish.md) that got as far as auditing a stood-down kill-switch marker
+    before the carve-outs explained the false alarm. So the classification, not
+    just the resolution, has to survive to disk.
+
+    Pins all four verdicts. The inline case is the one that matters most: it
+    must read `resolved_ok=false` AND be explicitly marked expected."""
+
+    def _verdict_for(config_dir: Path) -> str:
+        body = (config_dir / _SENTINEL_NAME).read_text(encoding="utf-8")
+        line = [ln for ln in body.splitlines() if ln.startswith("verdict=")]
+        assert len(line) == 1, f"expected exactly one verdict line, got {body!r}"
+        return line[0].split("=", 1)[1]
+
+    # 1. Content root resolves — the majority path.
+    resolved_dir = tmp_path / "resolved" / ".claude"
+    resolved_dir.mkdir(parents=True)
+    real_root = tmp_path / "resolved" / "coordinator-clone"
+    real_root.mkdir(parents=True)
+    monkeypatch.setenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, str(real_root))
+    run_self_probe(resolved_dir)
+    assert _verdict_for(resolved_dir) == "resolved"
+
+    monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
+
+    # 2. Inline `--plugin-dir`: empty content root is the healthy shape.
+    inline_dir = tmp_path / "inline" / ".claude"
+    inline_dir.mkdir(parents=True)
+    doe_root = tmp_path / "inline" / "example-doctrine-repo-clone"
+    (doe_root / "coordinator").mkdir(parents=True)
+    (inline_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
+    run_self_probe(inline_dir)
+    body = (inline_dir / _SENTINEL_NAME).read_text(encoding="utf-8")
+    assert "resolved_ok=false" in body, "the raw resolution must still be recorded honestly"
+    assert _verdict_for(inline_dir) == "expected-inline-plugin-dir"
+    assert not kill_switch_marker_path(str(inline_dir / "settings.json")).is_file()
+
+    # 3. Nothing explains it — the fail-safe shape that legitimately arms.
+    bare_dir = tmp_path / "bare" / ".claude"
+    bare_dir.mkdir(parents=True)
+    run_self_probe(bare_dir)
+    assert _verdict_for(bare_dir) == "unresolved-and-unexplained"
+    assert kill_switch_marker_path(str(bare_dir / "settings.json")).is_file()
+
+    # 4. A stale pointer is NOT an explanation — the carve-out must not blind
+    #    the true positive, and the verdict must not launder it as expected.
+    stale_dir = tmp_path / "stale" / ".claude"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / ".doe-root").write_text(
+        f"{tmp_path / 'stale' / 'now-gone'}\n", encoding="utf-8"
+    )
+    run_self_probe(stale_dir)
+    assert _verdict_for(stale_dir) == "unresolved-and-unexplained"
+
+
 def test_stale_doe_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypatch):
     """Regression: proves the inline-install carve-out does NOT blind the
     true positive. A `.doe-root` pointer file surviving while the coordinator

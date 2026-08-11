@@ -36,21 +36,44 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
 
-try:
-    import psutil
-except ImportError:  # psutil is a declared engine dependency (pyproject.toml);
-    # the guard exists ONLY so this module stays importable on a host missing
-    # it. It is NOT license for silent degradation anywhere psutil is the
-    # sole liveness mechanism (Windows entirely, POSIX's stable_pid_alive
-    # Layer 1 since the 2026-07-27 ps-to-psutil port) — every call site that
-    # is actually load-bearing there raises MissingPsutilError instead of
-    # falling through. ``pid_alive`` on POSIX is the sole surviving `os.kill`
-    # user; see that docstring / ``_win_create_time_epoch``.
-    psutil = None  # type: ignore[assignment]
+# Deferred-import accessor (hot-path import diet round 2 — docs/plans/
+# 2026-08-08-seven-measured-levers-load-norm.md § C1). psutil measured
+# 6.31ms self-time on a bare `ping`, which needs none of the liveness
+# machinery below. See coordinator_core.ipc's `_log()` for the general
+# pattern this mirrors (identity-preserving deferred import, resolved once
+# and cached — never re-attempted on a hot path).
+#
+# The cache is the module attribute `psutil` itself (not a private
+# `_psutil_mod`) so the pre-existing test-suite monkeypatch surface
+# (`monkeypatch.setattr(core, "psutil", None)` to simulate absence) keeps
+# working unmodified. `_UNRESOLVED` (not `None`) is the "not yet imported"
+# sentinel so a prior ImportError can be cached as `None` without being
+# confused with "haven't tried yet" on the next call. This preserves the
+# ORIGINAL try/except ImportError semantics exactly: every call site below
+# still sees either the real module or `None`, and every load-bearing site
+# still raises MissingPsutilError instead of silently degrading (it is NOT
+# license for silent degradation anywhere psutil is the sole liveness
+# mechanism — Windows entirely, POSIX's stable_pid_alive Layer 1 since the
+# 2026-07-27 ps-to-psutil port). ``pid_alive`` on POSIX is the sole
+# surviving `os.kill` user; see that docstring / ``_win_create_time_epoch``.
+_UNRESOLVED = object()
+psutil = _UNRESOLVED  # type: ignore[assignment]
+
+
+def _psutil():
+    global psutil
+    if psutil is _UNRESOLVED:
+        try:
+            import psutil as _imported_psutil
+        except ImportError:
+            psutil = None
+        else:
+            psutil = _imported_psutil
+    return psutil
 
 
 class MissingPsutilError(RuntimeError):
@@ -94,6 +117,23 @@ _LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
 #: PID-reuse detection loss is negligible against the certainty of breaking
 #: every persisted record. See ``docs/plans/2026-06-27-liveness-first-claim-staleness.md``.
 _STABLE_PID_EPOCH_TOLERANCE_SECS = 2
+
+#: Bound on how many rungs the Windows Guard-1 ancestor walk climbs looking
+#: for a "claude"-named process. Depth is caller-dependent and has measured
+#: differently for the two callers: 4 hops from ``os.getppid()`` in a Bash
+#: TOOL subprocess (trampoline x3), but only 2 in a HOOK — the caller that
+#: actually reaches Guard-1 — whose measured chain is ``python3.exe <-
+#: bash.exe <- bash.exe <- claude.exe`` (15 sessions, 2026-08-08). That the
+#: constant's basis moved once already is why ``CLAUDE_PID`` is now preferred
+#: over this walk — preferred for topology-drift resilience (a new
+#: trampoline shape needs no re-measurement), NOT because the walk is
+#: broken or narrowed for the hook path; the bound below is unchanged and
+#: still correctly generous for both callers, kept only as the fallback.
+#: The value is the Bash-tool figure doubled plus a couple, for headroom against a
+#: deeper trampoline (e.g. an extra shell layer) without walking unbounded —
+#: an unbounded walk on a psutil call per rung risks a slow/hung hot-path
+#: init() if the process tree is malformed or absurdly deep.
+_STABLE_PID_WINDOWS_ANCESTOR_DEPTH = 10
 
 #: Collapse runs of whitespace — mirrors the bash helper's ``tr -s ' '``
 #: BSD-double-space normalization (single-digit %e day pad on macOS/BSD ps).
@@ -313,7 +353,8 @@ def pid_alive(pid) -> bool:
     if _IS_WINDOWS:
         # No kill(pid, 0) equivalent on native Windows; psutil is
         # authoritative there (bash's kill -0 doesn't run natively either).
-        if psutil is None:
+        _ps = _psutil()
+        if _ps is None:
             raise MissingPsutilError(
                 "psutil is a required dependency and is not installed in this "
                 "interpreter, but Windows PID-liveness (pid_alive) has no "
@@ -323,7 +364,7 @@ def pid_alive(pid) -> bool:
                 "coordinator_core project root) or re-run claude-klabauter's setup "
                 "(scripts/setup.py) to provision the engine venv."
             )
-        return psutil.pid_exists(pid_int)
+        return _ps.pid_exists(pid_int)
     try:
         os.kill(pid_int, 0)
     except ProcessLookupError:
@@ -386,7 +427,8 @@ def _win_create_time_epoch(pid_int: int) -> Optional[int]:
     caller passes the separate long-lived ``stable_pid`` (RAW-PID-LIVENESS
     floor).
     """
-    if psutil is None:
+    _ps = _psutil()
+    if _ps is None:
         raise MissingPsutilError(
             "psutil is a required dependency and is not installed in this "
             "interpreter, but session-liveness (stable_pid_alive) has no "
@@ -397,8 +439,8 @@ def _win_create_time_epoch(pid_int: int) -> Optional[int]:
             "setup (scripts/setup.py) to provision the engine venv."
         )
     try:
-        return int(psutil.Process(pid_int).create_time())
-    except psutil.NoSuchProcess:
+        return int(_ps.Process(pid_int).create_time())
+    except _ps.NoSuchProcess:
         return None
     except Exception as exc:
         raise _WinLivenessAmbiguous(str(exc)) from exc
@@ -667,6 +709,75 @@ def update_meta_field(sdir: str, field: str, value) -> bool:
     return True
 
 
+def update_meta_fields(sdir: str, fields: "Mapping[str, object]") -> bool:
+    """Batch sibling of ``update_meta_field``: updates (or adds) MULTIPLE
+    fields in ``<session_dir>/meta.json`` with exactly ONE atomic tempfile +
+    ``os.replace`` rewrite, instead of one rewrite per field. Added for
+    ``init()``'s refresh path (AC10, ``stable_pid_capture`` breadcrumb plan)
+    — that path fires on every session start on a box whose load norm is
+    50-70 concurrent LLMs (``docs/wiki/machine-load-norm.md``), so collapsing
+    what was 3-5 sequential read-modify-atomic-rewrite calls into one is load
+    -bearing, not cosmetic.
+
+    Mirrors ``update_meta_field``'s semantics exactly, just batched:
+      - same tempfile + ``os.replace`` atomic pattern, in the target's own
+        directory.
+      - same ``False`` no-op when ``meta.json`` is absent, unreadable, or
+        not a JSON object.
+      - same string coercion (``str(value)``) for every field.
+      - same required-non-empty contract as ``update_meta_field``, applied
+        per-key: if ANY value in ``fields`` stringifies to ``""``, the WHOLE
+        call raises ``ValueError`` before anything is read or written (fail
+        the call, not a silent partial write) — this is the documented
+        choice between "reject the call" and "skip the empty key"; the
+        former was picked to keep this helper's failure mode identical to
+        ``update_meta_field``'s (raise, never a silent partial).
+
+    ``fields`` empty is a no-op returning ``False`` — nothing to write is
+    not the same outcome as "meta.json missing", but both correctly signal
+    "no rewrite happened" to a caller checking the return value.
+
+    ``update_meta_field`` itself is UNCHANGED and kept — it still has other
+    callers; this is an addition, not a replacement.
+    """
+    if not fields:
+        return False
+    for key, value in fields.items():
+        if str(value) == "":
+            raise ValueError(f"value required (non-empty) for field {key!r}")
+    meta_path = Path(sdir) / "meta.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False  # unreadable or non-JSON meta.json -> no-op update
+    if not isinstance(data, dict):
+        return False
+    for key, value in fields.items():
+        data[key] = str(value)
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="meta.json.", dir=str(meta_path.parent)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+                fh.write("\n")
+            os.replace(tmp_name, meta_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                # Best-effort tmp-file cleanup on the error path; the original
+                # exception is re-raised below regardless.
+                pass
+            raise
+    except OSError:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Confined-findings-agent SSOT
 # ---------------------------------------------------------------------------
@@ -736,6 +847,203 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
         if sid:
             return sid
     return ""
+
+
+def _find_windows_claude_ancestor(
+    start_pid: int, max_depth: int = _STABLE_PID_WINDOWS_ANCESTOR_DEPTH
+) -> "tuple[Optional[tuple[int, float]], str]":
+    """Walk UPWARD from ``start_pid`` (inclusive) looking for the first
+    ancestor whose ``psutil`` process name strips (after any ``.exe``
+    suffix) to exactly "claude". Returns ``(match, reason)``: ``match`` is
+    ``(pid, create_time)`` for the first "claude" ancestor found within
+    ``max_depth`` rungs, or ``None`` if no match is found. ``reason`` names
+    which of the walk's failure modes fired when ``match`` is ``None`` (the
+    stable_pid-capture breadcrumb plan's C1 chunk — see
+    ``docs/plans/2026-08-10-stable-pid-capture-breadcrumb-and-liveness-basis.md``
+    § C1 for the full vocabulary this is part of):
+      walk-hit:<rung>                           a match at this rung index
+      walk-hit:<rung>+skipped:<exc>:<depth>     match, with 1+ skipped rungs
+                                                 below it (one "+skipped:..."
+                                                 segment per skipped rung, in
+                                                 the order they were stepped
+                                                 over — never "|", which
+                                                 ``init()`` uses to join legs)
+      walk-miss:depth-exhausted                 cap reached with no match
+      walk-miss:rung-unreadable:<exc>:<depth>   a rung raised; which and where
+      walk-miss:no-parent                       ppid chain terminated
+
+    Windows has no ``exec``-replace: a hook subprocess's real parent is a
+    Git-Bash trampoline rung (``bash.exe`` x2 on the measured hook topology,
+    x3 from a Bash tool subprocess — see
+    ``_STABLE_PID_WINDOWS_ANCESTOR_DEPTH``), not
+    the ``claude.exe`` session process the POSIX single-parent check
+    expects. This walk climbs ``.ppid()`` links until it finds a "claude"
+    match or exhausts ``max_depth``.
+
+    First match wins walking upward: the nearest "claude" ancestor is
+    stamped, never a more distant one skipped past — a session can only
+    ever stamp an ancestor of itself (never a descendant), so the failure
+    direction of a wrong match is false-LIVE (stamping a process that
+    outlives the caller), never false-DEAD.
+
+    Robust to a vanished/inaccessible rung, but not uniformly: on the NAME
+    read, ``psutil.AccessDenied`` and ``psutil.ZombieProcess`` are SKIPPED —
+    the rung still exists (that is exactly what those two exceptions mean),
+    so its ``.ppid()`` remains a verified link, and the walk steps over it
+    and keeps climbing toward the next rung, consuming a depth unit like any
+    other rung. ``psutil.NoSuchProcess`` is never skipped, on any read: the
+    rung's process is gone, so there is no verified parent link to climb,
+    and on a box whose load norm is 50-70 concurrent LLMs
+    (``docs/wiki/machine-load-norm.md``) a recycled PID matching "claude" by
+    coincidence is not theoretical. The asymmetry is deliberate: today's
+    unresolved-walk failure mode is a bounded ~30-minute false-LIVE that
+    expires on its own once the recency window lapses; a wrong-ancestor
+    stamp from trusting a recycled PID would be unbounded, pinned to an
+    unrelated live process for as long as that process lives. Widening the
+    skip to ``NoSuchProcess`` would trade the bounded failure for the
+    unbounded one, so it never does — that rung still ends the walk
+    (return ``(None, reason)``) exactly as before, recorded as
+    ``walk-miss:rung-unreadable:NoSuchProcess:<depth>``. This sits on the
+    session-init hot path, where failing to stamp must degrade to today's
+    recency-only Layer-2 behaviour, never raise.
+
+    A skipped rung is never silently swallowed: each one stepped over is
+    annotated onto the eventual ``walk-hit:<rung>`` code as
+    ``+skipped:<exc>:<depth>``, one segment per skipped rung, in climb
+    order (see the vocabulary block above). If the hit rung's
+    ``create_time()`` read then raises, the same ``+skipped:...`` suffix is
+    appended to the resulting ``walk-miss:rung-unreadable:...`` code instead,
+    so the accumulated skip annotations are never dropped on that path. A
+    walk that skips rungs and misses for any other reason keeps its
+    existing ``walk-miss:*`` code unannotated — C4 (a later chunk) only
+    needs skip visibility on the hit path (and the rung-unreadable miss
+    that immediately follows a hit).
+    """
+    _ps = _psutil()
+    pid = start_pid
+    depth = 0
+    skipped: "list[str]" = []
+    while depth < max_depth:
+        try:
+            proc = _ps.Process(pid)
+        except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
+            return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}"
+        try:
+            name = proc.name() or ""
+        except (_ps.AccessDenied, _ps.ZombieProcess) as exc:
+            # The rung still exists (that is what these two exceptions
+            # mean), so its .ppid() is a verified link even though its
+            # name is not readable — try that link before giving up. If
+            # ppid() itself cannot be obtained, there is no verified link
+            # to climb and the walk ends as an ordinary no-parent miss.
+            try:
+                parent_pid = proc.ppid()
+            except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as ppid_exc:
+                # Review: coordinator:code-reviewer P2 — the skip branch's
+                # ppid() failure must stay distinct from an ordinary
+                # no-parent miss, matching the main (non-skip) path below.
+                return None, f"walk-miss:rung-unreadable:{type(ppid_exc).__name__}:{depth}"
+            if not parent_pid or parent_pid == pid:
+                return None, "walk-miss:no-parent"
+            skipped.append(f"skipped:{type(exc).__name__}:{depth}")
+            pid = parent_pid
+            depth += 1
+            continue
+        except _ps.NoSuchProcess as exc:
+            return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}"
+        comm = name[:-4] if name.lower().endswith(".exe") else name
+        if comm == "claude":
+            suffix = "".join(f"+{s}" for s in skipped)
+            try:
+                match = (pid, proc.create_time())
+            except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
+                # Review: coordinator:code-reviewer P3 — preserve any
+                # accumulated skip annotations even when the hit rung's
+                # create_time() itself raises, so the miss reason stays as
+                # legible as the hit would have been.
+                return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}{suffix}"
+            return match, f"walk-hit:{depth}{suffix}"
+        try:
+            parent_pid = proc.ppid()
+        except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
+            return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}"
+        if not parent_pid or parent_pid == pid:
+            return None, "walk-miss:no-parent"
+        pid = parent_pid
+        depth += 1
+    return None, "walk-miss:depth-exhausted"
+
+
+def _resolve_claude_pid_from_env() -> "tuple[Optional[tuple[int, float]], str]":
+    """Resolve ``CLAUDE_PID`` — the harness-exported PID of the session's own
+    ``claude.exe`` process — as the preferred Windows Guard-1 source, ahead
+    of the bounded ancestor walk (``_find_windows_claude_ancestor``).
+
+    Returns ``(match, reason)``: ``match`` is ``(pid, create_time)`` on
+    success, ``None`` on failure. ``reason`` names which of leg (a)'s
+    failure modes fired when ``match`` is ``None`` (stable_pid-capture
+    breadcrumb plan, C1 — see
+    ``docs/plans/2026-08-10-stable-pid-capture-breadcrumb-and-liveness-basis.md``
+    § C1 for the full vocabulary this is part of):
+      env-hit                    leg (a) answered
+      env-miss:absent            CLAUDE_PID not in environ
+      env-miss:non-integer       present but not parseable
+      env-miss:non-positive      parsed <= 0
+      env-miss:name-mismatch     PID resolves, name does not strip to "claude"
+      env-miss:<psutil-exc>      NoSuchProcess / AccessDenied / ZombieProcess
+      psutil-absent               ``_psutil()`` returned ``None``
+
+    Measured live from inside a real PreToolUse hook across concurrent
+    sessions on this box (2026-08-08): ``os.environ["CLAUDE_PID"]`` is
+    present in every hook fire and agrees exactly with the value the
+    ancestor walk derives — see
+    ``state/audits/2026-08-08-the-git-bash-trampoline-is-harness-owned.md``.
+    Preferring it sidesteps the walk's fixed depth bound
+    (``_STABLE_PID_WINDOWS_ANCESTOR_DEPTH``), which was measured against one
+    observed trampoline topology — any host that inserts an extra rung pushes ``claude.exe``
+    out of the walk's range, leaving the stamp empty and silently degrading
+    liveness to the Layer-2 recency window even though the true PID was
+    available all along.
+
+    Still comm-verified exactly like the walk before being trusted: an
+    absent, empty, or non-integer env var, a PID naming something other
+    than "claude" (after any ``.exe`` suffix), or a PID that no longer
+    resolves, all return ``None`` so the caller falls through to the walk —
+    never raises, and never stamps an unverified PID. This holds
+    self-contained regardless of caller: a non-positive PID (garbage env
+    var) is rejected here, before ``psutil.Process(pid)`` — not left to
+    depend on a caller-side blanket ``except Exception`` for safety.
+
+    Review: code-reviewer P3 — subject to the SAME PID-reuse/TOCTOU window
+    ``_find_windows_claude_ancestor`` already has (the name-read and the
+    ``create_time()`` read below are two separate ``try`` blocks, so the
+    PID could theoretically be recycled between them): no wider a window
+    than the pre-existing walk, not a regression.
+    """
+    raw = os.environ.get("CLAUDE_PID", "")
+    if not raw:
+        return None, "env-miss:absent"
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None, "env-miss:non-integer"
+    if pid <= 0:
+        return None, "env-miss:non-positive"
+    _ps = _psutil()
+    if _ps is None:
+        return None, "psutil-absent"
+    try:
+        proc = _ps.Process(pid)
+        name = proc.name() or ""
+    except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
+        return None, f"env-miss:{type(exc).__name__}"
+    comm = name[:-4] if name.lower().endswith(".exe") else name
+    if comm != "claude":
+        return None, "env-miss:name-mismatch"
+    try:
+        return (pid, proc.create_time()), "env-hit"
+    except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
+        return None, f"env-miss:{type(exc).__name__}"
 
 
 # ---------------------------------------------------------------------------
@@ -825,41 +1133,72 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
     stable_pid = ""
     stable_pid_lstart = ""
     stable_pid_start_epoch = ""
+    # stable_pid_capture — WHY the above stamp did or didn't happen, on
+    # every run (AC1/AC2, stable-pid-capture-breadcrumb-and-liveness-basis
+    # plan § C1). Never gates behaviour: `match`/`stable_pid` above are
+    # computed exactly as they were before this breadcrumb existed, and
+    # this string is purely observational — see AC3/AC11.
+    stable_pid_capture = "psutil-absent"
     ppid = os.getppid()
 
     if _IS_WINDOWS:
-        # Windows Guard-1 (psutil-everywhere, 2026-07-19 PM W2 decision): comm-
-        # verify the parent via psutil — native Windows has no `ps` binary. The
-        # process name carries a `.exe` suffix ("claude.exe"); strip it and
-        # require an EXACT "claude" match (a prefix like "claude-helper" would
-        # store the wrong stable_pid and defeat the skip-safe purpose, mirroring
-        # the POSIX comm-verify). create_time() is captured as BOTH the epoch
-        # identity (stable_pid_start_epoch) and the birth-instant token
-        # (stable_pid_lstart) — there is no ps lstart string on Windows, and a
-        # non-empty stable_pid_lstart is what gates session_live's Layer 1.
-        # Non-match / psutil absent leaves stable_pid empty -> recency-only
-        # Layer-2 fallback, zero regression. UNTESTED on this POSIX host — the
-        # Windows-box dogfood is the deferred Gate (d) of the W2 leg.
+        # Windows Guard-1 (CLAUDE_PID-preferred, 2026-08-08 fix): the harness
+        # exports CLAUDE_PID — the session's own claude.exe PID — into every
+        # command-hook environment (see _resolve_claude_pid_from_env's
+        # docstring for the measurement). That is tried FIRST; the bounded
+        # ancestor walk (_find_windows_claude_ancestor) is the fallback for
+        # a host/harness where the env var is absent or fails comm-verify.
+        # Native Windows has no `ps` binary, and unlike POSIX (where `sh -c
+        # "<cmd>"` exec-replaces the shell so the hook's direct parent IS
+        # claude), Windows has no exec-replace: the Git-Bash trampoline
+        # inserts real persisting rungs between the hook subprocess and the
+        # claude.exe session process (measured hook chain: python3.exe ->
+        # bash.exe -> bash.exe -> claude.exe) — a parent-only check therefore
+        # NEVER matched on Windows, which is why the walk exists as the
+        # fallback. Both sources comm-verify identically: the process name
+        # carries a `.exe` suffix ("claude.exe"); it is stripped and an EXACT
+        # "claude" match is required (a prefix like "claude-helper" would
+        # store the wrong stable_pid and defeat the skip-safe purpose,
+        # mirroring the POSIX comm-verify). create_time() is captured as BOTH
+        # the epoch identity (stable_pid_start_epoch) and the birth-instant
+        # token (stable_pid_lstart) — there is no ps lstart string on
+        # Windows, and a non-empty stable_pid_lstart is what gates
+        # session_live's Layer 1. Neither source resolving leaves stable_pid
+        # empty -> recency-only Layer-2 fallback, zero regression.
         #
         # Deliberate exception to fail-loud-on-missing-psutil: unlike
         # pid_alive / stable_pid_alive, an absent psutil HERE degrades to the
-        # SAME recency-only Layer-2 path that a non-"claude" parent (shell,
+        # SAME recency-only Layer-2 path that a non-"claude" match (shell,
         # CI runner) already takes today — it never causes a live process to
         # read DEAD, so there is no wrongful-takeover shape to close. Raising
         # here would turn a harmless precision loss into a hard init()
         # failure for no correctness gain.
-        if psutil is not None:
+        if _psutil() is not None:
             try:
-                parent = psutil.Process(ppid)
-                ppid_name = parent.name() or ""
-                ppid_ct = parent.create_time()
-            except Exception:
-                ppid_name, ppid_ct = "", None
-            ppid_comm = (
-                ppid_name[:-4] if ppid_name.lower().endswith(".exe") else ppid_name
-            )
-            if ppid_comm == "claude" and ppid_ct is not None:
-                stable_pid = str(ppid)
+                match, env_reason = _resolve_claude_pid_from_env()
+            except Exception as exc:
+                match, env_reason = None, f"env-miss:{type(exc).__name__}"
+            if match is None:
+                try:
+                    match, walk_reason = _find_windows_claude_ancestor(ppid)
+                except Exception as exc:
+                    match, walk_reason = None, f"walk-miss:{type(exc).__name__}"
+                # Both legs RAN (leg (a) missed, so leg (b) was tried) —
+                # record BOTH families regardless of leg (b)'s outcome. A
+                # single "last answer wins" string would lose leg (a)'s
+                # reason on the walk-hit path too — e.g. collapsing
+                # "env-miss:absent, rescued by the walk" into the same
+                # breadcrumb as "env-hit" outright, which is exactly the
+                # env-vs-walk distinction the version-floor hypothesis in
+                # this plan's Problem section turns on. A stable "|" join,
+                # documented here as the separator between the env-miss and
+                # walk-miss/walk-hit halves.
+                stable_pid_capture = f"{env_reason}|{walk_reason}"
+            else:
+                stable_pid_capture = env_reason
+            if match is not None:
+                found_pid, ppid_ct = match
+                stable_pid = str(found_pid)
                 epoch_i = int(ppid_ct)
                 # Review: code-reviewer nit — mirror the POSIX branch's `!= 0`
                 # guard (`0` is lstart_to_epoch's "parse failed" sentinel; a
@@ -884,12 +1223,15 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
         # exact-match guard was written to dodge never applies. No `.exe`
         # stripping is needed here (POSIX has no such suffix) — that step
         # stays specific to the Windows branch above.
+        _ps = _psutil()
+        posix_capture_exc = None
         try:
-            parent = psutil.Process(ppid)
+            parent = _ps.Process(ppid)
             ppid_comm = parent.name() or ""
             ppid_ct = parent.create_time()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+        except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.Error) as exc:
             ppid_comm, ppid_ct = "", None
+            posix_capture_exc = exc
 
         if ppid_comm == "claude" and ppid_ct is not None:
             stable_pid = str(ppid)
@@ -899,18 +1241,47 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             # same `!= 0` guard is kept for the psutil-derived epoch too.
             stable_pid_start_epoch = str(epoch_i) if epoch_i != 0 else ""
 
+        # POSIX breadcrumb (EM decision, C1 dispatch brief — AC1 says
+        # "every run" and the plan's vocabulary was Windows-only; extended
+        # rather than left silent). Computed from the SAME state the
+        # stamping logic above already derived, in a block wrapped so it
+        # can never itself raise into init() (AC3) — the stamping logic
+        # above it is untouched and unwrapped, so behaviour is unchanged.
+        try:
+            if posix_capture_exc is not None:
+                stable_pid_capture = f"posix-parent-miss:{type(posix_capture_exc).__name__}"
+            elif ppid_comm == "claude" and ppid_ct is not None:
+                stable_pid_capture = "posix-parent-hit"
+            elif ppid_comm != "claude":
+                stable_pid_capture = "posix-parent-miss:name-mismatch"
+            else:
+                stable_pid_capture = "posix-parent-miss:no-create-time"
+        except Exception:
+            stable_pid_capture = "posix-parent-miss:unknown"
+
     meta_path = sdir / "meta.json"
     if meta_path.is_file():
-        # Refresh path: pid/last_activity/branch/stable_pid* only. `goal` is
-        # deliberately NOT written back here — bash `cs_init` writes goal
-        # only on first create (see its "write goal only on first create"
-        # comment); a re-init with a new non-empty goal does NOT overwrite
-        # the stored goal. Do not "fix" this to write effective_goal.
-        update_meta_field(str(sdir), "pid", pid)
-        update_meta_field(str(sdir), "last_activity", now)
-        update_meta_field(str(sdir), "branch", branch)
+        # Refresh path: pid/last_activity/branch/stable_pid*/
+        # stable_pid_capture only. `goal` is deliberately NOT written back
+        # here — bash `cs_init` writes goal only on first create (see its
+        # "write goal only on first create" comment); a re-init with a new
+        # non-empty goal does NOT overwrite the stored goal. Do not "fix"
+        # this to write effective_goal.
+        #
+        # Batched into ONE `update_meta_fields` rewrite (AC10) rather than
+        # the field-at-a-time `update_meta_field` calls this used to make —
+        # `init()` fires at every session start on a box whose load norm is
+        # 50-70 concurrent LLMs (docs/wiki/machine-load-norm.md); adding a
+        # 6th sequential meta.json read-modify-atomic-rewrite for the
+        # breadcrumb would have been a real hot-path cost, not a nitpick.
+        refresh_fields: "dict[str, object]" = {
+            "pid": pid,
+            "last_activity": now,
+            "branch": branch,
+            "stable_pid_capture": stable_pid_capture,
+        }
         if stable_pid:
-            update_meta_field(str(sdir), "stable_pid", stable_pid)
+            refresh_fields["stable_pid"] = stable_pid
             # POSIX stopped WRITING stable_pid_lstart 2026-07-27 (ps-to-
             # psutil port, stable_pid_alive docstring PLATFORM SPLIT note):
             # stable_pid_start_epoch supersedes it, and the read-only legacy
@@ -918,9 +1289,10 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             # still writes it — that field IS its create_time() token, not a
             # derived-and-superseded duplicate.
             if _IS_WINDOWS:
-                update_meta_field(str(sdir), "stable_pid_lstart", stable_pid_lstart)
+                refresh_fields["stable_pid_lstart"] = stable_pid_lstart
         if stable_pid_start_epoch:
-            update_meta_field(str(sdir), "stable_pid_start_epoch", stable_pid_start_epoch)
+            refresh_fields["stable_pid_start_epoch"] = stable_pid_start_epoch
+        update_meta_fields(str(sdir), refresh_fields)
     else:
         data = {
             "session_id": session_id,
@@ -928,6 +1300,7 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             "pid": str(pid),
             "last_activity": now,
             "goal": goal or "",
+            "stable_pid_capture": stable_pid_capture,
         }
         if stable_pid:
             data["stable_pid"] = stable_pid

@@ -423,11 +423,24 @@ def _build_correction_note(
     )
 
 
+def _heading_present(text: str, heading: str) -> bool:
+    """True only where ``heading`` occurs as a REAL ATX heading line.
+
+    Line-anchored, not a substring test. These markers are strings that
+    reviewers, integrators, and docs quote in running prose while explaining
+    the mechanism they drive, and a bare ``heading in text`` cannot tell the
+    heading from a mention of it. Both failure directions are silent — see
+    ``ops/append_integrator_dispositions._find_heading`` for the live 2026-08-10
+    case that motivated line-anchoring every consumer of these markers.
+    """
+    return re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text) is not None
+
+
 def _append_correction_note(body: str, note_line: str) -> str:
     """Append `note_line` under the canonical correction-log section, creating
     the section once and appending to it thereafter — never a new heading per
     correction (AC5)."""
-    if _CORRECTION_SECTION_HEADING in body:
+    if _heading_present(body, _CORRECTION_SECTION_HEADING):
         # Section already exists — append the note line at the very end of
         # the body, under the existing section (no new heading).
         if not body.endswith("\n"):

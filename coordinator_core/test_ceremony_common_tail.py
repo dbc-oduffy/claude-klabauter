@@ -30,6 +30,9 @@ from typing import Any
 import coordinator_core.workday_complete.brief as workday_brief
 import coordinator_core.workweek_complete.brief as workweek_brief
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
+from coordinator_core.workstream_complete.directives_commit_tail import (
+    build_emit_cadence_directive,
+)
 
 
 def _find(directives: list[dict[str, Any]], directive_id: str) -> dict[str, Any]:
@@ -64,6 +67,13 @@ def test_build_ceremony_close_tail_shape():
     assert cadence["depends_on"] is None
     assert cadence["already_satisfied"] is False
     assert "hard_block" not in cadence
+
+    # AC8: the emit-cadence entry declares itself best-effort so a
+    # non-zero exit lands in the ceremony runner's `degraded` bucket
+    # rather than `failed` — the post-command-hook entry does NOT get
+    # the key, since that step is not documented as best-effort.
+    assert cadence["best_effort"] is True
+    assert "best_effort" not in hook
 
 
 def test_workday_complete_tail_directives():
@@ -109,6 +119,16 @@ def test_workweek_complete_tail_directives():
     # hard-block gate, so both must read False, never missing.
     assert hook["hard_block"] is False
     assert cadence["hard_block"] is False
+
+
+def test_workstream_complete_emit_cadence_directive_is_best_effort():
+    # AC8: workstream_complete takes only build_ceremony_close_tail's
+    # emit-cadence element (it has no post-command-hook step of its own)
+    # and must inherit best_effort: True from that shared factor rather
+    # than losing it across the re-point of depends_on/args.
+    cadence = build_emit_cadence_directive()
+    assert cadence["cli"] == "emit-cadence"
+    assert cadence["best_effort"] is True
 
 
 def test_workday_brief_envelope_contains_tail(monkeypatch):

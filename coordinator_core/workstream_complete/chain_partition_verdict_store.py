@@ -206,6 +206,83 @@ def read_verdict_record(
     return verdict
 
 
+#: `verdict_record_presence`'s three outcomes. NOT a verdict and never a
+#: substitute for one — this is the DIAGNOSTIC axis (did the producer run?),
+#: orthogonal to `read_verdict_record`'s value axis (what did it decide?).
+PRESENCE_ABSENT: str = "absent"
+PRESENCE_UNREADABLE: str = "unreadable"
+PRESENCE_PRESENT: str = "present"
+
+
+def verdict_record_presence(
+    repo_root: Path, *, session_id: str, expected_from_handoff: Optional[str] = None
+) -> str:
+    """Report WHY `read_verdict_record` would return `None`, without ever
+    supplying a verdict of its own.
+
+    `read_verdict_record` deliberately collapses every failure mode to
+    `None` (its fail-closed contract, module docstring). That collapse is
+    correct for the value axis and useless for diagnosis: "the producer has
+    not run yet" and "the producer ran and its verdict did not survive the
+    seam" are the same `None`, and they call for OPPOSITE responses — wait
+    and run the gate, versus investigate a broken persistence seam. This
+    function is the discriminator, added because `build_review_scale_
+    judgment_point` was ASSERTING the second cause ("a verdict that was not
+    carried forward") in EM-facing prose on every unresolved chain-terminal
+    close, having checked neither (example-retrieval-repo-em memo, cross-repo/inbox/
+    2026-08-10-example-retrieval-repo-em-jp-review-scale-null-is-blocked-computation.md;
+    PM ruling 2026-08-10 that the "as designed" defence of that null did not
+    survive contact with `brief()` emitting `d-run-chain-plan-brightline-
+    gate` on the very same envelope).
+
+      - `PRESENCE_ABSENT` — no record file at this session's path. The
+        producer has not run for this close. Normal and expected before
+        `d-run-chain-plan-brightline-gate` executes; NOT a defect.
+      - `PRESENCE_UNREADABLE` — a file exists at the path but
+        `read_verdict_record` rejects it (corrupt JSON, schema-unexpected,
+        session-id or from_handoff mismatch, verdict outside
+        `KNOWN_VERDICTS`). The producer ran and the value did not survive.
+        Break-class: report it, do not paper over it.
+      - `PRESENCE_PRESENT` — a record exists and reads clean.
+
+    Negative-spec: callers MUST still take the VALUE from
+    `read_verdict_record`. A `PRESENCE_PRESENT` result is not permission to
+    read the file a second way, and no caller may infer a verdict from
+    presence alone — that would be the fabricated-permissive outcome this
+    module exists to make impossible.
+
+    `expected_from_handoff`, when supplied, is threaded straight into the
+    `read_verdict_record` call below so this diagnostic axis rejects exactly
+    what the value axis rejects (a record computed against a different
+    `from_handoff` reports `PRESENCE_UNREADABLE`, not `PRESENCE_PRESENT`) —
+    see `read_verdict_record`'s own docstring for that provenance check.
+
+    Never raises; an unstattable path degrades to `PRESENCE_ABSENT`, the
+    conservative reading (it keeps the EM pointed at "run the gate" rather
+    than at a phantom seam bug).
+
+    TOCTOU note: the `is_file()` check below and the subsequent
+    `read_verdict_record` open are two separate filesystem operations with
+    no lock between them. If the record is deleted or atomically replaced in
+    that window, `is_file()` can observe True and the following read still
+    fail, collapsing to `PRESENCE_UNREADABLE` rather than the more accurate
+    `PRESENCE_ABSENT` — a diagnostic label only, never a verdict value, so
+    this degrades safely.
+    """
+    path = verdict_store_path(repo_root, session_id)
+    try:
+        if not path.is_file():
+            return PRESENCE_ABSENT
+    except OSError:
+        return PRESENCE_ABSENT
+
+    if read_verdict_record(
+        repo_root, session_id=session_id, expected_from_handoff=expected_from_handoff
+    ) is None:
+        return PRESENCE_UNREADABLE
+    return PRESENCE_PRESENT
+
+
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     """Write *data* as JSON to *path* atomically via mkstemp + os.replace,
     same shape as `coordinator_core.ops.ceremony.receipt_emit._atomic_write_

@@ -252,6 +252,88 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
     return out
 
 
+def _reject_empty_sha_range(sha_range: str, caller_worktree: Optional[Path]) -> None:
+    """Refuse to write a record whose diff-shaped ``sha_range`` resolves to
+    ZERO commits (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-
+    in-a-git-rev-6679bf76eb8a.yaml).
+
+    Only acts on a range that actually contains ``..``/``...`` (the same
+    diff shape ``_resolve_symbolic_range`` targets) — a bare scope_kind=plan/
+    integration token is never a range and is left untouched. A no-op
+    without a real ``caller_worktree`` (test-isolation contract, matching
+    every other git-backed check in this module): there is no repo to run
+    ``git rev-list`` against.
+
+    Raises ``ValueError`` on an empty (zero-commit) range — refusing to
+    persist a record that discharges nothing is the point of this check.
+    Raises ``ValueError`` on a range git cannot resolve at all too (a
+    DIFFERENT failure than "empty" — e.g. a genuinely bogus/unknown SHA —
+    but equally unsafe to persist silently); the two cases get distinct
+    messages so an operator isn't misled about which happened.
+
+    CALL-SITE ORDERING (restored 2026-08-10, docs/plans/2026-08-10-caret-
+    fix-on-the-wrong-launcher.md § C2 — read this before moving the call):
+    ``c4a8e5e86`` originally called this function immediately after
+    ``_resolve_symbolic_range``, AHEAD of ``_guard_foreign_session_range``.
+    That ordering made this function's own ``git rev-list`` failure the
+    FIRST thing an unresolvable range hit, so it raised a bare ``ValueError``
+    before the foreign-session guard ever ran — pre-empting that guard's own
+    ``GitLogFailed``-derived exception contract for the identical input, and
+    turning a passing test red. ``052996621`` reverted the whole function
+    for that reason. The fix is not "don't restore it" — it is call-site
+    ordering: ``write_review_trail_entry`` now invokes this function AFTER
+    ``_guard_foreign_session_range`` has already run (and not raised), so
+    the guard's exception contract still fires first for any range that
+    FAILS TO RESOLVE, and this backstop is only reached for a range that
+    RESOLVES and resolves to zero commits — a strictly narrower condition
+    than "the guard didn't raise." Do not move this call back ahead of the
+    guard.
+    """
+    if caller_worktree is None:
+        return
+    sep = "..." if "..." in sha_range else (".." if ".." in sha_range else None)
+    if sep is None:
+        return
+    # Same test-isolation no-op contract as `_resolve_symbolic_range` /
+    # `_guard_foreign_session_range`: a `caller_worktree` that is not itself
+    # inside a git work tree (e.g. a plain tmp dir a unit test passes to
+    # exercise write-path logic with synthetic SHAs) has no real commit
+    # history to check emptiness against — skip rather than hard-fail on
+    # `git rev-list` erroring out against a non-repo.
+    is_work_tree_rc, _out, _err = _git_runner(
+        ["git", "rev-parse", "--is-inside-work-tree"], str(caller_worktree),
+    )
+    if is_work_tree_rc != 0:
+        return
+    rc, out, err = _git_runner(
+        ["git", "rev-list", "--count", sha_range], str(caller_worktree),
+    )
+    if rc != 0:
+        raise ValueError(
+            f"review_trail.write: sha_range {sha_range!r} could not be resolved "
+            f"by `git rev-list` (rc={rc}: {err.strip()!r}) — refusing to persist "
+            "a record for an unresolvable range"
+        )
+    try:
+        count = int(out.strip())
+    except ValueError:
+        raise ValueError(
+            f"review_trail.write: sha_range {sha_range!r} — `git rev-list --count` "
+            f"returned a non-integer result ({out.strip()!r}) — refusing to persist "
+            "a record for an unresolvable range"
+        ) from None
+    if count == 0:
+        raise ValueError(
+            f"review_trail.write: sha_range {sha_range!r} resolves to ZERO commits "
+            "— refusing to persist a record that discharges nothing. This is the "
+            "exact shape a caret-eating shell/shim produces from a legitimate "
+            "per-commit '<sha>^..<sha>' request (e.g. the pre-fix cmd.exe launcher "
+            "defect, or any other path that mangles a range the same way): the "
+            "record would still look like a successful write while covering no "
+            "commits at all. Verify the range was constructed correctly."
+        )
+
+
 def _resolve_symbolic_range(sha_range: str, caller_worktree: Optional[Path]) -> str:
     """Concretize any symbolic ref token(s) in a diff-shaped sha_range.
 
@@ -466,27 +548,75 @@ def _guard_foreign_session_range(
     offending SHA is covered by that one remaining evidence source. The
     waiver (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
     § C3), added 2026-07-31, is a per-SHA, per-chain waiver minted by the
-    coverage GATE at HALT (``coordinator_core.ops.coverage_gate``, C2) — NOT
-    granted by a human, and NOT this guard's own doing; this guard only
-    OBSERVES it via ``chain_ancestry_waivers.chain_ancestry_waived_shas``,
-    scoped to ``own_session_id`` (the writing session's own id, which IS
-    the closing chain's identity when this session is that chain's
-    terminal ``/workstream-complete`` — see that module's own docstring for
-    why no new derivation is needed to resolve it here). A range whose
-    foreign-attributed SHAs are only PARTIALLY covered by the waiver set
-    still refuses, naming only the uncovered remainder — this closes the
-    chain-terminal ``/workstream-complete`` deadlock only for the commits a
-    waiver actually names; the waiver needs no write-side persistence step
-    here — it was already minted, permanently, by the gate at HALT (C2/C1).
+    coverage GATE (``coordinator_core.ops.coverage_gate``, C2) — NOT granted
+    by a human, and NOT this guard's own doing; this guard only OBSERVES it
+    via ``chain_ancestry_waivers.chain_ancestry_waived_shas``, scoped to
+    ``own_session_id`` (the writing session's own id, which IS the closing
+    chain's identity when this session is that chain's terminal
+    ``/workstream-complete`` — see that module's own docstring for why no
+    new derivation is needed to resolve it here). The mint fires whenever a
+    caller passes ``mint_chain_waivers=True`` and ``from_handoff`` and the
+    gate's ``result.uncovered_shas`` is non-empty — NOT gated on
+    ``result.verdict`` (the verdict leg was deliberately dropped 2026-08-07,
+    state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md,
+    since a chain whose only uncovered commits are planning artifacts can
+    still net verdict COVERED while genuinely owing the narrowing). In
+    practice this means: a chain-terminal session that runs its own close
+    gate against the handoff it picked up, before attempting this write,
+    mints waivers covering its predecessor's commits — the constraint this
+    guard's refusal exists under is ORDERING (gate before write), not
+    impossibility — **for a picked-up handoff whose chain walk reaches at
+    least one node other than the closing handoff itself.**
+
+    NEGATIVE SPEC — the shape that ordering does NOT rescue
+    (state/audits/2026-08-10-chain-ancestry-waiver-mint-attribution-gap.md,
+    measured in-process): predecessor commits reach ``uncovered_shas`` only
+    through a WALKED ANCESTOR node, because
+    ``coverage._derive_dag_chain_set``'s Step-3 segment attribution takes its
+    trailer-derived ``else`` branch only for non-closing nodes. For the
+    ``--from-handoff`` node ITSELF it substitutes the RUNNING session's id
+    (D3 case 3), so that node never contributes its AUTHOR's commits. When
+    the walk collapses to a single node — a picked-up handoff with no walked
+    predecessor edge, the ``predecessor: none``-on-a-continuation-handoff
+    shape — there is no ancestor node to supply them, the mint has nothing
+    to mint over, and running the gate first changes nothing. For that shape
+    the refusal IS impossibility, not ordering, and no amount of re-ordering
+    clears it; the range must be narrowed instead. Do not read the paragraph
+    above as an unconditional remedy.
+
+    A range whose foreign-attributed SHAs are only PARTIALLY
+    covered by the waiver set still refuses, naming only the uncovered
+    remainder — this closes the chain-terminal ``/workstream-complete``
+    deadlock only for the commits a waiver actually names; the waiver needs
+    no write-side persistence step here — it was already minted,
+    permanently, by the gate.
     Trailerlessness alone is never Case 1 (SC-DR-008 sanctions trailerless
     commits by design).
 
-    A range this session cannot record at all — a foreign, unwaived commit
-    named here — has NO remedy this session can perform: narrowing sha_range
-    to exclude it (case-(ii) below), or writing a per-slice record over this
-    session's own commits instead, are the only sanctioned paths; there is no
-    grant, vouch, or override this session can invoke to make the named range
-    recordable as-is.
+    A range naming a foreign, unwaived commit is refused AS-IS — narrowing
+    sha_range to exclude it (case-(ii) below), or writing a per-slice record
+    over this session's own commits instead, are the sanctioned paths that
+    make the WRITE itself proceed. For case (i) (a chain-terminal reviewer
+    obliged to cover baton-ancestor commits), there IS a remedy, but it is
+    upstream of this guard, not a parameter to it: running the ceremony
+    close coverage gate (``wsc-coverage-gate-runner.py coverage-gate`` /
+    ``brightline-gate``, ``--from-handoff``) against the picked-up handoff
+    BEFORE this write mints a chain-ancestry waiver keyed to THIS session,
+    which this guard then observes on retry. The binding constraint is
+    ordering — gate before write — not an absence of any remedy, SUBJECT TO
+    the walked-ancestor precondition in the negative spec above: on a
+    single-node walk that gate mints nothing and the remedy does not exist
+    for this range at all.
+
+    Separately, a refusal here is a verdict on THIS CALL SITE, not on the
+    range in the abstract. The open-loop freeze-time record
+    (``freeze-review-diff.py``) and the close-side write
+    (``coordinator-write-review-trail`` with an explicit verdict) are
+    distinct callers; once waivers exist, the close-side write can succeed
+    for the very range the freeze-time one refused
+    (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-correction-chain-terminal-
+    trail-write-does-work.md — a peer read a freeze-time refusal as a
+    verdict on the range and filed a memo about a bug that was not there).
 
     Case 2 — no foreign-trailer commit, AND every untrailered commit in
     range touches at least one path this session's own trailer-attributed
@@ -569,12 +699,16 @@ def _guard_foreign_session_range(
     if foreign_trailer_shas:
         # Evidence source (2026-07-31, C3,
         # docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md):
-        # a per-SHA waiver the coverage gate already minted for THIS chain at
-        # HALT (C2/C1). `own_session_id` IS the closing chain's identity at
-        # this call site (see this function's own docstring) — no signature
-        # change, no new parameter, no new derivation. This guard only
-        # OBSERVES the waiver; it never mints one. The PM-vouch evidence
-        # source formerly consulted here is gone
+        # a per-SHA waiver the coverage gate already minted for THIS chain
+        # (coverage_gate.py's `mint_chain_waivers and from_handoff and
+        # result.uncovered_shas` condition — not gated on `result.verdict`,
+        # dropped 2026-08-07, see
+        # state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md).
+        # `own_session_id` IS the closing chain's
+        # identity at this call site (see this function's own docstring) —
+        # no signature change, no new parameter, no new derivation. This
+        # guard only OBSERVES the waiver; it never mints one. The PM-vouch
+        # evidence source formerly consulted here is gone
         # (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2) —
         # this is the ONLY remaining evidence source.
         chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
@@ -591,7 +725,7 @@ def _guard_foreign_session_range(
                 "review_trail.write: sha_range %r contains foreign-attributed "
                 "commit(s) %s covered by a gate-minted chain-ancestry waiver "
                 "for chain %s — no new waiver written here; the gate already "
-                "minted it permanently at HALT",
+                "minted it permanently",
                 sha_range,
                 ", ".join(sorted(chain_waived)),
                 own_session_id,
@@ -614,12 +748,44 @@ def _guard_foreign_session_range(
             f"trailer names a different session: {', '.join(shown)}"
             f"{remainder_note}{vouched_note} — refusing to write a record "
             f"for them on that basis alone. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
+            "If you have already run the gate with --from-handoff and this "
+            "refusal is unchanged, that is the shape you are in: do not "
+            "re-run it a third time — narrow sha_range instead. "
             "This session cannot record a range naming another session's "
-            "commits. Write per-slice records over this session's own "
-            "commits instead, or narrow sha_range to exclude the foreign "
-            "commit(s) named above — there is no vouch, grant, or override "
-            "this session can invoke to make the named range recordable "
-            "as-is."
+            "commits as-is. Two paths remain: narrow sha_range to exclude "
+            "the foreign commit(s) named above (case (ii) only — see above), "
+            "or, if this is a chain-terminal close reviewing a picked-up "
+            "handoff (case (i)), run the ceremony close coverage gate "
+            "against that handoff BEFORE this write — "
+            "wsc-coverage-gate-runner.py coverage-gate/brightline-gate "
+            "with --from-handoff (minting is that runner's DEFAULT; it "
+            "takes no --mint-chain-waivers flag and rejects one — "
+            "--no-mint is its opt-OUT. --mint-chain-waivers belongs to "
+            "review-coverage-gate.py, the child the runner invokes, and "
+            "is only needed when calling that child directly) mints a "
+            "per-SHA chain-ancestry waiver keyed to THIS session's own id "
+            "for every uncovered predecessor commit, and this guard "
+            "observes that waiver on retry. The constraint is then "
+            "ordering, not impossibility: a session that reviews-then-writes "
+            "before reaching its own close gate hits this refusal; running "
+            "the gate first and retrying the write clears it. IMPORTANT "
+            "EXCEPTION — that remedy needs the chain walk to reach at least "
+            "one node OTHER than the picked-up handoff itself. The gate "
+            "attributes the --from-handoff node to the RUNNING session, not "
+            "to the session that AUTHORED it, so a handoff with no walked "
+            "predecessor edge (predecessor: none on a continuation handoff) "
+            "collapses the walk to one node, mints nothing, and leaves this "
+            "refusal exactly where it was. Also note this refusal is a "
+            "verdict on THIS call site, not on the range: the close-side "
+            "write (coordinator-write-review-trail with an explicit "
+            "verdict) may succeed for this very range once waivers exist, "
+            "even where the freeze-time open-loop record refused it. "
+            "Caveat: gate admission is not discharge — crediting is "
+            "range-based and narrowed again downstream, so an admitted "
+            "record can still credit zero commits at the chain-terminal "
+            "path (see this module's own zero-chain-terminal-credit "
+            "diagnostic, _diagnose_zero_chain_terminal_credit / "
+            "_ALWAYS_ZERO_CREDIT_SCOPE_KINDS, for when that applies)."
         )
 
     known_scope_paths, saw_untrailered = _own_session_touched_paths_and_untrailered_flag(
@@ -1487,6 +1653,29 @@ def write_review_trail_entry(
     # _resolve_symbolic_range documents above.
     if scope_kind in ("diff", "plan") and caller_worktree is not None:
         _guard_foreign_session_range(sha_range, resolved_session_id, caller_worktree)
+
+    # Empty-range rejection (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-
+    # the-caret-in-a-git-rev-6679bf76eb8a.yaml): a caller-side mangler (the
+    # cmd.exe launcher caret defect fixed alongside this check, or ANY other
+    # future path that mangles a range the same way) can turn a legitimate
+    # per-commit `<sha>^..<sha>` request into `<sha>..<sha>` — a range git
+    # itself resolves to ZERO commits. Left unchecked, that record is still
+    # written, the CLI still exits 0, and it discharges nothing while
+    # looking exactly like a successful, meaningful write — the silent
+    # failure this check exists to close, independent of and in addition to
+    # the caller-side caret fix, so any OTHER path that mangles a range
+    # reproduces the identical silent hole and is still caught here.
+    #
+    # DELIBERATELY AFTER the foreign-session guard above, not before
+    # (see _reject_empty_sha_range's own docstring, "CALL-SITE ORDERING"):
+    # placing this ahead of the guard is what made 052996621 revert it —
+    # this function's own `git rev-list` ValueError on an unresolvable
+    # range pre-empted `_guard_foreign_session_range`'s GitLogFailed-derived
+    # exception contract for the identical input. Running it after means
+    # the guard's contract still fires first for a range that fails to
+    # resolve; this backstop only fires for a range that resolves and
+    # resolves to zero commits.
+    _reject_empty_sha_range(sha_range, caller_worktree)
 
     # Resolve workstream.
     resolved_workstream = _resolve_workstream(workstream, caller_worktree, resolved_session_id)

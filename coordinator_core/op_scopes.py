@@ -631,6 +631,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "deliverable.cascade_terminal":            "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
+    # sizing.decline — keyed on git_common_dir, same scope class as
+    # deliverable.cascade_terminal above: the handler reads/writes a
+    # main-worktree-rooted state/sizings/ file, derived via
+    # main_worktree_root(common_dir). Without this entry dispatch resolves
+    # repo_root=None and the handler raises rather than silently deriving
+    # against the wrong worktree.
+    # Spec: docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2
+    "sizing.decline":                           "common_dir",
     # strang-11 B8 new ops — all keyed on git_common_dir: handlers derive worktree via
     # main_worktree_root(common_dir), matching the fleet.*/handoff.*/ceremony.* precedent.
     # Class-A ops (fleet.*) use archive_and_commit and read/write main-worktree-rooted paths.
@@ -747,6 +755,39 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "git_branch.detect_unpushed_commits":     "show_top",
     "git_branch.list_unmerged_work":          "common_dir",
     "git_branch.verify_commit_in_review_window": "common_dir",
+    # chain_ancestry_waivers.reap — "common_dir", MUTATING (fail-closed,
+    # REMOVE-ONLY deletion, per the module's own docstring): the handler
+    # (_chain_ancestry_waivers_reap) DOES use repo_root — it falls back to
+    # `str(repo_root)` as `cwd` whenever the caller omits an explicit
+    # `params["cwd"]`, and `chain_root_dir(cwd)` (chain_ancestry_waivers.py)
+    # resolves `<cwd>/state/review-trail/chain-ancestry-waivers`, the same
+    # main-worktree-rooted `state/` tree handoff.has_live_children reads.
+    # `chain_reached_terminal_close` (same module) explicitly resolves `cwd`
+    # to the git common dir before classifying, matching the common_dir
+    # keying class exactly. Without this entry dispatch resolves
+    # repo_root=None, cwd falls back to "." (module docstring's own
+    # DO-NOT-RUN-AGAINST-THE-LIVE-TREE warning), and the reaper would act
+    # against the engine process's cwd instead of the caller's own worktree.
+    # Spec: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § Tasks, row W2.
+    "chain_ancestry_waivers.reap":            "common_dir",
+    # scratchpad.sweep — "none", MUTATING (dry-run by default; `reclaim: true`
+    # is the sole destructive opt-in — see module docstring's two-gate
+    # deletion contract). The handler (_handler in scratchpad_sweep.py)
+    # accepts `repo_root` for dispatch-signature parity only and NEVER passes
+    # it to `sweep_scratchpads` — confirmed by its own docstring ("Scope:
+    # none ... repo_root is accepted ... but unused") and by reading the
+    # `_handler` body, which forwards only temp_root/project_slugs/ttl_days/
+    # reclaim. The op is fleet-generic by construction: it walks
+    # `<temp_root>/claude/` across EVERY discovered project-slug directory
+    # (via `_build_slug_to_root_map`'s Tier A + Tier A.5 discovery), not the
+    # caller's own dispatching tree — same "any repo, never the caller's own
+    # tree" target-resolution model as cartography.*/workflow.validate,
+    # confirmed by test_scratchpad_sweep.py's cross-repo-isolation tests
+    # (test_two_project_slugs_resolve_independent_liveness), which sweep
+    # multiple project slugs in one call, none derived from repo_root.
+    # Spec: this module's own docstring (Two-gate deletion contract /
+    # Liveness-scope fix, 2026-08-10).
+    "scratchpad.sweep":                       "none",
     # cartography.count_references — "none": mirrors cartography.edges' own existing
     # scope (target_root is an explicit caller-supplied param, not injected repo_root),
     # same target-resolution convention as the rest of the cartography.* family.
@@ -789,6 +830,21 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # no repo-specific _origin_worktree state is read).
     # Spec: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-seam.md
     "cartography.chunk_table":                 "none",
+    # ceremony.chunk_commits — "none": same cartography.* / workflow.validate
+    # target-resolution model (explicit caller-supplied plan_path, any repo,
+    # NEVER the caller's own dispatching tree); the op derives its git repo
+    # from wherever the resolved path lands and ignores repo_root entirely.
+    # COMPUTE_ONLY — two read-only `git log` invocations, no writes.
+    #
+    # Registered EXPLICITLY rather than defaulting to "none" by omission,
+    # which is what this entry's absence was: the op shipped relying on the
+    # table's default, so its "scope is deliberately none" claim lived only in
+    # a docstring. That claim is load-bearing — it is the reason the
+    # caller-cwd defect (d4d429d21) was fixed in the bin/ forwarder rather
+    # than by resolving against a forwarded --repo, which would have made the
+    # op's answer depend on where it was dispatched from.
+    # Spec: cross-repo/inbox/2026-08-10-example-doctrine-repo-em-chunk-commits-forwarder-relative-path.md
+    "ceremony.chunk_commits":                  "none",
     # install.detect_python3_appx_stub — "none": inspects the operator's own machine
     # (PATH-resolved python3 interpreter), not any repo state; mirrors engine.drift/
     # plugin_health.drift's own-machine-probe class.

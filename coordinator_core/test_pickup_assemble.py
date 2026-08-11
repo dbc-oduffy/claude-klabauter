@@ -5273,6 +5273,43 @@ class TestSplitArtifactArgs:
         assert pa.split_artifact_args("   ") == ["   "]
 
 
+class TestSplitArtifactArgsBraceExpansion:
+    def test_single_group_expands_to_n_paths(self):
+        assert pa.split_artifact_args("dir/prefix-{a,b,c}-suffix.md") == [
+            "dir/prefix-a-suffix.md",
+            "dir/prefix-b-suffix.md",
+            "dir/prefix-c-suffix.md",
+        ]
+
+    def test_whitespace_and_newline_after_comma_is_stripped(self):
+        assert pa.split_artifact_args("p-{a,\n  b}.md") == ["p-a.md", "p-b.md"]
+
+    def test_no_braces_passes_through_unchanged(self):
+        assert pa.split_artifact_args("state/handoffs/h1.md") == [
+            "state/handoffs/h1.md"
+        ]
+
+    def test_unbalanced_braces_pass_through_unchanged(self):
+        assert pa.split_artifact_args("dir/prefix-{a,b-suffix.md") == [
+            "dir/prefix-{a,b-suffix.md"
+        ]
+
+    def test_pm_invocation_string_resolves_to_two_real_inbox_paths(self):
+        # abs-path-ok: verbatim PM-supplied invocation string under test, not a
+        # filesystem citation this repo's own code would ever construct.
+        raw = (
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "{bx17-ssot-command-tool-constant-your-29-sites,\n"
+            "  your-44-is-right-my-8-was-wrong-and-correction-2-does-not-hold}.md"
+        )
+        assert pa.split_artifact_args(raw) == [
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "bx17-ssot-command-tool-constant-your-29-sites.md",
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "your-44-is-right-my-8-was-wrong-and-correction-2-does-not-hold.md",
+        ]
+
+
 class TestMultiArtifactBrief:
     def test_two_path_and_arg_resolves_both(self, tmp_path):
         repo = tmp_path / "repo"
@@ -5457,6 +5494,88 @@ class TestRepoBasenameReanchor:
         assert results[0].decision_object["artifact"]["classification"] == "handoff"
         assert results[1].decision_object["artifact"]["classification"] == "memo"
         assert results[1].decision_object["artifact"]["path"] == "cross-repo/inbox/m2.md"
+
+
+class TestLineWrappedArtifactPath:
+    """A long path hard-wrapped by the surface that rendered it (the Windows
+    case: absolute paths are long enough that a prompt/terminal breaks them
+    mid-token, e.g. `...not-th\\n  e-new-baton.md`) resolves through the
+    sanitize fallback tier — see `_sanitize_artifact_path_str` § Line-wrap
+    tolerance."""
+
+    def test_absolute_path_wrapped_mid_token_resolves(self, tmp_path):
+        repo = tmp_path / "claude-klabauter"
+        _init_repo(repo)
+        seeded = _seed_memo(repo, "2026-08-10-carry-gate-validates-the-predecessor.md")
+
+        literal = str(seeded)
+        cut = literal.index("predecessor") + 4
+        wrapped = literal[:cut] + "\n  " + literal[cut:]
+
+        result = pa.brief(wrapped, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert (
+            result.decision_object["artifact"]["path"]
+            == "cross-repo/inbox/2026-08-10-carry-gate-validates-the-predecessor.md"
+        )
+
+    def test_repo_relative_path_wrapped_mid_token_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pa.brief("state/hand\r\n        offs/h1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    def test_wrap_composes_with_wrapper_and_trailing_punctuation(self, tmp_path):
+        # The unwrap runs inside the same fixed-point loop as the wrapper /
+        # trailing-punctuation strips, so a path pasted from prose AND wrapped
+        # resolves in one call rather than needing a second pass.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pa.brief("`state/hand\n  offs/h1.md`.", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    def test_unwrap_is_a_fallback_not_a_normalizer(self, tmp_path):
+        # Negative-spec of `_sanitize_artifact_path_str`: raw is always tried
+        # first, so an unwrapped path that already resolves is untouched.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert "sanitize_resolution" not in result.decision_object["artifact"]
+
+    def test_interior_space_without_a_newline_is_never_joined(self):
+        # `_LINE_WRAP_RE` is anchored on a real newline: a path carrying an
+        # ordinary interior space (`.../My Documents/...`) must survive the
+        # sanitizer intact, or this tier would corrupt every spaced path it
+        # was handed.
+        assert (
+            pa._sanitize_artifact_path_str("C:/My Documents/notes/h1.md")
+            == "C:/My Documents/notes/h1.md"
+        )
+
+    def test_crlf_and_continuation_indent_are_both_consumed(self):
+        assert pa._sanitize_artifact_path_str("state/hand\r\n\t  offs/h1.md") == (
+            "state/handoffs/h1.md"
+        )
+
+    def test_drive_letter_colon_still_survives_the_loop(self):
+        # The added unwrap step must not perturb the pre-existing guards the
+        # fixed-point loop carries (bare drive letter, `.`/`..` component).
+        assert pa._sanitize_artifact_path_str("C:") == "C:"
+        assert pa._sanitize_artifact_path_str("../") == "../"
 
 
 # ---------------------------------------------------------------------------

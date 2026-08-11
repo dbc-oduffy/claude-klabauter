@@ -141,6 +141,7 @@ from coordinator_core.bash_guards._dialect import (
 from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._write_bump_applicability import (
+    anchor_subtree_contains,
     bump_applies,
     is_agent_memory_store_path,
     publish_destination_owner,
@@ -148,6 +149,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     resolve_launch_anchor,
     target_is_publish_destination,
     target_is_registered_repo,
+    target_is_under_claude_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     bump_is_cleared,
@@ -164,6 +166,7 @@ from coordinator_core.bash_guards._write_bump_message import (
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     PS_SET_LOCATION_ALIASES,
+    _host_is_windows,
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
@@ -756,6 +759,22 @@ def _iter_write_sink_candidates(
     `resolve_gitdir`. Reads (a git subcommand in `_GIT_READONLY_SUBCOMMANDS`)
     are never yielded at all (module docstring, "READS NEVER BUMP").
 
+    `resolve_command_positions` is called with `preserve_windows_
+    backslashes=_host_is_windows()` (C2, docs/plans/2026-08-10-carve-claude-
+    out-and-close-the-backslash-bypass.md, AC5-AC6) -- on a Windows host,
+    an UNQUOTED `\\`-spelled absolute target (`C:\\Users\\...\\out.txt`)  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    survives tokenization with its separators intact, instead of `shlex`'s
+    ordinary POSIX-escape rule silently eating every backslash and leaving
+    a single mangled token (`C:Users...out.txt`) that neither
+    `_WINDOWS_DRIVE_ABSOLUTE_RE` nor `translate_msys_path` can recognise as
+    absolute -- the mangled token was falling through to a cwd-relative
+    join, misclassifying a foreign-repo write as a same-repo one. Fixed at
+    THIS single upstream seam (see `tokenize_full_command`'s own docstring)
+    rather than at `_resolve_relative`/`translate_msys_path` below, because
+    the lost separators cannot be recovered once `shlex` has already
+    consumed them -- there is no later point in this pipeline where the
+    original spelling still exists to normalize.
+
     `raw_target` (R1, docs/plans/2026-08-08-the-bump-message-never-showed-
     the-operat.md) is the literal token this segment carried BEFORE
     `_resolve_relative`/`translate_msys_path` touched it, for the plain-
@@ -775,7 +794,9 @@ def _iter_write_sink_candidates(
     if not cmd or not cmd.strip():
         return
     try:
-        resolved_segments = resolve_command_positions(cmd)
+        resolved_segments = resolve_command_positions(
+            cmd, preserve_windows_backslashes=_host_is_windows()
+        )
     except Exception:  # noqa: BLE001 -- fail open, never let a parse crash reach the dispatcher
         return
 
@@ -905,6 +926,16 @@ def _evaluate_foreign_repo_candidate(
     if is_agent_memory_store_path(target_dir):
         return None
 
+    # ~/.claude carve-out (docs/plans/2026-08-10-carve-claude-out-and-
+    # close-the-backslash-bypass.md, C1, AC1-AC4). Reached here despite
+    # `target_gitdir` already being confirmed non-`None` above -- `~/.claude`
+    # IS a real git checkout on this fleet, matching the agent-memory
+    # exemption immediately above; see `target_is_under_claude_home`'s own
+    # docstring for why this is unconditional rather than gated on git-dir
+    # state.
+    if target_is_under_claude_home(target_dir):
+        return None
+
     # Resolved once per candidate, reused below for the AC14 common-dir
     # comparison (when `anchor_has_repo`) and unconditionally for
     # `target_repo_label` -- see `_common_dir_cf_from_root`'s docstring
@@ -930,11 +961,19 @@ def _evaluate_foreign_repo_candidate(
         # `_write_bump_marker`'s "MARKER SCOPE" docstring section).
         marker_probe = probe_dir
     else:
-        # § No-repo anchor branch -- the session itself owns no repo,
-        # so only a REGISTERED target still bumps (per § Where the
-        # bump does not fire), and the marker falls back to the
-        # TARGET's own gitdir (see module docstring for why).
-        if not target_is_registered_repo(str(target_gitdir), env=env):
+        # § No-repo anchor branch -- the session itself owns no repo. A
+        # REGISTERED target still bumps unconditionally, as it always has
+        # (per § Where the bump does not fire). Narrow (PM ruling
+        # 2026-08-10): an UNREGISTERED target now ALSO bumps unless it
+        # sits at or under the session's own anchor SUBTREE -- see
+        # `anchor_subtree_contains`'s own docstring for why this branch
+        # (target already confirmed to resolve to a real gitdir, above) is
+        # exactly the shape Narrow can site a clearable marker for. The
+        # marker falls back to the TARGET's own gitdir either way (see
+        # module docstring for why).
+        if not target_is_registered_repo(
+            str(target_gitdir), env=env
+        ) and anchor_subtree_contains(anchor, target_dir):
             return None
         # `probe_dir`, not `target_dir` -- same latent-bug fix as
         # above: `resolve_git_root`/`bump_is_cleared` also shell out

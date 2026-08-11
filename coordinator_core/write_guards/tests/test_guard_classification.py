@@ -25,27 +25,96 @@ Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, under
 DR-277 (docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md).
 DR-277 REPLACES the B5-era irreversible-harm-only hard-deny bar this
 docstring previously argued for: the ruling is guards are advisory BY
-DEFAULT, with hard-deny reserved for three named carve-outs -- (1) a
-genuinely silent/total/irreversible loss with no error at write time AND
-no error at the moment of loss (a derived doctrine copy overwritten
-silently; a settings.json poison that locks every tool fleet-wide with no
-in-session repair path; an NTFS-illegal filename that breaks
-`git checkout` on every Windows machine; a memo delivered to an inbox
-nobody ever reads), (2) a fleet-wide resource-exhaustion risk that takes
-the machine down (the `check_test_suite_invocation` carve-out), or (3) a
-handful of PM-ratified exceptions recorded in the census itself. Everything
-that does not clear one of those three carve-outs is advisory, including
-guards this file previously pinned hard-deny under the superseded B5 bar
-(the nine C2-C12 flips: `check_claude_md_size`,
+DEFAULT, with hard-deny reserved for three named carve-outs, quoted from
+DR-277's own headings rather than paraphrased (Review: coordinator:code-
+reviewer, 36bfdde30 follow-up -- this enumeration previously invented a
+DIFFERENT and equally wrong three-item list, "(1) a genuinely
+silent/total/irreversible loss..., (2) a fleet-wide resource-exhaustion
+risk..., or (3) a handful of PM-ratified exceptions recorded in the census
+itself" -- none of which are DR-277's actual carve-out names, and there is
+no "PM-ratified exceptions" carve-out at all):
+
+- Carve-out 1 -- broken control plane: "the harm is a broken control
+  plane -- the tool surface itself, doctrine loaded before review is
+  possible, or the boundary deciding what other guards enforce -- not
+  merely a bad file" (e.g. a settings.json poison that locks every tool
+  fleet-wide with no in-session repair path, or the stash guards, where a
+  dropped stash leaves no reflog).
+- Carve-out 2 -- the Windows-cost boundary: "a guard's deny leg is a
+  Windows-cost boundary" (e.g. `block_reviewer_bash_outside_allowlist`,
+  `guard_multiprobe_banner`, `guard_plumbing_and_loops`).
+- Carve-out 3 -- the machine itself: "resource exhaustion that takes the
+  session or the box down" (the `check_test_suite_invocation` carve-out).
+
+Everything that does not clear one of those three carve-outs is advisory,
+including guards this file previously pinned hard-deny under the
+superseded B5 bar (the nine C2-C12 flips: `check_claude_md_size`,
 `block_cutover_phase_hand_edit`, `block_tracker_edit`,
 `block_priority_ledger_edit`,
 `block_em_hand_edit_pending_review_integration`,
 `nudge_prose_queue_creation`, `nudge_improvement_queue_write`,
 `guard_memory_store_cap`, `block_dev_repo_sentinel_write` -- disk-truth
 wires and dev-side mirrors whose harm is reversible and
-individually-correctable, not the silent-and-total shape the DR-277
-hard-deny bar reserves). The guards remaining hard-deny below are the
+individually-correctable, not the broken-control-plane, Windows-cost, or
+machine-exhaustion shape DR-277's three carve-outs reserve (Review:
+coordinator:code-reviewer, 36bfdde30 follow-up -- "silent-and-total" was
+this same wrong paraphrase's own language, not DR-277's; see the corrected
+enumeration above). The guards remaining hard-deny below are the
 carve-out set DR-277 names, not a residual of the old bar.
+
+`bump_out_of_repo_tool_write` is hard-deny (moved from advisory by the bug
+fix `2026-08-10-cross-repo-write-boundary-denies-on-bash-b6fd16ed9ab9`) for
+none of the "silent" or "total" reasons a first read of the guard's own
+harm suggests -- a cross-repo write is neither silent (it shows up in the
+peer session's own `git status`) nor total (it is revertible with a plain
+`git checkout`/`git revert`).
+
+Review: coordinator:code-reviewer (2074e4dd) -- an earlier version of this
+paragraph claimed this cleared DR-277's bar under "the third carve-out:
+PM-ratified parity with this guard's Bash-surface siblings." No such
+carve-out exists. DR-277's actual three carve-outs are (1) a broken
+control plane, (2) the Windows-cost boundary, and (3) fleet-wide resource
+exhaustion that takes the machine down -- none is cross-surface parity,
+and `bump_out_of_repo_tool_write` is not in the
+`state/audits/2026-08-06-guard-class-census/` census this file's own
+carve-out-3 paraphrase (above) would also require. The parity argument
+below is real and worth keeping on its own terms; it is not, as written,
+covered by DR-277.
+
+This guard's classification therefore EXCEEDS DR-277 as currently written
+and is PENDING a PM ruling: amend DR-277 with a named cross-surface-parity
+carve-out, add a census entry, or re-argue the harm against one of the
+three carve-outs that already exist. `CLASS` is left at hard-deny pending
+that ruling -- this paragraph records the gap, it does not close it, and
+should not be resolved by editing this prose a second time without that
+ruling in hand.
+
+The parity argument itself: leaving this module advisory while its
+Bash-surface siblings, `bump_foreign_repo_write` [C4] and
+`bump_outside_repo_write` [C5], already compose a real
+`permissionDecision: "deny"` envelope for the identical payload shape
+(verified live, same session, same target) is a tool-surface loophole
+around an already-hard-denied boundary: an agent blocked on
+`git checkout` into a foreign repo could simply reach for `Write`/`Edit`
+instead and land the identical unannounced write. On a machine where a
+dozen-plus sessions share worktrees, that write lands as unattributed
+drift in a peer session's diff, with no attribution and no announcement
+at the point of harm.
+
+`block_subagent_grant_record_write` is hard-deny under carve-out 1
+(broken control plane): "the harm is a broken control plane -- the tool
+surface itself, doctrine loaded before review is possible, or the
+boundary deciding what other guards enforce -- not merely a bad file"
+(DR-277). Its own module docstring states the target directly: the
+CLAUDE.md write-grant record is "the record `coordinator_core.session.
+claude_md_grant` writes and `check_claude_md_write_grant` reads to gate
+`block_unauthorized_claude_md_write`" -- i.e. the artifact this guard
+protects IS the boundary that decides whether a separate guard
+(`block_unauthorized_claude_md_write`, already hard-deny in this same
+list) allows or denies a write. A subagent able to hand-author a
+live-looking grant record walks straight through that other guard's
+allow leg, so this guard's own harm is not "a bad file" but the control
+plane one hard-deny guard's enforcement rests on.
 """
 from __future__ import annotations
 
@@ -68,9 +137,11 @@ HARD_DENY_NAMES = [
     "block_memo_status_hand_edit",
     "block_oss_mirror_memo_delivery",
     "block_subagent_archive_write",
+    "block_subagent_grant_record_write",
     "block_subagent_plan_body_write",
     "block_unauthorized_claude_md_write",
     "block_worktree_sentinel_write",
+    "bump_out_of_repo_tool_write",
     "guard_doctrine_surface_edits",
     "guard_settings_json_write",
     "validate_frontmatter_schema_deny",
@@ -89,7 +160,6 @@ ADVISORY_NAMES = [
     "block_em_hand_edit_pending_review_integration",
     "block_priority_ledger_edit",
     "block_tracker_edit",
-    "bump_out_of_repo_tool_write",
     "check_claude_md_size",
     "guard_concrete_path_citations",
     "guard_memory_store_cap",
@@ -97,7 +167,9 @@ ADVISORY_NAMES = [
     "nudge_em_code_dispatch",
     "nudge_improvement_queue_write",
     "nudge_new_sh_file_naked_python",
+    "nudge_outbox_draft_frontmatter_shape",
     "nudge_plan_sidecar_family_split",
+    "nudge_private_git_fact_resolver",
     "nudge_prose_queue_append",
     "nudge_prose_queue_creation",
     "nudge_sentinel_retained_review_sidecar",

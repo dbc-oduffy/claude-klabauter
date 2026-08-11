@@ -65,8 +65,14 @@ def _install_real_prepare_commit_msg_hook(repo: Path) -> None:
     ) / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook_path = hooks_dir / "prepare-commit-msg"
+    # Both paths go through `as_posix()` and are quoted: git runs hooks under
+    # its bundled `sh` on Windows too, where a native `C:\...\python.exe`
+    # spelling has its backslashes eaten as shell escapes (the hook then dies
+    # with `exec: C:Usersexample_operatorAppData...: not found`). Forward slashes with a
+    # drive letter are understood by that shell, and are unchanged on POSIX.
     hook_path.write_text(
-        f"#!/bin/sh\nexec {sys.executable} {_REAL_HOOK_SCRIPT} \"$@\"\n",
+        '#!/bin/sh\nexec "%s" "%s" "$@"\n'
+        % (Path(sys.executable).as_posix(), _REAL_HOOK_SCRIPT.as_posix()),
         encoding="utf-8",
     )
     hook_path.chmod(hook_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)

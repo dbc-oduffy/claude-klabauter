@@ -59,6 +59,7 @@ from unittest import mock
 import pytest
 
 from coordinator_core.session import core, liveness, scope
+from coordinator_core.session import harness_registry
 from coordinator_core.pickup_assemble import compute_competing_claim
 from coordinator_core.pickup_assemble import holder_evidence as holder_evidence_mod
 
@@ -207,6 +208,94 @@ class TestSessionLive:
             },
         )
         assert liveness.session_live("s-dead-stable", cwd=str(repo)) is False
+
+    def test_layer1_exception_fails_open_no_fallthrough_to_layer2(self, tmp_path, monkeypatch):
+        # Review: staff-eng-review B. A raise from core.stable_pid_alive in
+        # session_live's own Layer-1 arm must fail OPEN (True), matching
+        # live_session_verdicts' sibling Layer-1 arm's (True, "unknown",
+        # None) exactly -- and must NOT fall through to Layer 2, even though
+        # last_activity below is stale enough to read DEAD there.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-layer1-boom",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": "12345",
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated stable_pid_alive failure")
+
+        monkeypatch.setattr(core, "stable_pid_alive", _boom)
+        assert liveness.session_live("s-layer1-boom", cwd=str(repo)) is True
+
+    def test_layer1_epoch_only_witness_no_lstart_reaches_layer1_live(self, tmp_path, monkeypatch):
+        """dca0e3e80 regression pin: POSIX init() stopped writing
+        stable_pid_lstart 2026-07-27 but still writes
+        stable_pid_start_epoch. A record carrying stable_pid +
+        stable_pid_start_epoch but NO stable_pid_lstart must still reach
+        Layer 1 (core.stable_pid_alive) and return basis "stable-pid", not
+        silently fall through to the recency window forever."""
+        import psutil
+        repo = _make_repo(tmp_path)
+        ct = int(psutil.Process(os.getpid()).create_time())
+        _write_session(
+            repo,
+            "s-epoch-only",
+            {
+                # last_activity deliberately STALE to prove Layer 1 -- not
+                # recency -- is what makes this live.
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": str(os.getpid()),
+                "stable_pid_start_epoch": str(ct),
+                # stable_pid_lstart deliberately absent.
+            },
+        )
+        assert liveness.session_live("s-epoch-only", cwd=str(repo)) is True
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age = verdicts["s-epoch-only"]
+        assert live is True
+        assert basis == "stable-pid"
+
+    def test_layer1_epoch_only_witness_recycled_epoch_is_dead(self, tmp_path):
+        """Companion negative case: epoch-only witness, but the stored epoch
+        does NOT match the live process's create_time() -> Layer 1
+        authoritative DEAD, even with fresh last_activity (recency not
+        consulted)."""
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-epoch-only-recycled",
+            {
+                "pid": "999",
+                "last_activity": core.now_iso(),
+                "stable_pid": str(os.getpid()),
+                "stable_pid_start_epoch": "1",
+            },
+        )
+        assert liveness.session_live("s-epoch-only-recycled", cwd=str(repo)) is False
+
+    def test_layer1_neither_witness_still_falls_through_to_layer2(self, tmp_path):
+        """A-F1 survives: stable_pid present, BOTH stable_pid_lstart and
+        stable_pid_start_epoch absent -> falls through to the Layer-2
+        recency window (unchanged from pre-fix behavior)."""
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-neither-witness",
+            {"pid": "999", "stable_pid": "12345", "last_activity": core.now_iso()},
+        )
+        assert liveness.session_live("s-neither-witness", cwd=str(repo)) is True
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age = verdicts["s-neither-witness"]
+        assert live is True
+        assert basis == "recency-window"
 
     @pytest.mark.skipif(
         os.name == "nt",
@@ -610,6 +699,62 @@ class TestLiveSessionIdsCorpus:
                 assert (base / sid).is_dir()
                 assert sid not in (".archive", ".agents")
 
+    def test_every_non_uuid_real_child_is_denylisted_or_a_file(self):
+        # Regression for the 2026-08-08 phantom-peer defect: `decisions/` and
+        # `reconcile-history/` sit alongside the UUID-shaped session dirs in
+        # THIS repo's real `.git/coordinator-sessions/` and were, until this
+        # test, unfiltered by `_NON_SESSION_DIR_NAMES` -- so
+        # `live_session_verdicts`/`live_session_ids` enumerated them as
+        # sessions (and `decisions/` in particular reads Layer-2-recent-LIVE,
+        # since pickup_assemble actively mtime-touches it).
+        #
+        # This walks the REAL on-disk registry (not a tmp_path fixture) on
+        # purpose: a denylist gains holes exactly when a new infra dir is
+        # added next to the sessions without anyone updating this constant,
+        # and only a live walk of the actual corpus catches that. Approach
+        # (a) (denylist + this real-corpus test) was chosen over inverting to
+        # a positive UUID-shape check: this module's own docstring for
+        # `_NON_SESSION_DIR_NAMES` records that session ids are
+        # caller-supplied and "NOT guaranteed to be UUID-shaped -- test
+        # overrides legitimately use non-UUID ids" (e.g. `no-session`), so a
+        # positive UUID-only gate would be a behavior change with no way to
+        # show non-regression against that documented contract.
+        base = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        if not base.is_dir():
+            pytest.skip("no real .git/coordinator-sessions/ registry on this box")
+        uuid_re = __import__("re").compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
+        # NEGATIVE-SPEC: do NOT reintroduce a known-test-leak exclusion set here.
+        # This check carried one for `sess-abc` until 2026-08-08. Bug-backlog
+        # `2026-07-21-test-leaks-a-session-dir-into-the-real-g-5e739049c5c4.yaml`
+        # closed on two claims; only one held. Its technical claim is CONFIRMED --
+        # the producer, `archive_stamp._session_shape_set_bridge`, is gone
+        # (docstring reference only, no definition, no call site), and the
+        # surviving writer `session.shape.session_shape_set` is cwd-scoped by its
+        # production caller. Its cleanup claim ("stray dir removed") was FALSIFIED:
+        # the dir's mtime was 2026-07-20, predating the closure, so it had never
+        # been deleted and nothing re-created it. The operator removed it
+        # 2026-08-08 and the exclusion went with it.
+        #
+        # An exclusion here is a hole in exactly the signal this test exists to
+        # give. If a stray non-UUID dir appears, delete the dir; do not re-add a
+        # name to a passlist to quiet the failure.
+        offenders = []
+        for entry in base.iterdir():
+            if not entry.is_dir():
+                continue
+            if entry.name in liveness._NON_SESSION_DIR_NAMES:
+                continue
+            if uuid_re.match(entry.name):
+                continue
+            offenders.append(entry.name)
+        assert offenders == [], (
+            "non-UUID-shaped dir(s) under .git/coordinator-sessions/ are not "
+            f"in _NON_SESSION_DIR_NAMES and will be enumerated as phantom "
+            f"sessions: {offenders!r}"
+        )
+
     def test_resolve_alias_matches_live_session_ids(self):
         # resolve_live_session_ids() is the zero-arg alias core.py:441 imports.
         #
@@ -850,6 +995,160 @@ class TestLiveSessionVerdicts:
         _write_session(repo, "real", {"pid": "1", "last_activity": core.now_iso()})
         verdicts = liveness.live_session_verdicts(cwd=str(repo))
         assert "no-such-sid" not in verdicts
+
+
+class TestSessionVerdict:
+    """`session_verdict` (Review: staff-eng-review C) — the O(1) per-sid
+    entry point over the same ``_verdict_for_sdir`` derivation
+    ``live_session_verdicts`` uses, added to drop ``holder_evidence.
+    liveness_basis``'s incidental whole-corpus scan."""
+
+    def test_matches_whole_corpus_verdict_recency(self, tmp_path):
+        # Review: staff-eng slice-A P2 — this test was misnamed
+        # "..._stable_pid" while writing a recency-only session (no
+        # stable_pid, no registry record), so it exercised only the
+        # recency arm. Renamed to match what it actually covers; the
+        # stable-pid arm (the one carrying the refactor's actual risk) is
+        # separately pinned below.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-recency",
+            {"pid": "1", "last_activity": core.now_iso()},
+        )
+        whole = liveness.live_session_verdicts(cwd=str(repo))["s-recency"]
+        single = liveness.session_verdict("s-recency", cwd=str(repo))
+        assert single == whole
+
+    def test_matches_whole_corpus_verdict_stable_pid(self, tmp_path):
+        # Review: staff-eng slice-A P2 — parity for the stable-pid arm,
+        # which the misnamed test above never exercised. Reuses the
+        # os.getpid()/create_time() fixture already written for
+        # TestLivenessBasisMatchesVerdictSource.
+        import psutil
+
+        repo = _make_repo(tmp_path)
+        ct = int(psutil.Process(os.getpid()).create_time())
+        _write_session(
+            repo,
+            "s-stable-parity",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": str(os.getpid()),
+                "stable_pid_lstart": "irrelevant-token",
+                "stable_pid_start_epoch": str(ct),
+            },
+        )
+        whole = liveness.live_session_verdicts(cwd=str(repo))["s-stable-parity"]
+        single = liveness.session_verdict("s-stable-parity", cwd=str(repo))
+        assert single == whole
+        assert whole[1] == "stable-pid"
+
+    def test_absent_sid_returns_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _write_session(repo, "real", {"pid": "1", "last_activity": core.now_iso()})
+        assert liveness.session_verdict("no-such-sid", cwd=str(repo)) is None
+
+    def test_empty_sid_returns_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.session_verdict("", cwd=str(repo)) is None
+
+    def test_traversal_sid_returns_none(self, tmp_path):
+        # Review: staff-eng slice-A P2 — core.session_dir is a bare join
+        # with no validation; unlike the whole-corpus loop (which only ever
+        # sees real child directory names), the per-sid path must reject
+        # a traversal-shaped sid explicitly rather than resolving it.
+        repo = _make_repo(tmp_path)
+        assert liveness.session_verdict("../../etc/passwd", cwd=str(repo)) is None
+        assert liveness.session_verdict("foo/../bar", cwd=str(repo)) is None
+        assert liveness.session_verdict("foo\\bar", cwd=str(repo)) is None
+
+    def test_colon_drive_letter_sid_returns_none(self, tmp_path):
+        # Review: coordinator:code-reviewer — a blocklist of `/`, `\`, `..`,
+        # NUL did not reject a bare drive-letter/colon component; on
+        # Windows, `core.session_dir`'s underlying `Path.__truediv__` join
+        # DISCARDS `base` entirely for a drive-letter-bearing sid like
+        # "C:evil", a full containment escape out of the sessions corpus
+        # (confirmed live: `Path(base) / "C:evil"` resolves to bare
+        # "C:evil", never touching `base`). Pin that the join escape is
+        # UNGUARDED at `core.session_dir` (so the hazard this fix closes is
+        # real, not hypothetical) while `session_verdict` — the guarded
+        # entrypoint reached with a sid read off disk — rejects every such
+        # sid before ever calling `core.session_dir` on attacker input.
+        repo = _make_repo(tmp_path)
+        # "C:\\evil" is an unambiguous absolute-with-drive path regardless of
+        # process cwd — unlike "C:evil" (drive-relative, resolves against
+        # the OS's per-drive cwd and so is environment-dependent to assert
+        # on directly), it deterministically demonstrates the raw join
+        # escape at `core.session_dir`.
+        resolved = core.session_dir("C:\\evil", str(repo))  # abs-path-ok: attack-shaped sid literal, not a machine path citation
+        assert resolved == "C:\\evil", (
+            f"expected the unguarded join to demonstrate the join escape "
+            f"for 'C:\\\\evil'; instead got {resolved!r} — if "
+            f"core.session_dir started validating internally, this "
+            f"assertion (and its rationale) needs revisiting"
+        )
+        for bad_sid in ("C:evil", "C:\\evil", "C:/Windows/Temp/x"):
+            assert liveness.session_verdict(bad_sid, cwd=str(repo)) is None
+
+    def test_allowlisted_test_fixture_sid_shape_still_accepted(self, tmp_path):
+        # The allowlist must stay compatible with a live on-disk corpus
+        # containing non-UUID hyphenated test-fixture sids, e.g.
+        # "test-session-abc123".
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "test-session-abc123", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        assert liveness.session_verdict("test-session-abc123", cwd=str(repo)) is not None
+
+    def test_non_session_dir_name_returns_none_without_touching_disk(self, tmp_path):
+        # "no-session" would otherwise resolve to a real (bogus) directory
+        # via core.session_dir -- the per-sid path must apply
+        # _NON_SESSION_DIR_NAMES filtering explicitly, same as the
+        # whole-corpus loop gets for free from its own skip check.
+        repo = _make_repo(tmp_path)
+        assert liveness.session_verdict("no-session", cwd=str(repo)) is None
+
+
+class TestLivenessBasisMatchesVerdictSource:
+    """Integration-shaped: on a real tmp_path corpus, the basis
+    ``holder_evidence.liveness_basis`` prints must be the basis of the SAME
+    arm ``session_verdict``/``live_session_verdicts`` actually resolved --
+    nothing currently detects a verdict/basis mismatch on this surface
+    (Review: staff-eng-review, tests section)."""
+
+    def test_stable_pid_session_basis_matches_verdict_arm(self, tmp_path):
+        import psutil
+        repo = _make_repo(tmp_path)
+        ct = int(psutil.Process(os.getpid()).create_time())
+        _write_session(
+            repo,
+            "s-stable",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": str(os.getpid()),
+                "stable_pid_lstart": "irrelevant-token",
+                "stable_pid_start_epoch": str(ct),
+            },
+        )
+        live, basis, _age = liveness.session_verdict("s-stable", cwd=str(repo))
+        assert live is True
+        assert basis == "stable-pid"
+        reported = holder_evidence_mod.liveness_basis("s-stable", cwd=str(repo))
+        assert reported == basis
+
+    def test_recency_session_basis_matches_verdict_arm(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "s-recency-int", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        live, basis, _age = liveness.session_verdict("s-recency-int", cwd=str(repo))
+        assert live is True
+        assert basis == "recency-window"
+        reported = holder_evidence_mod.liveness_basis("s-recency-int", cwd=str(repo))
+        assert reported == basis
 
 
 class TestLiveSessionIdsMatchesVerdictsSeam:
@@ -1263,6 +1562,24 @@ class TestComputeScopeEmptyVsIndeterminate:
         core.init("mine", cwd=str(repo))
         mine_sdir = Path(core.sessions_dir(cwd=str(repo))) / "mine"
         core.update_meta_field(str(mine_sdir), "last_activity", "2000-01-01T00:00:00Z")
+        # Guard-1 (core.init) stamps stable_pid from the ambient CLAUDE_PID
+        # of the live harness session actually running this test suite --
+        # an authoritative signal the fixture's stale last_activity above
+        # cannot override. Neutralise it the same way last_activity is
+        # neutralised above, so Layer 1 has nothing authoritative left to
+        # read and "mine" reads dead purely off the (now-stale) recency
+        # fallback, matching what this test is actually exercising.
+        # update_meta_field() hard-rejects an empty-string value (required-
+        # non-empty contract), so the stamp is cleared via a direct
+        # meta.json rewrite instead.
+        mine_meta_path = mine_sdir / "meta.json"
+        mine_meta = json.loads(mine_meta_path.read_text(encoding="utf-8"))
+        mine_meta["stable_pid"] = ""
+        mine_meta["stable_pid_lstart"] = ""
+        mine_meta["stable_pid_start_epoch"] = ""
+        mine_meta_path.write_text(
+            json.dumps(mine_meta, indent=2) + "\n", encoding="utf-8"
+        )
 
         _write_session(
             repo, "dead-peer", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
@@ -1303,12 +1620,12 @@ class TestHolderEvidenceLivenessBasisSeam:
 
     def test_liveness_basis_delegates_to_verdicts_seam(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        sentinel = {"holder-x": (True, "recency-window", 42)}
+        sentinel = (True, "recency-window", 42)
         with mock.patch.object(
-            liveness, "live_session_verdicts", return_value=sentinel
+            liveness, "session_verdict", return_value=sentinel
         ) as mocked:
             basis = holder_evidence_mod._liveness_basis("holder-x", cwd=str(repo))
-        mocked.assert_called_once_with(str(repo))
+        mocked.assert_called_once_with("holder-x", str(repo))
         assert basis == "recency-window"
 
     def test_holder_absent_from_map_reads_unknown_basis(self, tmp_path):
@@ -1338,6 +1655,18 @@ class TestHolderEvidenceLivenessBasisSeam:
         repo = _make_repo(tmp_path)
         self_path = repo / "state" / "handoffs" / "self.md"
         candidate_path = repo / "state" / "handoffs" / "peer.md"
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        # `_resolve_ledger_first_holder` (C11, ledger-first-authoritative-
+        # read) resolves the holder via `claim_state.resolve_claim_state`,
+        # which reads the mirror claim straight off DISK (`_read_mirror_claim`
+        # opens `handoff_path`) rather than trusting the `fm` dict a synthetic
+        # `handoff_scan` entry carries — so the candidate file must actually
+        # exist on disk with a matching `claimed_by:` line, or the ledger/
+        # mirror read finds nothing, `_resolve_ledger_first_holder` falls
+        # through to the `picked_up_by`-only mirror fallback (absent here),
+        # and the candidate is silently dropped before `compute_competing_claim`
+        # ever sees it.
+        candidate_path.write_text("claimed_by: no-session\nscope: []\n", encoding="utf-8")
         scan = [
             {
                 "path": candidate_path,
@@ -1389,6 +1718,11 @@ class TestHolderEvidenceLivenessBasisSeam:
             out = []
             for i in range(n):
                 p = repo / "state" / "handoffs" / f"c{i}.md"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                # See the previous test's comment: `_resolve_ledger_first_holder`
+                # reads the mirror claim off DISK, so each synthetic candidate
+                # needs a real `claimed_by:` line, not just an in-memory `fm`.
+                p.write_text("claimed_by: holder-1\nscope: []\n", encoding="utf-8")
                 out.append(
                     {
                         "path": p,
@@ -1417,4 +1751,317 @@ class TestHolderEvidenceLivenessBasisSeam:
         assert len(result_one["candidates"]) == 1
         assert len(result_three["candidates"]) == 3
         assert mocked_one.call_count == mocked_three.call_count
-        assert mocked_one.call_count > 0
+
+
+# ---------------------------------------------------------------------------
+# harness_registry precedence — C2. Registry is Source 0: LIVE or NO-RECORD,
+# never DEAD. Point every fixture at a tmp_path registry_dir — never the
+# operator's real `~/.claude/sessions` (AC5/AC7/AC8/AC10 in the C2 brief).
+# ---------------------------------------------------------------------------
+
+
+def _write_registry_record(registry_dir, filename, session_id, pid, epoch):
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    ticks = int(
+        (epoch + harness_registry._FILETIME_EPOCH_OFFSET_SEC)
+        * harness_registry._FILETIME_TICKS_PER_SEC
+    )
+    payload = {"sessionId": session_id, "pid": pid, "procStart": ticks}
+    (registry_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _self_create_time():
+    import psutil
+
+    return psutil.Process(os.getpid()).create_time()
+
+
+class TestHarnessRegistrySessionLivePrecedence:
+    def test_registry_live_wins_over_absent_stable_pid(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # No stable_pid at all, and stale last_activity -> Layer 2 would say
+        # DEAD -- the registry hit must win regardless.
+        _write_session(
+            repo, "s-registry-live", {"pid": "999", "last_activity": "2000-01-01T00:00:00Z"}
+        )
+        _write_registry_record(
+            registry_dir, "s.json", "s-registry-live", os.getpid(), _self_create_time()
+        )
+        assert liveness.session_live("s-registry-live", cwd=str(repo)) is True
+
+    def test_registry_live_wins_over_stale_stable_pid(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # A DEAD stable_pid arm on its own -- registry must still win.
+        _write_session(
+            repo,
+            "s-registry-over-dead-stable",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+        _write_registry_record(
+            registry_dir,
+            "s.json",
+            "s-registry-over-dead-stable",
+            os.getpid(),
+            _self_create_time(),
+        )
+        assert liveness.session_live("s-registry-over-dead-stable", cwd=str(repo)) is True
+
+    def test_registry_none_falls_through_to_stable_pid_arm_exact_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # Registry dir exists but has no record for this sid -> NO-RECORD,
+        # falls through to today's Layer-1 DEAD verdict, byte-unchanged.
+        _write_session(
+            repo,
+            "s-dead-stable-no-registry",
+            {
+                "pid": "999",
+                "last_activity": core.now_iso(),
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+        assert (
+            liveness.session_live("s-dead-stable-no-registry", cwd=str(repo)) is False
+        )
+
+    def test_registry_none_falls_through_to_layer2_recency_window_exact_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo, "s-recency-no-registry", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        assert liveness.session_live("s-recency-no-registry", cwd=str(repo)) is True
+        _write_session(
+            repo,
+            "s-recency-stale-no-registry",
+            {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"},
+        )
+        assert (
+            liveness.session_live("s-recency-stale-no-registry", cwd=str(repo)) is False
+        )
+
+    def test_registry_none_falls_through_to_metaless_mtime_substitution(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        sdir = _session_dir_path(repo, "s-mid-write-no-registry")
+        sdir.mkdir(parents=True)
+        marker = sdir / "lock"
+        marker.write_text("x")
+        _touch(marker, core.now_epoch())
+        assert liveness.session_live("s-mid-write-no-registry", cwd=str(repo)) is True
+
+    def test_registry_absent_directory_falls_through_never_dead(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # registry_dir itself does not exist on disk at all -- must degrade
+        # cleanly to NO-RECORD, not raise, not influence toward DEAD.
+        missing = tmp_path / "no-such-registry-dir"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: missing)
+        _write_session(
+            repo, "s-no-registry-dir", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        assert liveness.session_live("s-no-registry-dir", cwd=str(repo)) is True
+
+    def test_registry_internal_exception_cannot_propagate(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+
+        def _boom():
+            raise RuntimeError("simulated harness_registry internal failure")
+
+        monkeypatch.setattr(harness_registry, "snapshot", _boom)
+        _write_session(
+            repo, "s-registry-boom", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        # snapshot() raising must not propagate out of session_live -- but
+        # session_live calls lookup(), which itself catches internally per
+        # C1's own contract (AC11); this belt-and-braces proves the
+        # end-to-end path never raises even if that inner catch were removed.
+        assert liveness.session_live("s-registry-boom", cwd=str(repo)) is True
+
+    def test_registry_compare_raises_falls_through_to_layer1_exact_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        # Review: staff-eng-review P2 (PM-overridden, treated as accepted).
+        # A registry HIT whose core.stable_pid_alive compare raises (e.g.
+        # MissingPsutilError) must fall through to Layer 1/2 byte-unchanged
+        # -- exact same fail-open posture as live_session_verdicts' sibling
+        # registry arm -- never propagate out of session_live, and never
+        # itself mean DEAD.
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-registry-compare-boom",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+        _write_registry_record(
+            registry_dir, "s.json", "s-registry-compare-boom", os.getpid(), _self_create_time()
+        )
+
+        real_stable_pid_alive = core.stable_pid_alive
+        calls = []
+
+        def _boom_once_then_real(*a, **k):
+            calls.append(a)
+            if len(calls) == 1:
+                raise RuntimeError("simulated stable_pid_alive failure")
+            return real_stable_pid_alive(*a, **k)
+
+        monkeypatch.setattr(core, "stable_pid_alive", _boom_once_then_real)
+        # Today's exact Layer-1 verdict for this stable_pid/lstart/epoch combo
+        # is DEAD (recycled/invalid pid) -- the raising registry compare must
+        # not prevent reaching that same verdict, and must not raise.
+        assert (
+            liveness.session_live("s-registry-compare-boom", cwd=str(repo)) is False
+        )
+        assert len(calls) == 2
+
+
+class TestHarnessRegistryVerdictsPrecedence:
+    def test_registry_basis_and_age_none(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-registry-basis",
+            {"pid": "999", "last_activity": "2000-01-01T00:00:00Z"},
+        )
+        _write_registry_record(
+            registry_dir, "s.json", "s-registry-basis", os.getpid(), _self_create_time()
+        )
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age_sec = verdicts["s-registry-basis"]
+        assert live is True
+        assert basis == "harness-registry"
+        assert age_sec is None
+
+    def test_exactly_one_registry_scan_per_invocation(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        for i in range(5):
+            _write_session(
+                repo, f"s-count-{i}", {"pid": "1", "last_activity": core.now_iso()}
+            )
+        calls = []
+        real_snapshot = harness_registry.snapshot
+
+        def _counting_snapshot():
+            calls.append(1)
+            return real_snapshot()
+
+        monkeypatch.setattr(harness_registry, "snapshot", _counting_snapshot)
+        liveness.live_session_verdicts(cwd=str(repo))
+        assert len(calls) == 1
+
+    def test_registry_none_falls_through_stable_pid_verdict_exact(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-dead-stable-verdict",
+            {
+                "pid": "999",
+                "last_activity": core.now_iso(),
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age_sec = verdicts["s-dead-stable-verdict"]
+        assert live is False
+        assert basis == "stable-pid"
+        assert age_sec is None
+
+    def test_registry_internal_exception_cannot_propagate_in_verdicts(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+
+        def _boom():
+            raise RuntimeError("simulated harness_registry internal failure")
+
+        monkeypatch.setattr(harness_registry, "snapshot", _boom)
+        _write_session(
+            repo, "s-verdict-boom", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age_sec = verdicts["s-verdict-boom"]
+        assert live is True
+        assert basis == "recency-window"
+
+
+class TestHarnessRegistryLiveSessionIdsParity:
+    """live_session_ids() stays set-identical to today when the registry
+    yields NO-RECORD for every candidate -- including the negative-elapsed
+    clock-skew case (AC8)."""
+
+    def test_set_identical_with_registry_present_but_no_matching_records(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # A registry row exists, but keyed to a DIFFERENT sessionId than any
+        # fixture below -- must not influence any of these verdicts.
+        _write_registry_record(
+            registry_dir, "other.json", "unrelated-sid", os.getpid(), _self_create_time()
+        )
+        _write_session(
+            repo, "live-one", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        _write_session(
+            repo, "stale-one", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
+        )
+        _write_session(
+            repo,
+            "future-nostable",
+            {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"},
+        )
+        assert liveness.live_session_ids(cwd=str(repo)) == frozenset({"live-one"})
+
+    def test_registry_hit_extends_live_session_ids(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # This session would read DEAD on Layer 2 alone (stale recency, no
+        # stable_pid) -- the registry hit must rescue it into the live set.
+        _write_session(
+            repo, "s-rescued", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
+        )
+        _write_registry_record(
+            registry_dir, "s.json", "s-rescued", os.getpid(), _self_create_time()
+        )
+        assert "s-rescued" in liveness.live_session_ids(cwd=str(repo))

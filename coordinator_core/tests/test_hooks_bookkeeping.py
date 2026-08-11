@@ -319,6 +319,45 @@ class TestTrackTouchedFiles:
             verb == "T" and path == "coordinator_core/ops/foo.py" for verb, _ts, path in events
         )
 
+    def test_agent_keyed_write_canonical_shape_rewritten_against_live_session(
+        self, tmp_path: Path
+    ) -> None:
+        """/clear regression: a subagent-context fire carrying an already-
+        canonical <name>@session-<short> agent_id (the harness's own stale-
+        embedded-short shape, not the a<name>-16hex raw form) must key
+        .agents/ by the LIVE session_id, not the harness's stale short — the
+        same join key track_dispatched_agents now writes (see
+        TestTrackDispatchedAgents.test_teammate_agent_id_short_rewritten_
+        against_live_session), so a cross-writer join finds the same directory.
+
+        Root cause: docs/research/spike-verdicts/2026-08-10-session-scoped-
+        hooks-inside-a-teammate-session.md.
+        """
+        from coordinator_core.hooks.track_touched_files import _handler
+        from coordinator_core.session.scope import parse_touch_event
+        ctx = self._ctx(tmp_path)
+        live_sid = "f91c46a7bbbbbbbb"
+        _make_session(tmp_path, live_sid)
+        boot_short = "5ee0cb12"
+        stale_agent_id = f"hookprobe-named@session-{boot_short}"
+        _run(_handler(
+            {"session_id": live_sid, "tool_name": "Write",
+             "file_path": "coordinator_core/ops/foo.py", "agent_id": stale_agent_id},
+            repo_root=ctx.repo_root,
+        ))
+        expected_dir = _cs_dir(tmp_path) / ".agents" / f"hookprobe-named@session-{live_sid[:8]}"
+        agent_touched = expected_dir / "touched.txt"
+        assert agent_touched.exists(), (
+            f"Agent-keyed write must land under the LIVE-short directory {expected_dir}"
+        )
+        lines = [l for l in agent_touched.read_text().splitlines() if l]
+        events = [parse_touch_event(l) for l in lines]
+        assert any(
+            verb == "T" and path == "coordinator_core/ops/foo.py" for verb, _ts, path in events
+        )
+        stale_dir = _cs_dir(tmp_path) / ".agents" / stale_agent_id
+        assert not stale_dir.exists(), "Must not also create a stale-short-keyed directory"
+
     def test_agent_absent_skips_agent_write(self, tmp_path: Path) -> None:
         """No agent_id → no .agents/ write; only session-keyed write fires."""
         from coordinator_core.hooks.track_touched_files import _handler
@@ -871,7 +910,11 @@ class TestTrackDispatchedAgents:
     # --- (a2) Agent-id shape: teammate canonical id (agent_id / regex pass) ---
 
     def test_teammate_agent_id_accepted(self, tmp_path: Path) -> None:
-        """Teammate canonical id (<name>@session-<short>) is accepted."""
+        """Teammate canonical id (<name>@session-<short>) is accepted, and its
+        embedded short is rewritten against the LIVE session_id (normalize_
+        teammate_agent_id) rather than recorded verbatim — see
+        test_teammate_agent_id_short_rewritten_against_live_session below for
+        the dedicated /clear regression this guards."""
         from coordinator_core.hooks.track_dispatched_agents import _handler
         ctx = self._ctx(tmp_path)
         sid = "ses0000000000002"
@@ -883,7 +926,48 @@ class TestTrackDispatchedAgents:
         assert result == {}
         disp = self._dispatched(tmp_path, sid)
         lines = [l for l in disp.read_text().splitlines() if l]
-        assert any(l.split("\t")[0] == self._TEAMMATE_AID for l in lines)
+        expected_id = f"the Director of Engineering@session-{sid[:8]}"
+        assert any(l.split("\t")[0] == expected_id for l in lines), (
+            f"Expected rewritten id {expected_id!r} in col-1; lines={lines!r}"
+        )
+        assert not any(l.split("\t")[0] == self._TEAMMATE_AID for l in lines), (
+            "Harness-stale short must not be recorded verbatim"
+        )
+
+    def test_teammate_agent_id_short_rewritten_against_live_session(self, tmp_path: Path) -> None:
+        """/clear regression: a teammate's harness-embedded <short> is stamped once
+        at team creation and never refreshed. Dispatching that SAME teammate again
+        under a NEW live session_id (post-/clear) must key the row — and therefore
+        the .agents/<id>/ directory every other bookkeeping writer joins against —
+        by the LIVE short, not the stale one the harness keeps handing back.
+
+        Root cause: docs/research/spike-verdicts/2026-08-10-session-scoped-hooks-
+        inside-a-teammate-session.md.
+        """
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        boot_sid = "5ee0cb12aaaaaaaa"
+        live_sid = "f91c46a7bbbbbbbb"
+        harness_agent_id = f"hookprobe-named@session-{boot_sid[:8]}"
+
+        # Dispatch fires under the NEW live session — as it does post-/clear —
+        # but the harness still hands back the id it minted at team creation.
+        _run(_handler(
+            {"session_id": live_sid, "dispatched_agent_id": harness_agent_id,
+             "dispatched_model": "claude-opus-5", "subagent_type": "executor"},
+            repo_root=ctx.repo_root,
+        ))
+
+        disp = self._dispatched(tmp_path, live_sid)
+        assert disp.exists(), "row must land in the LIVE session's dispatched-agents.txt"
+        lines = [l for l in disp.read_text().splitlines() if l]
+        expected_id = f"hookprobe-named@session-{live_sid[:8]}"
+        assert any(l.split("\t")[0] == expected_id for l in lines), (
+            f"Expected LIVE-short-keyed id {expected_id!r}; lines={lines!r}"
+        )
+        assert not any(harness_agent_id in l for l in lines), (
+            "Harness's stale boot-session short must not survive into the record"
+        )
 
     # --- Agent-id shape: invalid → rejected ---
 
@@ -987,6 +1071,134 @@ class TestTrackDispatchedAgents:
         assert "AMBIGUOUS" in content, (
             f"Expected AMBIGUOUS in dispatched-agents.txt after collision; content={content!r}"
         )
+
+    # --- (c2) Two-phase write: "unknown" is a placeholder, not a collision ---
+
+    def _row(self, tmp_path: Path, sid: str) -> list[str]:
+        lines = [l for l in self._dispatched(tmp_path, sid).read_text().splitlines() if l]
+        assert len(lines) == 1, f"Expected exactly 1 row; got {len(lines)}: {lines!r}"
+        return lines[0].split("\t")
+
+    def test_two_phase_placeholder_enriched_not_marked_ambiguous(self, tmp_path: Path) -> None:
+        """Identity-only create then a typed enrich resolves the row in place.
+
+        A caller that knows the agent_id before it knows the type (SubagentStart supplies
+        neither model nor subagent_type) lands a placeholder row; the later typed call must
+        fill it in rather than stamp the collision sentinel. Stamping AMBIGUOUS here would
+        disarm the four bash guards that read it, on every dispatch.
+        """
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        sid = "ses0000000000021"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID},
+            repo_root=ctx.repo_root,
+        ))
+        assert self._row(tmp_path, sid)[2] == "unknown", "create should land a placeholder type"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:executor"},
+            repo_root=ctx.repo_root,
+        ))
+        cols = self._row(tmp_path, sid)
+        assert cols[2] == "coordinator:executor", f"type not enriched; row={cols!r}"
+        assert cols[1] == "claude-opus-4-5", (
+            f"model not enriched; a permanently-'unknown' col-2 silently undercounts opus "
+            f"in coordinator-session-loe and drops the opus runtime tripwire; row={cols!r}"
+        )
+
+    def test_two_phase_enrich_preserves_dispatched_at(self, tmp_path: Path) -> None:
+        """Enrichment keeps column 4 from the create call, which is closer to the true
+        dispatch moment than the enriching call — the runtime tripwire measures against it."""
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        sid = "ses0000000000022"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID},
+            repo_root=ctx.repo_root,
+        ))
+        created_at = self._row(tmp_path, sid)[3]
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:executor"},
+            repo_root=ctx.repo_root,
+        ))
+        assert self._row(tmp_path, sid)[3] == created_at
+
+    def test_late_placeholder_does_not_downgrade_resolved_row(self, tmp_path: Path) -> None:
+        """A placeholder arriving AFTER a resolved row is a no-op, never a downgrade.
+
+        The two calls race on a machine running dozens of concurrent sessions, so arrival
+        order is not guaranteed to match dispatch order.
+        """
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        sid = "ses0000000000023"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:executor"},
+            repo_root=ctx.repo_root,
+        ))
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID},
+            repo_root=ctx.repo_root,
+        ))
+        cols = self._row(tmp_path, sid)
+        assert cols[2] == "coordinator:executor", f"resolved type was downgraded; row={cols!r}"
+        assert cols[1] == "claude-opus-4-5", f"resolved model was downgraded; row={cols!r}"
+
+    def test_collision_after_enrich_still_marks_ambiguous(self, tmp_path: Path) -> None:
+        """The guards stay armed downstream of an enrichment: once a row carries a REAL
+        type, a second real differing type is still a genuine collision."""
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        sid = "ses0000000000024"
+        for params in (
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID},
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:executor"},
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:code-reviewer"},
+        ):
+            _run(_handler(params, repo_root=ctx.repo_root))
+        assert self._row(tmp_path, sid)[2] == "AMBIGUOUS"
+
+    def test_legacy_short_record_is_not_a_placeholder(self) -> None:
+        """A legacy short record carries "" in column 3, which is NOT the placeholder
+        sentinel — it stays on the collision arm, and padding does not grow a trailing
+        empty column it never had."""
+        from coordinator_core.hooks.track_dispatched_agents import _resolve_row_collision
+        cols = _resolve_row_collision([self._HEX_AID], "claude-opus-4-5", "coordinator:executor")
+        assert cols == [self._HEX_AID, "", "AMBIGUOUS"]
+
+    def test_both_write_arms_agree_on_the_branch_table(self) -> None:
+        """The POSIX (locked_rmw) and non-POSIX arms must not drift apart on dedup /
+        enrich / collision — they are mirrors of one table, and only one of them runs
+        on any given platform."""
+        import tempfile
+        from coordinator_core.hooks.track_dispatched_agents import (
+            _make_dispatch_mutate, _process_dispatched_sync,
+        )
+        aid = self._HEX_AID
+        sequences = [
+            [("unknown", "unknown"), ("claude-opus-4-5", "coordinator:executor")],
+            [("claude-opus-4-5", "coordinator:executor"), ("unknown", "unknown")],
+            [("claude-opus-4-5", "coordinator:reviewer"), ("claude-opus-4-5", "coordinator:executor")],
+            [("claude-opus-4-5", "coordinator:executor"), ("claude-opus-4-5", "coordinator:executor")],
+        ]
+        for seq in sequences:
+            text = ""
+            for model, stype in seq:
+                text = _make_dispatch_mutate(aid, model, stype)(text)
+            path = Path(tempfile.mkdtemp()) / "dispatched-agents.txt"
+            for model, stype in seq:
+                _process_dispatched_sync(str(path), aid, model, stype)
+            mirrored = path.read_text(encoding="utf-8")
+            # Column 4 is a write-time epoch; compare the identity columns only.
+            assert [l.split("\t")[:3] for l in text.splitlines()] == \
+                   [l.split("\t")[:3] for l in mirrored.splitlines()], (
+                f"Write arms disagree on {seq!r}: locked={text!r} sync={mirrored!r}"
+            )
 
     # --- (c) Non-collision append ---
 
@@ -1135,6 +1347,65 @@ class TestTrackDispatchedAgents:
             f"Snake fallback not recorded in col-1: expected {snake_id!r}, "
             f"got {lines[0].split(chr(9))[0]!r}"
         )
+
+    # --- AC6/AC7: LockTimeout vs MutateAbort — the drop-visibility split ---
+
+    def test_lock_timeout_produces_drop_signal_not_fallback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """LockTimeout: a lost write leaves a greppable stderr signal naming the agent id and
+        the dropped file, does NOT call _process_dispatched_sync (no unserialised fallback
+        write while a peer process holds the lock), and does not raise into the hook's caller.
+        """
+        import coordinator_core.hooks.track_dispatched_agents as tda_mod
+        from coordinator_core.locked_write import LockTimeout
+
+        ctx = self._ctx(tmp_path)
+        sid = "ses000LOCKTIME001"
+        with mock.patch.object(tda_mod, "locked_rmw", side_effect=LockTimeout("timed out")), \
+                mock.patch.object(tda_mod, "_process_dispatched_sync") as mock_sync:
+            result = _run(tda_mod._handler(
+                {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+                 "dispatched_model": "claude-sonnet-4-5", "subagent_type": "executor"},
+                repo_root=ctx.repo_root,
+            ))
+        assert result == {}, "hook must not raise into the caller on LockTimeout"
+        mock_sync.assert_not_called()
+        captured = capsys.readouterr()
+        assert self._HEX_AID in captured.err, (
+            f"drop signal must name the agent id; stderr={captured.err!r}"
+        )
+        assert "LockTimeout" in captured.err or "dropped" in captured.err, (
+            f"drop signal must be greppable for the drop; stderr={captured.err!r}"
+        )
+        disp = self._dispatched(tmp_path, sid)
+        assert str(disp) in captured.err, (
+            f"drop signal must name the file that was not written; stderr={captured.err!r}"
+        )
+
+    def test_mutate_abort_stays_silent_no_fallback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """MutateAbort is a clean abort — nothing needed writing. It stays silent (no stderr
+        signal) and, like LockTimeout, does NOT call _process_dispatched_sync. Pins the split
+        itself, not just the LockTimeout arm.
+        """
+        import coordinator_core.hooks.track_dispatched_agents as tda_mod
+        from coordinator_core.locked_write import MutateAbort
+
+        ctx = self._ctx(tmp_path)
+        sid = "ses000MUTATEABT01"
+        with mock.patch.object(tda_mod, "locked_rmw", side_effect=MutateAbort("declined")), \
+                mock.patch.object(tda_mod, "_process_dispatched_sync") as mock_sync:
+            result = _run(tda_mod._handler(
+                {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+                 "dispatched_model": "claude-sonnet-4-5", "subagent_type": "executor"},
+                repo_root=ctx.repo_root,
+            ))
+        assert result == {}, "hook must not raise into the caller on MutateAbort"
+        mock_sync.assert_not_called()
+        captured = capsys.readouterr()
+        assert captured.err == "", f"MutateAbort must stay silent; stderr={captured.err!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1288,7 +1559,7 @@ _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _git_init(path: Path) -> None:
+def _git_init_lenient(path: Path) -> None:
     """Run git init in path — required for locked_rmw (needs git_common_dir to succeed)."""
     subprocess.run(
         ["git", "init", str(path)],
@@ -1319,7 +1590,7 @@ class TestCrossProcessConcurrency:
         writes so BOTH appends land without corruption or loss — neither collapses the
         other, and neither torn-writes into the file.
         """
-        _git_init(tmp_path)
+        _git_init_lenient(tmp_path)
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
         sid = "xproc10000000001"
         _make_session(tmp_path, sid)
@@ -1365,7 +1636,7 @@ asyncio.run(_handler(
         Validates that the cross-process lock does not cause one write to silently drop
         when both processes touch different paths.
         """
-        _git_init(tmp_path)
+        _git_init_lenient(tmp_path)
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
         sid = "xproc10000000002"
         _make_session(tmp_path, sid)
@@ -1407,7 +1678,7 @@ asyncio.run(_handler(
         separate processes racing on the same dispatched-agents.txt produce exactly one row
         (dedup wins) rather than two rows (lost-write corruption).
         """
-        _git_init(tmp_path)
+        _git_init_lenient(tmp_path)
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
         sid = "xproc40000000001"
         (_cs_dir(tmp_path) / sid).mkdir(parents=True, exist_ok=True)
@@ -1443,7 +1714,7 @@ asyncio.run(_handler(
 
     def test_c4_cross_process_distinct_agents_both_recorded(self, tmp_path: Path) -> None:
         """Two subprocesses dispatching different agent_ids → both rows recorded, no loss."""
-        _git_init(tmp_path)
+        _git_init_lenient(tmp_path)
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
         sid = "xproc40000000002"
         (_cs_dir(tmp_path) / sid).mkdir(parents=True, exist_ok=True)

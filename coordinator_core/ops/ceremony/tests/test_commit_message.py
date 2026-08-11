@@ -210,6 +210,51 @@ def test_trailers_appended_after_full_message():
     )
 
 
+def test_trailers_join_existing_trailer_block_no_blank_line():
+    """Caller's own prose already ends in a trailer block -- must join it.
+
+    Regression for the break-class defect fixed alongside `_ends_with_trailer_block`'s
+    move to this module: a blank-line separator here would start a NEW
+    paragraph and demote `Deliverable-Id:` to body prose for git's trailer
+    parser (`interpret-trailers` sees only the LAST paragraph as trailers).
+    """
+    subj = "C1: subject line\n\nsome prose here.\n\nDeliverable-Id: dlv-abc123"
+    actual = compose_message(subject=subj, trailers="Session-Id: deadbeef")
+    assert actual == (
+        "C1: subject line\n"
+        "\n"
+        "some prose here.\n"
+        "\n"
+        "Deliverable-Id: dlv-abc123\n"
+        "Session-Id: deadbeef\n"
+    )
+    # Last paragraph (no blank line inside it) must contain BOTH trailers.
+    last_paragraph = actual.rstrip("\n").split("\n\n")[-1]
+    assert "Deliverable-Id: dlv-abc123" in last_paragraph
+    assert "Session-Id: deadbeef" in last_paragraph
+
+
+def test_trailers_after_prose_only_stays_blank_line_separated():
+    """Caller message ending in plain prose (no trailer block) -- unchanged."""
+    actual = compose_message(
+        subject="subj", prose="just some prose.", trailers="Nature: infra"
+    )
+    assert actual == "subj\n\njust some prose.\n\nNature: infra\n"
+
+
+def test_trailers_after_subject_only_shaped_like_key_value_stays_blank_line_separated():
+    """A subject-only "wsc: subject only" shape is prose, not a trailer block.
+
+    Mirrors `_ends_with_trailer_block`'s own documented trap: a trailing
+    non-blank run that consumes the ENTIRE message is the subject line
+    (first paragraph), never a trailer paragraph -- git's trailers always
+    live in the message's last paragraph, and the last paragraph is never
+    the first one.
+    """
+    actual = compose_message(subject="wsc: subject only", trailers="Nature: infra")
+    assert actual == "wsc: subject only\n\nNature: infra\n"
+
+
 # ---------------------------------------------------------------------------
 # (d) format_kept_entry
 # ---------------------------------------------------------------------------

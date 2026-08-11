@@ -171,6 +171,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -456,40 +457,74 @@ def _compute_fresh_output_path(
     coincide with `artifact_path` for a genuinely fresh (not-yet-existing)
     mint target -- that coincidence is intentional idempotency, not a bug.
 
-    `title` (2026-08-04 break-class fix, standalone-handoff case): when
-    `artifact_path` is EMPTY -- the standalone-handoff shape, `brief`'s
-    `standalone_no_predecessor_reason` case, which has no plan/predecessor
-    to derive a slug from at all -- `Path("").stem` is `""`, and the old
-    unconditional `f"{date_str}-{slug}.md"` candidate came back as a
-    dangling `state/handoffs/<date>-.md`. `title` (the caller-supplied
-    `--title`, already threaded to d1's own `--title=` flag) is the ONLY
-    other caller-supplied naming signal available here, so it now supplies
-    the slug in that case, via `coordinator_core.ops.ceremony.
-    completion_entry._slug_from_title` -- the one PORT of `coordinator-doc-
-    new`'s own `_slug_from_title` that lives in an importable `coordinator_
-    core` module (`coordinator-doc-new` itself has no `.py` suffix and is
-    not a package, so it cannot be imported directly; several other
-    `coordinator_core` modules carry their OWN hand-ported copy rather than
-    importing this one, apparently because each was written before this
-    copy existed as a reachable import target -- this call site reuses the
-    existing importable port instead of adding a fourth copy). Same
-    lower/collapse-non-alnum/strip-dashes/40-char-cap algorithm, so a
-    standalone handoff's filename slug matches the house style already
-    visible on disk (e.g. `state/sizings/2026-08-03-git-commit-agent-
-    structurally-denied-by-.yaml`'s dangling-hyphen-on-truncation
-    behaviour). When artifact_path is also empty and no title was supplied
-    either, falls back to the literal slug `"untitled"` -- deterministic,
-    never a dangling `<date>-.md` -- rather than raising, since a bare
-    `baton-assemble apply handoff` with neither is still a request this
-    function must produce SOME fresh, collision-checked path for.
+    SLUG DERIVATION ORDER (2026-08-10 PM ruling, naming derivation), most
+    specific first, consulted ONLY when `artifact_path` is EMPTY -- the
+    standalone shape, `brief`'s `standalone_no_predecessor_reason` case,
+    which has no plan/predecessor to derive a slug from via `stem` below at
+    all:
+
+      1. `artifact_path`'s own basename (the plan/predecessor a non-empty
+         `artifact_path` names) -- handled by the `stem` branch below, not
+         this list; this list only ever runs when that branch is empty.
+      2. THIS SESSION's own `state/sizings/*.yaml` sizing object, via
+         `_resolve_session_sizing_slug` -- NEW. Sizing is the EM's first
+         move on a fresh ask (`coordinator:sizing` routes before plan/
+         shape/dispatch), so a session's own sizing object frequently
+         exists before any plan or handoff does, and the "genuinely
+         sourceless standalone" case this fallback used to assume was
+         usually not sourceless at all -- see that function's own
+         docstring for the authorship-not-adjacency discriminator and the
+         multiple-sizings-per-session tiebreak.
+      3. `title` (the caller-supplied `--title`, already threaded to d1's
+         own `--title=` flag) -- the ONLY OTHER caller-supplied naming
+         signal available here (2026-08-04 break-class fix: `Path("").stem`
+         is `""`, and the old unconditional `f"{date_str}-{slug}.md"`
+         candidate came back as a dangling `state/handoffs/<date>-.md`).
+         Slugified via `coordinator_core.ops.ceremony.
+         completion_entry._slug_from_title` -- the one PORT of
+         `coordinator-doc-new`'s own `_slug_from_title` that lives in an
+         importable `coordinator_core` module (`coordinator-doc-new` itself
+         has no `.py` suffix and is not a package, so it cannot be imported
+         directly; several other `coordinator_core` modules carry their OWN
+         hand-ported copy rather than importing this one, apparently
+         because each was written before this copy existed as a reachable
+         import target -- this call site reuses the existing importable
+         port instead of adding a fourth copy). Same
+         lower/collapse-non-alnum/strip-dashes/40-char-cap algorithm, so a
+         standalone handoff's filename slug matches the house style
+         already visible on disk (e.g. `state/sizings/2026-08-03-git-
+         commit-agent-structurally-denied-by-.yaml`'s
+         dangling-hyphen-on-truncation behaviour).
+      4. `_mint_last_resort_slug()` -- a `secrets.token_hex(4)`-based
+         `untitled-<shortid>` slug (2026-08-10 PM ruling, REPLACING the
+         prior literal `"untitled"`): deterministic-enough (collision-free
+         by construction, no disambiguation retry needed) and never a
+         dangling `<date>-.md`, for the genuine "nothing at all to go on"
+         case -- a bare `baton-assemble apply handoff` with no title, no
+         session sizing, and standalone (no predecessor) is still a
+         request this function must produce SOME fresh, collision-checked
+         path for. See that function's own docstring for why the prior
+         literal `"untitled"` was a defect (two same-day standalone
+         handoffs collided on one path) and not merely inelegant.
+
+    Tier 2 (session sizing) needs `root` to run `git log`; when `root` is
+    `None` (the same "no root in scope" callers named in this function's
+    own `root` paragraph below), it is skipped and derivation falls straight
+    through to tier 3/4 -- unchanged behaviour for those callers, not a
+    regression, since none of them exercised the standalone-empty-
+    `artifact_path` shape this whole ordered list only ever applies to.
     """
     stem = Path(artifact_path).stem
     if stem:
         slug = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", stem)
-    elif title:
-        slug = _title_slug(title) or "untitled"
     else:
-        slug = "untitled"
+        sizing_slug = _resolve_session_sizing_slug(root) if root is not None else None
+        if sizing_slug:
+            slug = sizing_slug
+        elif title:
+            slug = _title_slug(title) or _mint_last_resort_slug()
+        else:
+            slug = _mint_last_resort_slug()
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     candidate = _repo_rel_handoff_path(f"{date_str}-{slug}.md")
     if root is None:
@@ -724,6 +759,199 @@ def _resolve_current_session_id() -> Optional[str]:
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
         or None
     )
+
+
+def _sizing_slug_from_path(path: Path) -> str:
+    """`state/sizings/<date>-<slug>.yaml` -> `<slug>` -- the same
+    date-prefix-strip `_compute_fresh_output_path` already applies to a
+    plan/predecessor basename, reused here so a sizing-derived slug matches
+    that same house shape rather than inventing a second stripping rule."""
+    return re.sub(r"^\d{4}-\d{2}-\d{2}-", "", path.stem)
+
+
+def _sizing_add_commits_by_relpath(
+    root: Path, sizings_dir: Path
+) -> dict[str, tuple[str, str]]:
+    """Map every repo-relative `state/sizings/` path to `(author_iso,
+    session_id_trailer)` of the commit that ADDED it, resolved in ONE
+    `git log --diff-filter=A` walk of the whole directory.
+
+    Replaces two git spawns PER sizing file (an add-commit lookup plus a
+    trailer lookup on its sha) with one walk that carries both, because the
+    directory is scanned in full on every untitled mint and grows without
+    bound. Gate: `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`.
+
+    Framing is `%x00`-delimited records with a `%x01` header/name-list
+    separator, not newline-delimited fields: `%(trailers:...valueonly)` renders
+    a MULTI-VALUED trailer as several lines, so a newline-framed parse could
+    read a second trailer value as the next commit's record. The trailer sits
+    LAST in the header for the same reason -- everything between the second
+    `|` and the `%x01` is its value, however many lines that is, and a
+    multi-valued trailer therefore compares unequal to a session id exactly as
+    the per-file form's `stdout.strip() != session_id` did.
+
+    Newest-first is git's own order, so the LAST record naming a path is that
+    path's creation commit -- the same "oldest entry" rule the per-file form
+    applied to its own output.
+
+    Returns `{}` on any git failure, and omits any path with no add commit in
+    this walk; the caller reads both as "unattributable" and falls through to
+    its next derivation tier, never guessing.
+
+    Negative-spec -- `--follow` is deliberately NOT used and cannot be: git
+    rejects it for more than one pathspec, which is what makes a single walk
+    possible at all. A sizing file RENAMED since it was added is therefore
+    attributed to the rename commit rather than its pre-rename creation, and a
+    session that renamed someone else's sizing could be credited with it.
+    Accepted narrowly: this tier only picks a FILENAME slug, the docstring
+    above states a wrong pick "never corrupts or overwrites anything", and
+    renaming a `state/sizings/*.yaml` is not a shape this corpus exhibits.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "log",
+                "--diff-filter=A",
+                "--format=%x00%H|%aI|%(trailers:key=Session-Id,valueonly=true)%x01",
+                "--name-only",
+                "--",
+                sizings_dir.as_posix() if sizings_dir.is_absolute() else str(sizings_dir),
+            ],
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return {}
+    if proc.returncode != 0:
+        return {}
+
+    by_relpath: dict[str, tuple[str, str]] = {}
+    for record in proc.stdout.split("\x00")[1:]:
+        header, _, names_blob = record.partition("\x01")
+        _sha, _, rest = header.partition("|")
+        add_iso, _, trailer = rest.partition("|")
+        trailer_sid = trailer.strip()
+        for name in names_blob.splitlines():
+            rel = name.strip()
+            if rel:
+                # Newest-first: a later assignment is an OLDER commit, so the
+                # last one to land is the creation commit.
+                by_relpath[rel] = (add_iso.strip(), trailer_sid)
+    return by_relpath
+
+
+def _resolve_session_sizing_slug(root: Path) -> Optional[str]:
+    """The slug of the `state/sizings/*.yaml` sizing object THIS SESSION
+    authored, or `None` when none is attributable -- the PM-ordered
+    derivation tier between "predecessor/plan" and "caller-supplied title"
+    (2026-08-10 PM amendment to the untitled-mint fix): a session that
+    started from a fresh ask routes through the sizing lobby FIRST
+    (`coordinator:sizing`), so its own sizing object frequently exists
+    before any plan or handoff does -- the "standalone, nothing to go on"
+    case the pre-amendment fallback assumed was sourceless usually is not.
+
+    AUTHORSHIP, not adjacency (the discriminator the PM's amendment names
+    explicitly, by analogy to the handoff-predecessor "don't pick the
+    newest handoff" trap): "most recent file in `state/sizings/`" is not
+    ownership on a fleet where concurrent sessions author sizings
+    constantly. A sizing-object carries no `session_id`/`authoring_session`
+    field of its own (see `sizing-object.schema.json`'s own 1.5.0 x-bump-
+    note: "`system.created_by_session` ... was CONSIDERED AND DECLINED ...
+    recoverable from the commit's own `Session-Id:` trailer, and needs no
+    schema slot") -- so authorship is read from THAT trailer on the commit
+    that ADDED the sizing file, via `git log --diff-filter=A --follow`
+    (the earliest such commit chronologically, in case a rename crosses
+    this scan), never from the file's own content or a later editor's
+    commit (the schema's own 1.10.0 note records a sizing being amended by
+    a DIFFERENT session -- review-integrator, not the original author --
+    which is exactly the adjacency trap this authorship check exists to
+    avoid: an editor is not an author).
+
+    MULTIPLE SIZINGS FROM ONE SESSION (PM-named, must be decided and
+    documented, not silently picked): this function picks the MOST
+    RECENTLY AUTHORED one (by the adding commit's own `%aI` author-date),
+    not "refuse to guess" -- because a session that authored several
+    sizings in one turn (the `/pickup a AND b AND c` multi-artifact shape
+    has a sizing analogue) is overwhelmingly likely to be minting THIS
+    baton for the LATEST thing it sized, not an earlier one from the same
+    session. This mirrors `_adopt_prior_attempt_scaffold_path`'s own
+    precedent of preferring a decidable single answer over an unconditional
+    refusal wherever the ambiguity resolves cleanly -- unlike that
+    function's EXACTLY-ONE-candidate refusal (which guards a DESTRUCTIVE
+    write), a slug pick here is non-destructive: choosing wrong picks an
+    imperfect filename, never corrupts or overwrites anything.
+
+    Returns `None` (never raises) on a missing `state/sizings/` directory,
+    an unresolvable current session id, a `git log` spawn failure, or zero
+    attributable candidates -- falls through to the caller-supplied-title
+    tier exactly like every other "nothing found" case in this cascade.
+
+    Negative-spec:
+      - Does NOT read a sizing's own frontmatter/YAML body for a
+        session-shaped field -- no such field exists (see docstring above);
+        the ONLY evidence source is the adding commit's `Session-Id:`
+        trailer.
+      - Does NOT treat a LATER (edit) commit on the file as authorship --
+        only the file's own creation (`--diff-filter=A`) commit is
+        consulted.
+      - Does NOT fall back to "newest file by mtime" when the git-trailer
+        read is unavailable -- an unresolvable authorship check returns
+        `None`, never a guess from filesystem adjacency.
+    """
+    session_id = _resolve_current_session_id()
+    if not session_id:
+        return None
+    sizings_dir = root / "state" / "sizings"
+    if not sizings_dir.is_dir():
+        return None
+
+    on_disk = sorted(sizings_dir.glob("*.yaml"))
+    if not on_disk:
+        return None
+    add_commits = _sizing_add_commits_by_relpath(root, sizings_dir)
+
+    candidates: list[tuple[str, Path]] = []
+    for path in on_disk:
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            rel = str(path)
+        add = add_commits.get(rel)
+        if add is None:
+            continue
+        add_iso, trailer_sid = add
+        if trailer_sid != session_id:
+            continue
+        candidates.append((add_iso, path))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0])
+    return _sizing_slug_from_path(candidates[-1][1])
+
+
+def _mint_last_resort_slug() -> str:
+    """The terminal fallback slug when NOTHING upstream (plan, predecessor,
+    this session's own sizing object, caller-supplied title) resolves --
+    `secrets.token_hex(4)` (8 hex chars), the same shortid-nonce shape
+    `coordinator_core.dispatch.provision` and `coordinator_core.subagent_
+    sandbox.provision_report` already mint with for an analogous
+    "guaranteed non-colliding, no ambient identity to derive from" case.
+
+    2026-08-10 PM ruling, replacing the literal string `"untitled"`: two
+    standalone handoffs minted on the same date used to collide on that one
+    literal slug and fight over one `state/handoffs/<date>-untitled.md`
+    path -- `_compute_fresh_output_path`'s own `<date>_<HHMMSS>_..`/`-N`
+    disambiguation ladder papers over same-SECOND collisions but not the
+    underlying defect: a mint-time name that carries zero information about
+    what was minted. A per-call shortid is non-colliding by construction
+    (no disambiguation retry needed) and, unlike `"untitled"`, never reads
+    as a title an operator forgot to fill in."""
+    return f"untitled-{secrets.token_hex(4)}"
 
 
 _DIRTY_TREE_EVIDENCE_PATH_CAP = 10
@@ -2269,6 +2497,7 @@ def _build_directives(
     # value crosses into a scaffolded file) rather than in `resolve_lineage`
     # keeps that echo-the-caller contract intact for d6, which takes the
     # value in memory and never writes it into frontmatter.
+    _pred = None
     if kind == "handoff":
         _pred = lineage.get("predecessor")
         _pred_id = lineage.get("predecessor_id")
@@ -2277,6 +2506,28 @@ def _build_directives(
             d1_args.append(f"--predecessor={_pred_rel}")
             if _pred_id:
                 d1_args.append(f"--predecessor-id={_pred_id}")
+
+    # d7 -- precondition gate, not a post-step: composes
+    # `coordinator_core.ops.handoff_carry_gate.evaluate_gate` (in-process, via
+    # `_dispatch_handoff_carry_gate` in apply.py) over the PREDECESSOR's own
+    # `carried_items` frontmatter array, before d1 scaffolds the successor.
+    # Kind-gated identically to the `--predecessor`/`--predecessor-id` block
+    # immediately above, and for the same reason: the spinoff kinds are
+    # `predecessor: none` by design (schema_validate.py Rule A3a-3), so there
+    # is no predecessor whose carried items could be gated. Omitted entirely
+    # (never emitted with an empty arg) when there is no predecessor -- a
+    # standalone handoff with no predecessor has nothing for this gate to
+    # check. Never `already_satisfied`: it is a read-only check with no
+    # converged state to detect.
+    d7_directive: Optional[dict[str, Any]] = None
+    if kind == "handoff" and _pred:
+        d7_directive = {
+            "id": "d7",
+            "cli": "handoff-carry-gate",
+            "args": [_pred],
+            "depends_on": None,
+            "already_satisfied": False,
+        }
     # d1 is `already_satisfied` iff its own `--out` target is already a file on
     # disk. Two distinct jobs, one predicate:
     #   - RESUME. On a replay (`lineage["resumed_successor"]`, see
@@ -2310,7 +2561,10 @@ def _build_directives(
             "scaffolded it, and `coordinator-doc-new --out` is an unconditional "
             "overwrite, so re-authoring it would destroy that content"
         )
-    directives: list[dict[str, Any]] = [
+    directives: list[dict[str, Any]] = []
+    if d7_directive is not None:
+        directives.append(d7_directive)
+    directives += [
         d1_directive,
         {
             "id": "d2",

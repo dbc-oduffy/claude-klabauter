@@ -128,26 +128,70 @@ def git_common_dir(repo_root: Path) -> Path:
 
 
 def main_worktree_root(common_dir: Path) -> Path:
-    """Return the main worktree root from the git common dir.
+    """Return the main worktree root from a git common dir.
 
-    For the standard .git-under-worktree layout, lifecycle.git_common_dir() returns
-    <main-worktree>/.git for both a regular repository and a linked worktree
-    (see git_common_dir()).  The main worktree is therefore common_dir.parent.
+    Documented/canonical input is the git common dir (the path ending in
+    ``.git``) as returned by ``lifecycle.git_common_dir()`` — for both a
+    regular repository and a linked worktree that is ``<main-worktree>/.git``
+    (see ``git_common_dir()``).  The main worktree is therefore
+    ``common_dir.parent``, and every existing engine call site passes exactly
+    this form (verified across ``coordinator_core`` — see the fix note below).
+
+    ERGONOMIC WIDENING (2026-08-10, worktree-root-misresolves-to-drive-root
+    fix): a caller that mistakenly hands this function the worktree ROOT
+    itself (e.g. ``repo_root`` instead of ``git_common_dir(repo_root)``)
+    previously got ``common_dir.parent`` silently applied anyway — walking one
+    directory ABOVE the real worktree root with no error (on Windows this
+    lands on the drive root; on POSIX it can land on ``/``).
+    Every downstream consumer then resolved its corpus under that wrong root,
+    found nothing, and reported a confident, well-formed empty result — see
+    ``docs/reference`` incident note / the 2026-08-10 handoff on
+    ``deliverable.cascade_terminal``. This function now detects that shape and
+    self-corrects: if ``common_dir`` does NOT itself look like a git dir (name
+    ``.git``, or otherwise contains a live ``.git`` entry) but DOES itself
+    contain a ``.git`` entry (dir or gitdir-pointer file), it is treated as
+    an already-resolved worktree root and returned AS-IS rather than having
+    ``.parent`` applied.
+
+    Resolution order:
+    1. ``common_dir`` is named ``.git`` (the standard/documented shape) →
+       return ``common_dir.parent`` (UNCHANGED from prior behaviour — every
+       verified existing call site passes this form, so this arm is byte-for-
+       byte compatible with the pre-fix function for every correct caller).
+    2. ``common_dir`` is not named ``.git``, but ``common_dir / ".git"``
+       exists (dir OR gitdir-pointer file) → the input is already a worktree
+       root; return it unchanged (the ergonomic fix — replaces the prior
+       silent walk-past-root).
+    3. Neither shape holds → fail loud with ValueError rather than returning
+       a plausible-looking wrong path. A genuinely non-standard layout (bare
+       repo, --separate-git-dir pointing somewhere unusual) is out of scope
+       for this helper per the negative-spec below; callers hitting this
+       should not paper over it with a bare ``.parent``.
 
     NEGATIVE-SPEC (standard-layout assumption):
-    - Assumes .git is a real directory directly under the main worktree root.
-      Does NOT handle bare repos, repos with --separate-git-dir, repos where
-      .git is in a non-standard location, or git worklists layouts that produce
-      a common dir that is not <worktree>/.git.
+    - Assumes .git is a real directory (or, for the widened arm, a
+      gitdir-pointer file) directly under the main worktree root. Does NOT
+      handle bare repos, repos with --separate-git-dir pointing outside the
+      worktree, or git worktree layouts that produce a common dir that is
+      neither ``<worktree>/.git`` nor ``<worktree>`` itself.
     - Handlers MUST call this helper — do NOT inline a bare .parent anywhere.
       This function is the single reviewed home for the derivation and its
-      documented assumption.  Inlining .parent skips the negative-spec and makes
-      the standard-layout assumption implicit and unauditable.
+      documented assumption. Inlining .parent skips the negative-spec and
+      makes the standard-layout assumption implicit and unauditable.
     - params.repo_root is NEVER used as the worktree source (it is the D3 check only).
       This helper derives the worktree from the engine-supplied common_dir arg,
       which is socket-authoritative (cannot be spoofed by the caller).
     """
-    return common_dir.parent
+    if common_dir.name == ".git":
+        return common_dir.parent
+    if (common_dir / ".git").exists():
+        return common_dir
+    raise ValueError(
+        f"main_worktree_root: {common_dir!r} is neither a git common dir "
+        f"(name '.git') nor a worktree root (no '.git' entry beneath it) — "
+        f"refusing to guess; pass git_common_dir(repo_root) or the resolved "
+        f"worktree root itself"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -185,6 +185,8 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.locked_write import LockTimeout, locked_rmw
+from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
@@ -2007,14 +2009,39 @@ def _append_sent_ledger(
     delivered_path: Path,
     receiver_repo_path: Path,
     in_reply_to: Optional[str],
-) -> bool:
+) -> Optional[str]:
     """Append-only local evidence that a send happened: one JSONL line per
     delivered receiver, in `<sender_worktree>/state/memo-outbox/sent-ledger.jsonl`.
 
-    Returns True iff the append actually happened (used by the caller,
-    `_memo_send`, to build `_scope_touch_paths` — see the analogous
-    docstring note on `_stamp_sender_outbox_sent`'s return value). False
-    only on the best-effort OSError branch below.
+    Returns the FULL ledger text after the append on success (used by the
+    caller, `_memo_send`, both to build `_scope_touch_paths` — see the
+    analogous docstring note on `_stamp_sender_outbox_sent`'s return value —
+    and, per C2, as the exact bytes the sender-side ledger commit leg
+    commits, with no separate read-back). Returns `None` only on the
+    best-effort OSError branch below.
+
+    C2 (docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md):
+    routed through `locked_rmw` (coordinator_core/locked_write.py) rather
+    than a bare `open(mode="a")` — the append itself is now the SAME
+    critical section a caller can commit the returned text from, with no
+    separate unlocked read that could observe a torn final line mid-append
+    by a concurrent peer session. Every writer of this file goes through
+    this one function, so this lock is the single point of mutual exclusion
+    for the whole ledger, not merely this process's own appends.
+
+    ONE-TIME LINE-ENDING NORMALIZATION, observed live (f7e8778062181fd9, the
+    first send after this leg landed): `locked_rmw` is asymmetric by
+    construction — it reads via `Path.read_text()` (text mode, universal
+    newlines, so CRLF on disk arrives as `\n`) and writes raw
+    `new_text.encode("utf-8")` (no translation). A ledger written by the
+    PREVIOUS `open(mode="a")` path on Windows is therefore CRLF on disk, and
+    the first append routed through here rewrites every line to bare LF. That
+    commit reads as a whole-file rewrite (1539 insertions / 1502 deletions
+    here) and is NOT this leg sweeping peer content — every one of those rows
+    is byte-identical apart from its terminator. It happens exactly ONCE per
+    ledger: LF read back as LF re-encodes to LF, so every subsequent append is
+    a clean +1/-0. A sibling repo adopting this shape will see the same
+    one-time churn on its own first send; that is expected, not a defect.
 
     Root cause this closes (cross-repo memo, example-doctrine-repo-em, 2026-08-04): a
     plan chunk in a SENDING repo whose deliverable is a cross-repo memo had
@@ -2077,20 +2104,194 @@ def _append_sent_ledger(
         "delivered_to": _portable_delivered_to_form(receiver_repo_path, delivered_path),
         "in_reply_to": in_reply_to,
     }
+    appended_line = json.dumps(line, ensure_ascii=False) + "\n"
+
+    def _mutate(old_text: str) -> str:
+        return old_text + appended_line
+
     try:
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        with ledger_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(line, ensure_ascii=False))
-            fh.write("\n")
-        return True
-    except OSError as exc:
+        return locked_rmw(
+            ledger_path, _mutate, repo_root=sender_worktree, missing_ok=True,
+        )
+    except (OSError, LockTimeout, RuntimeError) as exc:
         _LOG.warning(
             "memo_send: could not append sent-ledger line to %s (%s) — "
             "delivery already succeeded; the ledger write is best-effort and "
             "never turns a successful send into a failure.",
             ledger_path, exc,
         )
-        return False
+        return None
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md) — the
+# sender-side ledger commit leg. Commits state/memo-outbox/sent-ledger.jsonl
+# in the SENDER's own tree via git_native.commit_authored_content (DR-272
+# § 3.3 form-3, no-worktree-read), never a mirror of _commit_delivered_memo's
+# hand-rolled `git add -- <path> && git commit -- <path>` (Problem § Reason 2
+# of the plan — that raw form is the exact one DR-211 § D3 found laundering
+# foreign worktree content; commit_authored_content never reads the worktree
+# at all, closing that hazard structurally rather than by convention).
+# ---------------------------------------------------------------------------
+
+# CAS-failure diagnostic signature emitted by commit_authored_content's
+# update-ref step (git_native.py) — distinguishes the EXPECTED, retryable
+# "HEAD moved concurrently" failure from every other (non-retryable) refusal,
+# most notably the HEAD-existence refusal on a fresh, untracked-ledger clone
+# ("does not exist in HEAD"), which retrying can never fix.
+_LEDGER_CAS_FAILURE_SIGNATURE = "compare-and-swap failed"
+
+# Repo-relative, posix-separated pathspec commit_authored_content expects —
+# matches _sender_sent_ledger_path's own _SENDER_OUTBOX_DIRNAME + filename.
+_SENT_LEDGER_RELPATH = "/".join((*_SENDER_OUTBOX_DIRNAME, _SENT_LEDGER_FILENAME))
+
+
+def _read_sent_ledger_locked(sender_worktree: Path) -> Optional[str]:
+    """Read the sender's ledger file back under the SAME `locked_rmw` lock
+    `_append_sent_ledger` appends through — a locked, race-safe read with no
+    mutation (the `mutate` callback is the identity function, so `locked_rmw`
+    always takes its no-op/no-write branch).
+
+    Used only for the fan-out hoist's single post-loop read (see
+    `_memo_send_fan_out`) and for the CAS-failure retry's fresh-HEAD re-read
+    below — the inline (non-fan-out) path never calls this, because
+    `_append_sent_ledger` already returns the exact post-append bytes from
+    its own single critical section (no separate read-back needed there).
+
+    Never raises: returns `None` on any lock/read failure, logged at WARNING
+    — mirrors every other best-effort branch on this leg.
+    """
+    ledger_path = _sender_sent_ledger_path(sender_worktree)
+    try:
+        return locked_rmw(
+            ledger_path, lambda old_text: old_text,
+            repo_root=sender_worktree, missing_ok=True,
+        )
+    except (OSError, LockTimeout, RuntimeError) as exc:
+        _LOG.warning(
+            "memo_send: could not read sender ledger %s under lock (%s) — "
+            "the sender-side ledger commit leg is best-effort and never "
+            "turns a successful send into a failure.",
+            ledger_path, exc,
+        )
+        return None
+
+
+def _commit_ledger_once(sender_worktree: Path, content: str) -> git_native.GitResult:
+    """One `commit_authored_content` attempt against `sender_worktree`,
+    committing EXACTLY `content` at `_SENT_LEDGER_RELPATH` — sync (subprocess
+    via `git_native._git`), always called through `asyncio.to_thread` by this
+    leg's async callers (DR-211 D4; never blocks the event loop).
+
+    Precedent for the msg-file + cleanup shape: `queue_close._commit_close`.
+    """
+    message = (
+        f"memo.send: append sent-ledger row(s) in {_SENT_LEDGER_RELPATH}\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as fh:
+        fh.write(message)
+        msg_path = fh.name
+    try:
+        return git_native.commit_authored_content(
+            _SENT_LEDGER_RELPATH, content, msg_path, sender_worktree,
+        )
+    finally:
+        try:
+            Path(msg_path).unlink()
+        except OSError:
+            pass
+
+
+async def _commit_sender_ledger(sender_worktree: Path, ledger_text: str) -> Optional[str]:
+    """Commit `ledger_text` (the exact, already-read bytes of the sender's
+    `sent-ledger.jsonl`) into the sender's own tree; return the new commit
+    SHA on success, else `None`.
+
+    Async wrapping (DR-211 D4): `commit_authored_content` is a private-index/
+    CAS/trailer-replay Python sequence, not a shell-out — it is wrapped via
+    `asyncio.to_thread`, never reimplemented via `asyncio.create_subprocess_exec`
+    (that hand-rolled form is this file's OWN local precedent for
+    `_commit_delivered_memo`, which shells out to plain `git` directly; this
+    leg does not).
+
+    CAS-failure handling: `commit_authored_content`'s compare-and-swap
+    `update-ref` fails loud with a distinctive diagnostic
+    (`_LEDGER_CAS_FAILURE_SIGNATURE`) when HEAD moved concurrently since the
+    private index was seeded — the EXPECTED failure mode on this shared,
+    multi-session machine, not an exotic one. On exactly that failure, the
+    ledger is re-read under a FRESH `locked_rmw` critical section
+    (`_read_sent_ledger_locked`) and the commit is retried EXACTLY ONCE
+    against the new HEAD (mirrors `_commit_delivered_memo_with_retry`'s own
+    one-retry shape on the receiver leg). Any other failure — most notably
+    the non-retryable HEAD-existence refusal on a fresh, untracked-ledger
+    clone — falls straight through to the WARNING-and-continue branch
+    without a retry.
+
+    Never raises: the receiver-side delivery is already a durable fact by
+    the time this leg runs (see module docstring negative-spec and
+    `_commit_delivered_memo`'s own never-raise contract, the identical
+    rationale on the sibling leg) — every failure, including an unexpected
+    exception from the thread-offloaded call itself, logs at WARNING and
+    returns `None` rather than propagating.
+    """
+    try:
+        result = await asyncio.to_thread(_commit_ledger_once, sender_worktree, ledger_text)
+    except Exception as exc:  # never-raise contract — see docstring
+        _LOG.warning(
+            "memo_send: sender ledger commit raised unexpectedly in %s (%s: %s) "
+            "— the send stays successful; this leg is best-effort.",
+            sender_worktree, type(exc).__name__, exc,
+        )
+        return None
+
+    if result.ok:
+        return result.stdout.strip()
+
+    reason = (result.stderr or "")
+    if _LEDGER_CAS_FAILURE_SIGNATURE not in reason.lower():
+        _LOG.warning(
+            "memo_send: sender ledger commit in %s failed (non-retryable): %s",
+            sender_worktree, reason,
+        )
+        return None
+
+    _LOG.info(
+        "memo_send: sender ledger commit in %s hit a concurrent HEAD move — "
+        "retrying once against the new HEAD.",
+        sender_worktree,
+    )
+    try:
+        fresh_text = await asyncio.to_thread(_read_sent_ledger_locked, sender_worktree)
+    except Exception as exc:  # never-raise contract — see docstring
+        _LOG.warning(
+            "memo_send: sender ledger CAS-retry re-read raised unexpectedly in "
+            "%s (%s: %s) — the send stays successful; this leg is best-effort.",
+            sender_worktree, type(exc).__name__, exc,
+        )
+        return None
+    if fresh_text is None:
+        return None  # _read_sent_ledger_locked already logged the reason
+
+    try:
+        retry_result = await asyncio.to_thread(_commit_ledger_once, sender_worktree, fresh_text)
+    except Exception as exc:  # never-raise contract — see docstring
+        _LOG.warning(
+            "memo_send: sender ledger commit retry raised unexpectedly in %s "
+            "(%s: %s) — the send stays successful; this leg is best-effort.",
+            sender_worktree, type(exc).__name__, exc,
+        )
+        return None
+    if retry_result.ok:
+        return retry_result.stdout.strip()
+
+    _LOG.warning(
+        "memo_send: sender ledger commit retry in %s also failed: %s",
+        sender_worktree, retry_result.stderr,
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2191,6 +2392,7 @@ async def _memo_send_fan_out(params: dict, *, repo_root) -> dict:
     candidates: list[dict] = []
     acted: list[dict] = []
     failed: list[dict] = []
+    any_ledger_appended = False
 
     # Review: code-reviewer (Finding 3) — ONE today() capture shared by every
     # receiver in this campaign, threaded through via the `today` kwarg (see
@@ -2216,7 +2418,19 @@ async def _memo_send_fan_out(params: dict, *, repo_root) -> dict:
         captured_stderr = io.StringIO()
         try:
             with contextlib.redirect_stderr(captured_stderr):
-                one_result = await _memo_send(one_params, repo_root=repo_root, today=today)
+                # C2 fan-out constraint (plan body, not an executor choice):
+                # the sender-side ledger commit leg is hoisted OUT of this
+                # per-receiver call (_defer_ledger_commit=True) and fired
+                # exactly once below, after every receiver in this campaign
+                # has appended its own ledger row — otherwise this loop would
+                # fire N sequential commit_authored_content CAS round-trips
+                # (and N auto-push replays) for one operator gesture. A
+                # direct, non-fan-out caller of `_memo_send` never sets this
+                # kwarg and keeps firing the commit inline (see `_memo_send`).
+                one_result = await _memo_send(
+                    one_params, repo_root=repo_root, today=today,
+                    _defer_ledger_commit=True,
+                )
         except Exception as exc:  # best-effort, fail-loud-PER-receiver
             reason = f"{type(exc).__name__}: {exc}"
             failed.append({"id": receiver, "reason": reason})
@@ -2227,6 +2441,14 @@ async def _memo_send_fan_out(params: dict, *, repo_root) -> dict:
             continue
 
         exit_code = one_result.get("exit_code") if isinstance(one_result, dict) else None
+        # Review: code-reviewer (P2-2) — track whether ANY receiver in this
+        # campaign actually appended a ledger row, so the post-loop commit
+        # below fires only when there is something new to commit. Checking
+        # `ledger_text is not None` after a bare re-read (the prior shape)
+        # cannot distinguish "this campaign appended nothing" from "some
+        # earlier campaign already wrote the ledger" — this flag can.
+        if isinstance(one_result, dict) and one_result.get("_ledger_appended"):
+            any_ledger_appended = True
         if exit_code == 0:
             if dry_run:
                 candidates.extend(one_result.get("candidates") or [])
@@ -2257,6 +2479,41 @@ async def _memo_send_fan_out(params: dict, *, repo_root) -> dict:
         })
 
     result_exit_code = 2 if failed else 0
+
+    # C2 fan-out constraint — fire the sender-side ledger commit leg exactly
+    # ONCE for the whole campaign here, after every receiver's own
+    # `_append_sent_ledger` call above has landed (each was deferred via
+    # `_defer_ledger_commit=True`). `repo_root=None` (direct-in-process/test
+    # call path — see `_memo_send`'s own None-tolerant precedent) has no
+    # sender worktree to commit in, so this leg is skipped entirely, same
+    # guard the append itself already sits behind.
+    sender_ledger_commit: Optional[str] = None
+    # Review: code-reviewer (P2-2) — gated on `any_ledger_appended`, not just
+    # `ledger_text is not None`. If every receiver in this campaign failed
+    # before reaching its own append, `_read_sent_ledger_locked` returns the
+    # pre-existing (unchanged) ledger text unchanged, and
+    # `commit_authored_content` has no unchanged-tree short-circuit — firing
+    # the commit anyway would land a genuine no-op commit for a campaign that
+    # delivered nothing.
+    if not dry_run and repo_root is not None and any_ledger_appended:
+        _sender_worktree = main_worktree_root(Path(repo_root))
+        ledger_text = await asyncio.to_thread(_read_sent_ledger_locked, _sender_worktree)
+        if ledger_text is not None:
+            sender_ledger_commit = await _commit_sender_ledger(_sender_worktree, ledger_text)
+
+    # EM ruling, C2 follow-up (test_act_success_top_level_envelope_keys_unchanged
+    # pins the top-level key set — no new top-level key, ever): stamp the ONE
+    # campaign-wide SHA onto EVERY acted entry, as a sibling of that entry's
+    # own `delivery_commit`, rather than a new top-level key. This single
+    # commit genuinely covers every receiver in this campaign (it commits the
+    # ledger AFTER all N appends have landed), so the same SHA on every entry
+    # is correct, not a placeholder repeated by accident — and it keeps the
+    # acted-entry shape identical between the single-receiver and fan-out
+    # paths (both carry `sender_ledger_commit` on the entry, never above it).
+    for entry in acted:
+        if isinstance(entry, dict):
+            entry["sender_ledger_commit"] = sender_ledger_commit
+
     return {
         "exit_code": result_exit_code,
         "mode": _MODE,
@@ -2275,7 +2532,10 @@ async def _memo_send_fan_out(params: dict, *, repo_root) -> dict:
 # ---------------------------------------------------------------------------
 
 @register_op("memo.send")
-async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> dict:
+async def _memo_send(
+    params: dict, repo_root=None, today: str | None = None,
+    _defer_ledger_commit: bool = False,
+) -> dict:
     """JSON-RPC 'memo.send' MUTATING op handler (command-type, spawn-per-call).
 
     Write one schema-valid memo into the receiver's cross-repo/inbox/ tree,
@@ -2306,6 +2566,16 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
     campaign and threads it here so every receiver in a fan-out shares the same
     filename/`created:` date even if the loop straddles local midnight; a direct
     single-receiver caller omits it and this function computes today() itself.
+
+    _defer_ledger_commit arg: Python-level kwarg (same non-wire status as
+    `today`), C2 (docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md).
+    When True, this call still appends the sender-side ledger row via
+    `_append_sent_ledger` but does NOT fire the `commit_authored_content`
+    ledger commit inline — `_memo_send_fan_out` sets this on every
+    per-receiver call it makes and fires the commit itself exactly once,
+    after its loop over all receivers completes (the fan-out constraint: N
+    receivers must not multiply into N ledger commits). A direct
+    single-receiver caller never sets this and keeps the inline commit.
 
     dry_run:true  → validate params + containment; read collision state; compose
                     + frontmatter self-validate (shared with act path — see the
@@ -2787,13 +3057,22 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
     # here). The stamp and the ledger append are each conditional/best-effort,
     # so each is declared only when its own helper reports it actually wrote.
     touched_outbox_paths: list[str] = []
+    sender_ledger_commit: Optional[str] = None
+    ledger_appended = False
     if _sender_worktree is not None:
         stamped = _stamp_sender_outbox_sent(
             _sender_worktree, topic, target_path, receiver_repo_path,
         )
         if stamped:
             touched_outbox_paths.append(str(_sender_outbox_path(_sender_worktree, topic)))
-        ledger_appended = _append_sent_ledger(
+        # Review: code-reviewer (P2-1) — `_append_sent_ledger`'s `locked_rmw`
+        # call acquires a cross-process flock with up to LOCK_TIMEOUT_SECS of
+        # wait (unlike the plain unlocked `open(mode="a")` it replaced), so it
+        # is thread-wrapped here on the same footing as every other blocking
+        # git_native call in this handler — running it inline would block the
+        # event loop under this repo's stated lock-contention load.
+        ledger_text = await asyncio.to_thread(
+            _append_sent_ledger,
             _sender_worktree,
             topic=topic,
             to=canonical_to,
@@ -2802,8 +3081,35 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
             receiver_repo_path=receiver_repo_path,
             in_reply_to=in_reply_to,
         )
+        ledger_appended = ledger_text is not None
         if ledger_appended:
             touched_outbox_paths.append(str(_sender_sent_ledger_path(_sender_worktree)))
+            # C2 — commit the ledger append into the SENDER's own tree via
+            # commit_authored_content (never a mirror of
+            # _commit_delivered_memo's hand-rolled add/commit, see the
+            # module-level "C2" section above for the full rationale).
+            # `ledger_text` is the EXACT bytes `_append_sent_ledger` just
+            # returned from its own single `locked_rmw` critical section —
+            # no separate, unlocked read-back. A concurrently-appended
+            # peer's row can legitimately ride along here: that peer's
+            # append landed and released the lock before this critical
+            # section started, so it is already an immutable, durable-on-
+            # disk fact (a completed delivery, not someone else's
+            # uncommitted work-in-progress) — `locked_rmw` closes the
+            # torn-read case, not this one, and this is expected/tolerable
+            # per the plan's C1 DR-272 amendment.
+            #
+            # `_defer_ledger_commit` (fan-out hoist, C2 plan body): a
+            # per-receiver call from `_memo_send_fan_out` still appends its
+            # own row above, but the actual commit is skipped here and
+            # fired exactly once by the fan-out caller after its whole loop
+            # completes — otherwise N receivers would fire N sequential
+            # commit_authored_content CAS round-trips (and N auto-push
+            # replays) for one operator gesture.
+            if not _defer_ledger_commit:
+                sender_ledger_commit = await _commit_sender_ledger(
+                    _sender_worktree, ledger_text,
+                )
 
     result = build_act_result(
         _MODE,
@@ -2813,6 +3119,20 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
             "receiver": canonical_to,
             "topic": topic,
             "delivery_commit": delivery_commit,
+            # C2 (EM ruling, C2 follow-up) — a sibling of delivery_commit on
+            # this SAME acted entry, deliberately never a new top-level
+            # envelope key: test_act_success_top_level_envelope_keys_unchanged
+            # pins the top-level key set to exactly
+            # exit_code/mode/dry_run/candidates/acted/failed, the same
+            # boundary delivery_commit itself already respects by living
+            # here rather than above. Own key, never overloading
+            # delivery_commit (which names the RECEIVER-side commit outcome
+            # above) — None when the leg was skipped (_sender_worktree is
+            # None, the ledger append itself failed, or
+            # _defer_ledger_commit deferred it to the fan-out caller, which
+            # stamps this same key onto every acted entry in its own
+            # campaign after its loop completes — see _memo_send_fan_out).
+            "sender_ledger_commit": sender_ledger_commit,
             # Additive, non-fatal notice (2026-08-07 warn-and-substitute
             # PM ruling, AC9) — mirrors the dry_run candidate's own pair of
             # fields above; present iff the explicit `summary` param was
@@ -2825,4 +3145,15 @@ async def _memo_send(params: dict, repo_root=None, today: str | None = None) -> 
     )
     if touched_outbox_paths:
         result["_scope_touch_paths"] = touched_outbox_paths
+    if _defer_ledger_commit:
+        # Review: code-reviewer (P2-2) — non-wire, internal-only signal
+        # consumed ONLY by `_memo_send_fan_out` (which always sets
+        # `_defer_ledger_commit=True`) to know whether THIS receiver's call
+        # actually appended a ledger row, so the fan-out's post-loop commit
+        # can be skipped when no receiver in the campaign appended anything
+        # (an unconditional post-loop commit would otherwise land a genuine
+        # no-op commit). Never set on the direct, non-fan-out call path —
+        # test_act_success_top_level_envelope_keys_unchanged pins the
+        # top-level key set for that path.
+        result["_ledger_appended"] = ledger_appended
     return result

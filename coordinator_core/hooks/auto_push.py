@@ -123,6 +123,10 @@ _ENV_NO_SLEEP = "COORDINATOR_AUTO_PUSH_NO_SLEEP"
 # calling process (and tests) can observe the push outcome directly.
 _ENV_SYNC = "COORDINATOR_AUTO_PUSH_SYNC"
 
+# Forensic seam: when the hook runs through a wrapper, sys.executable names the
+# wrapper's interpreter rather than the real host interpreter that launched it.
+_ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
+
 MAX_ATTEMPTS = 3
 # Classes that are safe to retry; see classify_error() for why each is/isn't.
 _RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient"})
@@ -431,12 +435,17 @@ def _module_provenance() -> str:
     Every path is emitted via `as_posix()`: these are TEXT fields in a log whose
     rows are all-forward-slash by contract (see `log_failure`'s forensic-path
     note), so a backslashed `sys.executable` on nt must not drift them.
+
+    The interpreter field prefers `COORDINATOR_HOST_PYTHON` (when set and
+    non-empty) over `sys.executable`: a wrapper-launched hook reports the
+    wrapper's interpreter via `sys.executable`, not the real host interpreter,
+    which defeats the self-diagnosing intent above.
     """
     try:
         module_path = Path(__file__).resolve().as_posix()
     except (OSError, NameError, ValueError):
         module_path = "<unresolved>"
-    interp = sys.executable
+    interp = os.environ.get(_ENV_HOST_PYTHON, "").strip() or sys.executable
     if interp:
         try:
             interp = Path(interp).as_posix()

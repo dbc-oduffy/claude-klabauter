@@ -93,12 +93,25 @@ def test_repo_flag_refused_on_another_none_scoped_op():
 
 
 def test_repo_flag_not_refused_on_worktree_scoped_op():
-    """--repo on a worktree-scoped op (coverage.gate, scope="show_top") is honored,
-    not refused — the refusal must not regress the legitimate --repo use case."""
-    result = _invoke("coverage.gate", "{}", "--repo", _PROJECT_ROOT)
+    """--repo on a worktree-scoped op is honored, not refused — the refusal must
+    not regress the legitimate --repo use case.
+
+    Vehicle note: this drove `coverage.gate` (scope="show_top") until 2026-08-10.
+    That op's cost scales with the repo's review-trail corpus (measured 48s on this
+    tree — past the engine's own 30s dispatch timeout AND this file's 30s subprocess
+    timeout), so the test became a stopwatch on an unrelated subsystem. Any op in
+    WORKTREE_SCOPED_OPS proves the point; `handoff.has_live_children` (common_dir
+    class) is worktree-scoped and returns in ~0.1s. Do not restore a
+    history-walking op here.
+    """
+    result = _invoke(
+        "handoff.has_live_children",
+        '{"candidate": "state/handoffs/does-not-exist-repo-scope-test.md"}',
+        "--repo", _PROJECT_ROOT,
+    )
 
     assert result.returncode in (0, 1), (
-        f"coverage.gate with --repo must dispatch normally (exit 0 or 1 from the "
+        f"a worktree-scoped op with --repo must dispatch normally (exit 0 or 1 from the "
         f"op itself), not be refused; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )

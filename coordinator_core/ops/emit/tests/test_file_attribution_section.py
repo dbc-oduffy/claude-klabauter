@@ -22,7 +22,7 @@ containment logic is exercised the same way regardless of the host OS running th
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -307,15 +307,23 @@ def test_collect_mixed_rows_partition_correctly(tmp_path):
 # ---------------------------------------------------------------------------
 # _relativize_or_exclude — unit-level containment/normalisation coverage,
 # including Windows-shaped inputs regardless of host OS.
+#
+# POSIX-shaped cases pin repo_root as a PurePosixPath, never a bare Path: on a Windows host
+# Path("/Users/x/...") stringifies with BACKSLASHES, which _is_windows_shaped() reads as a
+# Windows-flavoured root, so a POSIX-shaped file_path fails the flavour check and every case
+# collapses to None (the in-repo case fails outright; the exclusion cases pass vacuously, for
+# the wrong reason). The production contract is that repo_root and file_path originate on the
+# same host and therefore share a flavour — these fixtures must express that, host-independently,
+# the same way the Windows-shaped cases already do.
 # ---------------------------------------------------------------------------
 
 def test_relativize_posix_in_repo():
-    result = _relativize_or_exclude("/Users/x/claude-klabauter/sub/file.py", Path("/Users/x/claude-klabauter"))
+    result = _relativize_or_exclude("/Users/x/claude-klabauter/sub/file.py", PurePosixPath("/Users/x/claude-klabauter"))
     assert result == "sub/file.py"
 
 
 def test_relativize_posix_out_of_repo():
-    result = _relativize_or_exclude("/Users/x/example-doctrine-repo/sub/file.py", Path("/Users/x/claude-klabauter"))
+    result = _relativize_or_exclude("/Users/x/example-doctrine-repo/sub/file.py", PurePosixPath("/Users/x/claude-klabauter"))
     assert result is None
 
 
@@ -324,13 +332,13 @@ def test_relativize_posix_sibling_prefix_collision_is_excluded():
     false-positive as in-repo — this is exactly the bug a string ``startswith`` check
     would introduce."""
     result = _relativize_or_exclude(
-        "/Users/x/claude_klabauter2/file.py", Path("/Users/x/claude-klabauter")
+        "/Users/x/claude_klabauter2/file.py", PurePosixPath("/Users/x/claude-klabauter")
     )
     assert result is None
 
 
 def test_relativize_already_relative_path_passes_through():
-    result = _relativize_or_exclude("sub/file.py", Path("/Users/x/claude-klabauter"))
+    result = _relativize_or_exclude("sub/file.py", PurePosixPath("/Users/x/claude-klabauter"))
     assert result == "sub/file.py"
 
 
@@ -370,9 +378,9 @@ def test_relativize_windows_shaped_sibling_prefix_collision_is_excluded():
 
 
 def test_relativize_non_string_input_is_excluded():
-    assert _relativize_or_exclude(None, Path("/Users/x/claude-klabauter")) is None
-    assert _relativize_or_exclude(123, Path("/Users/x/claude-klabauter")) is None
-    assert _relativize_or_exclude("", Path("/Users/x/claude-klabauter")) is None
+    assert _relativize_or_exclude(None, PurePosixPath("/Users/x/claude-klabauter")) is None
+    assert _relativize_or_exclude(123, PurePosixPath("/Users/x/claude-klabauter")) is None
+    assert _relativize_or_exclude("", PurePosixPath("/Users/x/claude-klabauter")) is None
 
 
 def test_relativize_relative_path_with_leading_dotdot_is_excluded():
@@ -381,7 +389,7 @@ def test_relativize_relative_path_with_leading_dotdot_is_excluded():
     `git ls-files` output, so it must be excluded, not waved through as "already
     repo-relative"."""
     result = _relativize_or_exclude(
-        "../sibling-repo/file.py", Path("/Users/x/claude-klabauter")
+        "../sibling-repo/file.py", PurePosixPath("/Users/x/claude-klabauter")
     )
     assert result is None
 
@@ -399,7 +407,7 @@ def test_relativize_path_equal_to_repo_root_is_excluded():
     remaining components), distinct from the shorter/outside-containment branch the other
     exclusion tests exercise."""
     result = _relativize_or_exclude(
-        "/Users/x/claude-klabauter", Path("/Users/x/claude-klabauter")
+        "/Users/x/claude-klabauter", PurePosixPath("/Users/x/claude-klabauter")
     )
     assert result is None
 

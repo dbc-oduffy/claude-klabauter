@@ -82,6 +82,8 @@ shape and helpers this module imports rather than reimplements).
 
 from __future__ import annotations
 
+import re
+
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -113,6 +115,20 @@ PRIORITY = 76
 _FINDINGS_HEADING = "## Findings"
 
 
+def _heading_present(text: str, heading: str) -> bool:
+    """True only where ``heading`` occurs as a REAL ATX heading line.
+
+    Line-anchored, not a substring test — parity with the sibling guard's own
+    copy, kept local for the same reason (write_guards owns its own helpers
+    rather than importing ops). These markers are strings a reviewer quotes in
+    running prose while explaining the mechanism they drive, and
+    ``heading in text`` cannot tell the heading from a mention of it. See
+    ``ops/append_integrator_dispositions._find_heading`` for the live
+    2026-08-10 case that motivated line-anchoring every consumer.
+    """
+    return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", text) is not None
+
+
 def _find_sentinel_retained_sidecar(
     sidecar_dir: Path, normalized_target: str, basename: str
 ) -> Optional[Path]:
@@ -138,9 +154,9 @@ def _find_sentinel_retained_sidecar(
 
         if _extract_frontmatter_agent_type(text) != _REVIEWER_AGENT_TYPE:
             continue
-        if _FINDINGS_HEADING not in text:
+        if not _heading_present(text, _FINDINGS_HEADING):
             continue
-        if _DISPOSITIONS_HEADING in text:
+        if _heading_present(text, _DISPOSITIONS_HEADING):
             continue  # already integrated
         if _FINDINGS_SENTINEL not in text:
             continue  # not the population this guard covers — sibling's deny territory

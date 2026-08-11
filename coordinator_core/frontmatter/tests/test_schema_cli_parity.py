@@ -104,7 +104,7 @@ def test_validate_review_trail_good_record_ok_true_exit_0(monkeypatch, capsys):
         "sha_range": "abc1234..def5678",
         "reviewer": "code-reviewer",
         "scope": "bin/schema-cli.js",
-        "scope_kind": "file",
+        "scope_kind": "diff",
         "verdict": "pass",
         "diff_loc": 100,
         "session_id": "test-session-1",

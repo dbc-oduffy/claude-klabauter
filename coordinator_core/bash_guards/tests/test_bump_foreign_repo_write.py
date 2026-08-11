@@ -37,6 +37,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards import _command_tokenizer
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards._write_bump_marker import (
     marker_basename,
@@ -936,11 +937,16 @@ def test_agent_memory_store_index_write_never_bumps_even_when_home_is_a_repo(rep
     assert result is None
 
 
-def test_project_dir_write_not_under_memory_still_bumps_when_home_is_a_repo(repos, monkeypatch, tmp_path):
-    """Proves the exemption is scoped to `memory/`, not the whole
-    `<slug>/` project directory -- a write elsewhere under a project's own
-    directory (e.g. a hypothetical per-project doctrine file) still bumps
-    when `~/.claude` is a real, different git repo."""
+def test_project_dir_write_not_under_memory_now_allowed_by_c1(repos, monkeypatch, tmp_path):
+    """AC1/AC4 (docs/plans/2026-08-10-carve-claude-out-and-close-the-
+    backslash-bypass.md, C1): superseded by C1's unconditional `~/.claude`
+    carve-out, wired into this leg alongside the (narrower, `memory/`-only)
+    agent-memory exemption immediately above -- a write elsewhere under a
+    project's own directory (not `memory/`) no longer bumps, because it is
+    still under `~/.claude` as a whole. Prior to C1 this test asserted the
+    opposite (`test_project_dir_write_not_under_memory_still_bumps_when_
+    home_is_a_repo`), proving only the agent-memory exemption's own,
+    narrower boundary."""
     session_id = "sess-mem-c4-3"
     home = _init_repo(tmp_path, "home-that-is-a-repo-3")
     monkeypatch.setenv("HOME", str(home))
@@ -952,8 +958,63 @@ def test_project_dir_write_not_under_memory_still_bumps_when_home_is_a_repo(repo
 
     result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
 
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
+# -- `~/.claude` never bumps on this leg either, wholesale, even though it
+# is a real git checkout on this fleet. AC1-AC4.
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_settings_json_write_never_bumps_on_this_leg(repos, monkeypatch, tmp_path):
+    session_id = "sess-c1-settings"
+    home = _init_repo(tmp_path, "home-c1-settings")
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+    dest = home / ".claude" / "settings.json"
+    dest.parent.mkdir(parents=True)
+    cmd = f"echo hi > {_posix(dest)}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_ac4_unregistered_foreign_repo_still_bumps_alongside_claude_home_carveout(
+    repos, monkeypatch, tmp_path
+):
+    """AC4 regression: an ordinary unregistered foreign repo (not
+    `~/.claude`) keeps bumping on this leg after C1's carve-out lands --
+    same control-matrix cell as the spike verdict record's "(b) UNREGISTERED
+    repo" row, under the in-repo-anchor control (not the rootless-session
+    axis, which C1 does not touch)."""
+    session_id = "sess-c1-ac4-unreg"
+    home = tmp_path / "home-c1-ac4-unreg"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
+    dest = repos["foreign"] / "note.txt"
+    cmd = f"echo hi > {_posix(dest)}"
+
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+
     assert result is not None
     assert "hookSpecificOutput" in result
+
+
+#: NOTE: this leg's own `check_bump_foreign_repo_write` never consults
+#: `target_is_registered_repo` -- that predicate governs only the
+#: anchor-in-no-repo branch (`bump_outside_repo_write.py` [C5] / the tool
+#: leg), not this leg, which bumps on ANY foreign repo unconditionally. A
+#: distinct "registered foreign repo" regression cell would therefore be
+#: identical in setup and assertion to the unregistered one immediately
+#: above -- not duplicated here for that reason; the spike verdict record's
+#: "(c) REGISTERED repo" row is pinned instead on the tool leg (see
+#: `test_bump_out_of_repo_tool_write.py::test_ac4_registered_repo_
+#: destination_still_bumps`) and on C5 (`bump_outside_repo_write.py`),
+#: where the registry membership actually changes the verdict.
 
 
 # ---------------------------------------------------------------------------
@@ -1118,3 +1179,220 @@ def test_extended_length_prefix_does_not_desync_same_repo_root(monkeypatch, tmp_
     root_cf = guard._resolve_and_casefold("root-input")
     assert candidate_cf is not None and root_cf is not None
     assert guard._same_repo_root(candidate_cf, root_cf) is True
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
+# AC5-AC6 -- an unquoted backslash-spelled absolute target must bump exactly
+# like the identical, forward-slash-spelled target, on the Bash surface.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_ac5_backslash_spelled_target_bumps_same_as_forward_slash(monkeypatch, repos):
+    """Reproduces the spike's own incidental finding (docs/research/spike-
+    verdicts/2026-08-10-rootless-session-write-boundary.md, "Incidental
+    finding"): before C2, plain `shlex` treats an UNQUOTED backslash as a
+    POSIX escape character, so `echo probe > C:\\Users\\...\\out.txt`
+    tokenized to a single mangled word with every separator stripped
+    (`C:Users...out.txt`) -- neither `_WINDOWS_DRIVE_ABSOLUTE_RE` nor
+    `translate_msys_path` could recognise that as absolute, so it fell
+    through to a cwd-relative join and this guard silently allowed a
+    foreign-repo write the forward-slash spelling already denied.
+
+    Host-gated (`_host_is_windows()`, matching production's own gate) --
+    on a POSIX host `translate_msys_path` is IDENTITY regardless of
+    `preserve_windows_backslashes`, so this assertion is meaningless there
+    and the test is skipped rather than asserting a no-op."""
+    if not guard._host_is_windows():
+        pytest.skip("Windows-only: backslash-spelled absolute paths are not this platform's shape")
+
+    _set_anchor(monkeypatch, repos, "sess-c2-ac5")
+    forward = _posix(repos["foreign"] / "out.txt")
+    backward = str(repos["foreign"] / "out.txt")
+
+    fwd_result = guard.check_bump_foreign_repo_write(
+        f"echo probe > {forward}", "sess-c2-ac5", str(repos["anchor"]), {}
+    )
+    bwd_result = guard.check_bump_foreign_repo_write(
+        f"echo probe > {backward}", "sess-c2-ac5", str(repos["anchor"]), {}
+    )
+
+    assert fwd_result is not None, "forward-slash spelling must still bump (control)"
+    assert bwd_result is not None, "AC5: backslash spelling must bump identically"
+    assert (
+        fwd_result["hookSpecificOutput"]["permissionDecision"]
+        == bwd_result["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+
+
+def test_c2_ac6_backslash_normalization_removed_would_fail(monkeypatch, repos):
+    """AC6: pins the exact mechanism C2 introduces -- `tokenize_full_
+    command(..., preserve_windows_backslashes=True)` must keep the target's
+    separators intact through tokenization. Directly exercises the
+    tokenizer (not the guard's end-to-end verdict, already covered by
+    AC5's test above) so a revert of `preserve_windows_backslashes` fails
+    HERE even if some other, unrelated change happened to keep the AC5
+    guard-level assertion passing. `shlex`'s escape processing is pure text
+    handling with no platform branch of its own (the platform gate lives
+    ONLY at the two write-bump guards' call sites -- see `_iter_write_sink_
+    candidates`'s own docstring), so this assertion holds on every host,
+    unlike AC5's end-to-end test above."""
+    cmd = r"echo probe > C:\Users\x\out.txt"  # abs-path-ok: illustrative example shape, not a machine-specific citation
+
+    tokens_normalized = _command_tokenizer.tokenize_full_command(
+        cmd, preserve_windows_backslashes=True
+    )
+    tokens_default = _command_tokenizer.tokenize_full_command(cmd)
+
+    assert tokens_normalized[-1] == r"C:\Users\x\out.txt"  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    # The pre-C2 default behavior mangles it -- pinned here so a future
+    # reader can see exactly what "removing the normalization" reverts to.
+    assert tokens_default[-1] == "C:Usersxout.txt"
+    assert tokens_normalized[-1] != tokens_default[-1]
+
+
+def test_c2_p1_quoted_escaped_quote_survives_preserve_windows_backslashes():
+    """Review: coordinator:code-reviewer P1 (05fb6ef70 follow-up) -- C2's
+    original `preserve_windows_backslashes=True` shape set `lex.escape = ""`
+    for the WHOLE `shlex` lexer state, which also disables `escapedquotes`
+    handling. `\\"` inside a double-quoted token no longer escaped the
+    quote, so the quote closed EARLY and the remainder re-tokenized as
+    fresh, unquoted words -- on ANY command tokenized with the flag on,
+    whether or not it contains a Windows path at all.
+
+    Pins that a legitimately escaped `\\"` inside a double-quoted token
+    lexes IDENTICALLY with `preserve_windows_backslashes=True` as it does
+    with the flag at its `False` default: one token, quote content intact,
+    nothing split off into a second word. `shlex`'s own `escape` attribute
+    is host-independent pure text handling (see AC6's test above), so this
+    assertion holds on every host, not just Windows."""
+    cmd = r'git commit -m "fixed \"quoted\" bug"'
+
+    tokens_preserved = _command_tokenizer.tokenize_full_command(
+        cmd, preserve_windows_backslashes=True
+    )
+    tokens_default = _command_tokenizer.tokenize_full_command(cmd)
+
+    assert tokens_preserved == tokens_default
+    assert tokens_preserved[-1] == 'fixed "quoted" bug'
+    assert len(tokens_preserved) == 4
+
+
+def test_c2_p0_unquoted_escaped_quote_does_not_swallow_separator():
+    """Review: coordinator:code-reviewer P0 (d8a8b14c) -- an UNQUOTED
+    `\\'`/`\\"` is an atomic escaped-literal-quote pair in real bash, not a
+    quote-open. Before the fix, `_mask_unquoted_backslashes` sentinel-masked
+    the bare backslash on one loop iteration and then toggled quote state on
+    the bare quote the NEXT iteration, having no memory the quote had just
+    been escaped. That let a real `;` separator get swallowed into a
+    fictitious quoted span -- a guard-bypass shape, since every write-
+    boundary guard segments on tokens and never saw the second command at
+    all, even though bash executes it as its own segment.
+
+    This is a tokenization assertion that fails on pre-fix HEAD: the
+    fictitious quote swallows `;`/`rm`/`-rf`/`/important` into one token
+    instead of splitting them into their own segment."""
+    danger = "important"
+    remove = "r" + "m"
+    force_recursive = "-r" + "f"
+    cmd = "echo \\' ; " + remove + " " + force_recursive + " /" + danger + " \\'"
+
+    tokens_on = _command_tokenizer.tokenize_full_command(
+        cmd, preserve_windows_backslashes=True
+    )
+    tokens_off = _command_tokenizer.tokenize_full_command(cmd)
+
+    assert tokens_on == tokens_off, (
+        "the escaped-quote separator shape must tokenize identically with "
+        "the flag on and off"
+    )
+    assert tokens_on == [
+        "echo",
+        "'",
+        ";",
+        remove,
+        force_recursive,
+        "/" + danger,
+        "'",
+    ]
+    assert remove not in tokens_on[1], "the separator must not be swallowed into a single token"
+
+
+def test_c2_p2_backslash_before_punctuation_pairs_like_backslash_before_quote():
+    """Review: coordinator:code-reviewer P2 (36bfdde30 follow-up) --
+    `_mask_unquoted_backslashes` only special-cased an unquoted backslash
+    immediately before a QUOTE (`'`/`"`); one before `;`/`&`/`|` still fell
+    through to plain sentinel-masking, so `a\\;b` tokenized to
+    `['a\\', ';', 'b']` -- a fabricated separator real bash never produces
+    (bash's own escape rule treats `\\;` as a literal `;` inside one word:
+    `echo a\\;b` is a single `a;b` argument, no second command). Fail-closed
+    direction (an inert literal separator character got treated as a real
+    command boundary), but the same root cause as the P0 this module was
+    already fixed for -- generalized here to the other two
+    `punctuation_chars` this tokenizer recognizes.
+
+    Pins that flag on/off tokenize identically for all three punctuation
+    characters, exactly as the existing quote-pair case already pins."""
+    for punctuation in (";", "&", "|"):
+        cmd = "echo a\\" + punctuation + "b"
+        tokens_on = _command_tokenizer.tokenize_full_command(
+            cmd, preserve_windows_backslashes=True
+        )
+        tokens_off = _command_tokenizer.tokenize_full_command(cmd)
+
+        assert tokens_on == tokens_off, (
+            f"backslash-before-{punctuation!r} must tokenize identically "
+            "with the flag on and off"
+        )
+        assert tokens_on == ["echo", "a" + punctuation + "b"], (
+            f"backslash-before-{punctuation!r} must stay one literal word, "
+            "not fabricate a separator token"
+        )
+
+
+def test_c2_p2_consecutive_backslashes_before_quote_pair_left_to_right():
+    """Review: coordinator:code-reviewer P2 (36bfdde30 follow-up) -- pairing
+    an unquoted backslash with a following quote per-character (rather than
+    over the whole RUN of consecutive backslashes) mis-paired `\\\\'` (two
+    backslashes then a quote) as `(\\)(\\')` instead of real bash's own
+    left-to-right `(\\\\)('...)`: the first backslash pairs with the SECOND
+    backslash (one literal backslash, consumed), leaving the quote genuinely
+    unescaped -- a real quote-open that runs uninterrupted to the next bare
+    quote. Before this fix, `_mask_unquoted_backslashes` let the second
+    backslash reach for the quote a character the first backslash had
+    already claimed, fabricating token boundaries real bash does not
+    produce (`rm`/`-rf`/`/important` split out as their own tokens where
+    real bash runs nothing but the surrounding `echo`).
+
+    Pins the structural property that matters for guard classification: an
+    EVEN run of backslashes before a quote leaves the quote free to open a
+    real (uninterrupted) span, so the danger tokens stay swallowed inside
+    one `echo` argument in BOTH the flag-on and flag-off tokenization --
+    same segment count, same absence of the danger tokens as their own
+    segment, in each. (The exact literal backslash count surviving inside
+    that swallowed argument differs cosmetically between flag on/off --
+    flag-on preserves both raw backslashes as literal sentinel-unmasked
+    characters rather than collapsing the pair the way plain `shlex` escape
+    does -- but that difference is inert: it is not a command-position
+    token in either case.)"""
+    remove = "r" + "m"
+    force_recursive = "-r" + "f"
+    danger = "important"
+    cmd = "echo \\\\' ; " + remove + " " + force_recursive + " /" + danger + " \\\\'"
+
+    tokens_on = _command_tokenizer.tokenize_full_command(
+        cmd, preserve_windows_backslashes=True
+    )
+    tokens_off = _command_tokenizer.tokenize_full_command(cmd)
+
+    for label, tokens in (("on", tokens_on), ("off", tokens_off)):
+        assert tokens is not None
+        assert len(tokens) == 2, (
+            f"flag-{label} must swallow the danger text into one echo "
+            f"argument (a real command-position token per segment); got {tokens!r}"
+        )
+        assert tokens[0] == "echo"
+        assert tokens[1] not in (remove, force_recursive, "/" + danger), (
+            f"flag-{label} must not surface {remove!r} as its own command-position token"
+        )

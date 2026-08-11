@@ -5,7 +5,7 @@ Purpose: Records agent IDs dispatched by the EM into two session-runtime files:
     .git/coordinator-sessions/<session_id>/dispatched-agents.txt   (tab-delimited log)
     .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
 
-Ported from the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Ported from the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``). Faithful port of all write logic and
 conditionals — same 3-pass agent-id extraction (now pre-resolved to flat scalar
 input by the manifest), same 4-source model cascade (now pre-resolved), same
@@ -25,10 +25,21 @@ the harness. Reject anything else (fail-closed).
 
 Dedup / collision guard (column-1 comparison, per source step e):
     Same agent_id + same subagent_type → silent idempotent dedup.
-    Same agent_id + different subagent_type → mark existing row's column 3 as
+    Same agent_id + different REAL subagent_type → mark existing row's column 3 as
     AMBIGUOUS (detect-then-fail-loud; fail-closed for both colliding dispatches per
     AC14). The suffixed-row approach is NOT used: the subagent-side resolver
     reconstructs only the unsuffixed canonical id.
+
+Two-phase write (create then enrich): the "unknown" sentinel is a PLACEHOLDER, not a
+colliding value. A caller that knows an agent_id before it knows the agent's type —
+SubagentStart fires with neither model nor subagent_type available — records an
+identity-only row, and a later call carrying the real type enriches that row in place
+instead of colliding with it. Both directions are covered, because the two calls race
+on a machine running dozens of concurrent sessions: a placeholder arriving AFTER a
+resolved row is a no-op and never downgrades it. Only two REAL, differing types are a
+genuine collision, which is what the AMBIGUOUS sentinel is read as downstream — four
+bash guards treat it as a hostile shape, so widening it to cover in-order enrichment
+would disarm them on every dispatch. See _resolve_row_collision for the full table.
 
 Write atomicity (D6 — shared singleton engine): concurrent sessions sharing the
 engine can invoke this op simultaneously. An asyncio.Lock keyed to the
@@ -56,7 +67,7 @@ Negative-spec:
     - Always returns without blocking the harness — advisory bookkeeping only.
 
 Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C4
-Source: retired ~/.claude/plugins/coordinator/hooks/scripts/
+Source: retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
 """
 
@@ -192,6 +203,66 @@ def _setup_dirs_sync(
     _write_backpointer_sync(em_backpointer, session_id)
 
 
+#: Sentinel both `model` and `subagent_type` degrade to when the harness supplies neither
+#: (see _handler's fallback pair). In column 3 it doubles as the two-phase placeholder.
+PLACEHOLDER_TYPE = "unknown"
+
+#: Collision sentinel written into column 3. Read downstream by the bash guards
+#: (block_subagent_destructive_action names it in its refusal text) as a hostile shape.
+AMBIGUOUS_TYPE = "AMBIGUOUS"
+
+
+def _resolve_row_collision(
+    existing_cols: list[str],
+    model: str,
+    subagent_type: str,
+) -> list[str] | None:
+    """Decide what a second write for an already-recorded agent_id does to its row.
+
+    Single source of truth for the dedup / enrich / collision table, shared by both
+    write arms (_process_dispatched_sync and _make_dispatch_mutate.mutate) so the
+    POSIX and non-POSIX paths cannot drift apart on it.
+
+    Returns the replacement column list, or None when the existing row stands unchanged.
+
+        existing type == incoming type          → None (idempotent dedup)
+        incoming type is the placeholder        → None (a late or out-of-order
+                                                  identity-only write never downgrades
+                                                  an already-resolved row)
+        existing type is the placeholder        → enrich in place: adopt the real type,
+                                                  and the real model when the incoming
+                                                  one is not itself a placeholder
+        two real, differing types               → AMBIGUOUS (detect-then-fail-loud, AC14)
+
+    Enrichment deliberately PRESERVES column 4: the create call fires at SubagentStart,
+    closer to the true dispatch moment than the enriching PostToolUse call, and the
+    runtime tripwire measures elapsed time against that column.
+
+    A legacy short record carries "" in column 3, which is NOT the placeholder — it
+    stays on the AMBIGUOUS arm exactly as before, and padding stops at 3 columns so a
+    collision against one does not grow a trailing empty field it never had.
+    """
+    cols = list(existing_cols)
+    # Pad to at least 3 columns (0: agent_id, 1: model, 2: subagent_type).
+    while len(cols) < 3:
+        cols.append("")
+    existing_type = cols[2]
+
+    if existing_type == subagent_type:
+        return None
+    if subagent_type == PLACEHOLDER_TYPE:
+        return None
+
+    if existing_type == PLACEHOLDER_TYPE:
+        cols[2] = subagent_type
+        if model != PLACEHOLDER_TYPE:
+            cols[1] = model
+        return cols
+
+    cols[2] = AMBIGUOUS_TYPE
+    return cols
+
+
 def _process_dispatched_sync(
     dispatched: str,
     agent_id: str,
@@ -234,29 +305,23 @@ def _process_dispatched_sync(
     # Mirrors: cut -f1 "$DISPATCHED" | grep -qxF "$AGENT_ID"
     # Spec backlink: docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C1(e)
     existing_idx: int | None = None
-    existing_type: str = ""
     for i, ln in enumerate(lines):
         cols = ln.rstrip("\n").split("\t")
         if cols and cols[0] == agent_id:
             existing_idx = i
-            # Column 3 (subagent_type, 0-indexed as cols[2]); "" for legacy short records.
-            existing_type = cols[2] if len(cols) > 2 else ""
             break
 
     if existing_idx is not None:
-        if existing_type == subagent_type:
-            # Same dispatch shape — idempotent dedup, silent exit.
-            return
-
-        # Collision: different subagent_type for the same canonical id.
-        # Mark existing row's column 3 as AMBIGUOUS (detect-then-fail-loud).
+        # Dedup / enrich / collision — the shared table, not a second copy of it.
         # Mirrors: awk -F'\t' -v id="$AGENT_ID" 'BEGIN{OFS="\t"} $1==id{$3="AMBIGUOUS"} {print}'
-        cols = lines[existing_idx].rstrip("\n").split("\t")
-        # Pad to at least 3 columns (0: agent_id, 1: model, 2: subagent_type).
-        while len(cols) < 3:
-            cols.append("")
-        cols[2] = "AMBIGUOUS"
-        lines[existing_idx] = "\t".join(cols) + "\n"
+        new_cols = _resolve_row_collision(
+            lines[existing_idx].rstrip("\n").split("\t"), model, subagent_type
+        )
+        if new_cols is None:
+            # Row stands as written — idempotent dedup, or a placeholder that must
+            # not downgrade it. Silent exit.
+            return
+        lines[existing_idx] = "\t".join(new_cols) + "\n"
 
         # Atomic rewrite — temp+rename (D6; mirrors the awk > tmp && mv tmp dispatched pattern).
         # Tolerated TOCTOU for external-process concurrent appends; in-engine races
@@ -310,26 +375,21 @@ def _make_dispatch_mutate(agent_id: str, model: str, subagent_type: str):
 
         # Dedup / collision detection — column-1 (agent_id) comparison.
         existing_idx = None
-        existing_type = ""
         for i, ln in enumerate(lines):
             cols = ln.rstrip("\n").split("\t")
             if cols and cols[0] == agent_id:
                 existing_idx = i
-                existing_type = cols[2] if len(cols) > 2 else ""
                 break
 
         if existing_idx is not None:
-            if existing_type == subagent_type:
-                # Same dispatch shape — idempotent dedup; locked_rmw skips write (byte-identical).
+            # Dedup / enrich / collision — the shared table, not a second copy of it.
+            new_cols = _resolve_row_collision(
+                lines[existing_idx].rstrip("\n").split("\t"), model, subagent_type
+            )
+            if new_cols is None:
+                # Row stands as written; locked_rmw skips the write (byte-identical).
                 return old_text
-
-            # Collision: different subagent_type for the same canonical id.
-            # Mark existing row col-3 as AMBIGUOUS (detect-then-fail-loud, AC14).
-            cols = lines[existing_idx].rstrip("\n").split("\t")
-            while len(cols) < 3:
-                cols.append("")
-            cols[2] = "AMBIGUOUS"
-            lines[existing_idx] = "\t".join(cols) + "\n"
+            lines[existing_idx] = "\t".join(new_cols) + "\n"
             return "".join(lines)
 
         # New entry: append tab-delimited row.
@@ -353,17 +413,36 @@ def _process_dispatched_locked(
     — the lock prevents intra-process re-entrancy on the same file before the flock reaches the OS.
 
     When locked_rmw succeeds (POSIX + valid git working directory), the read-modify-write is
-    serialised across processes. When it raises (non-POSIX, git unavailable, LockTimeout), the
-    fallback _process_dispatched_sync provides intra-process-only serialisation (same guarantee
-    as the original path).
+    serialised across processes. When it raises MutateAbort or LockTimeout, NEITHER routes to the
+    fallback _process_dispatched_sync — see the two error legs below for why they diverge despite
+    both leaving the file unwritten. Only a third class of failure (non-POSIX, git unavailable —
+    the generic `except Exception` leg) falls back to it.
 
-    Silent-failure contract: all errors in both paths are swallowed.
+    Silent-failure contract: MutateAbort (clean, nothing to write) is swallowed silently, as
+    before. LockTimeout (a LOST WRITE — another process demonstrably holds the lock) is no longer
+    silent: it leaves a durable, greppable stderr breadcrumb naming the agent id and the dropped
+    file, then is swallowed the same as before (no raise into the caller). A stderr breadcrumb was
+    chosen over a marker file because it needs zero I/O of its own — no path to create, no
+    directory to ensure, nothing that could itself contend for the lock this leg just failed to
+    take. It costs a single already-buffered write to an already-open stream.
     """
     mutate = _make_dispatch_mutate(agent_id, model, subagent_type)
     try:
         locked_rmw(Path(dispatched), mutate, repo_root=repo_root_path, missing_ok=True)
-    except (LockTimeout, MutateAbort):
-        pass  # lock timeout or clean abort — silent-failure for bookkeeping
+    except MutateAbort:
+        pass  # clean abort — mutate declined to write; nothing lost, stays silent
+    except LockTimeout:
+        # Lost write: another process demonstrably holds the lock (that's what timed out
+        # waiting on). Do NOT fall back to _process_dispatched_sync — it has no cross-process
+        # serialisation, so taking it here would write unserialised at exactly the moment a
+        # peer process holds the lock (see the module's Anti-scope in the owning plan).
+        # Control flow is otherwise unchanged: the write is dropped, no fallback fires, and
+        # this still doesn't raise into the caller — only the drop stops being invisible.
+        print(
+            f"track_dispatched_agents: LockTimeout — dropped write for agent_id={agent_id!r} "
+            f"to {dispatched} (another process held the lock)",
+            file=sys.stderr,
+        )
     except Exception:
         # locked_rmw unavailable (non-POSIX, non-git dir, RuntimeError from git_common_dir).
         # Fall back to the original sync helper. Cross-process protection absent on this path;
@@ -420,6 +499,23 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # Reject anything else fail-closed.
     if not _valid_agent_id(agent_id):
         return no_advisory()
+
+    # --- Rewrite a stale harness-embedded short against the LIVE session_id ---
+    # The harness hands back a named teammate's agent_id already in canonical
+    # <name>@session-<short> form, with <short> stamped once at team creation
+    # (survives /clear, resume, compact, fork). Every OTHER writer in this
+    # codebase (track_touched_files, session/identity.py, _subagent_identity.py)
+    # builds this same teammate's canonical id fresh from the LIVE session_id —
+    # so recording the harness value verbatim keys a DIFFERENT .agents/<id>/
+    # directory than every other bookkeeping surface uses for the same
+    # teammate, and every cross-writer join against it silently misses. See
+    # docs/research/spike-verdicts/2026-08-10-session-scoped-hooks-inside-a-
+    # teammate-session.md and normalize_teammate_agent_id's own docstring.
+    from coordinator_core.write_guards._subagent_identity import (
+        normalize_teammate_agent_id,
+    )
+
+    agent_id = normalize_teammate_agent_id(agent_id, session_id)
 
     # --- Model fallback (mirrors source step (c), line 138: MODEL="unknown") ---
     # The manifest resolved the 4-source cascade to a flat scalar; "" means none resolved.

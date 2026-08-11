@@ -46,6 +46,7 @@ import coordinator_core.baton_assemble.apply as ba_apply
 from coordinator_core.ops.deliverable_carry import DroppedDeliverableJoinError
 from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.session import claims as session_claims
+from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session import shape as session_shape
 
 _FAKE_OPERATOR_CONFIG = {
@@ -995,6 +996,70 @@ class TestClaimedPlanDeliverableIdCarry:
 
         with pytest.raises(DroppedDeliverableJoinError):
             ba.brief("handoff", "fresh-handoff-ac4-null", repo_root=tmp_path)
+
+
+class TestC1bResolveClaimedPlanPathBlastRadius:
+    """C1b (docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md
+    § C1b): non-regression coverage for `resolve_claimed_plan_path`'s
+    `baton_assemble/__init__.py` lineage-resolution caller, after C1a changed
+    its tier-(b) N>1 tie-break from alphabetical-by-slug to
+    earliest-`claimed_at`. Tier (a) precedence, and the N<=1 return shape,
+    are UNCHANGED by C1a -- this class pins that directly against
+    `resolve_claimed_plan_path` rather than through the full `ba.brief()`
+    deliverable-id-carry cascade (already covered by
+    `TestClaimedPlanDeliverableIdCarry` above)."""
+
+    @staticmethod
+    def _seed_plan_claim_with_claimed_at(
+        repo_root: Path, session_id: str, plan_slug: str, claimed_at: str
+    ) -> None:
+        common_dir = repo_root / ".git"
+        claim_dir = plan_claim_dir(common_dir, Path(f"{plan_slug}.md"))
+        claim_dir.mkdir(parents=True, exist_ok=True)
+        (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+        (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+
+    def test_single_claim_resolution_byte_identical_before_and_after_c1a(
+        self, tmp_path, monkeypatch
+    ):
+        """N<=1 held claims: `resolve_claimed_plan_path`'s return value is
+        untouched by C1a -- tier (b) exercised with `session-shape.json`
+        entirely absent, exactly one claim held."""
+        _init_repo(tmp_path)
+        plan_slug = "2026-08-10-c1b-single-claim"
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-c1b-single")
+        self._seed_plan_claim_with_claimed_at(
+            tmp_path, "sid-c1b-single", plan_slug, "2026-08-10T09:00:00Z"
+        )
+
+        resolved = resolve_claimed_plan_path(cwd=tmp_path)
+
+        assert resolved == f"docs/plans/{plan_slug}.md"
+
+    def test_multi_claim_tier_b_only_picks_earliest_claimed_at_not_alphabetical(
+        self, tmp_path, monkeypatch
+    ):
+        """N>1 held claims, tier (a) session-shape.json absent so this is
+        exercised via tier (b) ONLY: C1a's tie-break is deterministic
+        earliest-`claimed_at`, not alphabetical-by-slug. Slugs are seeded
+        so alphabetical order DISAGREES with claim order -- a regression to
+        the pre-C1a alphabetical tie-break would pick the wrong plan."""
+        _init_repo(tmp_path)
+        earlier_claimed_but_later_alpha = "2026-08-10-zzz-claimed-first"
+        later_claimed_but_earlier_alpha = "2026-08-10-aaa-claimed-second"
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-c1b-multi")
+        self._seed_plan_claim_with_claimed_at(
+            tmp_path, "sid-c1b-multi", earlier_claimed_but_later_alpha,
+            "2026-08-10T09:00:00Z",
+        )
+        self._seed_plan_claim_with_claimed_at(
+            tmp_path, "sid-c1b-multi", later_claimed_but_earlier_alpha,
+            "2026-08-10T10:00:00Z",
+        )
+
+        resolved = resolve_claimed_plan_path(cwd=tmp_path)
+
+        assert resolved == f"docs/plans/{earlier_claimed_but_later_alpha}.md"
 
 
 class TestUnrecognizedKind:
@@ -2385,6 +2450,7 @@ class TestApplyBaseClosedDispatchRejection:
             "handoff.author_fork",
             "render-project-tracker",
             "handoff.supersede_predecessor",
+            "handoff-carry-gate",
         }
 
 
@@ -4808,7 +4874,7 @@ class TestCleanFirstRunIsUnchanged:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
         assert report["replayed"] == []
         assert all(not r["already_satisfied"] for r in report["results"])
         assert report["commit_sha"]
@@ -4909,7 +4975,7 @@ class TestD6AlreadySupersededWedge:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
         assert [e["directive_id"] for e in report["replayed"]] == ["d1"]
         assert successor in report["replayed"][0]["reason"]
         # No duplicate mutation: one successor, same bytes, same edge.
@@ -4968,7 +5034,7 @@ class TestReplayAfterPartialAbortBeforeD6:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
         # A clean re-run, not a replay -- there was no residue to resume.
         assert report["replayed"] == []
         assert harness.archived_predecessor() is not None
@@ -6459,3 +6525,279 @@ class TestStandaloneHandoffApplyEndToEnd:
         assert report["landed"] == ["d1", "d2", "d4"]
         assert d1_calls == [f"state/handoffs/{today}-some-title-here.md"]
         assert (repo / "state" / "handoffs" / f"{today}-some-title-here.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# C1 (2026-08-10 plan) -- d7, the carry gate inside apply()'s own transaction.
+# Spec backlink: docs/plans/2026-08-10-the-carry-gate-nobody-put-inside-the-
+# transaction.md, chunk C1.
+# ---------------------------------------------------------------------------
+
+
+class TestD7EmissionDiscriminator:
+    """Mirrors `TestD6EmissionDiscriminator`'s own MECHANICAL discriminator
+    convention: `kind == "handoff"` AND a real predecessor, never a
+    judgment point."""
+
+    def test_d7_emitted_for_handoff_with_named_predecessor(self, tmp_path):
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            ["handoff_id: hnd-1-1a2b3c"],
+        )
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "h1.md",
+            [
+                "deliverable_id: DEL-1",
+                f"predecessor: {predecessor.relative_to(tmp_path)}",
+            ],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        clis = {d["cli"] for d in decision["directives"]}
+        assert "handoff-carry-gate" in clis
+        d7 = next(d for d in decision["directives"] if d["cli"] == "handoff-carry-gate")
+        assert d7["id"] == "d7"
+        assert d7["args"] == [str(predecessor.relative_to(tmp_path))]
+        assert d7["depends_on"] is None
+        assert d7["already_satisfied"] is False
+
+    def test_d7_runs_before_d1_scaffolds_the_successor(self, tmp_path):
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            ["handoff_id: hnd-1-1a2b3c"],
+        )
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "h1.md",
+            [
+                "deliverable_id: DEL-1",
+                f"predecessor: {predecessor.relative_to(tmp_path)}",
+            ],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        directive_ids = [d["id"] for d in decision["directives"]]
+        assert directive_ids.index("d7") < directive_ids.index("d1")
+
+    def test_d7_not_emitted_for_handoff_with_predecessor_none(self, tmp_path):
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "h1.md",
+            ['deliverable_id: DEL-1', 'predecessor: "none"'],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        clis = {d["cli"] for d in decision["directives"]}
+        assert "handoff-carry-gate" not in clis
+
+    def test_d7_not_emitted_for_spinoff_fork_kind(self, tmp_path):
+        origin = _write_artifact(
+            tmp_path / "state" / "handoffs" / "origin.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-2-1a2b3d"],
+        )
+        decision = ba.brief("spinoff", str(origin), repo_root=tmp_path).decision_object
+        clis = {d["cli"] for d in decision["directives"]}
+        assert "handoff-carry-gate" not in clis
+
+    def test_d7_not_emitted_when_predecessor_absent_for_standalone_handoff(self, tmp_path):
+        decision = ba.brief(
+            "handoff", "", repo_root=tmp_path, title="a standalone handoff"
+        ).decision_object
+        clis = {d["cli"] for d in decision["directives"]}
+        assert "handoff-carry-gate" not in clis
+
+
+class TestDispatchHandoffCarryGate:
+    """Unit-level coverage of `_dispatch_handoff_carry_gate` directly --
+    isolates the raise-vs-return-value posture and the two distinct error
+    classes (gate refusal vs. an unreadable predecessor) from the emission
+    question `TestD7EmissionDiscriminator` covers above."""
+
+    def test_raises_on_undeclared_state_fixture(self, tmp_path):
+        """Cheapest undeclared-state shape: a terminal disposition with no
+        disposition_detail. Must RAISE -- a returned error value lands in
+        `landed` under a green `APPLY_EXIT_OK` (the exact defect
+        `_dispatch_handoff_author_fork`/`_dispatch_handoff_stamp_phase` were
+        each fixed for; see this module's own docstring)."""
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            [
+                "handoff_id: hnd-pred-1a2b4c",
+                "carried_items:",
+                '  - carry_id: "carry-1"',
+                '    description: "some unresolved item"',
+                '    disposition: "closed"',
+            ],
+        )
+        rel = str(predecessor.relative_to(tmp_path))
+
+        # Review: coordinatorcode-reviewer-625ab891 finding 2 -- constrain
+        # the per-item violation REASON, not just the carry_id, so a defect
+        # that strips the reason (e.g. `f"carry-1 refused"`) fails this test.
+        with pytest.raises(
+            RuntimeError,
+            match=r"carry-1.*requires a non-empty disposition_detail",
+        ):
+            ba_apply._dispatch_handoff_carry_gate([rel], tmp_path)
+
+    def test_raises_a_distinct_error_class_for_a_missing_predecessor(self, tmp_path):
+        """A missing/unreadable predecessor file must raise a DIFFERENT
+        error class from a gate refusal -- mirrors the CLI's own measured
+        exit contract (1 = refusal, 2 = malformed/unreadable)."""
+        with pytest.raises(ba_apply._CarryGatePredecessorUnreadable):
+            ba_apply._dispatch_handoff_carry_gate(
+                ["state/handoffs/does-not-exist.md"], tmp_path
+            )
+
+    def test_gate_refusal_is_never_the_unreadable_error_class(self, tmp_path):
+        """The two failure classes must stay genuinely distinct, not just
+        differently worded -- a refusal must not (even incidentally) be an
+        instance of `_CarryGatePredecessorUnreadable`."""
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            [
+                "handoff_id: hnd-pred-1a2b4c",
+                "carried_items:",
+                '  - carry_id: "carry-1"',
+                '    disposition: "closed"',
+            ],
+        )
+        rel = str(predecessor.relative_to(tmp_path))
+        with pytest.raises(RuntimeError) as excinfo:
+            ba_apply._dispatch_handoff_carry_gate([rel], tmp_path)
+        assert not isinstance(excinfo.value, ba_apply._CarryGatePredecessorUnreadable)
+
+    def test_silent_on_a_clean_predecessor(self, tmp_path):
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            [
+                "handoff_id: hnd-pred-1a2b4c",
+                "carried_items:",
+                '  - carry_id: "carry-1"',
+                '    description: "still open"',
+                '    disposition: "carried"',
+            ],
+        )
+        rel = str(predecessor.relative_to(tmp_path))
+        result = ba_apply._dispatch_handoff_carry_gate([rel], tmp_path)
+        assert result["result"]["ok"] is True
+
+    def test_silent_when_predecessor_has_no_carried_items_at_all(self, tmp_path):
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            ["handoff_id: hnd-pred-1a2b4c"],
+        )
+        rel = str(predecessor.relative_to(tmp_path))
+        result = ba_apply._dispatch_handoff_carry_gate([rel], tmp_path)
+        assert result["result"]["ok"] is True
+
+
+class TestD7ApplyEndToEnd:
+    """Drives a REAL `apply()` run (only the subprocess-shaped directives --
+    d1/d2/d4/d5/d6 -- faked, matching `_ReplayHarness`'s own established
+    pattern) to prove d7 leaves `apply()`'s exit code and directive report
+    byte-identical to their pre-change shape for both a clean predecessor
+    and a predecessor carrying no `carried_items` at all (AC4)."""
+
+    def _run(self, tmp_path, monkeypatch, predecessor_fm):
+        for key in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        pred_rel = "state/handoffs/predecessor.md"
+        _write_artifact(repo / pred_rel, predecessor_fm)
+        _git(repo, "add", pred_rel)
+        _git(repo, "commit", "-m", "add predecessor")
+
+        h1_rel = "state/handoffs/h1.md"
+        _write_artifact(
+            repo / h1_rel,
+            [
+                "deliverable_id: DEL-1",
+                f"predecessor: {pred_rel}",
+                "claimed_at: 2026-07-27T09:00:00Z",
+                "claimed_by: test-session",
+            ],
+        )
+        _git(repo, "add", h1_rel)
+        _git(repo, "commit", "-m", "add h1")
+
+        def _fake_d1(args, repo_root):
+            out = next(a[len("--out="):] for a in args if a.startswith("--out="))
+
+            def _flag(name: str) -> str | None:
+                prefix = f"--{name}="
+                return next(
+                    (a[len(prefix):] or None for a in args if a.startswith(prefix)), None
+                )
+
+            _render_real_scaffold(
+                repo_root / out,
+                doc_type=_flag("type") or "handoff",
+                title=_flag("title"),
+                predecessor=_flag("predecessor"),
+                predecessor_id=_flag("predecessor-id"),
+                deliverable_id=_flag("deliverable-id"),
+            )
+            return {"cli": "coordinator-doc-new", "args": args}
+
+        def _noop(name):
+            def _fake(args, repo_root):
+                return {"cli": name, "args": args}
+
+            return _fake
+
+        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "coordinator-doc-new", _fake_d1)
+        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "lint-frontmatter", _noop("d2"))
+        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "render-project-tracker", _noop("d4"))
+        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "session-claim-cli", _noop("d5"))
+        monkeypatch.setitem(
+            ba_apply._CLI_DISPATCH, "handoff.supersede_predecessor", _noop("d6")
+        )
+
+        return ba_apply.apply(
+            "handoff", h1_rel, session_id="test-session", repo_root=repo
+        )
+
+    def test_clean_predecessor_leaves_apply_unchanged(self, tmp_path, monkeypatch):
+        exit_code, report = self._run(
+            tmp_path,
+            monkeypatch,
+            [
+                "handoff_id: hnd-pred-1a2b4c",
+                'predecessor: "none"',
+                "carried_items:",
+                '  - carry_id: "carry-1"',
+                '    description: "still open"',
+                '    disposition: "carried"',
+            ],
+        )
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["degraded"] == []
+
+    def test_predecessor_with_no_carried_items_leaves_apply_unchanged(
+        self, tmp_path, monkeypatch
+    ):
+        exit_code, report = self._run(
+            tmp_path,
+            monkeypatch,
+            ["handoff_id: hnd-pred-1a2b4c", 'predecessor: "none"'],
+        )
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["degraded"] == []
+
+    def test_undeclared_state_predecessor_aborts_the_whole_apply(self, tmp_path, monkeypatch):
+        exit_code, report = self._run(
+            tmp_path,
+            monkeypatch,
+            [
+                "handoff_id: hnd-pred-1a2b4c",
+                'predecessor: "none"',
+                "carried_items:",
+                '  - carry_id: "carry-1"',
+                '    disposition: "closed"',
+            ],
+        )
+        assert exit_code == ba_apply.apply_base.APPLY_EXIT_PARTIAL_MUTATION
+        assert report["failed_directive"] == "d7"
+        assert "d1" not in report.get("landed", [])

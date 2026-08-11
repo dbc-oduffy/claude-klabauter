@@ -303,11 +303,26 @@ def decide_review_scale(
     small-sessions case the source memo describes would never trip a
     session-scoped predicate. Row 5 fires when the chain terminal's
     verdict resolved but is NOT mandatory. Row 4 fires on the
-    session-scoped brightline alone, regardless of chain-terminal status.
-    Precedence is checked in row order 6, 4, 5, 3, 1, 2; any branch whose
-    own predicate needs an unresolved input to be ruled out returns the
-    unresolved outcome rather than falling through to a lower-precedence
-    row.
+    session-scoped brightline alone, regardless of chain-terminal status
+    — including on a chain terminal whose `chain_partition_verdict` is
+    still `None` or unrecognized: the row-4 brightline check is evaluated
+    BEFORE those chain-terminal-unresolved returns (fixed 2026-08-10; the
+    prior code returned unresolved on `chain_partition_verdict is None`
+    ahead of ever evaluating row 4, silently under-reporting scale to
+    `partition_mandatory=False` on a chain-terminal close whose own
+    session-scoped diff emphatically hit the brightline). Precedence is
+    checked in row order 6, 4, then the chain-terminal-unresolved returns
+    (`chain_partition_verdict` not yet resolved, or resolved to something
+    other than `single-reviewer-ok`/`PARTITION-MANDATORY`), then the
+    row-4-inputs-unresolved return, then 5, 3, 1, 2 — the chain-terminal
+    verdict's own unresolved reason is surfaced ahead of a *simultaneously*
+    unresolved row-4 input set, because "the chain-scoped verdict this
+    terminal close needs is missing" is the more actionable message for a
+    chain terminal than "some session-scoped LOC/commit/surface count is
+    missing," and matches the pre-fix reporting shape for that specific
+    combination. Any branch whose own predicate needs an unresolved input
+    to be ruled out returns the unresolved outcome rather than falling
+    through to a lower-precedence row.
 
     shell-doc-ok: the backticked comparisons above are Python boolean
     expressions quoted from this function's own code, not shell version
@@ -315,29 +330,13 @@ def decide_review_scale(
     """
     is_chain_terminal = canonicalize(chain_disposition) == PREDECESSOR_CONSUMED
 
-    if is_chain_terminal:
-        if chain_partition_verdict == _CHAIN_VERDICT_PARTITION_MANDATORY:
-            return ReviewScaleDecision(
-                row=6, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
-                reason="chain-terminal AND the chain-scoped brightline gate verdict is PARTITION-MANDATORY",
-            )
-        if chain_partition_verdict is None:
-            return _unresolved(
-                "chain-terminal close but chain_partition_verdict is not yet resolved "
-                "(rows 5/6 cannot be ruled out)"
-            )
-        if chain_partition_verdict != _CHAIN_VERDICT_SINGLE_REVIEWER_OK:
-            return _unresolved(
-                f"chain-terminal close with an unrecognized chain_partition_verdict "
-                f"{chain_partition_verdict!r} (expected "
-                f"{_CHAIN_VERDICT_PARTITION_MANDATORY!r} or {_CHAIN_VERDICT_SINGLE_REVIEWER_OK!r})"
-            )
-
     # `baton_count >= 2` MULTIPLIES the row-4 metrics (never forces the
     # partitioned row outright) — see the docstring's `baton_count` bullet.
     # `None`/`1` leaves `effective_*` identical to the raw measurement, so
     # every existing caller (which omits `baton_count`) sees byte-identical
-    # row-4 behaviour.
+    # row-4 behaviour. Hoisted above the `is_chain_terminal` branch (fix,
+    # 2026-08-10): row 4 must be evaluable on a chain terminal too — see
+    # this function's own docstring precedence paragraph.
     # shell-doc-ok: the backticked comparison above is a Python boolean
     # expression, not a shell version constraint.
     baton_multiplier = baton_count if (baton_count is not None and baton_count >= 2) else 1
@@ -350,7 +349,9 @@ def decide_review_scale(
         or (effective_commit_count is not None and effective_commit_count >= _BRIGHTLINE_COMMITS)
         or (effective_surface_count is not None and effective_surface_count >= _BRIGHTLINE_SURFACES)
     )
-    if brightline_known_true:
+    brightline_resolved = gross_loc is not None and commit_count is not None and surface_count is not None
+
+    def _row4_decision() -> ReviewScaleDecision:
         multiplier_note = (
             f", baton_count={baton_count} multiplier applied" if baton_multiplier != 1 else ""
         )
@@ -361,8 +362,8 @@ def decide_review_scale(
                 f"surfaces={surface_count}{multiplier_note})"
             ),
         )
-    brightline_resolved = gross_loc is not None and commit_count is not None and surface_count is not None
-    if not brightline_resolved:
+
+    def _row4_inputs_unresolved() -> ReviewScaleDecision:
         missing = [
             name for name, value in (
                 ("gross_loc", gross_loc), ("commit_count", commit_count), ("surface_count", surface_count),
@@ -374,11 +375,36 @@ def decide_review_scale(
         )
 
     if is_chain_terminal:
-        # chain_partition_verdict was validated == _CHAIN_VERDICT_SINGLE_REVIEWER_OK above.
+        if chain_partition_verdict == _CHAIN_VERDICT_PARTITION_MANDATORY:
+            return ReviewScaleDecision(
+                row=6, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
+                reason="chain-terminal AND the chain-scoped brightline gate verdict is PARTITION-MANDATORY",
+            )
+        if brightline_known_true:
+            return _row4_decision()
+        if chain_partition_verdict is None:
+            return _unresolved(
+                "chain-terminal close but chain_partition_verdict is not yet resolved "
+                "(rows 5/6 cannot be ruled out)"
+            )
+        if chain_partition_verdict != _CHAIN_VERDICT_SINGLE_REVIEWER_OK:
+            return _unresolved(
+                f"chain-terminal close with an unrecognized chain_partition_verdict "
+                f"{chain_partition_verdict!r} (expected "
+                f"{_CHAIN_VERDICT_PARTITION_MANDATORY!r} or {_CHAIN_VERDICT_SINGLE_REVIEWER_OK!r})"
+            )
+        if not brightline_resolved:
+            return _row4_inputs_unresolved()
+        # chain_partition_verdict == _CHAIN_VERDICT_SINGLE_REVIEWER_OK, row 4 ruled out.
         return ReviewScaleDecision(
             row=5, scale="code-reviewer", partition_mandatory=False, commit_message_names_change=False,
             reason="chain-terminal with a resolved, non-mandatory chain-scoped brightline verdict",
         )
+
+    if brightline_known_true:
+        return _row4_decision()
+    if not brightline_resolved:
+        return _row4_inputs_unresolved()
 
     row3_known_true = (
         executor_dispatched is True
@@ -440,14 +466,68 @@ _REVIEW_BRIGHTLINE_CLI = "review-brightline-gate"
 _COVERAGE_GATE_RUNNER_CLI = "wsc-coverage-gate-runner"
 
 
-def build_review_brightline_gate_directive(session_id: str) -> dict[str, Any]:
+def build_review_brightline_gate_directive(
+    session_id: str,
+    *,
+    trail_records: Optional[Iterable[Mapping[str, Any]]] = None,
+    chain_tip_sha: Optional[str] = None,
+    is_ancestor: Optional[Callable[[str, str], bool]] = None,
+    session_start_sha: Optional[str] = None,
+) -> dict[str, Any]:
     """Mid-chain brightline gate (`WSC_DISPOSITION != chain-terminal`,
     SKILL.md:428-434). `--session-id` scopes the gate's diff to this
     session's own trailer-matched commits — omitting it is the documented
     2026-06-15 multi-EM-brightline-noise failure mode; this builder makes
     it a required positional-keyword argument, not an optional flag, so a
-    caller cannot construct the phantom-scope call by omission."""
-    return _directive("d-run-review-brightline-gate", _REVIEW_BRIGHTLINE_CLI, ["--session-id", session_id])
+    caller cannot construct the phantom-scope call by omission.
+
+    Range floor (2026-08-08, `docs/plans/2026-08-08-the-second-close-
+    re-measures-the-first-c.md`): without a floor, the gate falls back to
+    its own default range — `merge-base(origin/main, HEAD)..HEAD` — which
+    re-measures every commit a PRIOR close in this same session already
+    reviewed (a session that closes two workstreams has its second close
+    scored over both). `trail_records`/`chain_tip_sha`/`is_ancestor`/
+    `session_start_sha` are all optional and independent of `session_id`:
+    supplying all four floors the emitted range at the last-reviewed sha via
+    `resolve_mid_chain_review_scope` (already defined in this module — not
+    reimplemented here), appended as the gate's trailing positional
+    `<git-range>` argument (`review_brightline_gate.py`'s own
+    `[--session-id <id>] [<git-range>]` contract already accepts one; no new
+    gate-side surface is added). This is ADDITIVE to `--session-id`, never a
+    replacement — the floor bounds *where to look*, the trailer still
+    decides *what counts*, so a range this wide but a trailer match of zero
+    still resolves via the gate's own session-aware floor retry
+    (`_resolve_session_floor`, `aff5b6efd`) exactly as it does today.
+
+    Any one of the four kwargs omitted (the default) reproduces TODAY'S
+    exact two-element `["--session-id", session_id]` argv — this is the
+    ordinary single-close path (nearly every close), which must stay
+    byte-identical. This module stays pure/IO-free (D-4): fetching trail
+    records and deciding `is_ancestor` remain the caller's job, matching
+    every other builder in this package and this module's own Negative-spec
+    for `resolve_mid_chain_review_scope`'s existing callers.
+
+    2026-08-08 caller-plumbing note: the production caller is
+    `workstream_complete/__init__.py`'s `build_directives`, which supplies
+    all four kwargs via `_resolve_review_brightline_floor_kwargs` whenever
+    the closing session has at least one prior review-trail record of its
+    own, and calls this builder with `session_id` alone otherwise. That
+    helper also owns the on-disk field-shape adapter: real records under
+    `state/review-trail/` carry `sha_range`, not the `sha_range_head`/`head`
+    key `resolve_mid_chain_review_scope` reads, so the caller re-keys each
+    record's tip (via `resolve_trail_range_tip`) before handing the list
+    over. Both the fetch and that adaptation stay caller-side by this
+    module's Negative-spec."""
+    args = ["--session-id", session_id]
+    if (
+        trail_records is not None
+        and chain_tip_sha is not None
+        and is_ancestor is not None
+        and session_start_sha is not None
+    ):
+        floor = resolve_mid_chain_review_scope(trail_records, chain_tip_sha, is_ancestor, session_start_sha)
+        args.append(f"{floor}..{chain_tip_sha}")
+    return _directive("d-run-review-brightline-gate", _REVIEW_BRIGHTLINE_CLI, args)
 
 
 def build_chain_plan_brightline_gate_directive(consumed_handoff: str) -> dict[str, Any]:

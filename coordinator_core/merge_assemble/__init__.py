@@ -255,21 +255,45 @@ def _resolve_version_override(
     return f"{tag_prefix}{major}.{minor}.{patch}", None
 
 
+#: Maps a `gate_verdicts` scaffold key to the directive id
+#: `merge_assemble.apply.apply` actually dispatches for it (C3 AC —
+#: `apply()` reads this from `execute_directives`' already-in-hand
+#: `report["results"]`/`report["failed_directive"]`, never re-derives
+#: state execute_directives has already discarded). There is no
+#: `active_branch_guard` directive anywhere in `build_directives` — no
+#: active-branch gate exists in this ceremony, so that key was removed
+#: from the scaffold below rather than left dangling with no CLI to fill
+#: it in (C3 exit (b) judgment for this one key; exit (a) taken for the
+#: three gates that DO have a directive — see this module's C3 audit
+#: entry in state/audits/2026-08-08-judgment-point-evidence-merge-assemble.md).
+GATE_DIRECTIVE_IDS: dict[str, str] = {
+    "coverage_gate": "d3",
+    "portability_sweep": "d5",
+    "check_no_illegal_paths": "d6",
+}
+
+
 def build_gate_verdicts_scaffold() -> dict[str, str]:
     """The `gate_verdicts` scaffold `brief()` returns — every gate this
-    module's directives run is `"pending"` at compute time; `apply()` (the
-    mutating half) is what actually runs each gate CLI and fills in the
-    real verdict string in its own report, never here (this half never
-    shells out to a MUTATING/verdict-bearing gate itself)."""
+    module's directives run is `"pending"` at compute time. `apply()` (the
+    mutating half) fills in the real verdict for each key named in
+    `GATE_DIRECTIVE_IDS` from `execute_directives`' own
+    `report["results"]`/`report["failed_directive"]` once dispatch has run
+    (C3 fix — previously documented but never implemented: no `gates` key
+    was ever written to `apply()`'s report). `active_branch_guard` is
+    deliberately absent — `build_directives` emits no directive for it, so
+    there is no CLI result that could ever fill it in; see
+    `GATE_DIRECTIVE_IDS`'s docstring."""
     return {
         "coverage_gate": "pending",
         "portability_sweep": "pending",
         "check_no_illegal_paths": "pending",
-        "active_branch_guard": "pending",
     }
 
 
-def build_judgment_points() -> list[dict[str, Any]]:
+def build_judgment_points(
+    *, portability_sweep_result: Optional[str] = None
+) -> list[dict[str, Any]]:
     """The judgment residue this chunk's AC names verbatim: ship-verdict,
     CI-failure interpretation, version-bump final number (PM-confirmed),
     portability disposition, merge-conflict resolution. Every entry pins
@@ -279,7 +303,18 @@ def build_judgment_points() -> list[dict[str, Any]]:
     is built via the shipped `build_judgment_point`/`build_disposition`
     constructors (Review: code-reviewer — Finding 1) rather than a hand-
     rolled dict literal; every `id`/`dispositions`/`recommendation` value
-    is unchanged from the prior hand-rolled shape."""
+    is unchanged from the prior hand-rolled shape.
+
+    `portability_sweep_result` is the two-invocation seam: d5 now runs
+    UNGATED (its `depends_on` no longer names `portability_disposition`) and
+    FEEDS this judgment point rather than being gated behind it. On the
+    first pass no sweep result exists yet, so the `portability_disposition`
+    evidence honestly names that (compute-time-scoped, not a permanent
+    claim — d5 already ran, or is about to, in this same apply() pass). On
+    the re-run, the caller threads the sweep's real finding — surfaced in
+    the halted pass's own report — back in as `decisions["portability_sweep_
+    result"]`; `brief()` passes it through here so the disposition is
+    offered against that REAL result, not the point's own absence."""
     return [
         build_judgment_point(
             None,
@@ -325,10 +360,20 @@ def build_judgment_points() -> list[dict[str, Any]]:
             id="portability_disposition",
             question="Proceed with the portability sweep finding, or defer it?",
             dispositions=[
-                build_disposition("proceed", resolves=["d5"]),
+                build_disposition("proceed"),
                 build_disposition("defer"),
             ],
-            evidence="portability-sweep (d5) has not run yet at compute time",
+            evidence=(
+                f"portability-sweep (d5) real finding: {portability_sweep_result}"
+                if portability_sweep_result
+                else (
+                    "portability-sweep (d5) runs UNGATED in this same pass and "
+                    "feeds this judgment point — no result has landed in this "
+                    "compute yet; re-run with decisions[\"portability_sweep_"
+                    "result\"] set to d5's reported finding once the halted "
+                    "pass's report has it"
+                )
+            ),
             reason="insufficient-evidence",
         ),
         build_judgment_point(
@@ -425,7 +470,7 @@ def build_directives(
             "id": "d5",
             "cli": "portability-sweep",
             "args": [str(repo_root), "--diff-only", "origin/main..HEAD", "--report-format", "md"],
-            "depends_on": ["portability_disposition"],
+            "depends_on": None,
             "already_satisfied": False,
         },
         {
@@ -450,6 +495,39 @@ def build_directives(
             "already_satisfied": False,
         },
     ]
+
+
+def _assert_resolves_depends_on_invariant(
+    directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]
+) -> None:
+    """Structural assertion (C2 AC): every `resolves` id named by any
+    disposition across `judgment_points` must name a directive whose own
+    `depends_on` contains that judgment point's `id`. A dangling `resolves`
+    edge — a judgment point claiming to unblock a directive that no longer
+    (or never did) gate on it — is exactly the defect class this chunk
+    fixes for `portability_disposition`/`d5`; this assertion is what keeps
+    a future edit from reintroducing it silently, here or at any other
+    judgment point/directive pair in this module."""
+    depends_on_by_directive_id = {
+        directive["id"]: set(directive.get("depends_on") or [])
+        for directive in directives
+    }
+    for point in judgment_points:
+        point_id = point["id"]
+        for disposition in point.get("dispositions", []):
+            for directive_id in disposition.get("resolves") or []:
+                gating = depends_on_by_directive_id.get(directive_id, set())
+                if point_id not in gating:
+                    # A bare `assert` is stripped under `python -O`, degrading
+                    # this guard to silence on the exact defect it exists to
+                    # catch (precedent: c90b638a5, and claude_klabauter_root.py's
+                    # shim-spec check).
+                    raise RuntimeError(
+                        f"judgment point {point_id!r} resolves directive "
+                        f"{directive_id!r}, but that directive's depends_on "
+                        f"{sorted(gating)!r} does not name {point_id!r} — "
+                        "dangling resolves edge"
+                    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -516,7 +594,10 @@ def brief(
 
     gate_verdicts = build_gate_verdicts_scaffold()
     directives = build_directives(root, tag_prefix=tag_prefix, proposed_tag=cut_tag_input)
-    judgment_points = build_judgment_points()
+    judgment_points = build_judgment_points(
+        portability_sweep_result=effective_decisions.get("portability_sweep_result")
+    )
+    _assert_resolves_depends_on_invariant(directives, judgment_points)
 
     narration = (
         f"merge-assemble brief: branch_state={branch_state!r}, "

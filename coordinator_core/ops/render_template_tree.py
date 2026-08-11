@@ -49,7 +49,7 @@ from typing import List, Optional
 
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "render-template-tree.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
 
@@ -234,7 +234,7 @@ def main(argv: List[str]) -> int:
         # which Windows CreateProcess cannot exec (WinError 193).
         proc = subprocess.run(
             [*render_single_argv, fpath, "-o", fpath, *kv_pairs],
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
         if proc.returncode != 0:
             return proc.returncode

@@ -77,10 +77,12 @@ wsc_tail's body already folds this"):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -99,6 +101,7 @@ from coordinator_core.ops.ceremony.commit_gates import deletion_block_gate
 from coordinator_core.ops.ceremony.commit_message import compose_message, format_kept_entry
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
+from .fixtures.pipeline_result import make_pipeline_result
 
 _EM_DASH = " — "
 
@@ -193,7 +196,18 @@ def test_assertion_a_golden_message_byte_identical_pure_unit():
 def test_assertions_a_and_b_end_to_end_through_pipeline(tmp_path):
     """(a) golden message + (b) staged-set == explicit pathspec, driven
     through the full `run_commit_pipeline` on the bash oracle's own fixture
-    data -- the same scenario the deleted CLI-level test exercised."""
+    data -- the same scenario the deleted CLI-level test exercised.
+
+    C7c note: this test's own red state at dispatch time was NOT the
+    branch-decline defect C7c's sibling tests hit (this fixture never
+    configures a remote, so no push -- and no decline -- is ever reached
+    here); it was `commit()`'s unconditional `Commit-Token: <uuid4().hex>`
+    trailer (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md,
+    W1, already landed on this branch), appended to every commit message
+    AFTER `compose_message()` builds it -- so the golden fixture, which
+    predates W1, no longer matches byte-for-byte. Fixed by comparing the
+    golden prefix and asserting the appended trailer's shape separately,
+    rather than a golden-message repair (a)/(b) this test never needed."""
     repo = _init_repo(tmp_path)
 
     # Seed + commit COMMIT_PATHS (tracked at HEAD, to be modified+re-staged).
@@ -240,7 +254,16 @@ def test_assertions_a_and_b_end_to_end_through_pipeline(tmp_path):
     # log --format=%B` (like the bash oracle's own `$(...)` capture) strips
     # trailing newlines -- rstrip both sides to compare content, not git's
     # own trailing-newline normalization.
-    assert _head_message(repo).rstrip("\n") == _GOLDEN_MESSAGE.rstrip("\n")
+    #
+    # W1 (already landed on this branch, see this test's own docstring)
+    # appends a per-commit `Commit-Token: <uuid4().hex>` trailer AFTER
+    # `compose_message()` runs, so the real HEAD message is the golden
+    # fixture plus that trailer, never byte-identical to the fixture alone.
+    head_message = _head_message(repo).rstrip("\n")
+    golden_prefix = _GOLDEN_MESSAGE.rstrip("\n")
+    assert head_message.startswith(golden_prefix)
+    trailer_suffix = head_message[len(golden_prefix):]
+    assert re.fullmatch(r"\n\nCommit-Token: [0-9a-f]{32}", trailer_suffix), trailer_suffix
 
     # (b) staged-set == explicit pathspec: exactly COMMIT_PATHS + DELETED_PATHS,
     # nothing more, nothing less.
@@ -678,8 +701,8 @@ class WscTailRepo:
     def porcelain(self) -> list[str]:
         return [ln for ln in self._git("status", "--porcelain").stdout.splitlines() if ln]
 
-    def remote_log(self) -> str:
-        return self._git("log", "--oneline", "origin/main").stdout
+    def remote_log(self, remote_branch: str = "main") -> str:
+        return self._git("log", "--oneline", f"origin/{remote_branch}").stdout
 
     def sentinel_path(self, sid: str) -> Path:
         return self.common_dir / "coordinator-sessions" / sid / "wsc-tail-commit-landed"
@@ -765,8 +788,36 @@ def test_ac17_shipped_in_stamp_lands_in_own_pushed_follow_up_commit_sync_seam(
     """Sync seam (`COORDINATOR_WSC_SYNC_PUSH=1`) variant of AC17: with the
     deferred-push cutover opted out of, the follow-up commit still lands in
     its own commit AND is pushed synchronously in-op, byte-for-byte the
-    pre-DEC-1 contract this test pinned before C3/C8."""
+    pre-DEC-1 contract this test pinned before C3/C8.
+
+    C7c (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+    both the main commit's sync push AND the follow-up (C5 stamp+ship)
+    commit's own push are this test's subject -- it is pinned to the
+    pre-DEC-1 "both really land" contract by name and by docstring. It used
+    to run on `wsc_tail_repo`'s shared `main`; a transitional C6b-era edit
+    (superseded here) had re-pinned only the MAIN push to `push_status=
+    "declined"` while leaving `follow_up_pushed=True`, which was consistent
+    at the time since C6e (the change that routes
+    `consumed_handoff_stamp._commit_and_push_follow_up` through the same
+    branch-gated `push_with_retry`) had not yet landed. With C6e now in,
+    BOTH pushes decline on `main`, and no combination of "declined"/"landed"
+    on `main` can satisfy this test's own stated contract -- repair (a):
+    a per-test `work/*` checkout (not a `wsc_tail_repo` fixture change --
+    that fixture is shared by 8 call sites across this file, most of them
+    deliberately exercising the `main`-decline path) restores the branch
+    both pushes need to actually land, and the main-push assertions below
+    revert from the transitional "declined" pin back to this test's
+    original "pushed" contract."""
     repo = wsc_tail_repo
+    branch = "work/test/ac17-sync-seam"
+    checkout = repo._git("checkout", "-b", branch)
+    assert checkout.returncode == 0, checkout.stderr
+    # Match local/remote branch names (same care as the sibling C7c fixes):
+    # the follow-up leg's `push_with_retry` issues a bare `git push`, which
+    # `push.default=simple` refuses when local and remote names differ, even
+    # with `-u` tracking configured.
+    push_branch = repo._git("push", "-u", "origin", branch)
+    assert push_branch.returncode == 0, push_branch.stderr
     monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
     sid = _unique_session_id()
     handoff_relpath = "state/handoffs/2026-07-15_100000_pred.md"
@@ -792,7 +843,18 @@ def test_ac17_shipped_in_stamp_lands_in_own_pushed_follow_up_commit_sync_seam(
     assert result["stamped"] == [handoff_relpath]
     assert result["follow_up_committed_sha"] is not None
     assert result["follow_up_committed_sha"] != result["committed_sha"]
+    # C7c: on the `work/*` branch checked out above, the real `work/*`-only
+    # push-leg branch policy (commit_pipeline.py) allows the push -- this is
+    # this test's original "byte-for-byte pre-DEC-1" contract (both the main
+    # commit's sync push AND the follow-up's own push really land), not the
+    # transitional "declined" pin a C6b-era edit gave this assertion (see
+    # this test's own docstring for why that pin no longer fits once C6e
+    # routed the follow-up leg through the same branch gate).
     assert result["push_status"] == "pushed"
+    assert result["pushed"] is True
+    # The follow-up (C5 stamp+ship) commit's own push is a SEPARATE call
+    # into `scoped_git_commit`'s push leg -- it also lands here, on the same
+    # allowed branch.
     assert result["follow_up_pushed"] is True
 
     # Never left as an unswept dirty working-tree edit -- the stamped
@@ -802,7 +864,7 @@ def test_ac17_shipped_in_stamp_lands_in_own_pushed_follow_up_commit_sync_seam(
 
     # The follow-up commit really landed AND really pushed.
     assert repo.head_sha() == result["follow_up_committed_sha"]
-    assert result["follow_up_committed_sha"][:7] in repo.remote_log()
+    assert result["follow_up_committed_sha"][:7] in repo.remote_log(remote_branch=branch)
 
 
 def test_chain_terminal_stamp_all_skipped_surfaces_tail_item_not_silent_exit_0(
@@ -881,16 +943,8 @@ def test_chain_terminal_commit_abort_stamps_never_evaluated_and_labels_nodes(
     (repo.root / "tasks" / "feature").mkdir(parents=True)
     (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
 
-    failed_outcome = commit_pipeline_mod.PipelineResult(
-        stage=None,
-        deletion_gate=None,
-        dirty_gate=None,
-        commit=None,
-        push=None,
-        committed_sha=None,
-        pushed=None,
+    failed_outcome = make_pipeline_result(
         commit_failed=True,
-        integrity_breach=False,
         diagnostics=["forced failure for wsc-tail-abort-loses-baton regression test"],
     )
     monkeypatch.setattr(wsc_tail_mod, "run_commit_pipeline", lambda *_a, **_kw: failed_outcome)
@@ -1012,8 +1066,24 @@ def test_ac18_crash_after_commit_resumes_from_sentinel_without_double_commit_syn
     resumed pass, `push_status` reports "unknown_resumed" (module docstring
     matrix -- ANY resumed pass wins regardless of push_mode), but the sync
     seam still drives a real synchronous `follow_up_pushed=True` through
-    `post_commit_stamp_and_ship`, byte-for-byte the pre-DEC-1 contract."""
+    `post_commit_stamp_and_ship`, byte-for-byte the pre-DEC-1 contract.
+
+    C7c (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+    `follow_up_pushed=True` is this test's own subject -- the follow-up push
+    really landing -- which C6e (routing `consumed_handoff_stamp._commit_
+    and_push_follow_up` through the same branch-gated `push_with_retry`)
+    made impossible on `wsc_tail_repo`'s shared `main`. Repair (a): a
+    per-test `work/*` checkout (not a `wsc_tail_repo` fixture change --
+    shared by 8 call sites in this file). `push_status` itself needs no
+    matching change: "unknown_resumed" wins on ANY resumed pass regardless
+    of branch (module docstring matrix), so it is untouched here, unlike
+    the sibling AC17 sync-seam fix."""
     repo = wsc_tail_repo
+    branch = "work/test/ac18-sync-seam"
+    checkout = repo._git("checkout", "-b", branch)
+    assert checkout.returncode == 0, checkout.stderr
+    push_branch = repo._git("push", "-u", "origin", branch)
+    assert push_branch.returncode == 0, push_branch.stderr
     monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
     sid = _unique_session_id()
     handoff_relpath = "state/handoffs/2026-07-15_100000_pred.md"
@@ -1786,16 +1856,8 @@ def test_archive_sweeps_do_not_fire_when_commit_pipeline_fails(wsc_tail_repo, mo
         fired = True
         return {"acted": [], "skipped": [], "failed": []}
 
-    failed_outcome = commit_pipeline_mod.PipelineResult(
-        stage=None,
-        deletion_gate=None,
-        dirty_gate=None,
-        commit=None,
-        push=None,
-        committed_sha=None,
-        pushed=None,
+    failed_outcome = make_pipeline_result(
         commit_failed=True,
-        integrity_breach=False,
         diagnostics=["forced failure for C2 regression test"],
     )
 
@@ -2054,19 +2116,29 @@ def test_push_mode_default_preserves_scoped_git_commit_contract(tmp_path):
     `push_mode` kwarg still pushes synchronously and returns a real `pushed`
     tri-state, byte-for-byte identical to pre-DEC-1 behavior. `scoped_git_
     commit.py` itself is untouched (out of this chunk's write-scope) -- this
-    exercises the exact call shape it makes."""
+    exercises the exact call shape it makes.
+
+    C7c (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+    this test's own subject is the push MECHANISM (a bare call still pushes,
+    still returns a real `pushed` tri-state) -- not the branch-policy
+    contract, which is exercised elsewhere. It used to run on `main`, which
+    the real `work/*`-only push-leg branch policy now declines; repair (a):
+    moved onto `work/test/push-mode-default` so the push this test actually
+    means to exercise still lands, rather than inverting the assertion to a
+    decline that isn't this test's point."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
+    branch = "work/test/push-mode-default"
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True
     )
     _git(["remote", "add", "origin", str(bare)], repo)
-    _git(["branch", "-M", "main"], repo)
-    push0 = _git(["push", "-u", "origin", "main"], repo)
+    _git(["checkout", "-b", branch], repo)
+    push0 = _git(["push", "-u", "origin", branch], repo)
     assert push0.returncode == 0, push0.stderr
 
     _seed_file(repo, "tasks/feature/todo.md", "content")
@@ -2138,10 +2210,19 @@ def test_wsc_tail_deferred_mode_default_result_contract_and_no_sync_push(
 
 def test_wsc_tail_sync_seam_restores_synchronous_push_byte_for_byte(wsc_tail_repo, monkeypatch):
     """`COORDINATOR_WSC_SYNC_PUSH=1` restores `push_mode="sync"` -- today's
-    fully synchronous push contract, byte-for-byte: the push lands in-op
-    (observable at result-return time via the real remote, never merely
-    "eventually" via a detached child), `push_status="pushed"`, `pushed`
-    is a real `True`, and the deferred-push spawn point is never invoked."""
+    fully synchronous push CONTRACT (the push, if any lands, happens in-op,
+    observable at result-return time via the real remote, never merely
+    "eventually" via a detached child) -- and the deferred-push spawn point
+    is never invoked.
+
+    C6b (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+    this fixture repo lives on "main", which the real `work/*`-only push-leg
+    branch policy (landed earlier in this same plan, commit_pipeline.py, out
+    of C6b's scope) genuinely declines -- this test was pinned to
+    `push_status="pushed"`/`pushed is True` only because the pre-C6b
+    derivation folded that decline silently into "pushed" (the exact defect
+    C6b fixes). Now correctly asserts the decline, not a push that landed;
+    `remote_log()` never carries the commit for the same reason."""
     repo = wsc_tail_repo
     sid = _unique_session_id()
     monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
@@ -2167,10 +2248,220 @@ def test_wsc_tail_sync_seam_restores_synchronous_push_byte_for_byte(wsc_tail_rep
     )
 
     assert result["exit_code"] == 0, result
-    assert result["push_status"] == "pushed"
-    assert result["pushed"] is True
+    assert result["push_status"] == "declined"
+    assert result["pushed"] is None
     assert spawn_calls == []  # sync mode never spawns a detached push
-    assert result["committed_sha"][:7] in repo.remote_log()
+    assert result["committed_sha"][:7] not in repo.remote_log()
+
+
+# ---------------------------------------------------------------------------
+# C6b (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+# `push_status` reads `PipelineResult.push_status` directly -- never
+# re-derived from the `pushed` tri-state, which used to fold a policy
+# decline silently into "pushed". Each test below drives a REAL
+# `PipelineResult` (built via `dataclasses.replace` off the genuine object
+# `run_commit_pipeline` returned for an actual commit) through the real
+# `wsc_tail._handler` derivation -- never a stub of the derivation itself.
+# ---------------------------------------------------------------------------
+
+
+def _patch_pipeline_result(monkeypatch, **overrides: Any) -> None:
+    orig_run_commit_pipeline = wsc_tail_mod.run_commit_pipeline
+
+    def _patched(*args: Any, **kwargs: Any) -> Any:
+        real_result = orig_run_commit_pipeline(*args, **kwargs)
+        return dataclasses.replace(real_result, **overrides)
+
+    monkeypatch.setattr(wsc_tail_mod, "run_commit_pipeline", _patched)
+
+
+def test_c6b_policy_decline_reports_declined_never_pushed(wsc_tail_repo, monkeypatch):
+    """AC12: a policy decline (`pushed=None`, `push_status="declined"` on
+    the real `PipelineResult`) must report `push_status="declined"` --
+    NEVER `"pushed"`, which is the exact defect C6b fixes (the old
+    derivation's `else` branch folded any non-`False` `pushed` into
+    `"pushed"`, silently reporting a refused push as landed)."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+    monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
+    _patch_pipeline_result(
+        monkeypatch,
+        pushed=None,
+        push_status=commit_pipeline_mod.PUSH_STATUS_DECLINED,
+        integrity_breach=False,
+    )
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+
+    assert result["exit_code"] == 0, result
+    assert result["push_status"] == "declined"
+    assert result["push_status"] != "pushed"
+
+
+def test_c6b_no_remote_reports_no_remote(wsc_tail_repo, monkeypatch):
+    """AC12: the new `"no-remote"` member (this module had none before
+    C6b) -- a genuine no-remote-configured `PipelineResult` must report
+    `push_status="no-remote"`, not fold silently into `"pushed"`."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+    monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
+    _patch_pipeline_result(
+        monkeypatch,
+        pushed=None,
+        push_status=commit_pipeline_mod.PUSH_STATUS_NO_REMOTE,
+        integrity_breach=False,
+    )
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+
+    assert result["exit_code"] == 0, result
+    assert result["push_status"] == "no-remote"
+
+
+def test_c6b_not_attempted_stays_pushed_and_distinct_from_declined(wsc_tail_repo, monkeypatch):
+    """AC12 point 5: this module's pre-existing `push_mode="none"` semantics
+    (`pushed=None`, nothing ever attempted -- canonical `push_status=
+    "not-attempted"`) must keep reporting `"pushed"`, same as before C6b,
+    and must stay a DIFFERENT value than a real `"declined"` policy
+    refusal -- two distinct "no push happened" reasons that must not
+    collapse into one."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+    monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
+    _patch_pipeline_result(
+        monkeypatch,
+        pushed=None,
+        push_status=commit_pipeline_mod.PUSH_STATUS_NOT_ATTEMPTED,
+        integrity_breach=False,
+    )
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+
+    assert result["exit_code"] == 0, result
+    assert result["push_status"] == "pushed"
+    assert result["push_status"] != "declined"
+
+
+def test_c6b_genuine_failure_still_reports_failed(wsc_tail_repo, monkeypatch):
+    """AC12: a genuine push failure (`pushed=False`, canonical
+    `push_status="push-failed"`) must still report `push_status="failed"`
+    -- unchanged by the C6b reconciliation."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+    monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
+    _patch_pipeline_result(
+        monkeypatch,
+        pushed=False,
+        push_status=commit_pipeline_mod.PUSH_STATUS_FAILED,
+        integrity_breach=True,
+    )
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+
+    assert result["exit_code"] == 2, result
+    assert result["push_status"] == "failed"
+
+
+def test_c6b_resumed_pass_still_reports_unknown_resumed(wsc_tail_repo, monkeypatch):
+    """AC12 point 3: `"unknown_resumed"` has no counterpart in the canonical
+    set and must survive the reconciliation -- a resumed pass wins
+    regardless of the (never-consulted, since `run_commit_pipeline` is
+    skipped entirely on a resumed pass) pipeline `push_status`. Reuses the
+    existing AC18 sentinel-resume pattern from
+    `test_ac18_crash_after_commit_resumes_from_sentinel_without_double_
+    commit_sync_seam`."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+    monkeypatch.setenv(wsc_tail_mod._ENV_SYNC_PUSH, "1")
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+    assert result["exit_code"] == 0, result
+    committed_sha = result["committed_sha"]
+
+    # Simulate a crash-recovered pass: write the AC18 sentinel for a NEW
+    # session id carrying the already-landed sha, then resume.
+    resumed_sid = _unique_session_id()
+    sentinel_path = repo.sentinel_path(resumed_sid)
+    sentinel_path.parent.mkdir(parents=True, exist_ok=True)
+    sentinel_path.write_text(committed_sha, encoding="utf-8")
+
+    resumed_result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": resumed_sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": [],
+                "caller_paths": [],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+    assert resumed_result["push_status"] == "unknown_resumed"
 
 
 def test_ac4_no_ceremony_lock_nesting_remains_on_any_live_path():
@@ -2488,16 +2779,8 @@ def test_diagnostics_name_failing_commit_pipeline(wsc_tail_repo, monkeypatch):
     repo = wsc_tail_repo
     sid = _unique_session_id()
 
-    failed_outcome = commit_pipeline_mod.PipelineResult(
-        stage=None,
-        deletion_gate=None,
-        dirty_gate=None,
-        commit=None,
-        push=None,
-        committed_sha=None,
-        pushed=None,
+    failed_outcome = make_pipeline_result(
         commit_failed=True,
-        integrity_breach=False,
         diagnostics=["forced failure for C8 regression test"],
     )
     monkeypatch.setattr(wsc_tail_mod, "run_commit_pipeline", lambda *_a, **_kw: failed_outcome)

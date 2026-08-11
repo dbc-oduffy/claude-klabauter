@@ -657,7 +657,9 @@ def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> d
 
 
 def _build_judgment_points(
-    open_day_goals: dict[str, Any], dirty_tree_verdict: dict[str, Any]
+    open_day_goals: dict[str, Any],
+    dirty_tree_verdict: dict[str, Any],
+    for_date: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2/3 (open-question) judgment-point entries.
 
@@ -689,6 +691,29 @@ def _build_judgment_points(
       (confirm which touched systems get a new unaudited `?` row; never
       touches audit clocks or existing grades, per Step 4e's own
       negative-spec).
+
+    `for_date` (threaded verbatim from `brief()`'s own validated same-named
+    kwarg, default `None`) scopes `jp_step4_5_clustering_dispatch`'s evidence
+    string's `query-completions --where created=<date>` reference to the
+    ceremony's own target day — `for_date` when set, else today's local
+    calendar date — never a literal `<today>` placeholder left uninterpolated.
+
+    2026-08-08 evidence-wording correction (falsifier search: neither this
+    module, the Step 4b/4c dispatched-worker bodies (`docs/commands/
+    workday-complete.md` Step 4, example-doctrine-repo), nor any other producer in this
+    repo computes a "zero new commits AND no agent-driven changes" boolean —
+    a grep across `coordinator_core/` returns only this module's own string
+    literal and a review-trail diff, and the skill prose at that doc's Step 4
+    section is text a dispatched Sonnet worker READS AND JUDGES, not a
+    computed predicate threaded back to this assembler) — `jp_step4b_
+    analyst_dispatch`'s and `jp_step4c_observer_dispatch`'s `evidence` no
+    longer assert that condition as an observed fact; both now say plainly
+    that no producer computes it and that the Step 4 skip is a disposition
+    the EM/dispatched worker judges, not a fact this module observed. This
+    module still computes exactly two facts (`_compute_open_day_goals`,
+    `_compute_dirty_tree_verdict`) — the Step 4 skip condition is
+    deliberately NOT a third; no git-log/session-record producer is wired
+    here to feed it, so no such predicate is invented.
 
     round_trip/revalidate_at_dispatch classification (AC14 step 5): the two
     ask-shaped points (`jp_step2_5_dirty_tree_ambiguous`,
@@ -771,7 +796,10 @@ def _build_judgment_points(
                 build_disposition("dispatch"),
                 build_disposition("skip_no_new_work"),
             ],
-            evidence="Step 4 skip condition: zero new commits AND no agent-driven changes",
+            evidence=(
+                "no producer computes this condition; Step 4 skip is a "
+                "disposition, not an observed fact"
+            ),
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
@@ -791,7 +819,11 @@ def _build_judgment_points(
                 build_disposition("dispatch"),
                 build_disposition("skip_no_new_work"),
             ],
-            evidence="Step 4 skip condition mirrors jp_step4b_analyst_dispatch",
+            evidence=(
+                "no producer computes a zero-new-commits/no-agent-driven-"
+                "changes condition either; Step 4c's skip is a disposition "
+                "paired with 4b's, not an observed fact"
+            ),
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
@@ -813,7 +845,10 @@ def _build_judgment_points(
                 build_disposition("dispatch_if_multi_entry_chains"),
                 build_disposition("skip_only_mode"),
             ],
-            evidence="query-completions --where created=<today> grouped by chain:",
+            evidence=(
+                f"query-completions --where created={for_date or date.today().isoformat()} "
+                "grouped by chain"
+            ),
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
@@ -925,7 +960,9 @@ def brief(
             only_mode=only_mode,
             scope_summary=scope_summary,
         )
-        judgment_points = _build_judgment_points(open_day_goals, dirty_tree_verdict)
+        judgment_points = _build_judgment_points(
+            open_day_goals, dirty_tree_verdict, for_date=for_date
+        )
     except Exception as exc:  # noqa: BLE001 - never fail the ceremony
         return int(WorkdayExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 

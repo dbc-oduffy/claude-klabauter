@@ -79,6 +79,17 @@ uncorrected instance of the banned shape).
 
 from __future__ import annotations
 
+# KEY-SHAPE HAZARD: each row below is keyed on (relpath, exact stripped
+# source line text) -- see the module docstring above. Only leading/trailing
+# whitespace is stripped; internal whitespace is NOT normalized. A pure
+# reformat that changes internal spacing on an already-baselined line (e.g.
+# a formatter touching operator spacing) changes the stripped text, so the
+# live finding no longer matches its baseline row and mints a phantom NEW
+# finding -- `test_*_baseline_has_no_stale_entries` will simultaneously
+# report the OLD row as stale. If a rule test goes red immediately after a
+# pure reformat with no logic change: re-seed the affected row(s) with the
+# new stripped text: do not treat the "NEW violation" as a real finding.
+
 # 2026-08-01 update: X_OK_BASELINE reached ZERO. The last 28 rows were pruned
 # together -- the fast-tier baseline-red sweep found every one of them stale
 # (`test_x_ok_baseline_has_no_stale_entries` named them). 27 were real paydowns
@@ -273,6 +284,17 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         167,
         'claude_home = os.environ.get("CLAUDE_HOME", "")',
     ),
+    # NOTE (review-integration correction): unlike the other Shape-A entries
+    # above, this one DOES feed a fallback chain -- 21 lines later at
+    # probe_onboarding_currency.py:196, `repo_root = f"{claude_home or
+    # os.environ.get('HOME') or os.environ.get('USERPROFILE', '')}/.claude"`
+    # is constructed from this same `claude_home` value. Not a defect: that
+    # chain already carries an explicit USERPROFILE rung, so it is
+    # Windows-safe as written. Baselined because the AST rule's +/-3-line
+    # window doesn't reach line 196 from the `os.environ.get` call at line
+    # 175 either way -- a window-distance false positive, not the "no
+    # fallback path is ever constructed" Shape-A class the entries above
+    # this one actually are.
     (
         "coordinator_core/ops/probe_onboarding_currency.py",
         175,
@@ -305,4 +327,44 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         91,
         'claude_home = _P(os.environ.get("CLAUDE_HOME", str(_P.home()))) / ".claude"',
     ),
+    # Correct construct, not deferred debt. This chain reads HOME at its FIRST
+    # rung, so the two realistic environments both resolve correctly and the
+    # `expanduser` terminal is unreachable in either: under git-bash HOME is set
+    # and wins at rung 1; under stock Windows HOME is unset and `expanduser`
+    # already honours USERPROFILE. Executed both permutations 2026-08-08 --
+    # HOME-unset/USERPROFILE-set resolved to the profile dir, posix-HOME/
+    # USERPROFILE-unset resolved to HOME. `bare_or` flags it on rule contract
+    # (an unguarded `expanduser` rung never exempts a chain), which is a
+    # different claim from "this resolves wrongly", and it does not.
+    (
+        "coordinator/bin/check-machine-path-leak.py",
+        327,
+        'current_home = os.environ.get("HOME") or os.path.expanduser("~")',
+    ),
 ]
+
+# 2026-08-08 (C8 re-seed): 6 NEW `bare_home_or_chain` findings surfaced this
+# run, all one shape -- `os.environ.get("CLAUDE_HOME"|"HOME"[, ...]) or
+# os.path.expanduser("~")` (sometimes nested one call deeper, e.g. inside
+# `os.path.join(...)`), in:
+#   coordinator_core/ops/bootstrap_orchestrate.py:184 (_resolve_coordinator_root)
+#   coordinator_core/ops/install_shell_init_guard_seam.py:150 (_resolve_rc_path)
+#   coordinator_core/ops/migrate_state_to_claude_klabauter.py:313 (main)
+#   coordinator/bin/check-machine-path-leak.py:327 (already independently
+#     F4-reviewed -- see this file's RUNG_ORDER_BASELINE removal note)
+#   coordinator/bin/gen-claude-klabauter-root-pointer.py:78 (_settings_home)
+#   coordinator/bin/tests/test_claude_machine_local.py:54 (_default_settings_home)
+#
+# Deliberately NOT baselined here. `find_bare_home_or_chains`'s own
+# docstring is explicit that an unguarded `expanduser` rung does not exempt
+# a bare_or chain either way: "an unguarded os.path.expanduser call is the
+# vulnerable site itself, not evidence the chain already guards against
+# it." That is a considered design choice of the rule (distinct from rule 5
+# / rung_order, which downgrades the same shape to a warning) -- reading it
+# as a false positive here would be exactly the "reason says why the gate
+# should pass, not why the construct is correct" shape this ledger's own
+# bar forbids. These 6 are real, live findings of this rule and are
+# reported as such in this chunk's own run-report rather than silenced
+# here; fixing them (swap the bare `expanduser` rung for an explicit
+# `USERPROFILE` rung or delegate to `Path.home()`) is out of this chunk's
+# write scope.

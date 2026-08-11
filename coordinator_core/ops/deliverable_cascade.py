@@ -24,7 +24,20 @@ fork-equivalence canonicalization (unlike `deliverable.rollup`) — C6's body do
 it and folding it in here would be undeclared scope creep on a join this plan's own table
 names as the one everybody already carries.
 
-Candidate surface: `state/handoffs/*.md` ONLY (flat, live corpus) — mirrors
+Second target kind (C2, this chunk): a CLOSED kind-descriptor (`_KindDescriptor`,
+`_KIND_DESCRIPTORS`) parameterises `_collect_live_candidates` over corpus dir,
+record reader, lifecycle field/terminal-value set, validator schema, and the
+DR-263 predicate-leg policy table. Two kinds are registered: `handoff`
+(default, this section's description, byte-for-byte unchanged) and `sizing`
+(`state/sizings/*.yaml`, whole-document YAML, `status`/`{"shipped"}` in place
+of `deployment_state`/HANDOFF_TERMINAL_DEPLOYMENT). An unregistered kind name
+raises (AC5), never degrades to an empty candidate set. This chunk wires the
+descriptor and the read side only — C3 owns the sizing kind's per-target
+write side, dispatched internally behind this SAME entrypoint (AC4, never a
+second `register_op`). See `docs/plans/2026-08-10-sizing-objects-join-the-deliverable-spine.md`
+§ C2 for the full spec, including AC6a's unreadable-record handling below.
+
+Candidate surface (handoff kind, unchanged): `state/handoffs/*.md` ONLY (flat, live corpus) — mirrors
 `handoff_transition._resolve_path`'s own containment discipline (mutation verbs are live-only;
 archived handoffs are out of scope for a mutation verb by long-standing convention, see
 docs/problems/2026-07-08-op-family-path-containment-investigation.md § 4). A candidate is
@@ -144,9 +157,10 @@ Negative-spec:
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 import yaml
 
@@ -155,6 +169,7 @@ from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
+    read_fm_field_unquoted,
     rebuild,
     replace_fm_field,
     split_frontmatter,
@@ -181,6 +196,44 @@ _SCHEMA_PATH: Path = (
 
 _LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
 
+# Vendored sizing-object schema path — the sizing kind's own validator, mirroring
+# `_SCHEMA_PATH` above's per-module-local-copy convention. x-schema-version 1.8.0
+# carries `deliverable_id`, the reverse `plan` FK, and `shipped` in `status.enum`
+# (vendored C0, docs/plans/2026-08-10-sizing-objects-join-the-deliverable-spine.md).
+_SIZING_SCHEMA_PATH: Path = (
+    Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+)
+
+# Sizing kind's terminal-value set (leg (c) / lifecycle-field parameterisation) —
+# `shipped` and `declined` are BOTH terminal (nothing further can advance either
+# one); `superseded` means a different fact ("replaced by a later sizing for the
+# same intent"), never "this shipped" or "this was declined". `declined` was added
+# 2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
+# § C2): a declined sizing must be excluded from this cascade's live-candidate
+# collection the same way `shipped` already is — it is done, by refusal rather
+# than delivery, and this cascade's job (advancing a candidate to `shipped` when
+# its deliverable ships) has nothing to do to it. Leaving it out of this set
+# would still be caught by leg (c)'s `_SIZING_LIVE_STATUS` check below (refused,
+# not silently flipped), but folding it in HERE is the more honest shape: a
+# declined sizing was never a live candidate for this cascade in the first
+# place, not a live one that happens to fail a downstream leg.
+# Review: coordinator:code-reviewer — Finding 5: this file's own hand-copy
+# mirror is `coordinator/bin/coordinator-doc-new::_SIZING_TERMINAL_STATUSES`
+# (plural). Not consolidated (EM-adjudicated) — but a future editor of
+# either set should check the other before assuming parity; as of this
+# comment they have already drifted (this set includes `declined`, the
+# mirror does not).
+_SIZING_TERMINAL_STATUS: FrozenSet[str] = frozenset({"shipped", "declined"})
+
+# Review: staff-eng — Finding 1: leg (c)'s POSITIVE live-set for the sizing
+# kind. `draft`/`superseded` are excluded deliberately: `draft` has no route
+# chosen yet (nothing downstream to be consistent WITH), and `superseded`
+# names a different fact than "still live" per `_SIZING_TERMINAL_STATUS`'s
+# own comment — flipping either straight to `shipped` on a plan-trigger
+# cascade would be exactly the "own work-state not consistent with terminal"
+# case leg (c) exists to catch.
+_SIZING_LIVE_STATUS: FrozenSet[str] = frozenset({"sized", "routed"})
+
 
 def _validate_fm(fm_text: str) -> list:
     """Parse fm_text as YAML and validate against the vendored handoff schema.
@@ -193,6 +246,161 @@ def _validate_fm(fm_text: str) -> list:
     except Exception as exc:  # noqa: BLE001
         return [{"field": "(parse)", "error": f"YAML parse error in frontmatter: {exc}", "hint": ""}]
     return validate_frontmatter(fm_dict, _SCHEMA_PATH)
+
+
+def _validate_sizing_fm(fm_text: str) -> list:
+    """Parse fm_text as YAML and validate against the vendored sizing-object schema.
+
+    Mirrors `_validate_fm`'s contract exactly, against `_SIZING_SCHEMA_PATH`
+    instead of `_SCHEMA_PATH` — the sizing kind's own local copy of the same
+    per-module validate-before-write discipline every mutating op in this
+    package follows (C3).
+    """
+    try:
+        fm_dict = yaml.safe_load(fm_text) or {}
+    except Exception as exc:  # noqa: BLE001
+        return [{"field": "(parse)", "error": f"YAML parse error in frontmatter: {exc}", "hint": ""}]
+    return validate_frontmatter(fm_dict, _SIZING_SCHEMA_PATH)
+
+
+def _read_sizing_meta(file_path: str) -> dict:
+    """Whole-document YAML reader for `state/sizings/*.yaml` records.
+
+    Unlike `_read_meta` (`coordinator_core.dag`), which parses `---`-delimited
+    frontmatter out of a `.md` file and returns `{}` — NOT an error — on a
+    whole-document YAML file (see module docstring "Measured in the spike"), a
+    sizing-object IS the entire document with no fences. This reader RAISES on
+    a parse failure or a non-mapping result rather than swallowing it, so
+    `_collect_live_candidates`'s sizing-kind path (AC6a) can route the failure
+    into `scan_incomplete`/`unreadable` instead of a silent empty-candidate
+    zero — the same silent-zero-match hazard the spike measured, reached by a
+    different door (a malformed record, not a wrong `base_dir`).
+    """
+    text = Path(file_path).read_text(encoding="utf-8")
+    parsed = yaml.safe_load(text)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"sizing-object at {file_path} did not parse to a YAML mapping")
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# Kind descriptor (AC5, AC6, AC6a, AC11) — the CLOSED, per-target-kind shape
+# `_collect_live_candidates` (this chunk) and C3's per-kind write sides key
+# off. Per the plan's own restated shape (§ "Restating the shape honestly"),
+# this is THREE things, not two: the corpus/reader/lifecycle-field shape the
+# read side parameterises over, PLUS a predicate-leg POLICY TABLE (AC11) —
+# each leg entry drawn from a CLOSED vocabulary, `applies` or
+# `exempt(reason: str)` only, never a callable or kind-specific branch logic.
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _PredicateLeg:
+    """One DR-263 predicate leg's disposition for a kind — closed vocabulary:
+    `applies` (evaluated normally) or `exempt(reason)` (short-circuited to
+    pass, with the exemption recorded here rather than by silent omission).
+    Never a callable, never kind-specific branch logic (per the plan body).
+    """
+
+    applies: bool
+    reason: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class _KindDescriptor:
+    """Closed per-kind shape: corpus dir, record reader, lifecycle field,
+    terminal-value set, validator schema path, and the DR-263 predicate-leg
+    policy table (AC11). `strict_unreadable=False` preserves the handoff
+    kind's existing swallow-and-continue read behaviour BYTE-FOR-BYTE (the
+    plan body's own bar); `strict_unreadable=True` is the sizing kind's AC6a
+    behaviour — an unreadable/unparseable record routes into
+    `scan_incomplete`/`unreadable` instead of a clean, silent zero.
+    """
+
+    name: str
+    corpus_subdir: str  # relative to the worktree root, e.g. "state/handoffs"
+    suffix: str  # e.g. ".md" or ".yaml"
+    reader: Callable[[str], dict]
+    lifecycle_field: str
+    terminal_values: FrozenSet[str]
+    # Review: staff-eng — Finding 1: leg (c) needs a POSITIVE live-set check,
+    # distinct from `terminal_values`. `terminal_values` alone degenerates
+    # leg (c) into a re-test of `_collect_live_candidates_for_kind`'s own
+    # exclusion filter (which already dropped every terminal record before
+    # leg (c) ever runs) — the plan's claim that terminal_values "doubles as
+    # leg (c)'s live-set" is false for any kind with intermediate non-live
+    # states (e.g. sizing's `superseded`, which is not terminal but is also
+    # not live). `live_values` names the states leg (c) treats as still
+    # live-and-consistent; anything else refuses.
+    live_values: FrozenSet[str]
+    schema_path: Path
+    strict_unreadable: bool
+    predicate_legs: Dict[str, _PredicateLeg]  # keys: "a", "b", "c"
+
+
+_HANDOFF_KIND = _KindDescriptor(
+    name="handoff",
+    corpus_subdir="state/handoffs",
+    suffix=".md",
+    reader=lambda p: _read_meta(p),
+    lifecycle_field="deployment_state",
+    terminal_values=HANDOFF_TERMINAL_DEPLOYMENT,
+    live_values=_LIVE_DEPLOYMENT_STATES,
+    schema_path=_SCHEMA_PATH,
+    strict_unreadable=False,
+    predicate_legs={
+        "a": _PredicateLeg(applies=True),
+        "b": _PredicateLeg(applies=True),
+        "c": _PredicateLeg(applies=True),
+    },
+)
+
+_SIZING_KIND = _KindDescriptor(
+    name="sizing",
+    corpus_subdir="state/sizings",
+    suffix=".yaml",
+    reader=_read_sizing_meta,
+    lifecycle_field="status",
+    terminal_values=_SIZING_TERMINAL_STATUS,
+    live_values=_SIZING_LIVE_STATUS,
+    schema_path=_SIZING_SCHEMA_PATH,
+    strict_unreadable=True,
+    predicate_legs={
+        "a": _PredicateLeg(applies=True),
+        "b": _PredicateLeg(
+            applies=False,
+            reason=(
+                "no successor-edge vocabulary reaches a sizing-object — grepped "
+                "handoff_children.py and dag.py for any edge kind whose source or "
+                "target is a sizing-object: none exists. A sizing-object's only "
+                "recorded downstream relationship is the `plan` FK (C4), which "
+                "DR-263's join-closure leg (b) hazard does not analogue onto."
+            ),
+        ),
+        "c": _PredicateLeg(applies=True),
+    },
+)
+
+#: Closed registry — the only two target kinds this cascade knows. AC5: an
+#: unknown kind is a fail-loud error (`_kind_descriptor` raises), never a
+#: silent skip or an empty candidate list.
+_KIND_DESCRIPTORS: Dict[str, _KindDescriptor] = {
+    "handoff": _HANDOFF_KIND,
+    "sizing": _SIZING_KIND,
+}
+
+
+def _kind_descriptor(name: str) -> _KindDescriptor:
+    """Resolve a target-kind name to its descriptor. Raises ValueError, never
+    returns a default or an empty descriptor, on an unregistered name (AC5).
+    """
+    try:
+        return _KIND_DESCRIPTORS[name]
+    except KeyError:
+        raise ValueError(
+            f"deliverable.cascade_terminal: unknown target kind {name!r} — "
+            f"registered kinds: {sorted(_KIND_DESCRIPTORS)}"
+        ) from None
 
 
 def _iso_now() -> str:
@@ -224,43 +432,84 @@ def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
 
 
 def _collect_live_candidates(worktree_root: Path, deliverable_id: str) -> tuple[List[dict], bool]:
-    """Return ([{path, fm}, ...], scan_incomplete) for every LIVE handoff whose own
-    `deliverable_id` frontmatter field exact-matches the query, and whose
-    `deployment_state` is NOT in HANDOFF_TERMINAL_DEPLOYMENT (i.e. still advertises its
-    work as live).
-
-    scan_incomplete=True means state/handoffs/ could not be fully enumerated (permission
-    denied) — the caller MUST treat this as "candidates may be missing," never as "this is
-    the complete set."
+    """Byte-for-byte-compatible 2-tuple wrapper over `_collect_live_candidates_for_kind`,
+    fixed to the handoff kind (this function's own pre-existing, only behaviour before
+    this chunk). Preserved under its original name/signature because
+    `coordinator_core.ops.cascade_backstop_sweep` — outside this chunk's scope — calls
+    it directly and unpacks exactly two values; the parameterised (AC5/AC6/AC6a) form
+    lives under a new name below so that caller is unaffected by this chunk.
     """
-    base_dir = worktree_root / "state" / "handoffs"
+    matches, scan_incomplete, _unreadable = _collect_live_candidates_for_kind(
+        worktree_root, deliverable_id, kind=_HANDOFF_KIND
+    )
+    return matches, scan_incomplete
+
+
+def _collect_live_candidates_for_kind(
+    worktree_root: Path, deliverable_id: str, kind: _KindDescriptor = _HANDOFF_KIND
+) -> tuple[List[dict], bool, List[dict]]:
+    """Return ([{path, fm}, ...], scan_incomplete, unreadable) for every LIVE
+    candidate of `kind` whose own `deliverable_id` field exact-matches the
+    query, and whose lifecycle field (`kind.lifecycle_field`) is NOT a member
+    of `kind.terminal_values` (i.e. still advertises its work as live).
+
+    Parameterised over the kind descriptor (AC5/AC6/AC6a) — corpus dir,
+    filename suffix, record reader, and lifecycle field/terminal-value set
+    all come from `kind`. The default (`_HANDOFF_KIND`) reproduces the
+    pre-existing handoff-only behaviour BYTE-FOR-BYTE: every existing caller
+    that omits `kind` is unaffected by this parameterisation.
+
+    scan_incomplete=True means the corpus directory could not be fully
+    enumerated — because it does not exist (2026-08-10 fix: a nonexistent
+    `base_dir` is no longer indistinguishable from a corpus that exists and
+    legitimately has zero matches; a bad/misresolved `worktree_root` — e.g.
+    the `main_worktree_root` drive-root-misresolution defect — must never
+    read back as a clean, complete empty scan) or because enumeration raised
+    (permission denied), OR — for a kind with `strict_unreadable=True` (the
+    sizing kind) — at least one record in the corpus failed to read/parse.
+    Either way the caller MUST treat this as "candidates may be missing,"
+    never as "this is the complete set."
+
+    unreadable is `[{"path": ..., "reason": ...}, ...]` for every record a
+    `strict_unreadable=True` kind failed to read — AC6a's named list, kept
+    distinct from a legitimate empty match set. For `strict_unreadable=False`
+    (handoff), this is always `[]` and an unreadable/malformed record is
+    silently dropped exactly as before (unchanged handoff behaviour).
+    """
+    base_dir = worktree_root / Path(kind.corpus_subdir)
     matches: List[dict] = []
+    unreadable: List[dict] = []
     if not base_dir.is_dir():
-        return matches, False
+        return matches, True, unreadable
 
     try:
         entries = list(base_dir.iterdir())
     except OSError:
-        return matches, True
+        return matches, True, unreadable
 
     for path in entries:
-        if path.suffix != ".md" or not path.is_file():
+        if path.suffix != kind.suffix or not path.is_file():
             continue
         try:
-            fm = _read_meta(str(path))
-        except Exception:  # noqa: BLE001 — quarantine an unreadable/malformed record
+            fm = kind.reader(str(path))
+        except Exception as exc:  # noqa: BLE001 — quarantine an unreadable/malformed record
+            if kind.strict_unreadable:
+                unreadable.append({"path": str(path), "reason": str(exc)})
             continue
         if not fm:
+            if kind.strict_unreadable:
+                unreadable.append({"path": str(path), "reason": "empty or unparseable record"})
             continue
         artifact_did = fm.get("deliverable_id")
         if not isinstance(artifact_did, str) or artifact_did.strip() != deliverable_id:
             continue
-        deployment = fm.get("deployment_state")
-        if deployment in HANDOFF_TERMINAL_DEPLOYMENT:
+        lifecycle_value = fm.get(kind.lifecycle_field)
+        if lifecycle_value in kind.terminal_values:
             continue
         matches.append({"path": path, "fm": fm})
 
-    return matches, False
+    scan_incomplete = bool(unreadable)
+    return matches, scan_incomplete, unreadable
 
 
 # ---------------------------------------------------------------------------
@@ -273,10 +522,22 @@ async def _predicate_refusal(
     fm: dict,
     repo_root: Path,
     exclude_children_check: Optional[List[str]] = None,
+    kind: _KindDescriptor = _HANDOFF_KIND,
 ) -> Optional[str]:
-    """Evaluate the three-legged per-target predicate. Returns a human-readable
-    refusal reason, or None when the candidate clears all three legs and is safe
-    to advance.
+    """Evaluate the DR-263 three-legged per-target predicate, per `kind`'s own
+    predicate-leg policy table (AC11). Returns a human-readable refusal reason,
+    or None when the candidate clears every APPLIES leg (an EXEMPT leg always
+    short-circuits to pass — recorded via its `_PredicateLeg.reason`, never a
+    silent skip) and is safe to advance.
+
+    `kind` defaults to `_HANDOFF_KIND` so `cascade_backstop_sweep.py`'s
+    existing 3-positional-arg call site (which never supplies `kind`) is
+    byte-for-byte unaffected — leg (c) below takes the pre-existing
+    `deployment_state`/`_LIVE_DEPLOYMENT_STATES` branch for that kind
+    specifically, reproducing the handoff kind's prior behaviour exactly
+    rather than re-deriving it from the generic `terminal_values` set (which
+    is coarser: it would not distinguish `awaiting_gate` from a genuinely
+    terminal state the way the handoff-specific check does).
 
     exclude_children_check (keyword-only by convention, positional-compatible for
     the two existing 3-positional-arg callers -- cascade_backstop_sweep.py and this
@@ -289,57 +550,81 @@ async def _predicate_refusal(
     its omission is exactly the pre-existing default (None -> no exclusion, byte-
     identical to this function's prior behaviour).
     """
-    deployment = fm.get("deployment_state")
-
-    # Leg (c) — own work-state consistent with terminal.
-    if deployment not in _LIVE_DEPLOYMENT_STATES:
-        return (
-            f"own work-state (deployment_state={deployment!r}) is not consistent "
-            "with terminal — live-but-blocked-on-something-else, not simply idle"
-        )
+    # Leg (c) — own work-state consistent with live-and-advanceable. Review:
+    # staff-eng — Finding 1: a POSITIVE check against `kind.live_values` for
+    # every kind, uniformly — the prior `kind is _HANDOFF_KIND` branch made
+    # this leg a no-op for sizing (re-testing `terminal_values`, which the
+    # collector already excluded upstream), so a `superseded` sizing cleared
+    # leg (c) and was flipped straight to `shipped`.
+    leg_c = kind.predicate_legs["c"]
+    if leg_c.applies:
+        lifecycle_value = fm.get(kind.lifecycle_field)
+        if lifecycle_value not in kind.live_values:
+            # Review: coordinator:code-reviewer — unifying the two kinds'
+            # branches into one POSITIVE `live_values` check (Finding 1)
+            # collapsed the handoff-specific wording into a single generic
+            # string, losing operator-facing signal the handoff kind used to
+            # carry (live-but-blocked reads differently from already-shipped).
+            # That collapse was never required by Finding 1 — restored here,
+            # kind-specific wording only, predicate logic unchanged.
+            if kind is _HANDOFF_KIND:
+                return (
+                    f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is not "
+                    "consistent with terminal — live-but-blocked-on-something-else, not simply idle"
+                )
+            return (
+                f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is "
+                "already terminal — refusing to re-advance"
+            )
 
     # Leg (a) — claimed by a live session. Ledger-first (see _claimant) — a
     # desynced mirror never reads as "unclaimed" here.
-    claimant = _claimant(candidate_path, repo_root)
-    if claimant is not None:
-        live_sids = resolve_live_session_ids()
-        if claimant in live_sids:
-            return f"claimed by live session {claimant!r} — refusing to advance out from under it"
+    leg_a = kind.predicate_legs["a"]
+    if leg_a.applies:
+        claimant = _claimant(candidate_path, repo_root)
+        if claimant is not None:
+            live_sids = resolve_live_session_ids()
+            if claimant in live_sids:
+                return f"claimed by live session {claimant!r} — refusing to advance out from under it"
 
-    # Leg (b) — has a live successor/continuation.
-    # Function-local import: composes the existing resolver rather than re-deriving
-    # reverse-membership; mirrors ops/handoff_children.py's own function-local-import
-    # discipline note for a sibling case (avoid pulling its transitive import set into
-    # every eager-registration pass just for a defensive edge that today is acyclic).
-    from coordinator_core.ops.handoff_children import CONCLUSION_EDGE_KINDS, _handoff_has_live_children
+    # Leg (b) — has a live successor/continuation. EXEMPT for a kind whose
+    # descriptor names no successor-edge vocabulary (sizing) — short-circuits
+    # to pass, per the recorded `reason`, never a silent omission.
+    leg_b = kind.predicate_legs["b"]
+    if leg_b.applies:
+        # Function-local import: composes the existing resolver rather than re-deriving
+        # reverse-membership; mirrors ops/handoff_children.py's own function-local-import
+        # discipline note for a sibling case (avoid pulling its transitive import set into
+        # every eager-registration pass just for a defensive edge that today is acyclic).
+        from coordinator_core.ops.handoff_children import CONCLUSION_EDGE_KINDS, _handoff_has_live_children
 
-    # This leg is conclusion-shaped, not archival-shaped: the write it gates is
-    # `deployment_state -> shipped` with `status` untouched and NO file move
-    # (`build_ship_mutate`'s "status untouched" contract, above). Nothing is
-    # archived here, so no origin pointer can be stranded — see
-    # dag.CONTINUATION_EDGE_KINDS for the general archival-vs-conclusion
-    # rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
-    # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
-    # Narrowed here explicitly rather than taking the op's archival-shaped
-    # default (`_DEFAULT_EDGE_KINDS`).
-    children_params: Dict[str, Any] = {
-        "candidate": str(candidate_path),
-        "edge_kinds": CONCLUSION_EDGE_KINDS,
-    }
-    if exclude_children_check:
-        children_params["exclude"] = list(exclude_children_check)
-    children_result = await _handoff_has_live_children(children_params, repo_root)
-    children_exit = children_result.get("exit_code")
-    if children_exit == 0:
-        children = children_result.get("children") or []
-        return f"has a live successor/continuation (referenced by: {children})"
-    if children_exit != 1:
-        # 2 (indeterminate) or any other unexpected value — fail-closed, never
-        # treat "cannot tell" as a green light.
-        return (
-            "live-successor check indeterminate: "
-            f"{children_result.get('error', 'unknown error')} — refusing (fail-closed)"
-        )
+        # This leg is conclusion-shaped, not archival-shaped: the write it gates is
+        # `deployment_state -> shipped` with `status` untouched and NO file move
+        # (`build_ship_mutate`'s "status untouched" contract, above). Nothing is
+        # archived here, so no origin pointer can be stranded — see
+        # dag.CONTINUATION_EDGE_KINDS for the general archival-vs-conclusion
+        # rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
+        # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
+        # Narrowed here explicitly rather than taking the op's archival-shaped
+        # default (`_DEFAULT_EDGE_KINDS`).
+        children_params: Dict[str, Any] = {
+            "candidate": str(candidate_path),
+            "edge_kinds": CONCLUSION_EDGE_KINDS,
+        }
+        if exclude_children_check:
+            children_params["exclude"] = list(exclude_children_check)
+        children_result = await _handoff_has_live_children(children_params, repo_root)
+        children_exit = children_result.get("exit_code")
+        if children_exit == 0:
+            children = children_result.get("children") or []
+            return f"has a live successor/continuation (referenced by: {children})"
+        if children_exit != 1:
+            # 2 (indeterminate) or any other unexpected value — fail-closed, never
+            # treat "cannot tell" as a green light.
+            return (
+                "live-successor check indeterminate: "
+                f"{children_result.get('error', 'unknown error')} — refusing (fail-closed)"
+            )
 
     return None
 
@@ -478,6 +763,98 @@ def _advance_one(
     return bool(_state["applied"]), None if _state["applied"] else _ALREADY_ADVANCED_MARKER
 
 
+def _advance_one_sizing(
+    candidate_path: Path,
+    plan_path: str,
+    repo_root: Path,
+) -> tuple[bool, Optional[str]]:
+    """Per-kind mutate for the sizing kind (C3) — sibling to `_advance_one`,
+    dispatched internally behind the SAME `deliverable.cascade_terminal`
+    entrypoint (AC4, never a second `register_op`). Writes `status: shipped`
+    plus the `plan` FK, and ONLY those two fields.
+
+    Deliberately does NOT write `shipped_in`, `advanced_by`, or `advanced_at`
+    — those are handoff-shaped ship-commit provenance
+    (`_cf_shipped_in_required` has no sizing-schema analogue) — and
+    deliberately does NOT route through `_advance_one`/`build_ship_mutate`,
+    which compose `resolve_source_ship_sha` and REFUSE the flip when no
+    ship-commit evidence resolves (correct for a handoff, meaningless for a
+    sizing-object that has no `shipped_in` field at all). See module
+    docstring / plan § C3.
+
+    Returns (advanced, refusal_reason), mirroring `_advance_one`'s contract.
+    Idempotent by construction (AC3 layer-2, inherited not automatic — plan
+    § "Idempotency must be inherited, not assumed"): `mutate` returns
+    `old_text` UNCHANGED, byte-for-byte, whenever the record's own `status`
+    is already a member of the sizing kind's terminal-value set, which is
+    exactly what makes `locked_rmw` short-circuit to the same idempotency
+    floor `_advance_one` gives handoffs.
+    """
+    _state: Dict[str, Any] = {"applied": False}
+
+    def mutate(old_text: str) -> str:
+        # A sizing-object is whole-document YAML with no `---` frontmatter
+        # fences (see `_read_sizing_meta`'s own docstring) — `split_frontmatter`
+        # returns None for it. The regex-based fm-field primitives operate on
+        # any block of `key: value` text, not specifically a frontmatter
+        # fence's interior, so the entire document IS the "fm text" here.
+        split = split_frontmatter(old_text)
+        whole_doc = split is None
+        fm_text = old_text if whole_doc else split.fm_text
+
+        # Review: staff-eng — Finding 0: the idempotency-floor comparison is
+        # against an unquoted in-memory value (_SIZING_TERMINAL_STATUS), so it
+        # must read through read_fm_field_unquoted (per that function's own
+        # documented use rule) rather than read_fm_field's raw on-disk bytes —
+        # otherwise `status: 'shipped'` or a trailing-comment-bearing
+        # `status: shipped  # ...` misses the set and is spuriously rewritten.
+        current_status = read_fm_field_unquoted(fm_text, "status")
+        if current_status in _SIZING_TERMINAL_STATUS:
+            # Already terminal — idempotency floor (AC3 layer-2). Byte-identical
+            # no-op, same contract as _advance_one's "already shipped" arm.
+            _state["applied"] = False
+            return old_text
+
+        if current_status is None:
+            raise MutateAbort(f"advance: sizing at {candidate_path} has no 'status' field")
+        fm_text = replace_fm_field(fm_text, "status", "shipped")
+
+        # Review: staff-eng — Finding 8 (EM-adjudicated policy): this cascade
+        # write holds the terminal fact for the `plan` FK and OVERWRITES an
+        # existing, differing value without a collision guard — the opposite
+        # policy from coordinator-doc-new::_mutate_sizing_reverse_edge, which
+        # raises MutateAbort on a differing existing value. The asymmetry is
+        # deliberate, not accidental: this cascade wins because it fires from
+        # the terminal (plan reached status: implemented) event, so a stale
+        # or provisional FK written earlier by the reverse-edge path must
+        # yield to it. See _mutate_sizing_reverse_edge's own docstring for
+        # the mirror statement of this same policy.
+        if plan_path:
+            if read_fm_field(fm_text, "plan") is not None:
+                fm_text = replace_fm_field(fm_text, "plan", plan_path)
+            else:
+                fm_text = insert_fm_field(fm_text, "plan", plan_path, "status")
+
+        errors = _validate_sizing_fm(fm_text)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(f"advance: post-mutation schema validation failed: {details}")
+
+        _state["applied"] = True
+        return fm_text if whole_doc else rebuild(split, fm_text)
+
+    try:
+        locked_rmw(candidate_path, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return False, f"advance: sizing not found: {candidate_path}"
+    except LockTimeout as exc:
+        return False, f"advance: timed out waiting for file lock on {candidate_path}: {exc}"
+    except MutateAbort as exc:
+        return False, (exc.args[0] if exc.args else "advance: mutation aborted")
+
+    return bool(_state["applied"]), None if _state["applied"] else _ALREADY_ADVANCED_MARKER
+
+
 # ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
@@ -513,6 +890,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Optional params:
         at (str) — ISO-8601 timestamp for `advanced_at`. Defaults to now (UTC) when absent.
+        target_kind (str) — which kind descriptor's corpus to scan (AC5). Defaults to
+                             "handoff" (the pre-existing, only behaviour before this chunk),
+                             so every existing caller that omits this param is unaffected.
+                             An unregistered value RAISES (fail-loud, AC5) rather than
+                             returning an empty candidate set — see `_kind_descriptor`.
+                             This chunk (C2) wires the kind descriptor and read side only;
+                             C3 owns the per-kind write side this selects into.
 
     Returns:
         {
@@ -527,6 +911,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
           "refused":  [{"handoff_path": ..., "reason": ...}, ...],
           "already_advanced": [{"handoff_path": ..., "reason": ...}, ...],
           "scan_incomplete": <bool>,
+          "unreadable": [{"path": ..., "reason": ...}, ...],  # AC6a — only populated
+                                                                 # for a strict_unreadable
+                                                                 # kind (sizing); always
+                                                                 # [] for handoff.
           "error": <str, present iff exit_code==1>,
         }
 
@@ -548,6 +936,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     source_kind: str = (params.get("source_kind") or "").strip()
     source_path: str = (params.get("source_path") or "").strip()
     at: str = (params.get("at") or "").strip() or _iso_now()
+    target_kind_name: str = (params.get("target_kind") or "").strip() or "handoff"
+    # Fail-loud on an unregistered kind (AC5) — never caught here, propagates
+    # as a genuine exception rather than degrading to an empty candidate set.
+    target_kind: _KindDescriptor = _kind_descriptor(target_kind_name)
 
     if not deliverable_id:
         return {
@@ -560,6 +952,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": [],
             "already_advanced": [],
             "scan_incomplete": False,
+            "unreadable": [],
             "error": "deliverable.cascade_terminal: 'deliverable_id' is required",
         }
     if repo_root is None:
@@ -573,12 +966,36 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": [],
             "already_advanced": [],
             "scan_incomplete": False,
+            "unreadable": [],
             "error": "deliverable.cascade_terminal: repo_root is required (no founding root available)",
         }
 
     worktree_root = main_worktree_root(repo_root)
 
-    candidates, scan_incomplete = _collect_live_candidates(worktree_root, deliverable_id)
+    candidates, scan_incomplete, unreadable = _collect_live_candidates_for_kind(
+        worktree_root, deliverable_id, kind=target_kind
+    )
+
+    # Sizing kind's write side (C3) writes the `plan` FK alongside `status:
+    # shipped` — normalized worktree-relative posix, matching the vendored
+    # schema's `^docs/plans/.+\.md$` pattern, regardless of how `source_path`
+    # arrived (absolute, OS-native-separator, or already relative).
+    sizing_plan_fk = ""
+    # Review: staff-eng — Finding 4: an unresolvable `source_path` (out-of-
+    # worktree mount, symlinked temp root, etc.) used to degrade silently to
+    # `""` — the record still flips to `shipped` with the `plan` FK dropped
+    # and no signal in the response. Track the failure explicitly so the
+    # advanced entry can name it (`plan_fk_unresolved`) rather than reading
+    # as a clean, unqualified success.
+    sizing_plan_fk_unresolved = False
+    if target_kind is _SIZING_KIND and source_kind == "plan" and source_path:
+        try:
+            candidate_source = Path(source_path)
+            resolved = candidate_source if candidate_source.is_absolute() else (worktree_root / candidate_source)
+            sizing_plan_fk = resolved.resolve().relative_to(worktree_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            sizing_plan_fk = ""
+            sizing_plan_fk_unresolved = True
 
     # Self-advance guard (needed by C6b's handoff trigger; a no-op for C6's plan
     # trigger, whose source_path is never itself a handoff in this scan surface).
@@ -630,13 +1047,24 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         for candidate in pending:
             candidate_path: Path = candidate["path"]
 
-            # Re-read frontmatter fresh off disk each pass -- legs (a)/(c)
+            # Re-read the record fresh off disk each pass -- legs (a)/(c)
             # must judge CURRENT state, not a snapshot from before this run's
             # own earlier passes may have changed the corpus around it.
-            fm = _read_meta(str(candidate_path)) or candidate["fm"]
+            # Uses `target_kind.reader` (not the handoff-fixed `_read_meta`)
+            # so a re-read for the sizing kind actually parses whole-document
+            # YAML instead of silently returning `{}` on a file with no
+            # `---` frontmatter fences.
+            try:
+                fm = target_kind.reader(str(candidate_path)) or candidate["fm"]
+            except Exception:  # noqa: BLE001 — fall back to the snapshot read at collection time
+                fm = candidate["fm"]
 
             refusal = await _predicate_refusal(
-                candidate_path, fm, repo_root, exclude_children_check=resolved_this_run
+                candidate_path,
+                fm,
+                repo_root,
+                exclude_children_check=resolved_this_run,
+                kind=target_kind,
             )
             if refusal is not None:
                 refused_reason[str(candidate_path)] = refusal
@@ -649,37 +1077,61 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # already-running event loop would raise RuntimeError. Off-loading to a
             # thread also keeps the event loop live during the blocking git-log/file-lock
             # work, per DR-212 D3.
-            did_advance, write_refusal = await asyncio.to_thread(
-                _advance_one, candidate_path, deliverable_id, at, repo_root, source_path
-            )
+            if target_kind is _SIZING_KIND:
+                # C3's per-kind write side -- never routed through _advance_one
+                # (see module docstring / _advance_one_sizing's own docstring
+                # for why: it composes ship-commit resolution that has no
+                # sizing-schema analogue and would refuse every sizing).
+                did_advance, write_refusal = await asyncio.to_thread(
+                    _advance_one_sizing, candidate_path, sizing_plan_fk, repo_root
+                )
+            else:
+                did_advance, write_refusal = await asyncio.to_thread(
+                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path
+                )
             if did_advance:
-                # AC6g depth: the candidate itself just advanced -- also resolve
-                # any rows its OWN body carries (evidence-joined, never blanket;
-                # see cascade_baton_rows.py's own docstring). Composed here, not
-                # re-derived -- deciding WHETHER this candidate advances stays
-                # entirely this module's per-target predicate (AC6h); row
-                # resolution only ever runs for a candidate already decided.
-                baton_rows = await asyncio.to_thread(
-                    resolve_baton_rows, candidate_path, deliverable_id, at, repo_root
-                )
-                advanced.append(
-                    {
-                        "handoff_path": str(candidate_path),
-                        "message": f"advanced (deployment_state: shipped, advanced_by: {deliverable_id})",
-                        "baton_rows_advanced": baton_rows["advanced"],
-                        "baton_rows_unresolved": baton_rows["unresolved"],
-                        **(
-                            {"baton_rows_error": baton_rows["error"]}
-                            if baton_rows.get("error")
-                            else {}
-                        ),
-                    }
-                )
+                entry = {
+                    # Review: staff-eng — Finding 7: "path" alongside the
+                    # legacy "handoff_path" key, which the sizing kind's own
+                    # tests already assert on and stays for compatibility —
+                    # a kind-agnostic name for the growing set of non-handoff
+                    # callers.
+                    "handoff_path": str(candidate_path),
+                    "path": str(candidate_path),
+                    "message": (
+                        f"advanced (status: shipped{', plan: ' + sizing_plan_fk if sizing_plan_fk else ''})"
+                        if target_kind is _SIZING_KIND
+                        else f"advanced (deployment_state: shipped, advanced_by: {deliverable_id})"
+                    ),
+                }
+                if target_kind is _SIZING_KIND and sizing_plan_fk_unresolved:
+                    # Review: staff-eng — Finding 4: name the dropped join
+                    # rather than let a silent "" pass as a clean success.
+                    entry["plan_fk_unresolved"] = source_path
+                if target_kind is not _SIZING_KIND:
+                    # AC6g depth: the candidate itself just advanced -- also resolve
+                    # any rows its OWN body carries (evidence-joined, never blanket;
+                    # see cascade_baton_rows.py's own docstring). Composed here, not
+                    # re-derived -- deciding WHETHER this candidate advances stays
+                    # entirely this module's per-target predicate (AC6h); row
+                    # resolution only ever runs for a candidate already decided.
+                    # Handoff-kind only: a sizing-object has no baton-row body to
+                    # scan, and AC6g's join is defined over roadmap-baton handoffs.
+                    baton_rows = await asyncio.to_thread(
+                        resolve_baton_rows, candidate_path, deliverable_id, at, repo_root
+                    )
+                    entry["baton_rows_advanced"] = baton_rows["advanced"]
+                    entry["baton_rows_unresolved"] = baton_rows["unresolved"]
+                    if baton_rows.get("error"):
+                        entry["baton_rows_error"] = baton_rows["error"]
+                advanced.append(entry)
                 refused_reason.pop(str(candidate_path), None)
                 resolved_this_run.append(str(candidate_path.resolve()))
                 progressed = True
             elif write_refusal == _ALREADY_ADVANCED_MARKER:
-                already_advanced.append({"handoff_path": str(candidate_path), "reason": write_refusal})
+                already_advanced.append(
+                    {"handoff_path": str(candidate_path), "path": str(candidate_path), "reason": write_refusal}
+                )
                 refused_reason.pop(str(candidate_path), None)
                 resolved_this_run.append(str(candidate_path.resolve()))
                 progressed = True
@@ -694,7 +1146,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     for candidate in pending:
         path_str = str(candidate["path"])
         refused.append(
-            {"handoff_path": path_str, "reason": refused_reason.get(path_str, "not advanced")}
+            {
+                "handoff_path": path_str,
+                "path": path_str,
+                "reason": refused_reason.get(path_str, "not advanced"),
+            }
         )
 
     result = {
@@ -707,12 +1163,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "refused": refused,
         "already_advanced": already_advanced,
         "scan_incomplete": scan_incomplete,
+        "unreadable": unreadable,
     }
     if not advanced:
         if not candidates:
+            # Review: staff-eng — Finding 7: this message was hardcoded to
+            # the handoff kind and named the wrong corpus/artifact class when
+            # run with target_kind="sizing" — the zero-candidate path is the
+            # only signal an EM gets, so it must name the corpus it actually
+            # scanned.
             result["error"] = (
-                f"deliverable.cascade_terminal: no live handoff in state/handoffs/ carries "
-                f"deliverable_id={deliverable_id!r} — nothing to advance"
+                f"deliverable.cascade_terminal: no live {target_kind.name} in "
+                f"{target_kind.corpus_subdir}/ carries deliverable_id={deliverable_id!r} "
+                "— nothing to advance"
             )
         else:
             result["error"] = (

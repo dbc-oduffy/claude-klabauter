@@ -617,6 +617,55 @@ def test_ac9_settings_home_write_never_bumps(env, monkeypatch):
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
+# -- `~/.claude` never bumps on the Bash outside-repo leg either. AC2/AC4.
+# ---------------------------------------------------------------------------
+
+
+def test_ac2_claude_home_write_never_bumps(env, monkeypatch):
+    """AC2: a bash command writing into `~/.claude` is not denied by this
+    leg. `~/.claude` is a real git checkout on this fleet (per `_init_repo`
+    below), so this candidate resolves to SOME git root and is skipped by
+    this guard's own "not this guard's predicate" branch BEFORE ever
+    reaching `_target_is_always_allowed` -- `bump_foreign_repo_write.py`
+    (C4) is the leg whose own carve-out this candidate shape actually
+    exercises (see that module's own C1 test). Kept here anyway as AC2's
+    literal "not denied by either bash leg" assertion for this destination
+    class; `test_target_is_always_allowed_covers_claude_home_when_
+    unresolved_as_a_repo` immediately below unit-tests THIS leg's own
+    `target_is_under_claude_home` wiring directly, for the (edge, currently
+    unobserved on this fleet) case where `~/.claude` resolves to no git
+    repo at all."""
+    claude_home = _init_repo(tmp_path=env["outside"].parent, name="claude-home-c1")
+    monkeypatch.setenv("HOME", str(claude_home))
+    monkeypatch.setenv("USERPROFILE", str(claude_home))
+    session_start.write_session_start_record("sess-c1-outside", launch_cwd=str(env["anchor"]))
+
+    dest = claude_home / ".claude" / "settings.json"
+    dest.parent.mkdir(parents=True)
+    cmd = f"echo hi > {_posix(dest)}"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-outside", str(env["anchor"]), {})
+
+    assert result is None
+
+
+def test_target_is_always_allowed_covers_claude_home_when_unresolved_as_a_repo(
+    env, monkeypatch
+):
+    """Direct unit test of this leg's own `_target_is_always_allowed` wiring
+    (AC1/AC3), independent of `check_bump_outside_repo_write`'s upstream
+    `target_gitdir is not None: continue` skip -- exercises exactly the
+    branch `target_is_under_claude_home` was added to."""
+    claude_home = env["home"]  # NOT a git checkout in this fixture
+    monkeypatch.setenv("HOME", str(claude_home))
+    monkeypatch.setenv("USERPROFILE", str(claude_home))
+    target = str(claude_home / ".claude" / "settings.json")
+
+    assert guard._target_is_always_allowed(target, str(env["anchor"]), "sess-x", env=os.environ)
+
+
 def test_ac9_system_temp_write_never_bumps(env, monkeypatch):
     # Undo `_clean_bump_env`'s fake-tempdir repoint -- this is the one test
     # that exercises the REAL system-temp carve-out.

@@ -244,7 +244,12 @@ class TestRegistryCoordinatorRoot:
         ml = tmp_path / "settings-home" / "machine-local"
         ml.mkdir(parents=True)
         (ml / "registry.local.toml").write_text("schema = 1\n", encoding="utf-8")
-        (ml / "registry.toml").write_text(f'[repos]\nexample_doctrine_repo = "{doe}"\n', encoding="utf-8")
+        # TOML LITERAL string (single quotes), never a basic one: a Windows path
+        # interpolated into a basic string makes "C:\Users\..." an invalid escape, tomllib
+        # raises, and the lookup silently degrades to the quoted-key regex fallback. The live
+        # machine-local/registry.local.toml writes backslash paths this way for that reason —
+        # the fixture must match the real on-disk shape.
+        (ml / "registry.toml").write_text(f"[repos]\nexample_doctrine_repo = '{doe}'\n", encoding="utf-8")
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
         assert _registry_coordinator_root() == doe / "coordinator"
 
@@ -263,14 +268,16 @@ class TestRegistryCoordinatorRoot:
         (tracked_root / "bin" / "query-records.py").write_text("# stub\n")
         ml = tmp_path / "settings-home" / "machine-local"
         ml.mkdir(parents=True)
+        # Literal (single-quoted) TOML strings — see the sibling test's note: a basic string
+        # cannot carry a Windows backslash path without an invalid-escape parse failure.
         (ml / "registry.local.toml").write_text(
             "[plugin.mirrors.coordinator-claude]\n"
-            f'live_path = "{local_root}"\n',
+            f"live_path = '{local_root}'\n",
             encoding="utf-8",
         )
         (ml / "registry.toml").write_text(
             "[plugin.mirrors.coordinator-claude]\n"
-            f'live_path = "{tracked_root}"\n',
+            f"live_path = '{tracked_root}'\n",
             encoding="utf-8",
         )
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))

@@ -41,6 +41,13 @@ import pytest
 
 from coordinator_core.workstream_complete import directives_commit_tail
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
+# stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.spawns_process]
+
 
 def _git(*args: str, cwd) -> subprocess.CompletedProcess:
     return subprocess.run(

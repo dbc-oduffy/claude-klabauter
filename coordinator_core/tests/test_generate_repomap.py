@@ -15,6 +15,7 @@ from unittest import mock
 import pytest
 
 from coordinator_core.ops.generate_repomap import _resolve_python_cmd, _trusted_root, main
+from coordinator_core.win_portability import no_console_creationflags
 
 
 # ---------------------------------------------------------------------------
@@ -109,8 +110,9 @@ def test_main_default_args_when_no_argv(tmp_path, monkeypatch):
 
     captured = {}
 
-    def _fake_run(cmd):
+    def _fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
 
         class _Result:
             returncode = 0
@@ -122,6 +124,7 @@ def test_main_default_args_when_no_argv(tmp_path, monkeypatch):
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[-7:] == [str(gen), "--project-root", ".", "--budget", "4000", "--profile", "balanced"]
+    assert captured["kwargs"] == no_console_creationflags()
 
 
 def test_main_passthrough_args_take_precedence(tmp_path, monkeypatch):
@@ -130,8 +133,9 @@ def test_main_passthrough_args_take_precedence(tmp_path, monkeypatch):
 
     captured = {}
 
-    def _fake_run(cmd):
+    def _fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
 
         class _Result:
             returncode = 3

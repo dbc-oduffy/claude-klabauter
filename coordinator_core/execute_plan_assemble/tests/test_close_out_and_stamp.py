@@ -700,6 +700,9 @@ class TestPostCommitTailStubCloseReach:
         fake_result = SimpleNamespace(
             committed_sha=None,
             pushed=None,
+            push_status=coas.PUSH_STATUS_NOT_ATTEMPTED,
+            pushed_range=None,
+            pushed_count=None,
             commit_failed=False,
             sha_unverified=True,
             diagnostics=[
@@ -740,6 +743,15 @@ class TestPostCommitTailStubCloseReach:
         assert result["origin_stub_close"]["failed"] == []
         assert len(result["origin_stub_close"]["skipped"]) == 1
         assert "sha-unverified" in result["origin_stub_close"]["skipped"][0]
+
+        # Review: coordinator:code-reviewer -- folded from the deleted
+        # test_pipeline_result_missing_push_status_degrades_safely (C7b),
+        # whose name still claimed a missing-push_status degradation path
+        # that C2 removed; this fixture already builds an equivalent
+        # sha_unverified=True double, it only lacked these assertions.
+        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
+        assert result["commit"]["pushed_range"] is None
+        assert result["commit"]["pushed_count"] is None
 
 
 class TestCloseOutAndStampContinued:
@@ -5734,3 +5746,458 @@ class TestAcTableDesync:
             "unresolved_ac_ids": ["AC1", "AC2"],
             "total_ac_rows": 2,
         }
+
+
+class TestCommitResultPushStatus:
+    """C6a (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-
+    branch.md): `commit_result` must surface `push_status` (the
+    fully-disambiguated companion to the legacy tristate `pushed` field)
+    plus the AC7 pushed-extent fields `pushed_range`/`pushed_count`, and
+    must not collapse this op's own "no push attempted" cases (dry-run,
+    already-committed-by-the-stamp-write, nothing-to-commit) into the same
+    `push_status` a real policy decline reports."""
+
+    def test_declined_push_surfaces_push_status_declined(self, tmp_path, monkeypatch):
+        """A landed commit whose push leg was declined by policy (a real
+        `run_commit_pipeline` outcome, e.g. branch-policy decline) must
+        report `push_status="declined"` -- distinct from this op's own
+        `push_mode`-less "no attempt made" cases below, even though both
+        read `pushed=None`."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        from types import SimpleNamespace
+
+        fake_result = SimpleNamespace(
+            committed_sha="deadbeef",
+            pushed=None,
+            push_status="declined",
+            pushed_range=None,
+            pushed_count=None,
+            commit_failed=False,
+            sha_unverified=False,
+            diagnostics=["push: declined by policy"],
+        )
+        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
+        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
+        monkeypatch.setattr(
+            coas,
+            "_reach_post_commit_tail_stub_close",
+            lambda *a, **k: {"acted": [], "skipped": [], "failed": []},
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["commit"]["pushed"] is None
+        assert result["commit"]["push_status"] == "declined"
+        assert result["commit"]["pushed_range"] is None
+        assert result["commit"]["pushed_count"] is None
+
+    def test_landed_push_surfaces_pushed_range_and_count(self, tmp_path, monkeypatch):
+        """A landed, successfully-pushed commit surfaces the resolved
+        `pushed_range`/`pushed_count` extent alongside `pushed=True` and
+        `push_status="pushed"` -- the whole point of AC7 reaching this
+        payload (the original memo's "pushed: true while origin/main
+        advanced by three commits that were not its own" incident)."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        from types import SimpleNamespace
+
+        fake_result = SimpleNamespace(
+            committed_sha="deadbeef",
+            pushed=True,
+            push_status="pushed",
+            pushed_range="abc123..deadbeef",
+            pushed_count=3,
+            commit_failed=False,
+            sha_unverified=False,
+            diagnostics=["push: landed range abc123..deadbeef (3 commits)"],
+        )
+        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
+        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
+        monkeypatch.setattr(
+            coas,
+            "_reach_post_commit_tail_stub_close",
+            lambda *a, **k: {"acted": [], "skipped": [], "failed": []},
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["commit"]["pushed"] is True
+        assert result["commit"]["push_status"] == "pushed"
+        assert result["commit"]["pushed_range"] == "abc123..deadbeef"
+        assert result["commit"]["pushed_count"] == 3
+
+    def test_no_attempt_synthetic_paths_report_not_attempted_not_declined(
+        self, tmp_path, monkeypatch
+    ):
+        """This op's own "no push attempted" cases (DR-272's
+        already-committed-by-the-stamp-write shortcut here) must report
+        `push_status="not-attempted"`, never `"declined"` -- a decline is a
+        real policy outcome from `run_commit_pipeline`, distinct from this
+        op never having tried at all. Exercises the DR-272 shortcut branch
+        (`_stage_paths_committed_already` True), which never reaches
+        `run_commit_pipeline`."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: True)
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["commit"]["pushed"] is None
+        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
+        assert result["commit"]["pushed_range"] is None
+        assert result["commit"]["pushed_count"] is None
+
+    def test_dry_run_reports_not_attempted_push_status(self, tmp_path, monkeypatch):
+        """The dry-run synthetic `commit_result` (no `run_commit_pipeline`
+        call at all) must also report `push_status="not-attempted"`, not
+        `None`/absent."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md", dry_run=True)
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["commit"]["pushed"] is None
+        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
+        assert result["commit"]["pushed_range"] is None
+        assert result["commit"]["pushed_count"] is None
+
+
+def _commit_chunk_with_demoted_trailer(
+    root: Path,
+    plan_rel: str,
+    chunk_id: str,
+    deliverable_id: str,
+    *,
+    tail_trailers: str = "Commit-Token: 0123456789abcdef0123456789abcdef",
+) -> None:
+    """Lands a chunk commit shaped exactly like the ones the 2026-08-10
+    trailer-join defect produced: the caller's `Deliverable-Id:` sits in its
+    OWN paragraph, with a blank line before the pipeline's `Commit-Token:`/
+    `Session-Id:` block. Git recognises only the LAST paragraph as trailers,
+    so `%(trailers:key=Deliverable-Id,valueonly)` comes back EMPTY for a
+    commit that visibly carries the line.
+
+    Successive `-m` arguments are exactly how git builds that shape (it joins
+    them with blank lines), so this reproduces the on-disk commits
+    `b1e0881d39a7`/`3301a8d1f68c` without depending on the pipeline that
+    emitted them.
+    """
+    plan_file = root / plan_rel
+    with plan_file.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n<!-- {chunk_id} landed -->\n")
+    _run_git(["add", plan_rel], root)
+    _run_git(
+        [
+            "commit",
+            "-q",
+            "-m",
+            f"{chunk_id}: land chunk",
+            "-m",
+            f"Deliverable-Id: {deliverable_id}",
+            "-m",
+            tail_trailers,
+        ],
+        root,
+    )
+
+
+class TestDemotedDeliverableIdTrailerFallback:
+    """Pins the message-line fallback in `_resolve_deliverable_id`.
+
+    A defect in `commit()`'s trailer-join branch (fixed 2026-08-10 at
+    `5fcbb42696e5`) left a blank line between a caller's `Deliverable-Id:`
+    and the pipeline's own trailer block, so git demoted the caller's line to
+    prose and the exact-equality trailer join could not see it. Every `-F`
+    caller was exposed for as long as that path has existed, which is the
+    commit practice `/execute-plan` doctrine prescribes -- so the affected
+    set is every plan whose chunks landed before the fix, not just the two
+    commits that surfaced it. Rewriting shared-branch history is not the
+    remedy, so the READER adapts.
+
+    Each test below fails against the pre-fallback reader: the demoted
+    commits produce an empty trailer atom, so the join attributes nothing and
+    the plan reports its chunks missing at exit 0 over a range that provably
+    contains them.
+    """
+
+    def test_demoted_trailer_still_attributes_the_chunk(self, tmp_path):
+        """THE LIVE BUG, reproduced: every chunk landed, every commit carries
+        a visible `Deliverable-Id:` line, and the plan must read shipped."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk_with_demoted_trailer(
+                root, "plan.md", chunk_id, _DLV_VALID_SPINE
+            )
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is True
+        assert missing == []
+        assert join_provenance == "joined"
+
+    def test_demoted_trailer_for_another_plan_still_does_not_count(self, tmp_path):
+        """The fallback recovers attribution; it must not widen it. A DEMOTED
+        line naming a DIFFERENT plan's deliverable is now visible to the join
+        and must be excluded by the same exact-equality test that excludes a
+        properly-parsed foreign trailer -- otherwise this fix would reopen
+        the 2026-07-27 false-positive incident from the other side."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_chunk_with_demoted_trailer(
+            root, "plan.md", "C1", "dlv-some-other-plan-000002"
+        )
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C1"]
+        assert join_provenance == "joined"
+
+    def test_parsed_trailer_wins_over_a_conflicting_body_line(self, tmp_path):
+        """Precedence is trailer-first and never the reverse. A commit whose
+        PARSED trailer names another plan, while its body quotes THIS plan's
+        id at line start, must still not count -- the fallback is consulted
+        only when git parsed nothing at all, so no already-correct verdict
+        can change."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        plan_target = root / "plan.md"
+        with plan_target.open("a", encoding="utf-8") as fh:
+            fh.write("\n<!-- C1 landed -->\n")
+        _run_git(["add", "plan.md"], root)
+        _run_git(
+            [
+                "commit",
+                "-q",
+                "-m",
+                "C1: land chunk",
+                "-m",
+                f"Deliverable-Id: {_DLV_VALID_SPINE}",
+                "-m",
+                "Deliverable-Id: dlv-some-other-plan-000002",
+            ],
+            root,
+        )
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
+
+        shipped, missing, _join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C1"]
+
+    def test_mid_sentence_mention_is_not_an_attribution(self, tmp_path):
+        """The fallback is line-anchored on purpose: prose that mentions
+        `Deliverable-Id: <id>` mid-sentence is not an attribution and must
+        not join, or every commit message discussing this defect would
+        attribute itself."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        plan_target = root / "plan.md"
+        with plan_target.open("a", encoding="utf-8") as fh:
+            fh.write("\n<!-- C1 landed -->\n")
+        _run_git(["add", "plan.md"], root)
+        _run_git(
+            [
+                "commit",
+                "-q",
+                "-m",
+                "C1: land chunk",
+                "-m",
+                f"The join reads Deliverable-Id: {_DLV_VALID_SPINE} from a trailer.",
+            ],
+            root,
+        )
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
+        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
+
+        shipped, missing, _join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C1"]
+
+
+def _commit_chunk_session_only(root: Path, plan_rel: str, chunk_id: str, session_id: str) -> None:
+    """Lands a chunk commit carrying ONLY a `Session-Id:` trailer -- no
+    `Deliverable-Id:` at all -- the shape `_committed_chunk_shas`'s C6
+    Session-Id fallback exists to recover: a genuinely-shipped commit whose
+    Deliverable-Id leg has nothing to join against. Mirrors `_commit_chunk`'s
+    own append-then-commit shape so `git log -- <path>` sees a real tree
+    change at `plan_rel`, exactly as that helper's own docstring explains."""
+    plan_file = root / plan_rel
+    with plan_file.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n<!-- {chunk_id} landed -->\n")
+    _run_git(["add", plan_rel], root)
+    _run_git(
+        ["commit", "-q", "-m", f"{chunk_id}: land chunk", "-m", f"Session-Id: {session_id}"],
+        root,
+    )
+
+
+def _write_plan_claim(root: Path, plan_rel: str, session_id: str) -> None:
+    """Writes a plan-claim dir's `session_id` file directly at the exact
+    on-disk path `_plan_claim_holder_session_id` reads
+    (`coordinator_core.ops.fleet._common.plan_claim_dir`) -- deliberately
+    bypassing the full `session.claims.claim_plan` machinery (session-id
+    resolution, pid liveness, EEXIST/takeover handling), none of which this
+    fallback's own read path depends on or needs exercised here."""
+    claim_dir = coas.plan_claim_dir(coas.git_common_dir(root), Path(plan_rel))
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+
+
+class TestSessionIdFallbackEvidence:
+    """Pins C6 (`docs/plans/2026-08-10-a-commit-trailer-that-names-the-
+    session.md`, AC10, finding 0): `_committed_chunk_shas` degrades to a
+    Session-Id-scoped chunk-subject match, bounded to this plan's own claim
+    holder and spine ids, ONLY when its own `Deliverable-Id:` join finds
+    ZERO evidence for this plan (`DeliverableJoinStats.matched_commit_count
+    == 0`). See that function's own docstring for the full zero-evidence-
+    gated argument this class exists to pin -- a general Session-Id
+    widening, applied regardless of Deliverable-Id evidence, would re-admit
+    the 2026-07-27 `C8b` cross-plan false-positive incident § Deliverable
+    scoping already closed."""
+
+    def test_zero_evidence_session_id_fallback_fires_for_a_covering_commit(
+        self, tmp_path
+    ):
+        """THE RECOVERY CASE: zero Deliverable-Id evidence anywhere in
+        range, but every chunk's own commit carries a `Session-Id:` trailer
+        naming the session this plan's own claim dir records as the
+        current holder, and a subject that covers a real spine id -- the
+        fallback must fire and the plan must read fully shipped."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk_session_only(
+                root, "plan.md", chunk_id, "sess-fallback-000001"
+            )
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is True
+        assert missing == []
+        # No commit anywhere in range ever carried a Deliverable-Id trailer
+        # at all -- the join itself never had a candidate to compare
+        # against, so this is "no_join_candidates", not "joined". The
+        # Session-Id fallback resolving every chunk-id is what makes
+        # `shipped` True despite that -- exactly the case this fix exists
+        # to recover.
+        assert join_provenance == "no_join_candidates"
+
+    def test_zero_evidence_unresolvable_session_claim_stays_missing(self, tmp_path):
+        """The negative twin: same zero-Deliverable-Id-evidence
+        precondition, but the commit's `Session-Id:` trailer does NOT
+        resolve to a claim on THIS plan (the plan's own claim dir records a
+        DIFFERENT session as holder). No fallback evidence must be added --
+        the chunk stays missing, never a crash, never a guess."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _write_plan_claim(root, "plan.md", "sess-real-holder-000001")
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk_session_only(
+                root, "plan.md", chunk_id, "sess-impostor-000002"
+            )
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C1", "C2a", "C2b"]
+        assert join_provenance == "no_join_candidates"
+
+    def test_non_zero_evidence_gate_blocks_the_fallback(self, tmp_path):
+        """THE GATE ITSELF: at least one commit in range already carries a
+        matching `Deliverable-Id:` trailer (non-zero evidence), and a SECOND
+        commit exists that would otherwise satisfy the fallback shape
+        (correct `Session-Id:` claim holder, covering subject) for a
+        DIFFERENT still-missing chunk. The fallback must NOT fire at all --
+        that second commit contributes nothing, proving the gate is
+        zero-evidence-only and not a general widening."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
+        # Fallback-shaped, but the Deliverable-Id join above already found
+        # evidence for this plan -- this must contribute nothing.
+        _commit_chunk_session_only(root, "plan.md", "C2a", "sess-fallback-000001")
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C2a"]
+        assert join_provenance == "joined"
+
+    def test_partial_fallback_reports_session_fallback_partial(self, tmp_path):
+        """Review: code-reviewer -- Finding P2, 2026-08-10, slice D. Zero
+        Deliverable-Id evidence anywhere in range (same precondition as
+        `test_zero_evidence_session_id_fallback_fires_for_a_covering_commit`),
+        but the Session-Id fallback only resolves SOME of the plan's
+        chunk-ids (one commit names the correct claim holder; one still has
+        no covering commit at all) -- `join_provenance` must name the
+        partial-fallback state, not "no_join_candidates" ("nothing existed
+        to compare against" is no longer true once the fallback found
+        evidence for another chunk in the same range), and the still-
+        uncovered chunk must remain in `missing`."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
+        for chunk_id in ("C1", "C2a"):
+            _commit_chunk_session_only(
+                root, "plan.md", chunk_id, "sess-fallback-000001"
+            )
+        # C2b gets no commit at all -- the fallback resolves 2 of 3.
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert missing == ["C2b"]
+        assert join_provenance == "session_fallback_partial"

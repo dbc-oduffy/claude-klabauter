@@ -148,6 +148,72 @@ def test_install_shim_appx_stub_fails_loud(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
+# _install_shim — `._pth` executable-basename trap
+# ---------------------------------------------------------------------------
+
+
+def test_install_shim_exe_basename_pth_trap_fails_loud(tmp_path, capsys):
+    _write(tmp_path / "python.exe")
+    _write(tmp_path / "python._pth", b"python312.zip\n.\n")  # keyed off python.exe's own basename
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "python._pth" in captured.err
+    assert "isolated mode" in captured.err.lower() or "isolation" in captured.err.lower()
+    # No shim installed -- fail loud, not a degraded shim.
+    assert not (tmp_path / "python3.exe").exists()
+
+
+def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path, capsys):
+    _write(tmp_path / "python.exe", b"fresh-bytes")
+    _write(tmp_path / "python312._pth", b"python312.zip\n.\n")  # DLL-named -- unaffected
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 0
+    assert (tmp_path / "python3.exe").is_file()
+    assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
+
+
+def test_install_shim_python3_only_pth_does_not_trip_trap(tmp_path, capsys):
+    # A distribution shipping only python3._pth (no python._pth) does not
+    # trap: the candidate is always built off py_exe.stem, which is
+    # "python", so the checked candidate is always "python._pth" -- never
+    # "python3._pth" -- regardless of what other ._pth files sit alongside.
+    _write(tmp_path / "python.exe", b"fresh-bytes")
+    _write(tmp_path / "python3._pth", b"python3.zip\n.\n")
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 0
+    assert (tmp_path / "python3.exe").is_file()
+    assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
+
+
+def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path, capsys):
+    _write(tmp_path / "python.exe", b"fresh-bytes")
+    _write(tmp_path / "other._pth", b"other.zip\n.\n")
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 0
+    assert (tmp_path / "python3.exe").is_file()
+    assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
+
+
+def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys):
+    # Pins the assumed case-insensitive filesystem behavior (default on
+    # Windows) -- a future change in that assumption should break this test.
+    _write(tmp_path / "python.exe")
+    _write(tmp_path / "Python._pth", b"python312.zip\n.\n")
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 1
+    assert not (tmp_path / "python3.exe").exists()
+
+
+def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys):
+    _write(tmp_path / "python.exe")
+    _write(tmp_path / "PYTHON._PTH", b"python312.zip\n.\n")
+    rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
+    assert rc == 1
+    assert not (tmp_path / "python3.exe").exists()
+
+
+# ---------------------------------------------------------------------------
 # _install_shim — already valid (hardlinked) shim is an idempotent no-op
 # ---------------------------------------------------------------------------
 

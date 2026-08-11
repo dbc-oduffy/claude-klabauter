@@ -139,6 +139,7 @@ Negative-spec (hard-won, preserved from the bash originals):
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import sys
@@ -155,6 +156,7 @@ from coordinator_core.ops.ceremony.git_native import (
     diff_cached_name_status,
     status_porcelain,
 )
+from coordinator_core.ops.handoff_carry_gate import CarryGateError, evaluate_gate, read_carried_items
 
 #: U+2014 EM DASH, surrounded by single spaces -- matches
 #: `commit_message.EM_DASH_SEPARATOR`; duplicated here (not imported) since
@@ -697,6 +699,385 @@ def dirty_tree_gate(
         unattributable.append(path)
 
     return DirtyTreeOutcome(passed=not unattributable, unattributable=unattributable)
+
+
+# ---------------------------------------------------------------------------
+# Carry gate
+# ---------------------------------------------------------------------------
+
+_HANDOFF_PATH_RE = re.compile(r"^state/handoffs/[^/]+\.md$")
+
+_CARRY_GATE_RESTAGE_HINT = (
+    "carry_gate: refused paths are left UNSTAGED -- fix the carried_items "
+    "entries above and re-stage (the tree will show `?? state/...` for them "
+    "until you do)."
+)
+
+
+def carry_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+) -> GateOutcome:
+    """Refuse a staged `state/handoffs/*.md` whose `carried_items` declare
+    undeclared state -- a third gate beside `deletion_block_gate` and
+    `dirty_tree_gate`, modelled on the latter (same module, same
+    `GateOutcome` shape).
+
+    Purpose: `docs/plans/2026-08-10-the-carry-gate-the-commit-pipeline-never-
+    asked-for.md` § C1 (AC1-AC7). Delegates every rule to
+    `coordinator_core.ops.handoff_carry_gate.evaluate_gate` -- this function
+    does not re-implement the carry_id/disposition/disposition_detail rules,
+    it only decides WHICH staged paths to run them against and how a
+    violation reaches this pipeline's `diagnostics`.
+
+    Scope: filtered to `gate_paths` entries matching `state/handoffs/*.md`
+    (single path segment under `state/handoffs/`, mirroring
+    `_build_known_scope`'s own non-recursive `handoffs_dir.glob("*.md")`
+    scan above). An empty filtered set returns `skipped=True` without
+    reading a single file (AC5) -- this gate has nothing to say about a
+    commit that stages no handoff.
+
+    Per-path outcome:
+      - The path is ABSENT from the worktree at gate time (AC8) -- a
+        legitimate skip, not a refusal, checked via `(root / path).exists()`
+        BEFORE `read_carried_items` is ever called (never via catching the
+        `OSError` that call would otherwise raise -- that would re-open
+        AC7, see below). A path only reaches this gate at all because
+        `commit_message.compute_gate_paths` put it in `gate_paths` --
+        `[*commit_paths, *deleted_paths]` -- which folds in every
+        EM-authored `deleted_paths` entry alongside staged content; a
+        deliberate `git rm state/handoffs/*.md` (`/distill` disposal, any
+        handoff removal) is exactly that: an entry with no file behind it
+        by design, not a read failure. Archival *swept* renames never reach
+        `gate_paths` this way -- `compute_commit_paths` folds those in
+        separately -- so this skip is scoped to genuine EM-authored
+        deletions only.
+      - The path EXISTS but `read_carried_items` raises `CarryGateError`
+        (unparseable frontmatter, `carried_items` not a list) or `OSError`
+        (permissions, race, or any other read failure) -- a REFUSAL, not a
+        skip (AC7), mirroring `baton_assemble.apply.
+        _dispatch_handoff_carry_gate`'s own unreadable-vs-refusal
+        distinction one layer up. The existence check above means this
+        branch's `OSError` is never the ordinary "file is being deleted"
+        case -- only a genuinely present-but-unreadable file reaches it.
+      - `read_carried_items` returns `[]` (absent `carried_items` key, or an
+        explicitly empty array) -- `evaluate_gate([])` is `ok=True`; this is
+        a legitimate pass here, NOT the vacuous-pass hazard the plan's
+        Anti-scope names -- that hazard was about authoring-time validation
+        with no staged-path precondition; this gate only ever fires on a
+        staged handoff, so absence of the FIELD (as opposed to absence of
+        the FILE, the AC8 case above) genuinely means "nothing carried".
+      - `evaluate_gate(items)` returns `ok=False` -- every violation line is
+        appended to `diagnostics` VERBATIM (AC3), prefixed only with the
+        path, never re-worded.
+
+    Any refusal appends `_CARRY_GATE_RESTAGE_HINT` once (AC6) -- the
+    pipeline leaves a refused path unstaged; the operator must re-stage
+    after fixing the entries above.
+    """
+    root = Path(worktree_root)
+    handoff_paths = [p for p in gate_paths if _HANDOFF_PATH_RE.match(p)]
+
+    if not handoff_paths:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    diagnostics: List[str] = []
+
+    for path in handoff_paths:
+        # AC8: absence is the deletion signal, checked BEFORE the read --
+        # never via catching read_carried_items' own OSError, which would
+        # also swallow a genuinely unreadable EXISTING file and re-open AC7.
+        if not (root / path).exists():
+            continue
+
+        try:
+            items = read_carried_items(str(root / path))
+        except CarryGateError as exc:
+            diagnostics.append(
+                f"{path}: carry_gate: unparseable carried_items -- {exc}"
+            )
+            continue
+        except OSError as exc:
+            diagnostics.append(f"{path}: carry_gate: could not read handoff -- {exc}")
+            continue
+
+        result = evaluate_gate(items)
+        if not result.ok:
+            for violation in result.violations:
+                diagnostics.append(f"{path}: {violation}")
+
+    if diagnostics:
+        diagnostics.append(_CARRY_GATE_RESTAGE_HINT)
+
+    return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Op-scope coverage gate
+# ---------------------------------------------------------------------------
+
+_REGISTRY_MAP_RELPATH = "coordinator_core/ops/_registry_map.py"
+_OP_SCOPES_RELPATH = "coordinator_core/op_scopes.py"
+_OP_MODULE_MAP_VAR = "OP_MODULE_MAP"
+_OP_KEY_SCOPE_VAR = "_OP_KEY_SCOPE"
+
+_OP_SCOPE_GATE_REMEDY = (
+    "Add each to _OP_KEY_SCOPE (coordinator_core/op_scopes.py) with a justified "
+    "'none'/'common_dir'/'show_top' verdict -- never default to 'none' by omission."
+)
+
+
+class _MultipleModuleBindingsError(Exception):
+    """Raised by `_extract_dict_str_keys` when `var_name` is bound more than once
+    at module level.
+
+    Purpose: the gate's established contract is "cannot evaluate -> refuse, never
+    guess" (see that function's own docstring). A second module-level rebind of
+    the target name is exactly the case `ast.walk`'s first-match-wins traversal
+    used to resolve silently -- reading the FIRST binding and staying blind to a
+    later, authoritative one (e.g. `VAR: Dict[str, str] = {}` followed by a real
+    `VAR = {...}` rebind, never a `.update()`). Refusing here, rather than
+    picking the last binding, keeps the gate consistent with its own no-guessing
+    contract even though "return the last one" would happen to be right for that
+    shape -- a guess that is right today and silently wrong for some other
+    rebind order tomorrow is the dead-guard hazard this whole gate exists to
+    close.
+    """
+
+    def __init__(self, var_name: str) -> None:
+        super().__init__(var_name)
+        self.var_name = var_name
+
+
+def _extract_dict_str_keys(source: str, var_name: str, *, filename: str) -> Optional[Set[str]]:
+    """Statically extract the string-literal keys of a module-level `<var_name> = {...}`
+    dict literal, via `ast.parse` -- no import.
+
+    Purpose: `op_scope_coverage_gate()` below needs the key sets of
+    `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` on a commit hot path.
+    Importing either module to read them is not acceptable there -- an import runs
+    arbitrary module-level code (both modules are otherwise side-effect-free today,
+    but this gate must not depend on that staying true forever, and `_registry_map.py`'s
+    own docstring states it must never import an op module itself) -- so this reads the
+    literal dict AST instead, exactly as `write_surface_manifest._declares_write_surface`
+    already does for a narrower "does this bind a name" question.
+
+    Returns `None` (never an empty set as a substitute) when `var_name` is not bound to
+    a dict literal anywhere at module level, or the source fails to parse -- both are
+    "the predicate could not be evaluated", which the caller must treat as a refusal, not
+    a silent zero-violations pass (a dead guard is the exact failure class this gate
+    exists to prevent). Only `ast.Constant` string keys are collected; a non-literal key
+    (an f-string, a variable) cannot be resolved statically and is simply not counted --
+    today neither table uses one.
+
+    Scoped deliberately to MODULE-LEVEL bindings only (`tree.body`, not
+    `ast.walk(tree)`): a same-named local inside a function body is not a
+    binding of the module attribute this gate cares about and must never
+    count toward the multiplicity check below.
+
+    Raises `_MultipleModuleBindingsError(var_name)` when more than one
+    module-level `Assign`/`AnnAssign` binds `var_name` -- see that
+    exception's own docstring for why refusing beats guessing which
+    binding is authoritative.
+    """
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError:
+        return None
+
+    def _keys_from_dict(dict_node: ast.expr) -> Optional[Set[str]]:
+        if not isinstance(dict_node, ast.Dict):
+            return None
+        return {
+            key.value
+            for key in dict_node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+
+    bindings: List[Optional[ast.expr]] = []
+    for node in tree.body:
+        # `OP_MODULE_MAP: Dict[str, str] = {...}` and `_OP_KEY_SCOPE:
+        # Dict[str, str] = {...}` are both type-annotated module-level
+        # bindings (`ast.AnnAssign`), not bare `ast.Assign` -- both real
+        # tables use this form, so this must check both node types (mirrors
+        # `write_surface_manifest._declares_write_surface`'s own
+        # `Assign`-then-`AnnAssign` pair for the same reason).
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == var_name:
+                    bindings.append(node.value)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == var_name:
+                bindings.append(node.value)
+
+    if len(bindings) > 1:
+        raise _MultipleModuleBindingsError(var_name)
+    if not bindings:
+        return None
+    value = bindings[0]
+    if value is None:
+        return None
+    return _keys_from_dict(value)
+
+
+def op_scope_coverage_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+) -> GateOutcome:
+    """Refuse a commit staging `_registry_map.py` that would register an op with no
+    matching `_OP_KEY_SCOPE` entry.
+
+    Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are two
+    independently-maintained tables -- registering an op in the former carries no
+    structural requirement to add it to the latter, and an omitted entry silently
+    defaults to `"none"` scope (see `op_scopes.py`'s own module docstring) rather than
+    failing loud. Three ops (`ceremony.chunk_commits`, `chain_ancestry_waivers.reap`,
+    `scratchpad.sweep`) shipped this way at once; for `chain_ancestry_waivers.reap` the
+    default was actively wrong -- its REMOVE-ONLY reaper fell back to the engine
+    process's cwd instead of the caller's worktree, exactly the state its own module
+    docstring carries a DO-NOT-RUN-AGAINST-THE-LIVE-TREE warning for. This gate is the
+    commit-time backstop `test_dispatch_message.py::
+    test_op_key_scope_table_covers_all_registered_ops` already proves as a predicate,
+    but that test only fires when someone happens to run that file -- this makes the
+    same check unavoidable at the point the omission is introduced.
+
+    Direction is deliberately one-way: only `OP_MODULE_MAP - _OP_KEY_SCOPE` (a
+    registered-but-unclassified op) is a violation. `_OP_KEY_SCOPE` legitimately carries
+    more entries than `OP_MODULE_MAP` (225 vs 222 at gate-authoring time) -- test-only or
+    legacy scope entries with no live registry counterpart are not a defect this gate has
+    any business flagging.
+
+    Scope filter: `skipped=True`, no file read at all, unless `_registry_map.py` is
+    among `gate_paths` -- a commit that does not touch the registry has nothing for this
+    gate to say, mirroring `carry_gate`'s own cheap-skip shape.
+
+    Absence classes (the three cases a naive port of this predicate gets wrong):
+      - `_registry_map.py` absent from the worktree (a staged deletion) -> SKIP, not a
+        refusal -- there is no `OP_MODULE_MAP` left to check coverage for.
+      - `op_scopes.py` absent, or its `_OP_KEY_SCOPE` dict literal cannot be located --
+        REFUSE. `op_scopes.py` need not itself be staged (it is read from the worktree
+        regardless, same as `_registry_map.py`); this gate cannot verify coverage
+        without it and must not pass silently in that state.
+      - Either file's target dict is not found by the AST walk (renamed, restructured,
+        assigned via something other than a literal `{...}`, or the source fails to
+        parse) -> REFUSE, naming which dict was not found. A gate that passes when its
+        own predicate fails to evaluate is a dead guard -- the exact failure class the
+        omission-default-to-"none" defect above already demonstrates once.
+      - Either target name is bound MORE THAN ONCE at module level (e.g. a placeholder
+        `VAR: Dict[str, str] = {}` followed by a later genuine `VAR = {...}` rebind) ->
+        REFUSE, naming the variable and that it is bound more than once. Which binding is
+        authoritative cannot be known statically without re-deriving Python's own
+        execution order; guessing "last wins" would be right for that shape and silently
+        wrong for some other rebind order -- refusing is consistent with every other
+        "predicate could not be evaluated" case above. See `_extract_dict_str_keys`'s own
+        docstring and `_MultipleModuleBindingsError`.
+    """
+    gate_scope: Set[str] = set(gate_paths)
+    if _REGISTRY_MAP_RELPATH not in gate_scope:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    root = Path(worktree_root)
+    registry_path = root / _REGISTRY_MAP_RELPATH
+
+    if not registry_path.exists():
+        # Staged deletion of the registry map itself -- nothing left to check
+        # coverage for; a legitimate skip, never a refusal.
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    try:
+        registry_source = registry_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: could not read {_REGISTRY_MAP_RELPATH} -- {exc}"
+            ],
+        )
+
+    try:
+        registered_ops = _extract_dict_str_keys(
+            registry_source, _OP_MODULE_MAP_VAR, filename=str(registry_path)
+        )
+    except _MultipleModuleBindingsError as exc:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: `{exc.var_name}` is bound more than once at "
+                f"module level in {_REGISTRY_MAP_RELPATH} -- refusing (cannot tell which "
+                "binding is authoritative)"
+            ],
+        )
+    if registered_ops is None:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: could not locate a `{_OP_MODULE_MAP_VAR} = {{...}}` "
+                f"dict literal in {_REGISTRY_MAP_RELPATH} -- refusing (a parse failure must "
+                "not read as \"no violations\")"
+            ],
+        )
+
+    scopes_path = root / _OP_SCOPES_RELPATH
+    if not scopes_path.exists():
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: {_OP_SCOPES_RELPATH} is absent from the worktree "
+                "-- cannot verify op-scope coverage, refusing"
+            ],
+        )
+
+    try:
+        scopes_source = scopes_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: could not read {_OP_SCOPES_RELPATH} -- {exc}"
+            ],
+        )
+
+    try:
+        scoped_ops = _extract_dict_str_keys(
+            scopes_source, _OP_KEY_SCOPE_VAR, filename=str(scopes_path)
+        )
+    except _MultipleModuleBindingsError as exc:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: `{exc.var_name}` is bound more than once at "
+                f"module level in {_OP_SCOPES_RELPATH} -- refusing (cannot tell which "
+                "binding is authoritative)"
+            ],
+        )
+    if scoped_ops is None:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"op_scope_coverage_gate: could not locate a `{_OP_KEY_SCOPE_VAR} = {{...}}` "
+                f"dict literal in {_OP_SCOPES_RELPATH} -- refusing (a parse failure must not "
+                "read as \"no violations\")"
+            ],
+        )
+
+    unclassified = sorted(registered_ops - scoped_ops)
+    if not unclassified:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+    diagnostics: List[str] = [
+        f"op_scope_coverage_gate: {len(unclassified)} op(s) registered in "
+        f"{_REGISTRY_MAP_RELPATH} with no _OP_KEY_SCOPE entry:"
+    ]
+    diagnostics.extend(f"  {name}" for name in unclassified)
+    diagnostics.append(_OP_SCOPE_GATE_REMEDY)
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
 # ---------------------------------------------------------------------------

@@ -665,6 +665,7 @@ class PushLandedGate(NamedTuple):
     deferred: bool
     unpushed_shas: tuple[str, ...]
     summary_line: str
+    declined: bool = False
 
 
 def compute_push_landed_gate(
@@ -675,16 +676,27 @@ def compute_push_landed_gate(
     """Step 3's push-confirmation branch tree, read-only throughout.
 
     `push_status` is `wsc-tail.py`'s own reported `push_status` field
-    (`"deferred"` under the 2026-07-23 async-push contract, `None`/absent
-    under `COORDINATOR_WSC_SYNC_PUSH=1` synchronous mode). Under the
-    default async contract, an unpushed commit in the first seconds after
-    `d-run-wsc-tail` returns is EXPECTED, not a failure — the detached push
-    child may still be in flight — so `deferred=True` short-circuits to a
-    non-failing gate without querying `origin/<branch>` at all; callers
-    that need certainty re-check after a short interval or consult
-    `.git/push-failures.log` (this module does not read that log — a
-    log-tail read belongs to whichever surface renders Step 4's "Pushed to
-    remote" line, not this gate).
+    (`"deferred"` under the 2026-07-23 async-push contract, `"declined"`
+    when branch policy deliberately withheld the push, `None`/absent under
+    `COORDINATOR_WSC_SYNC_PUSH=1` synchronous mode). Two short-circuits,
+    each non-failing but NOT interchangeable — one waits, one never will:
+
+    - `push_status == "deferred"`: an unpushed commit in the first seconds
+      after `d-run-wsc-tail` returns is EXPECTED, not a failure — the
+      detached push child may still be in flight — so this short-circuits
+      to a non-failing gate (`deferred=True`) without querying
+      `origin/<branch>` at all; callers that need certainty RE-CHECK after
+      a short interval or consult `.git/push-failures.log` (this module
+      does not read that log — a log-tail read belongs to whichever surface
+      renders Step 4's "Pushed to remote" line, not this gate).
+    - `push_status == "declined"`: branch policy decided, in this pass,
+      that no push would be attempted at all — nothing is in flight and
+      nothing ever will be, so re-checking later is pointless. This
+      short-circuits to a non-failing gate (`declined=True`, `deferred=
+      False`) without querying `origin/<branch>` either, but a caller must
+      NOT apply the `deferred` arm's "check again shortly" guidance here —
+      that is precisely the collapse this separate field exists to
+      prevent.
 
     Never issues `git push` itself — per the SKILL, only the detached push
     (or sync mode) owns that; this function only reads `git log`/`git
@@ -696,6 +708,15 @@ def compute_push_landed_gate(
             deferred=True,
             unpushed_shas=(),
             summary_line="Pushed to remote: deferred (async post-commit push in flight)",
+        )
+
+    if push_status == "declined":
+        return PushLandedGate(
+            pushed=None,
+            deferred=False,
+            unpushed_shas=(),
+            summary_line="Pushed to remote: declined (branch policy — push intentionally not attempted)",
+            declined=True,
         )
 
     try:
@@ -790,9 +811,16 @@ def build_release_plan_claim_directive(governing_plan_slug: Optional[str]) -> Op
 def build_emit_cadence_directive() -> dict[str, Any]:
     """Fires the per-repo emission cadence trigger, best-effort per AC5 —
     a no-seam machine / transport hiccup or gate-off must NOT wedge the
-    ceremony (mirrors `emit-cadence`'s own `|| echo ... skipped` fail-open
-    shape in the pre-conversion SKILL text). Depends on `d-run-wsc-tail`
-    per the SKILL's own ordering ("this fires after Step 3's commit/push,
+    ceremony. The fail-open is a real mechanism, not a mirrored bash
+    idiom: `build_ceremony_close_tail`'s emit-cadence entry carries
+    `best_effort: True` (docs/plans/2026-08-08-a-best-effort-directive-
+    cannot-fail-a-ce.md, AC8), and the ceremony runner's `_execute_
+    directives` routes a non-zero exit from a `best_effort` directive into
+    `report["degraded"]` instead of `report["failed"]`, so it can never
+    move the ceremony's exit code — the retired pre-conversion bash `||
+    echo ... skipped` had no successor until that plan landed.
+
+    Depends on `d-run-wsc-tail` per the SKILL's own ordering ("this fires after Step 3's commit/push,
     not earlier") — previously depended on `d-archive-session-claim`, but
     that directive was removed from this assembly (2026-07-28: session
     archival moved to session END, not workstream close; see `__init__.py`'s
@@ -824,6 +852,17 @@ def build_emit_cadence_directive() -> dict[str, Any]:
         ceremony_name="workstream-complete",
     )
     cadence = hook_and_cadence[1]
+    if cadence["best_effort"] is not True:
+        # Review: code-reviewer — a bare `assert` here is stripped under
+        # `python -O`/PYTHONOPTIMIZE, degrading this fail-loud check to a
+        # silent revert to failed-not-degraded semantics; an explicit raise
+        # survives an optimized run (precedent: claude_klabauter_root.py's shim-spec
+        # check).
+        raise RuntimeError(
+            "build_ceremony_close_tail's emit-cadence entry must carry best_effort: True "
+            "(docs/plans/2026-08-08-a-best-effort-directive-cannot-fail-a-ce.md, AC8) — "
+            "re-derive it there, do not re-set it here."
+        )
     cadence["depends_on"] = "d-run-wsc-tail"
     cadence["args"] = ["{d-run-wsc-tail.landed}"]
     return cadence

@@ -256,11 +256,35 @@ def _build_assessment_doc_text(
 def _build_staff_eng_review_doc_text(
     agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
 ) -> str:
-    """``--type staff-eng-review``: verdict + rationale."""
+    """``--type staff-eng-review``: verdict + rationale + per-finding slots.
+
+    ``## Findings`` is the canonical heading for review output across every
+    consumer (example-doctrine-repo ruling, 2026-08-10 memo): a type whose name promises
+    review output must emit a sidecar
+    ``ops.append_integrator_dispositions.append_dispositions`` can write into.
+    A verdict is not a finding, so ``## Verdict``/``## Rationale`` stay and the
+    three coexist.
+
+    SECTION ORDER IS LOAD-BEARING, not cosmetic. That module's
+    ``_extract_findings_section`` carves from ``## Findings`` to whichever of
+    ``## Exit interview`` / ``## Integrator Dispositions`` comes first, and
+    deliberately does NOT stop at an intervening ``## `` heading (the reviewer
+    layout nests ``## Summary``/``### Finding N`` inside the findings body).
+    Emitting ``## Verdict``/``## Rationale`` AFTER ``## Findings`` would fold
+    them into the findings body — so they are emitted BEFORE it, and
+    ``## Findings`` is last before the exit interview. Do not reorder.
+
+    The scaffold comment is the ``review-findings`` template's sentinel
+    verbatim, because ``_findings_section_is_empty`` strips that exact string
+    to tell a pristine scaffold from a filled body; a paraphrase would read as
+    filled-in content and defeat the empty-scaffold refusal.
+    """
     return (
         _frontmatter(agent_type, spawned_at, lead_session_id)
         + "## Verdict\n\n"
         + "## Rationale\n\n"
+        + "## Findings\n\n"
+        + "<!-- One entry per finding: `- [severity] <finding> — disposition: accepted | rejected | deferred — rationale: ...` -->\n\n"
         + _exit_interview_section()
     )
 

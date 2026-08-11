@@ -91,6 +91,19 @@ told so before it is ever told to wait for the machine:
      are exactly what an agent gets wrong by default, which is why they are
      written down here rather than only in `_deny_reason_grant`'s deny text.
 
+  2.5. WRAPPER leg (fail-CLOSED) -- once a Tier-U OR Tier-F command has
+     cleared the grant leg above, it is denied unless it is actually routed
+     through ``with-suite-mutex`` (``coordinator/bin/with-suite-mutex`` --
+     see ``_command_wrapped_in_suite_mutex``), the wrapper that takes the
+     mutex leg's lock for real. Closes the gap where a granted EM ran the
+     bare command and held nothing, so two granted sessions still overlapped
+     -- the mutex leg below only refuses a SECOND concurrent run; nothing
+     previously required the FIRST one to actually take the lock. The deny
+     names the wrapped form of the caller's own command. Runs strictly after
+     the grant leg (an ungranted command is never told to wrap what it is
+     not authorized to run) and strictly before the mutex leg (a wrapped
+     command still waits its turn if another run already holds the lock).
+
   3. MUTEX leg (layer 6, fail-OPEN) -- a suite-shaped command is denied while
      ANOTHER suite run holds the machine-wide mutex
      (``coordinator_core.testing.suite_mutex.holder()``), including for the
@@ -346,18 +359,29 @@ PRIORITY = 45
 #: module scope), matching ``dispatch_checks._override()``'s F2 discipline.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION"
 
-#: Cheap prefilter -- if none of these tokens appear anywhere in the command,
-#: no runner this classifier knows about can be present, so the whole guard
-#: (including the config-file reads and the resolver load) is skipped. Keeps
-#: the per-Bash-call cost of this hot-path guard to one regex search.
+#: Cheap prefilter -- if none of these tokens appear anywhere in the command
+#: AND the dynamic per-repo leg (``_dynamic_prefilter_hit``, below) also
+#: misses, no runner this classifier knows about can be present, so the whole
+#: guard (including the config-file reads and the resolver load) is skipped.
 #:
-#: Known limitation, taken deliberately: the prefilter gates the configured-
-#: fast/full-command equality leg too, so a repo whose configured test command
-#: invokes NONE of these runners (a bespoke `bin/run-the-suite`) is matched by
-#: the generic classifier only. Closing that would mean reading repo config on
-#: every Bash call in the session, which is the wrong trade for a guard on the
-#: spawn-per-call hot path; adding the runner to this set is the cheap fix
-#: when such a repo appears.
+#: Formerly a KNOWN LIMITATION here (removed 2026-08-10): a repo whose
+#: configured test command invokes NONE of these static runner names (a
+#: bespoke ``bin/run-the-suite``) matched nothing, so every leg of this guard
+#: -- identity, grant, mutex -- was skipped for that whole repo, for EM and
+#: dispatched subagent alike, until someone hand-added the missing token
+#: (``run_tier_tests`` was one such hand-patch, now removed -- see
+#: ``_dynamic_prefilter_hit``). That limitation is CLOSED, not merely
+#: narrowed: ``check()`` now falls through to the dynamic leg -- which reads
+#: the repo's OWN configured ``fast_test_cmd``/``full_test_cmd`` head tokens
+#: (from ``coordinator.local.md`` and the ``COORDINATOR_{FAST,FULL}_TEST_CMD``
+#: env vars, the same two sources ``resolve_validation_cmd`` resolves from) --
+#: whenever this static regex misses, so a repo's bespoke runner is gated
+#: automatically the day it is configured, with no per-repo token hand-patch
+#: required. The verdict on a widened-through command still comes from
+#: ``_matches_configured_cmd`` against that repo's own resolved tier strings,
+#: never from a new hardcoded runner branch -- the dynamic leg only decides
+#: whether to keep evaluating, exactly as this static regex already did.
+#:
 #: ``invoke-pester`` is matched case-insensitively (via the inline ``(?i:...)``
 #: group, scoped to that one alternative only) because PowerShell cmdlet
 #: names are case-insensitive by language design and are conventionally
@@ -365,18 +389,228 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION"
 #: set, which are lowercase-only shell command names by Unix convention.
 _RUNNER_PREFILTER_RE = re.compile(
     r"\b(pytest|py\.test|unittest|nose2|npm|pnpm|yarn|bun|npx|jest|vitest|"
-    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|(?i:invoke-pester))\b"
+    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|"
+    r"(?i:invoke-pester))\b"
 )
+
+
+#: Bounded walk-up depth for the CHEAP (stat-only, no subprocess) repo-root
+#: probe ``_cheap_repo_root`` uses for the dynamic prefilter leg. A real
+#: checkout is at most a handful of levels below its git root; this bound
+#: exists only to keep a pathological ``cwd`` (a deeply nested non-repo
+#: directory) from walking to the filesystem root one ``os.path.exists`` call
+#: at a time.
+_CHEAP_ROOT_WALK_MAX_DEPTH = 64
 
 #: Command-prefix words that wrap the real runner without changing what it is.
 #: Widened (2026-07-29, cross-guard fix -- code-reviewer Finding 3): `setsid`,
 #: `strace`, `doas`, `busybox` were unrecognized, same gap the sibling
 #: destructive-action/worktree/sentinel/commit guards fixed for their own
-#: copies of this enumerated allowlist.
+#: copies of this enumerated allowlist. Defined here (rather than near its
+#: other use sites further below) because ``_DYNAMIC_PREFILTER_TOKEN_STOPWORDS``
+#: composes it and must itself be defined before ``_tokens_from_cmd_value``'s
+#: first use, below -- a prior forward reference here let a partial/reloaded
+#: import of this module reach that use site before the name existed
+#: (``NameError: _DYNAMIC_PREFILTER_TOKEN_STOPWORDS``); moving definition
+#: order fixes the class of bug outright rather than relying on a
+#: same-process, no-partial-import assumption holding forever.
 _WRAPPER_WORDS = frozenset({
     "sudo", "command", "time", "exec", "nice", "nohup", "env", "ionice",
     "stdbuf", "npx", "bunx", "pnpx", "setsid", "strace", "doas", "busybox",
 })
+
+#: BX-13 (2026-07-29, confirmed live via the real dispatcher): a
+#: `sh -c '<payload>'` (or `bash -c`/`zsh -c`/etc.) invocation was never
+#: unwrapped -- the quoted `-c` argument tokenizes as ONE shlex word, so
+#: `_base(tokens[i])` resolved to the shell interpreter itself, never the
+#: real test-runner token inside it, and a subagent's `sh -c "pytest"`
+#: sailed through unclassified while the wrapped command still ran the
+#: whole suite for real. Same wrapper class this module's sibling guards
+#: (`block_subagent_commit.py`'s `_C_FLAG_SHELL_INTERPRETERS`,
+#: `dispatch_checks.py`'s `_SHELL_C_WRAPPER_INTERPRETERS`) already unwrap.
+_SHELL_C_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+
+#: Interpreter/wrapper basenames that must never surface as a dynamic
+#: prefilter token on their own -- ``python3 bin/run-fast-tests.py``'s
+#: distinguishing token is ``run-fast-tests.py``, not ``python3``: crediting
+#: the bare interpreter name would widen the dynamic leg open for almost
+#: every Python invocation in a repo that happens to configure a Python-run
+#: test script, which defeats the point of a PREFILTER (it is still SAFE --
+#: over-widening only means "do more classification work", never a wrong
+#: deny -- but it is not cheap). Reuses ``_WRAPPER_WORDS``/
+#: ``_SHELL_C_INTERPRETERS`` (already-enumerated shell/wrapper names) plus
+#: the python spellings, which neither set carries.
+_DYNAMIC_PREFILTER_TOKEN_STOPWORDS = (
+    _WRAPPER_WORDS | _SHELL_C_INTERPRETERS | frozenset({"python", "python3", "python2", "py"})
+)
+
+
+def _cheap_repo_root(cwd: Optional[str]) -> Optional[str]:
+    """Find the nearest ancestor of ``cwd`` containing a ``.git`` entry, via
+    ``os.path.exists`` only -- NEVER a ``git rev-parse`` subprocess spawn.
+
+    This is deliberately a DIFFERENT (cheaper, less authoritative) resolver
+    than ``resolve_git_root`` (which shells out to git and is what the rest
+    of this guard uses once a command is already known to be worth
+    classifying). The dynamic prefilter leg below runs on EVERY Bash/
+    PowerShell call whose command misses the static regex -- i.e. on most
+    calls this guard ever sees -- so it must not add a subprocess spawn to
+    that population; see the module docstring's "hot path stays cheap"
+    constraint. A stat-bounded walk-up is the cheap substitute: it is
+    slightly less correct in exotic layouts (a ``.git`` FILE for a worktree
+    still satisfies ``os.path.exists``, which is fine; a repo root reached
+    via a symlinked ancestor might resolve to a different absolute path than
+    ``git rev-parse`` would report, which is also fine here because this
+    leg's ONLY job is to find ``coordinator.local.md`` -- a wrong-by-symlink
+    root just means the dynamic leg misses and this call falls back to the
+    static-regex-only behavior it already had, never a false deny).
+
+    Returns ``None`` when ``cwd`` is falsy, unresolvable, or no ``.git`` is
+    found within ``_CHEAP_ROOT_WALK_MAX_DEPTH`` levels.
+    """
+    if not cwd:
+        return None
+    try:
+        current = os.path.abspath(cwd)
+    except (OSError, ValueError):
+        return None
+    for _ in range(_CHEAP_ROOT_WALK_MAX_DEPTH):
+        try:
+            if os.path.exists(os.path.join(current, ".git")):
+                return current
+        except OSError:
+            return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
+#: Matches a ``fast_test_cmd``/``full_test_cmd`` flat frontmatter line inside
+#: ``coordinator.local.md`` -- the SAME two keys ``resolve_validation_cmd.
+#: cs_resolve_fast_test_cmd``/``cs_resolve_full_test_cmd`` read (their own
+#: docstring's "Step 2 -- coordinator.local.md flat top-level ... key"),
+#: matched here with a cheap regex instead of the real resolver's frontmatter
+#: parse -- this leg only needs candidate TOKENS to widen a prefilter, not a
+#: correctly-quoted, escape-aware command string, so a lightweight read is
+#: the right trade (see ``_local_md_head_tokens``'s docstring for the full
+#: cost argument against caching this in a second file).
+_LOCAL_MD_CMD_LINE_RE = re.compile(
+    r'^(?:fast_test_cmd|full_test_cmd)\s*:\s*(.+?)\s*$', re.MULTILINE
+)
+
+
+def _tokens_from_cmd_value(raw: str) -> List[str]:
+    """Extract candidate PREFILTER tokens (lowercased basenames) from one
+    configured command VALUE string (``coordinator.local.md``'s flat
+    frontmatter value, or an env var's raw value) -- e.g. ``'"python3 bin/
+    run-fast-tests.py"'`` -> ``["run-fast-tests.py"]``. Interpreter/wrapper
+    basenames are dropped (``_DYNAMIC_PREFILTER_TOKEN_STOPWORDS``); a flag
+    token (leading ``-``) is dropped too, since a bare flag is never what
+    distinguishes one repo's bespoke runner from another's. Never raises --
+    an unparseable ``raw`` degrades to a whitespace split, matching this
+    module's other shlex-with-fallback call sites (``_tokens``)."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    try:
+        parts = shlex.split(value, posix=True)
+    except ValueError:
+        parts = value.split()
+    out: List[str] = []
+    for part in parts:
+        if not part or part.startswith("-"):
+            continue
+        base = _base(part).lower()
+        if base and base not in _DYNAMIC_PREFILTER_TOKEN_STOPWORDS:
+            out.append(base)
+    return out
+
+
+def _local_md_head_tokens(repo_root: str) -> frozenset:
+    """Dynamic prefilter tokens sourced from ``<repo_root>/coordinator.local.
+    md``'s ``fast_test_cmd``/``full_test_cmd`` frontmatter values.
+
+    Deliberately does NOT invoke ``_configured_test_cmds`` (the real
+    resolver -- an ``importlib`` module load plus, on the native leg, a
+    dataclass-carrying module exec) or a TOML/YAML parser. This leg's only
+    job is to decide whether the STATIC regex missing a runner name should
+    reopen the gate; it needs candidate tokens, not a correctly-resolved
+    command, and reads at most ~8 KB of one file with one regex pass to get
+    them -- already the "stat plus a small read" cost floor a persistent
+    per-repo cache file (mtime/size-keyed, as sketched in the dispatching
+    brief) would also have to pay just to VALIDATE its cache is still fresh,
+    before it could even return a cached value. Caching the OUTPUT of a
+    computation that costs exactly what checking the cache's validity costs
+    saves nothing and adds its own invalidation surface (a second file to
+    keep in sync, a corrupt-cache read path, a cross-process write race on a
+    machine running 50-70+ concurrent sessions against the same repo) for no
+    measurable benefit -- rejected in favor of this direct read.
+
+    Returns ``frozenset()`` (never raises) when the file is absent, unreadable,
+    or carries neither key -- degrading this leg to "no dynamic match" only,
+    never widening a deny into an unexpected allow.
+    """
+    path = os.path.join(repo_root, "coordinator.local.md")
+    try:
+        if not os.path.isfile(path):
+            return frozenset()
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(8192)
+    except OSError:
+        return frozenset()
+
+    frontmatter = text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            frontmatter = text[:end]
+
+    tokens: List[str] = []
+    for match in _LOCAL_MD_CMD_LINE_RE.finditer(frontmatter):
+        tokens.extend(_tokens_from_cmd_value(match.group(1)))
+    return frozenset(tokens)
+
+
+def _env_head_tokens() -> frozenset:
+    """Dynamic prefilter tokens sourced directly from the
+    ``COORDINATOR_FAST_TEST_CMD``/``COORDINATOR_FULL_TEST_CMD`` env vars --
+    ``resolve_validation_cmd``'s Step 1 for both tiers. Reading these costs
+    nothing (no file I/O, no repo-root resolution), so unlike the
+    ``coordinator.local.md`` leg this always runs, independent of ``cwd``."""
+    tokens: List[str] = []
+    for var in ("COORDINATOR_FAST_TEST_CMD", "COORDINATOR_FULL_TEST_CMD"):
+        raw = os.environ.get(var)
+        if raw:
+            tokens.extend(_tokens_from_cmd_value(raw))
+    return frozenset(tokens)
+
+
+def _dynamic_prefilter_hit(cmd: str, cwd: Optional[str]) -> bool:
+    """The dynamic counterpart to ``_RUNNER_PREFILTER_RE.search`` -- does
+    ``cmd`` contain a token drawn from THIS repo's own configured
+    ``fast_test_cmd``/``full_test_cmd`` (env var or ``coordinator.local.md``)?
+
+    Called ONLY when the static regex already missed (see ``check()``), so
+    this pays its own cost (a bounded stat-walk plus, at most, one small file
+    read) exclusively on the population the static regex does not already
+    resolve for free -- never doubling cost on a command the static path
+    already recognized as suite-shaped.
+
+    A hit here means only "keep evaluating" -- same contract as the static
+    regex. The actual verdict is still ``_matches_configured_cmd`` (or the
+    generic per-runner classifiers) against the repo's REAL resolved tier
+    strings; this function never denies or allows on its own.
+    """
+    tokens = _env_head_tokens()
+    repo_root = _cheap_repo_root(cwd)
+    if repo_root:
+        tokens = tokens | _local_md_head_tokens(repo_root)
+    if not tokens:
+        return False
+    lowered = cmd.lower()
+    return any(tok in lowered for tok in tokens)
 
 #: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): `nice`,
 #: `ionice`, and `stdbuf` all took their OWN argument(s) (`-n 10`, `-c2`,
@@ -565,16 +799,8 @@ def _base(token: str) -> str:
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-#: BX-13 (2026-07-29, confirmed live via the real dispatcher): a
-#: `sh -c '<payload>'` (or `bash -c`/`zsh -c`/etc.) invocation was never
-#: unwrapped -- the quoted `-c` argument tokenizes as ONE shlex word, so
-#: `_base(tokens[i])` resolved to the shell interpreter itself, never the
-#: real test-runner token inside it, and a subagent's `sh -c "pytest"`
-#: sailed through unclassified while the wrapped command still ran the
-#: whole suite for real. Same wrapper class this module's sibling guards
-#: (`block_subagent_commit.py`'s `_C_FLAG_SHELL_INTERPRETERS`,
-#: `dispatch_checks.py`'s `_SHELL_C_WRAPPER_INTERPRETERS`) already unwrap.
-_SHELL_C_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+#: BX-13's `sh -c` unwrap set (`_SHELL_C_INTERPRETERS`) is defined near
+#: `_WRAPPER_WORDS` above, not here -- see that constant's own comment.
 
 #: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` (2026-07-29
 #: cross-guard fix -- confirmed live against THIS module too, via the same
@@ -647,6 +873,18 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
                         i += 1
                         continue
                     break
+            continue
+        if base in _WITH_SUITE_MUTEX_BASENAMES:
+            # ``with-suite-mutex -- <real command>`` -- strip the wrapper
+            # itself AND its ``--`` separator so the classifier below sees
+            # the SAME argv it would see unwrapped (the WRAPPER leg above
+            # already knows how to tell wrapped from bare; this is what lets
+            # a wrapped command still classify as suite-shaped at all,
+            # rather than reading "with-suite-mutex" as an unrecognized
+            # runner and falling through as an allow).
+            i += 1
+            if i < n and tokens[i] == "--":
+                i += 1
             continue
         if base in _RUN_SUBCOMMAND_WRAPPERS:
             i += 1
@@ -1768,6 +2006,101 @@ def _deny_reason_subagent(detected: str, cmd_safe: str) -> str:
     ) % (detected, cmd_safe, package_script_note)
 
 
+#: Basenames (post ``_base()`` normalization) that identify the
+#: ``with-suite-mutex`` acquiring wrapper -- bare, ``.cmd``, and ``.ps1``
+#: shim spellings. ``_base()`` only strips ``.exe``, never ``.cmd``/``.ps1``
+#: (those are Windows *script* extensions, not executable-file ones), so
+#: both shim spellings are enumerated here rather than assumed handled.
+_WITH_SUITE_MUTEX_BASENAMES = frozenset({
+    "with-suite-mutex", "with-suite-mutex.cmd", "with-suite-mutex.ps1",
+})
+
+
+def _command_wrapped_in_suite_mutex(
+    cmd: str,
+    dialect: Optional[_Dialect],
+    testpaths: Sequence[str],
+    cwd: Optional[str],
+    configured: Sequence["ConfiguredCmd"],
+) -> bool:
+    """Does the SUITE-SHAPED segment of ``cmd`` -- the one that actually
+    invokes the runner -- route through ``with-suite-mutex``?
+
+    Review: code-reviewer -- the former implementation asked "does ANY
+    segment of this chained command start with ``with-suite-mutex``", which
+    a decoy leg satisfies for free: ``with-suite-mutex -- true &&
+    python -m pytest`` wrapped a no-op ``true`` while the real ``pytest``
+    invocation two segments over ran completely bare and held no mutex --
+    the exact hazard the WRAPPER leg exists to close, reopened by a
+    predicate that could be satisfied by a segment that was never the suite
+    invocation at all. Fixed by tying the wrapper check to the SAME
+    per-segment suite-shape classification ``check()`` already runs
+    (``_classify_tokens`` per segment, falling back to
+    ``_matches_configured_cmd`` containment for a chained configured
+    command whose tiers only match as a whole set) rather than a bare
+    ``with-suite-mutex`` token-presence scan: every segment identified as
+    suite-shaped must itself be wrapped, not merely coexist in a command
+    that has a wrapped segment somewhere.
+
+    A legitimately chained command (``cd x && with-suite-mutex --
+    pytest ...``) still passes: ``cd x`` never classifies as suite-shaped
+    so it is not required to be wrapped, and the ``pytest`` segment is both
+    suite-shaped and wrapped.
+
+    Fails CLOSED on ambiguity, never open: a chained configured command that
+    only matches as a whole segment-SET (no individual segment classifies
+    alone) requires every one of its segments to be wrapped.
+    """
+    stripped_segments: List[List[str]] = []
+    wrapped_flags: List[bool] = []
+    for raw_argv in _segment_argvs(cmd, dialect):
+        idx = 0
+        n = len(raw_argv)
+        while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
+            idx += 1
+        wrapped = idx < n and _base(raw_argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES
+        stripped = _strip_command_prefix(raw_argv)
+        if not stripped:
+            continue
+        stripped_segments.append(stripped)
+        wrapped_flags.append(wrapped)
+
+    suite_flags = [
+        _classify_tokens(seg, testpaths, cwd) is not None
+        or _matches_configured_cmd([seg], configured) is not None
+        for seg in stripped_segments
+    ]
+
+    if any(suite_flags):
+        return all(w for w, s in zip(wrapped_flags, suite_flags) if s)
+
+    # No single segment classifies alone -- only the whole segment SET
+    # matches a chained configured command (see ``_matches_configured_cmd``'s
+    # containment docstring). Require every segment wrapped rather than
+    # guessing which ones "count".
+    if stripped_segments and _matches_configured_cmd(stripped_segments, configured) is not None:
+        return all(wrapped_flags)
+
+    return False
+
+
+def _deny_reason_wrapper_required(detected: str, cmd_safe: str) -> str:
+    """WRAPPER-leg deny text -- a granted Tier-U/F command that does not
+    route through ``with-suite-mutex`` and so would hold no mutex while it
+    runs. Names the wrapped form of the caller's OWN command so the fix is a
+    copy-paste, matching the register/length of the sibling deny texts in
+    this module."""
+    return (
+        "Route this through the suite mutex so no other run overlaps "
+        "yours:\n"
+        "  with-suite-mutex -- %s\n\n"
+        "A granted Tier-U/F command must actually HOLD the machine-wide "
+        "test mutex while it runs; a bare invocation holds nothing.\n\n"
+        "  Detected: %s\n"
+        "  Command:  %s"
+    ) % (cmd_safe, detected, cmd_safe)
+
+
 def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> str:
     return (
         "Wait for the in-flight suite run, or scope this to what you touched "
@@ -2373,9 +2706,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     command is suite-shaped AND any of: (a) the payload carries a top-level
     ``agent_id`` (a subagent caller); (b) the command is Tier U OR Tier F and
     the top-level EM's session holds no live Tier-U authorization grant
-    (PM-ruled 2026-08-04: Tier F is no longer exempt from this leg); or
-    (c) the machine-wide suite mutex is held by another run. Checked in that
-    order -- identity, then grant, then mutex.
+    (PM-ruled 2026-08-04: Tier F is no longer exempt from this leg); (c) a
+    granted Tier-U/F command is not routed through ``with-suite-mutex``; or
+    (d) the machine-wide suite mutex is held by another run. Checked in that
+    order -- identity, then grant, then wrapper, then mutex.
     """
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
@@ -2397,16 +2731,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(cmd, str) or not cmd:
         return None
 
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else None
+
     if not _RUNNER_PREFILTER_RE.search(cmd):
-        return None
+        # Dynamic leg (2026-08-10): a repo whose configured test command
+        # invokes a runner this static regex has never heard of (a bespoke
+        # `bin/run-the-suite`) is caught here instead of falling through
+        # unclassified for every leg of this guard -- see
+        # `_dynamic_prefilter_hit`'s own docstring and the module docstring's
+        # `_RUNNER_PREFILTER_RE` comment for the incident and cost argument.
+        if not _dynamic_prefilter_hit(cmd, cwd):
+            return None
 
     # Top-level key access ONLY -- a nested tool_response.agent_id must never
     # reach this decision (see module docstring, negative spec).
     raw_agent_id = payload.get("agent_id")
     is_subagent = isinstance(raw_agent_id, str) and bool(raw_agent_id.strip())
 
-    cwd = payload.get("cwd")
-    cwd = cwd if isinstance(cwd, str) and cwd else None
     repo_root = resolve_git_root(cwd) or cwd
     testpaths = _read_testpaths(repo_root)
 
@@ -2545,6 +2887,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if "U" in matched_tiers:
                 return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie))
             return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie))
+
+        # WRAPPER leg (new, sited strictly after identity and grant, and
+        # strictly before the mutex leg below): a granted Tier-U/F command
+        # that does not route through ``with-suite-mutex`` would hold no
+        # mutex at all, reopening the exact concurrent-run hazard the grant
+        # leg above authorizes but cannot itself prevent -- see
+        # ``_command_wrapped_in_suite_mutex``'s docstring.
+        if not _command_wrapped_in_suite_mutex(cmd, dialect, testpaths, cwd, configured):
+            return _deny(_deny_reason_wrapper_required(detected, cmd_safe))
 
     holder = _mutex_holder()
     if holder:

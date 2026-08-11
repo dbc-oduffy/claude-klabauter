@@ -20,6 +20,19 @@ Migration:    detects the legacy `# --- coordinator maximalist launch ---` block
 Override:     --rc <path> (or the example-doctrine-repo trampoline's COORDINATOR_SHIM_RC env passthrough)
               selects the rc directly (escape hatch when $SHELL detection is wrong).
 
+Shell family: --shell bash|powershell (default: bash, preserving all prior
+              behaviour byte-for-byte) selects BOTH the wired rc line (bash:
+              guarded `source`; powershell: guarded dot-source, see
+              EXPECTED_SOURCE_LINE_POWERSHELL) and the rendered shim's
+              filename (.sh vs .ps1) under the same .claude/shell/ directory.
+              Explicit flag chosen over --rc-extension sniffing: --rc's value
+              is frequently a caller-supplied override (env var, test fixture,
+              non-standard path) with no reliable extension convention, so
+              inference would be a guess dressed as detection. An explicit
+              flag is unambiguous, matches how --rc/--template already work
+              as explicit escape hatches, and keeps the no-flag default
+              behaviour trivially unaffected.
+
 Fresh-install surface: this module writes into the operator's live interactive rc
 file and is exercised by `coordinator:install` on every fresh machine — a missed
 edge here hard-fails a clean install (Family-I).
@@ -85,6 +98,30 @@ EXPECTED_SOURCE_LINE = (
     '&& source "${CLAUDE_HOME:-$HOME}/.claude/shell/claude-doe-shim.sh"'
 )
 
+# PowerShell counterpart of EXPECTED_SOURCE_LINE, selected by --shell powershell.
+# Multi-line is fine: _extract_sentinel_body/_nonblank_join both operate over the
+# whole sentinel body, not a single line. Mirrors the bash guard's semantics (only
+# dot-source when the shim file exists, so a missing file never errors the
+# profile) using $env:CLAUDE_HOME, falling back to $HOME exactly like the bash
+# oracle's ${CLAUDE_HOME:-$HOME}.
+EXPECTED_SOURCE_LINE_POWERSHELL = (
+    "$__claude_doe_shim_base = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { $HOME }\n"
+    '$__claude_doe_shim_path = Join-Path $__claude_doe_shim_base ".claude\\shell\\claude-doe-shim.ps1"\n'
+    "if (Test-Path $__claude_doe_shim_path) { . $__claude_doe_shim_path }"
+)
+
+SHELL_FAMILIES = ("bash", "powershell")
+
+
+def _shim_filename(shell_family: str) -> str:
+    """bash/zsh render a POSIX-sourced ``.sh`` shim; PowerShell dot-sources a
+    ``.ps1`` counterpart at the same ``.claude/shell/`` location."""
+    return "claude-doe-shim.ps1" if shell_family == "powershell" else "claude-doe-shim.sh"
+
+
+def _expected_source_line(shell_family: str) -> str:
+    return EXPECTED_SOURCE_LINE_POWERSHELL if shell_family == "powershell" else EXPECTED_SOURCE_LINE
+
 _USAGE = """\
 Usage: gen-claude-doe-shim.sh [OPTIONS]
 
@@ -98,6 +135,9 @@ Options:
                       temp path, discards it, exits 0 on success)
   --template <path>   Override template source path (default: auto-resolved
                       relative to the example-doctrine-repo trampoline; useful for tests)
+  --shell <family>    Target shell family: "bash" (default, covers bash/zsh)
+                      or "powershell" (selects the .ps1 shim path and a
+                      dot-source wired line instead of a bash source line)
   -h, --help          Show this help and exit
 
 Environment:
@@ -178,6 +218,7 @@ def main(argv: List[str]) -> int:
     check_only = False
     template_override: Optional[str] = None
     graceful_skip_unresolved = False
+    shell_family = "bash"
 
     i = 0
     while i < len(argv):
@@ -199,6 +240,19 @@ def main(argv: List[str]) -> int:
                 print(f"{_PROG}: --template requires a value. Run with --help for usage.", file=sys.stderr)
                 return 1
             template_override = argv[i + 1]
+            i += 2
+        elif arg == "--shell":
+            if i + 1 >= len(argv):
+                print(f"{_PROG}: --shell requires a value. Run with --help for usage.", file=sys.stderr)
+                return 1
+            shell_family = argv[i + 1]
+            if shell_family not in SHELL_FAMILIES:
+                print(
+                    f'{_PROG}: --shell must be one of {", ".join(SHELL_FAMILIES)}, got '
+                    f'"{shell_family}". Run with --help for usage.',
+                    file=sys.stderr,
+                )
+                return 1
             i += 2
         elif arg in ("-h", "--help"):
             print(_USAGE, file=sys.stderr)
@@ -252,10 +306,12 @@ def main(argv: List[str]) -> int:
         print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")
         return 1
 
+    expected_source_line = _expected_source_line(shell_family)
+
     claude_home_base = _resolve_claude_home_base()
     claude_dir = os.path.join(claude_home_base, ".claude")
     shell_dir = os.path.join(claude_dir, "shell")
-    shim_dest = os.path.join(shell_dir, "claude-doe-shim.sh")
+    shim_dest = os.path.join(shell_dir, _shim_filename(shell_family))
 
     # ---- detect legacy stopgap (faithful: reads $HOME/.bashrc, not CLAUDE_HOME) ----
     bashrc = os.path.join(_resolve_home(), ".bashrc")
@@ -344,7 +400,7 @@ def main(argv: List[str]) -> int:
             if SENTINEL_BEGIN in rc_text.split("\n"):
                 body = _extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END)
                 body_trimmed = _nonblank_join(body)
-                expected_trimmed = _nonblank_join(EXPECTED_SOURCE_LINE)
+                expected_trimmed = _nonblank_join(expected_source_line)
                 if body_trimmed == expected_trimmed:
                     print(
                         f"[check-only] rc {target_rc}: sentinel block present and "
@@ -418,7 +474,7 @@ def main(argv: List[str]) -> int:
     if SENTINEL_BEGIN in rc_text.split("\n"):
         body = _extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END)
         body_trimmed = _nonblank_join(body)
-        expected_trimmed = _nonblank_join(EXPECTED_SOURCE_LINE)
+        expected_trimmed = _nonblank_join(expected_source_line)
         if body_trimmed == expected_trimmed:
             print(f"rc {target_rc}: sentinel block unchanged (no-op)", file=sys.stderr)
             rc_block_was_noop = True
@@ -436,7 +492,7 @@ def main(argv: List[str]) -> int:
     else:
         tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
         try:
-            new_block = f"\n{SENTINEL_BEGIN}\n{EXPECTED_SOURCE_LINE}\n{SENTINEL_END}\n"
+            new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
             with open(tmp_rc, "w", encoding="utf-8") as fh:
                 fh.write(rc_text)
                 fh.write(new_block)

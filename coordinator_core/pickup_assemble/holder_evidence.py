@@ -61,21 +61,35 @@ _PATH_INPUT_KEYS = ("file_path", "notebook_path", "path")
 _COMMAND_PATH_RE = re.compile(r"[./A-Za-z0-9_\-]*(?:/[./A-Za-z0-9_\-]+)+")
 
 
-def _liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
+def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     """Which liveness LAYER concluded live/dead for `holder_sid` — the single
     highest-value evidence field (see module docstring). Does not repeat the
     liveness decision itself, only names its source.
 
-    Reads the basis off `coordinator_core.session.liveness.live_session_verdicts`
-    — the ONE shared per-id liveness seam — rather than re-deriving it here.
-    This module used to call `core.stable_pid_alive` directly, which violated
-    `liveness.py`'s own D5 single-liveness-key invariant ("called from exactly
-    ONE place here — `session_live`"); reading off the seam instead restores
-    that invariant as a free side effect (Review: staff-eng second pass,
-    Finding 7).
+    Reads the basis off `coordinator_core.session.liveness.session_verdict`
+    — the per-id entry point over the SAME shared derivation
+    `live_session_verdicts` uses (`_verdict_for_sdir`) — rather than
+    re-deriving it here. This module used to call `core.stable_pid_alive`
+    directly, which violated `liveness.py`'s own D5 single-liveness-key
+    invariant ("called from exactly ONE place here — `session_live`");
+    reading off the seam instead restores that invariant as a free side
+    effect (Review: staff-eng second pass, Finding 7). `session_verdict` was
+    added (Review: staff-eng-review C, 2026-08-10) to drop the incidental
+    whole-corpus `live_session_verdicts(cwd)` scan this function used to run
+    just to discard every entry but one.
 
-    Vocabulary (four values; see `live_session_verdicts`'s docstring for the
+    Public name (promoted from `_liveness_basis`) so `coordinator/bin/
+    session-claim-cli`'s `is-session-live` subcommand can reuse this exact
+    derivation for AC8 rather than computing a second, drift-prone one — see
+    docs/plans/2026-08-10-stable-pid-capture-breadcrumb-and-liveness-basis.md
+    § C3. `_liveness_basis` is kept below as an alias for this module's own
+    internal caller (`holder_evidence`).
+
+    Vocabulary (five values; see `live_session_verdicts`'s docstring for the
     full per-arm derivation):
+      "harness-registry"      — harness-written process identity, stronger
+                                 evidence than `"stable-pid"`; `age_sec` is
+                                 always `None` on this basis.
       "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
       "recency-window"        — Layer 2 recency fallback, `last_activity`
                                  present and parseable.
@@ -89,12 +103,17 @@ def _liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
                                  `no-session` sentinel) — evidence-gap, not a
                                  stronger claim either way.
     """
-    verdicts = _liveness.live_session_verdicts(cwd)
-    entry = verdicts.get(holder_sid)
+    entry = _liveness.session_verdict(holder_sid, cwd)
     if entry is None:
         return "unknown"
     _live, basis, _age_sec = entry
     return basis
+
+
+#: Back-compat alias — `holder_evidence()` below is this module's own
+#: pre-existing internal caller; kept private-named so no behaviour changes
+#: for it while `liveness_basis` becomes the public entry point.
+_liveness_basis = liveness_basis
 
 
 def _last_activity_age_sec(sdir: str) -> Optional[int]:
@@ -244,7 +263,7 @@ def _recent_paths_from_transcript(transcript_path: str, repo_root: Path) -> list
 
 
 def holder_evidence(
-    holder_sid: str,
+    holder_sid: Optional[str],
     repo_root: Path,
     *,
     scope: Optional[list[str]] = None,
@@ -256,7 +275,9 @@ def holder_evidence(
     `coordinator_core.session.liveness`.
 
     Always returns a dict with these keys (each `None` when unknown):
-      liveness_basis        - "stable-pid" | "recency-window" | "unknown"
+      liveness_basis        - "harness-registry" | "stable-pid" |
+                                 "recency-window" | "recency-window-mtime" |
+                                 "unknown"
       last_activity_age_sec  - int seconds since meta.json's last_activity
       holder_goal            - meta.json's "goal" field
       holder_branch          - meta.json's "branch" field
@@ -277,6 +298,14 @@ def holder_evidence(
     fields — it never touches `holder_live`/`verdict`, which the caller
     already resolved via `session_live`/`claim_holder_live` before ever
     calling this function.
+
+    `holder_sid` is Optional because a claim dir CAN name no holder and still
+    read live: `liveness.claim_holder_live` falls back to the ephemeral-pid
+    test for a legacy dir with no `session_id` file, and a half-written dir
+    can lose that file to a concurrent takeover between two reads. A `None`
+    holder is an evidence gap, not an error — it yields the all-`None` result
+    below by the same fail-soft contract, never an exception into a caller
+    that is mid-verdict.
     """
     result: dict[str, Any] = {
         "liveness_basis": None,
@@ -287,6 +316,9 @@ def holder_evidence(
         "recent_paths_source": "unavailable",
         "scope_overlap": None,
     }
+
+    if not holder_sid:
+        return result
 
     try:
         sdir = core.session_dir(holder_sid, str(repo_root))

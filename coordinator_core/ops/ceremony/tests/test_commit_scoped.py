@@ -39,6 +39,8 @@ import pytest
 
 from coordinator_core.git.divergence import DivergenceCheckFailed
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
+from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from .fixtures.real_git import (
     make_agree_path,
     make_diverged_path,
@@ -99,6 +101,38 @@ def test_diverged_path_commits_staged_content_verbatim(tmp_path):
     # Worktree content is untouched by commit_scoped -- it never runs `git
     # checkout`/`git add` against the diverged path's worktree copy.
     assert (repo / "file.txt").read_text(encoding="utf-8") == "WORKTREE\n"
+
+
+def test_diverged_path_result_names_excluded_worktree_edits(tmp_path):
+    """P1 fix (state/bug-backlog/2026-08-10-scoped-git-commit-reports-
+    success-while-334e90d707f9.yaml): the private-index branch commits the
+    STAGED content (unchanged behaviour, asserted above) but must no longer
+    return a bare silent success -- the caller's excluded worktree edits are
+    named on the result."""
+    repo = real_git_repo(tmp_path)
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert result.worktree_excluded == ("file.txt",)
+    assert "file.txt" in result.stderr
+    assert "not included" in result.stderr.lower()
+
+
+def test_agree_branch_result_reports_no_excluded_worktree_edits(tmp_path):
+    """Clean case stays quiet: when index and worktree agree (the ordinary
+    AGREE branch), nothing was excluded and no warning is manufactured."""
+    repo = real_git_repo(tmp_path)
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert result.worktree_excluded == ()
+    assert result.stderr == ""
 
 
 def test_red_proof_diverged_path_via_worktree_reproduces_incident(tmp_path):
@@ -634,6 +668,12 @@ def test_file_mode_preserved(tmp_path):
     script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
     script.chmod(0o755)
     _git(["add", "--", "script.sh"], repo)
+    # The exec bit is set through the INDEX, not through the filesystem:
+    # Windows has no POSIX mode bits, so `chmod(0o755)` above is a no-op there
+    # and git records `100644`. `update-index --chmod=+x` is the portable way
+    # to establish the `100755` precondition this test is actually about
+    # (does `commit_authored_content` PRESERVE a mode it finds at HEAD).
+    _git(["update-index", "--chmod=+x", "--", "script.sh"], repo)
     _git(["commit", "-q", "-m", "baseline"], repo)
     assert _head_mode(repo, "script.sh") == "100755"
 
@@ -773,3 +813,210 @@ def test_wrong_known_diverged_trusts_caller_and_commits_worktree_content(tmp_pat
 
     assert result.ok, result.stderr
     assert _committed_content_at_head(repo, "file.txt") == "WORKTREE\n"
+
+
+# ---------------------------------------------------------------------------
+# `deliverable_id` -- C7a, docs/plans/2026-08-10-a-commit-trailer-that-names-
+# the-session.md. Covers AC12/13/17/18/19 on BOTH the agree and diverged
+# branches -- the branch-parametrised assertion the original (unsplit) C7
+# AC set lacked (staff-eng delta review, finding 5).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_equivalence_cache():
+    """`deliverable_equivalence.load_equivalence_map` memoizes per-process,
+    keyed to the FIRST `worktree_root` it is ever called with (see that
+    function's own docstring) -- each test here uses a fresh `tmp_path`
+    repo, so without a reset between tests the second test onward would
+    silently read the FIRST test's (empty) equivalence map result for an
+    unrelated root. Harmless for these tests today (no test declares a fork
+    equivalence), but the reset is cheap and this is the documented contract
+    for "a test iterating multiple roots" -- exactly this file's shape.
+    """
+    _reset_equivalence_map_cache()
+    yield
+    _reset_equivalence_map_cache()
+
+
+def _seed_deliverable_artifact(repo: Path, deliverable_id: str, *, slug: str = "seed-plan") -> Path:
+    """Write a minimal plan artifact under `docs/plans/` carrying
+    `deliverable_id` in its own frontmatter -- the AC19(b) existence check
+    (`_validate_explicit_deliverable_id`, via `coordinator_core.ops.
+    deliverable_rollup._scan_artifacts_by_deliverable_id`) resolves against
+    this three-path corpus scan, NOT against the commit's own pathspec (see
+    that function's own docstring for why: the whole point of this chunk is
+    admitting `deliverable_id` on ordinary code-only commits with no
+    frontmatter-capable artifact of their own).
+    """
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    path = plans_dir / f"{slug}.md"
+    path.write_text(
+        f"---\ndeliverable_id: {deliverable_id}\n---\n\n# seed plan\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _trailer_lines(repo: Path, sha: str, prefix: str) -> list[str]:
+    result = _git(["log", "-1", "--format=%B", sha], repo)
+    return [line for line in result.stdout.splitlines() if line.startswith(prefix)]
+
+
+# AC17 -- explicit deliverable_id lands as the trailer on a REAL committed
+# SHA, read back BY TRAILER (not by inspecting trailer_args/argv), on both
+# branches.
+
+
+def test_agree_branch_explicit_deliverable_id_lands_on_real_commit(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Deliverable-Id:") == ["Deliverable-Id: dlv-abc123"]
+
+
+def test_diverged_branch_explicit_deliverable_id_lands_on_real_commit(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    assert result.ok, result.stderr
+    sha = result.stdout.strip()
+    assert _trailer_lines(repo, sha, "Deliverable-Id:") == ["Deliverable-Id: dlv-abc123"]
+
+
+# AC13 -- deliverable_id=None is byte-identical to every existing case in
+# this file. Every pre-existing test above calls commit_scoped without the
+# new kwarg at all (default None) and is left unmodified -- this pins the
+# claim down explicitly rather than leaving it merely implied by the diff.
+
+
+def test_agree_branch_deliverable_id_none_is_byte_identical_to_default(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo_a = real_git_repo(tmp_path / "a")
+    make_agree_path(repo_a, "file.txt", "content\n")
+    msg_a = _write_msg(tmp_path)
+    result_a = git_native.commit_scoped(["file.txt"], msg_a, repo_a)
+    assert result_a.ok, result_a.stderr
+
+    repo_b = real_git_repo(tmp_path / "b")
+    make_agree_path(repo_b, "file.txt", "content\n")
+    msg_b = tmp_path / "msg_b.txt"
+    msg_b.write_text("a commit message\n", encoding="utf-8")
+    result_b = git_native.commit_scoped(["file.txt"], msg_b, repo_b, deliverable_id=None)
+    assert result_b.ok, result_b.stderr
+
+    body_a = _git(["log", "-1", "--format=%B"], repo_a).stdout
+    body_b = _git(["log", "-1", "--format=%B"], repo_b).stdout
+    assert body_a == body_b
+
+
+# AC18 -- message-trailer-agrees (one line, no duplicate) / disagrees
+# (raises DivergentDeliverableIdError), on both branches.
+
+
+def test_agree_branch_message_trailer_agrees_no_duplicate(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("subject\n\nDeliverable-Id: dlv-abc123\n", encoding="utf-8")
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Deliverable-Id:") == ["Deliverable-Id: dlv-abc123"]
+
+
+def test_agree_branch_message_trailer_disagrees_raises(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("subject\n\nDeliverable-Id: dlv-old\n", encoding="utf-8")
+    head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    with pytest.raises(DivergentDeliverableIdError):
+        git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before
+
+
+def test_diverged_branch_message_trailer_agrees_no_duplicate(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("subject\n\nDeliverable-Id: dlv-abc123\n", encoding="utf-8")
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    assert result.ok, result.stderr
+    sha = result.stdout.strip()
+    assert _trailer_lines(repo, sha, "Deliverable-Id:") == ["Deliverable-Id: dlv-abc123"]
+
+
+def test_diverged_branch_message_trailer_disagrees_raises(tmp_path):
+    repo = real_git_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-abc123")
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("subject\n\nDeliverable-Id: dlv-old\n", encoding="utf-8")
+    head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    with pytest.raises(DivergentDeliverableIdError):
+        git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
+
+    head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before
+
+
+# AC19 -- malformed-shape and unresolvable-value rejections. Guard runs
+# before either branch dispatches, so one agree-shaped fixture covers both
+# (the guard never reaches the divergence check).
+
+
+def test_malformed_shape_rejected(tmp_path):
+    repo = real_git_repo(tmp_path)
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+    head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    result = git_native.commit_scoped(
+        ["file.txt"], msg_file, repo, deliverable_id="not-a-dlv-id"
+    )
+
+    assert result.ok is False
+    assert "not-a-dlv-id" in result.stderr
+    assert "dlv-" in result.stderr
+    head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before
+
+
+def test_unresolvable_value_rejected(tmp_path):
+    repo = real_git_repo(tmp_path)
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+    head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    result = git_native.commit_scoped(
+        ["file.txt"], msg_file, repo, deliverable_id="dlv-doesnotexist"
+    )
+
+    assert result.ok is False
+    assert "dlv-doesnotexist" in result.stderr
+    head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before

@@ -403,20 +403,44 @@ def _advisory_reason(file_path: str) -> str:
     size-neutral) -- design-as-offers: names the concrete alternative (the
     same session-grant path the deny leg names) rather than a bare notice,
     per the Axis-A firing-shape obligation (any emission that asks the
-    agent to reconsider must name a concrete alternative)."""
+    agent to reconsider must name a concrete alternative).
+
+    RESHAPE (C4, docs/plans/2026-08-08-discriminate-the-caller-on-the-
+    write-grant.md): this guard's whole audience is dispatched subagents —
+    a subagent cannot observe, from where it stands, whether its dispatch
+    carries a PM ratification; it only hears what its EM tells it. The
+    rendered grant command is therefore attributed to the EM, not framed
+    as something the reading subagent should itself run — that framing
+    was this guard's original defect (the deny handed the very audience
+    it was meant to bind a command that cleared its own gate).
+    """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
         "Advisory: this edit does not grow "
         f"`{file_path_safe}` (shrink or size-neutral), so it is allowed "
         "without a session grant -- the growth-only deny this guard "
         "enforces does not apply here. If a later edit in this same "
-        "session GROWS the file instead, that edit still needs the grant "
-        "(" + _grant_cli_invocation() + ")."
+        "session GROWS the file instead, that edit will need a live "
+        "session grant. Filing one is the EM's action, not this agent's: "
+        "the EM runs (" + _grant_cli_invocation() + ")."
     )
 
 
 def _deny_reason(agent_id: str, file_path: str) -> str:
     """The deny-with-offer text (design-as-offers, see module docstring).
+
+    RESHAPE (C4, docs/plans/2026-08-08-discriminate-the-caller-on-the-
+    write-grant.md): this deny only ever renders for a dispatched
+    subagent (the check leg allows unconditionally when no ``agent_id``
+    is present). A subagent cannot itself confirm PM ratification — it
+    never speaks to the PM directly, only to its EM — so the remediation
+    here is "report BLOCKED upward", never a runnable ``grant pm``
+    invocation framed as the reader's own next step. The text states the
+    structural reason (a property of every subagent on every dispatch,
+    not a judgment that this agent's work is unauthorized) and hands the
+    agent the three pieces its BLOCKED report needs: the governed
+    surface, the structural reason, and the exact command the EM runs to
+    unblock it.
 
     Byte-budgeted prose (see ``docs/plans/2026-08-02-guard-message-size-
     discipline.md`` C8): leads with the BETTER ALTERNATIVE — the discharge
@@ -425,17 +449,31 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     longer echoed into the rendered text (the deny already reaches the
     firing subagent directly; the id added prose bytes with no reader who
     needed it there). The target path, grant command, and grant
-    precondition all sit inside the "Run this instead:" cue window so they
-    render exempt from the prose cap rather than needing to be cut.
+    precondition all sit inside the "Report BLOCKED to your EM instead:"
+    cue window (``_CUE_WINDOW_RE``,
+    ``coordinator_core.bash_guards._alternative_liveness``, matched here via
+    the bare "instead" token) so they render exempt from the prose cap
+    rather than needing to be cut. "instead" is load-bearing here for a
+    reason beyond the byte cap too: it names what the agent does IN PLACE
+    OF the write it was about to make (report upward, instead of writing),
+    which is the correct AC6/AC7 framing — not a "run this instead of the
+    thing you'd otherwise be blocked on" offer, which is the framing this
+    guard exists to avoid handing a dispatched subagent.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
         "BLOCKED: CLAUDE.md needs a session grant for dispatched writes. "
         "Check the discharge hierarchy (mechanize/reroute/wiki) first.\n\n"
-        "Still want CLAUDE.md? Run this instead:\n"
+        "This is not a judgment on the edit -- a dispatched agent cannot "
+        "see, from where it stands, whether its dispatch carries a PM "
+        "ratification; it only hears what its EM tells it. Confirming "
+        "that is the EM's call, not something to resolve from here. "
+        "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
-        f"  {_grant_cli_invocation()}\n"
-        f"  {_GRANT_CLI_PRECONDITION}\n\n"
+        "  Reason: needs a live CLAUDE.md write grant for this session.\n"
+        "  Unblock (EM runs this, not you):\n"
+        f"    {_grant_cli_invocation()}\n"
+        f"    {_GRANT_CLI_PRECONDITION}\n\n"
         + operator_override_note(_OVERRIDE_ENV_VAR)
     )
 

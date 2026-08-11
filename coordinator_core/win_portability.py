@@ -320,6 +320,21 @@ def no_console_creationflags() -> dict:
     NOT touch ``stdout``/``stderr``/``stdin`` handling, so a caller's existing
     ``capture_output=True`` / ``PIPE`` wiring is unaffected.
 
+    THE CATCH, and it is not optional reading: "unaffected" holds only for a
+    caller that wires SOMETHING. A spawn passing this flag and NO
+    ``stdin=``/``stdout=``/``stderr=``/``capture_output=`` at all silently
+    LOSES the child's output on Windows. CPython sets ``STARTF_USESTDHANDLES``
+    only when at least one of those is given; without it the child binds its
+    standard handles to the fresh, window-less console this flag allocates
+    instead of inheriting the parent's, and everything the child prints goes
+    into a console nobody can read. Measured, not inferred. Passing any ONE of
+    them is enough -- CPython then fills the unspecified handles from the
+    parent's own real handles -- so ``capture_output=True``, ``stdout=PIPE``,
+    and ``stderr=PIPE`` alone are all safe. If the child's output is meant to
+    reach the operator, use ``no_console_passthrough_kwargs()`` below instead
+    of this function. Gate: ``coordinator_core/tests/
+    test_no_output_swallowing_no_console_spawn.py``.
+
     GAP, not covered here: a call site that also passes ``shell=True`` needs
     the separate STARTUPINFO route (``STARTF_USESHOWWINDOW`` +
     ``wShowWindow=SW_HIDE``) instead of (or in addition to) this primitive.
@@ -366,3 +381,45 @@ def no_console_creationflags() -> dict:
     # so a test exercising this branch on a real POSIX host must not raise
     # AttributeError reaching for a Windows-only constant that isn't there.
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def no_console_passthrough_kwargs() -> dict:
+    """Kwargs mapping for a spawn that must suppress the console popup AND
+    still let the child's output reach this process's stdout/stderr.
+
+    Use this, not ``no_console_creationflags()``, whenever the child writes
+    something an operator is meant to see -- a passthrough delegation, a
+    progress-reporting installer step, a nested test run. Use
+    ``no_console_creationflags()`` when the caller captures the output itself
+    (``capture_output=True``/``PIPE``) or genuinely discards it.
+
+    Windows: the flag alone is not enough. With no ``stdout=``/``stderr=``
+    passed, CPython omits ``STARTF_USESTDHANDLES``, so the child binds its
+    standard handles to the fresh window-less console ``CREATE_NO_WINDOW``
+    allocates rather than inheriting this process's -- the output is written
+    into a console nobody can read and is lost. Handing the fds over
+    explicitly restores ``STARTF_USESTDHANDLES`` and the output lands where
+    the operator expects it.
+
+    Real fds, not ``sys.stdout``/``sys.stderr``: the child inherits OS
+    handles, and the fd is what a redirection (a shell ``>``, a pytest
+    ``capfd``) actually moved. A detached process (``pythonw``, a service) or
+    a captured-object stream has no fd at all -- there is nothing to pass
+    through, so those degrade to plain inheritance rather than raising.
+
+    POSIX: the returned mapping is the fds alone (``no_console_creationflags()``
+    contributes ``{}`` there), which is what inheritance already does -- so
+    this is behaviour-neutral off Windows, by construction rather than by a
+    platform branch.
+    """
+    import sys
+
+    kwargs: dict = dict(no_console_creationflags())
+    for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        if fd >= 0:
+            kwargs[key] = fd
+    return kwargs

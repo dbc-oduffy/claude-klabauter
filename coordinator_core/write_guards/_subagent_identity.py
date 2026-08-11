@@ -37,6 +37,59 @@ _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
 #: em-session-id.txt back-pointer content format guard.
 _SESSION_ID_FORMAT_RE = re.compile(r"^[a-zA-Z0-9_-]{3,}$")
 
+#: Already-canonical teammate shape as the HARNESS hands it back verbatim on
+#: dispatch (``tool_response.agentId`` / ``.agent_id``): ``<name>@session-<short>``.
+#: Distinct from ``_NAMED_TEAMMATE_RE`` above, which matches the SUBAGENT-side
+#: raw id (``a<name>-<16hex>``) seen from inside a dispatched teammate's own
+#: tool calls — the two shapes are NOT the same string for the same teammate.
+_TEAMMATE_CANONICAL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)@session-(?P<short>[a-z0-9-]+)$")
+
+
+def normalize_teammate_agent_id(agent_id: str, live_session_id: str) -> str:
+    """Rebuild a harness-supplied teammate canonical id against the LIVE session.
+
+    Root cause (docs/research/spike-verdicts/2026-08-10-session-scoped-hooks-
+    inside-a-teammate-session.md): the harness stamps a named teammate's
+    ``teamName`` — and therefore the ``<short>`` embedded in its
+    ``<name>@session-<short>`` canonical id — once, at team creation. A
+    ``/clear`` (and plausibly ``resume``/``compact``/``fork``) mints a new LIVE
+    session id without refreshing that stamp, so the harness keeps handing back
+    an id whose embedded ``<short>`` names a session that may since have ended
+    and been archived. Every OTHER bookkeeping writer in this codebase derives
+    its own teammate canonical id fresh, from the raw subagent-side id plus the
+    CURRENT firing ``session_id`` (see ``_resolve_subagent_identity`` above,
+    ``coordinator_core.session.identity.resolve_subagent_identity``, and
+    ``coordinator_core.hooks.track_touched_files._resolve_subagent_identity``)
+    — so a harness-verbatim id with a stale embedded short silently keys a
+    DIFFERENT ``.agents/<id>/`` directory than the one those writers use for
+    the exact same teammate, and a join against one never finds the other.
+
+    This function is the single place that re-derives the embedded short
+    against ``live_session_id`` (``CLAUDE_CODE_SESSION_ID`` — authoritative for
+    "which session am I actually in", per the same spike) so a harness-supplied
+    canonical id and a freshly-built one land on the SAME directory.
+
+    Returns ``agent_id`` unchanged (never rewrites) when:
+      - it is not ``<name>@session-<short>`` shaped at all (bare hex, or any
+        other unrecognised string — not this function's concern);
+      - ``live_session_id`` is absent or shorter than 8 chars — fail-closed,
+        never guess a short from an id too short to slice reliably;
+      - the embedded short already equals ``live_session_id[:8]`` — a no-op
+        rewrite would only churn callers for no behavior change.
+
+    Pure function — no filesystem I/O, no side effects.
+    """
+    match = _TEAMMATE_CANONICAL_RE.fullmatch(agent_id or "")
+    if not match:
+        return agent_id
+    live = live_session_id or ""
+    if len(live) < 8:
+        return agent_id
+    live_short = live[:8]
+    if match.group("short") == live_short:
+        return agent_id
+    return f"{match.group('name')}@session-{live_short}"
+
 
 def _cs_build_canonical_agent_id(name: str, short_session: str) -> str:
     """Port of ``cs_build_canonical_agent_id``, example-doctrine-repo coordinator-session.sh

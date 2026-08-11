@@ -408,7 +408,7 @@ def test_install_bin_resolvers_journals_all_four_shaped_clauses(tmp_path, monkey
 
     substrate._install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
-        python3_cmd_rendered=None, check_only=False,
+        check_only=False,
         python3_cmd_resolved_bin="/usr/bin/python3",
     )
 
@@ -457,7 +457,7 @@ def test_install_bin_resolvers_check_only_never_journals(tmp_path, monkeypatch):
     with pytest.raises(substrate.SubstrateFatalError):
         substrate._install_bin_resolvers(
             ml_bin, ch_bin, bin_dst,
-            python3_cmd_rendered=None, check_only=True,
+            check_only=True,
             python3_cmd_resolved_bin="/usr/bin/python3",
         )
 

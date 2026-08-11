@@ -344,6 +344,191 @@ def test_execute_directives_failing_directive_still_reported_as_failed(
 
 
 # ---------------------------------------------------------------------------
+# best_effort / degraded — 2026-08-08 "a best-effort directive cannot fail a
+# ceremony". A `best_effort: True` directive that exits non-zero must land
+# in `report["degraded"]`, never `report["failed"]`, and must not move the
+# exit code away from SUCCESS when nothing else failed. A non-`best_effort`
+# directive is unchanged. Both paths must carry the captured stderr in the
+# error string.
+# ---------------------------------------------------------------------------
+
+
+def test_best_effort_directive_failure_lands_in_degraded_not_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_main(argv: list[str]) -> int:
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directive = _directive("d_cadence", "fake-cli")
+    directive["best_effort"] = True
+    exit_code, report = wc_apply._execute_directives([directive], [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert report["landed"] == []
+
+
+def test_best_effort_directive_failure_alone_still_reaches_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: with every other directive clean, a run whose only non-zero exit
+    is on a `best_effort` directive must return SUCCESS, not
+    PARTIAL_MUTATION — asserted against the real `_execute_directives`."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 3
+
+    def clean_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {
+        "fake-cadence": _fake_module(failing_main, "fake_cadence"),
+        "fake-clean": _fake_module(clean_main, "fake_clean"),
+    }
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    cadence = _directive("d_cadence", "fake-cadence")
+    cadence["best_effort"] = True
+    directives = [_directive("d_clean", "fake-clean"), cadence]
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert report["landed"] == ["d_clean"]
+    assert exit_code == int(wc_apply.WorkdayApplyExitCode.SUCCESS)
+
+
+def test_non_best_effort_directive_failure_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC3: a directive with no `best_effort` key (or `best_effort: False`)
+    behaves exactly as before — `failed`, never `degraded`, and the exit
+    code still reflects the failure."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+
+    assert report["degraded"] == []
+    assert [entry["id"] for entry in report["failed"]] == ["d_plain"]
+    assert exit_code == int(wc_apply.WorkdayApplyExitCode.DIRECTIVE_FAILED)
+
+
+def test_failed_entry_error_string_carries_captured_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC4 (failed path): the captured stderr must appear in the `error`
+    string, not just in `report["results"]`."""
+
+    def failing_main(argv: list[str]) -> int:
+        print("op timed out after 30.0s", file=sys.stderr)
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    _, report = wc_apply._execute_directives(directives, [], {})
+
+    (entry,) = report["failed"]
+    assert "op timed out after 30.0s" in entry["error"]
+
+
+def test_degraded_entry_error_string_carries_captured_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC4 (degraded path): same stderr fold as the failed path."""
+
+    def failing_main(argv: list[str]) -> int:
+        print("op timed out after 30.0s", file=sys.stderr)
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directive = _directive("d_cadence", "fake-cli")
+    directive["best_effort"] = True
+    _, report = wc_apply._execute_directives([directive], [], {})
+
+    (entry,) = report["degraded"]
+    assert "op timed out after 30.0s" in entry["error"]
+
+
+def test_failed_entry_error_string_has_no_stray_block_on_clean_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stderr fold must not append a noisy empty block when the CLI
+    produced no stderr at all — the existing prefix stays byte-identical."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 3
+
+    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    _, report = wc_apply._execute_directives(directives, [], {})
+
+    (entry,) = report["failed"]
+    assert entry["error"] == "fake-cli exited 3 (args=[])"
+
+
+# ---------------------------------------------------------------------------
+# already_satisfied stdin_from — 2026-08-08 defect C. This runner threads
+# producer output via `stdin_from`, so an already-satisfied producer must
+# still refuse to dispatch its consumer (feeding an empty stream is exactly
+# what the guard exists to prevent) — but the message must say WHY: the
+# producer landed but produced no stdout, not "did not land".
+# ---------------------------------------------------------------------------
+
+
+def test_stdin_from_naming_already_satisfied_producer_still_refuses_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def consumer_main(argv: list[str]) -> int:
+        raise AssertionError("must never dispatch: producer gave no stdout this pass")
+
+    modules = {"fake-anchor": _fake_module(consumer_main, "fake_anchor")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [
+        _directive("d_scan", "fake-scan", already_satisfied=True),
+        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+    ]
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+
+    assert report["landed"] == ["d_scan"]
+    failed_ids = {entry["id"] for entry in report["failed"]}
+    assert failed_ids == {"d_anchor"}
+
+
+def test_stdin_from_already_satisfied_message_distinguishes_from_never_landed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC7: the refusal message for an already-satisfied producer must read
+    differently from the message for a producer that genuinely never landed
+    (failed/blocked/not-yet-dispatched) — same refusal, honest reason."""
+
+    def consumer_main(argv: list[str]) -> int:
+        raise AssertionError("must never dispatch")
+
+    modules = {"fake-anchor": _fake_module(consumer_main, "fake_anchor")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [
+        _directive("d_scan", "fake-scan", already_satisfied=True),
+        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+    ]
+    _, report = wc_apply._execute_directives(directives, [], {})
+
+    (entry,) = [e for e in report["failed"] if e["id"] == "d_anchor"]
+    assert "did not land" not in entry["error"]
+    assert "already-satisfied" in entry["error"]
+
+
+# ---------------------------------------------------------------------------
 # apply() / main() — `for_date`/`only_mode` plumbing into the brief() recompute
 #
 # Companion to `test_workday_complete_contract.py`'s brief-side

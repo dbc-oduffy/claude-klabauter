@@ -2901,6 +2901,26 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
+    # chain_ancestry_waivers.reap — MUTATING: deletes waiver files/subdirectories
+    # (coordinator_core/ops/reap_chain_ancestry_waivers.py — .unlink()/.rmdir() calls,
+    # verified). Deletion is a write to coordinator substrate even though the module's
+    # own docstring frames it as fail-safe/remove-only (a reap mistake can only make
+    # coverage.py's gate MORE conservative, never less) — that safety property is about
+    # DIRECTION of harm, not about whether a write happens at all.
+    # ceremony.chunk_commits — COMPUTE_ONLY: pure git-log read (resolve_chunk_commits
+    # composes git_native.log_diff_filter + a range `git log` call; no write_text/
+    # locked_rmw/unlink anywhere in coordinator_core/ops/ceremony/chunk_commits.py,
+    # verified). Answers "did chunk X commit?" — never mutates the repo it queries.
+    # Filed 2026-08-10 (state/bug-backlog/2026-08-10-chain-ancestry-waivers-reap-and-
+    # ceremony-e5afd3e0e7ab.yaml): both were registered+module-mapped but missing this
+    # entry, outside the frozen _KNOWN_UNCLASSIFIED_OPS_DEBT baseline — a genuine
+    # registration-quad regression, not baseline debt (see that entry for detail on why
+    # widening the baseline would have been the wrong fix).
+    "chain_ancestry_waivers.reap": OpClass.MUTATING,
+    "ceremony.chunk_commits": OpClass.COMPUTE_ONLY,
+    # sizing.decline — MUTATING: writes `status: declined` under locked_rmw
+    # (2026-08-10, docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2).
+    "sizing.decline": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # distill.curate_clusters — COMPUTE_ONLY: a pure structural verdict over a
     # caller-supplied {system_tag: count} map. Reads no file, opens no path, and
@@ -3112,6 +3132,38 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "diagnostics.always_succeeds": OpClass.COMPUTE_ONLY,
     "diagnostics.always_refuses": OpClass.COMPUTE_ONLY,
     "diagnostics.always_structural_pin": OpClass.COMPUTE_ONLY,
+    # scratchpad.sweep — MUTATING: reclaims (shutil.rmtree) dead harness
+    # scratchpad directories under the OS temp root (ops/scratchpad_sweep.py).
+    # Not a write to "coordinator substrate" in this module's literal sense
+    # (state files, queues, git objects) — the target is ephemeral per-session
+    # harness scratch, entirely outside state/ and outside any git repo — but
+    # a real, irreversible disk-delete op is exactly DR-208's named ambiguous
+    # case ("cache writes, lock files, temp files, advisory markers" -> MUTATING,
+    # fail-closed), and dry_run defaults True with reclaim:true as the sole
+    # destructive opt-in, so the classification must cover the destructive path.
+    # DR-208 five-question affirmation (citing ops/scratchpad_sweep.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?
+    #      Deletes directories, but under the OS temp root, never under state/
+    #      or any tracked git path — the letter of Q1 is No, but the op is a
+    #      real irreversible delete, so it is classified as if Q1 were Yes
+    #      (see the ambiguous-case rationale above).
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Only shutil.rmtree (delete), never an open-for-write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      Deletes directories a live harness session may still read from,
+    #      shared across every session on this machine.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      A deleted scratchpad directory is gone for every future reader.
+    # Two-gate safety (liveness AND age, both must hold before any delete) and
+    # the per-project-slug liveness-scope fix are documented in the module's
+    # own docstring — not restated here; this entry is the classification
+    # affirmation only.
+    # No local precedent: the closest sibling sweep, agent_worktree_sweep.py,
+    # is consumed by direct import and appears in neither this table nor
+    # ops/__init__.py/_registry_map.py — scratchpad.sweep is the first sweep
+    # op registered for JSON-RPC dispatch, not a copy of an existing pattern.
+    "scratchpad.sweep": OpClass.MUTATING,
 })
 
 

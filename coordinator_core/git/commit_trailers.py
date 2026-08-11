@@ -168,6 +168,173 @@ def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     return ""
 
 
+def _list_held_plan_claims(cwd: Union[str, Path]) -> List[tuple]:
+    """Lazy-imported wrapper over ``coordinator_core.session.claimed_plan.
+    list_held_plan_claims`` (C1a) -- the shared enumeration both the
+    scope-match tier and the ambiguity gate consume. ``claimed_plan`` is NOT
+    under ``coordinator_core.ops`` (see that module's own negative-spec), so
+    this import does not itself trigger the ~161-module eager sweep; it is
+    still kept function-local, matching this module's existing lazy-import
+    convention for every session-keyed lookup (see
+    ``_resolve_deliverable_id_from_claimed_plan`` below). Never raises --
+    an import failure or any exception from the callee both degrade to
+    ``[]``, the same omit-rather-than-guess contract ``list_held_plan_claims``
+    itself documents."""
+    try:
+        from coordinator_core.session.claimed_plan import list_held_plan_claims
+
+        return list_held_plan_claims(cwd)
+    except Exception:
+        return []
+
+
+def _normalize_committed_path(raw_path: str, cwd: Union[str, Path]) -> str:
+    """Normalize one entry of a commit's pathspec to the same shape
+    ``scope:`` frontmatter entries are authored in: repo-relative,
+    forward-slash-separated. An absolute path is made relative to ``cwd``
+    when possible; a path that cannot be related to ``cwd`` (rare -- a
+    caller-supplied path genuinely outside the tree) is returned with
+    separators normalized only, so it simply fails to match any scope entry
+    rather than raising. On a case-insensitive Windows filesystem, a ``cwd``
+    and incoming absolute path differing only in drive-letter or segment
+    casing also hits the "cannot relate" branch (``relative_to`` raises
+    ``ValueError`` on a case-sensitive string comparison) and abstains the
+    same way -- fail-safe direction, flagged for awareness only (review-
+    integrator P3, slice B, coordinatorcode-reviewer-f5f569aa.md)."""
+    path = Path(raw_path)
+    if path.is_absolute():
+        try:
+            path = path.relative_to(Path(cwd))
+        except ValueError:
+            pass
+    return str(path).replace("\\", "/")
+
+
+def _normalize_scope_path(raw_path: str) -> str:
+    """Normalize one ``scope:`` frontmatter entry to the same shape
+    ``_normalize_committed_path`` produces for a commit's pathspec:
+    forward-slash-separated, no leading ``./``, no trailing ``/``. A
+    ``scope:`` list is plan-author-written text, not machine-normalized
+    like the committed pathspec is, so an entry authored with a leading
+    ``./``, a trailing slash, or (rare on this codebase, but cheap to
+    handle) backslash separators would otherwise never match a normalized
+    committed path and the strict-containment check in
+    ``resolve_deliverable_id_from_scope_match`` would silently abstain --
+    see that finding (review-integrator P2, slice B,
+    coordinatorcode-reviewer-f5f569aa.md) for the full asymmetry. Never
+    raises; a blank/whitespace-only entry normalizes to ``""``."""
+    normalized = raw_path.strip().replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if len(normalized) > 1:
+        normalized = normalized.rstrip("/")
+    return normalized
+
+
+def _read_plan_scope_paths(cwd: Union[str, Path], plan_path: str) -> List[str]:
+    """The claimed plan's own ``scope:`` frontmatter list, via the shared
+    scanner (``coordinator_core.ops.extract_scope_paths``) rather than a
+    second hand-rolled copy -- same convention ``ops.dirty_tree_gate``
+    already established for the handoff-scope analogue of this read.
+    Imported lazily (function-local), matching this module's own
+    ops-import convention: a module-scope import of anything under
+    ``coordinator_core.ops`` triggers that package's eager ~161-module
+    sweep. Returns ``[]`` on any read/parse failure -- never raises.
+
+    Each entry is run through ``_normalize_scope_path`` before being
+    returned, so the set this feeds into
+    ``resolve_deliverable_id_from_scope_match``'s strict-containment check
+    is normalized on the SAME shape ``_normalize_committed_path`` produces
+    for the commit's own pathspec -- both sides of that comparison share
+    one normalization convention rather than trusting ``scope:`` authors
+    to already write the canonical form."""
+    from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
+
+    full_path = Path(cwd) / plan_path
+    try:
+        text = full_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [_normalize_scope_path(p) for p in _extract_scope_paths(text)]
+
+
+def resolve_deliverable_id_from_scope_match(
+    cwd: Union[str, Path],
+    paths: Optional[Sequence[str]],
+    claims: Sequence[tuple],
+) -> str:
+    """NEW scope-match tier (C2, spec § (1)): resolve a code-only commit's
+    ``Deliverable-Id`` by matching its pathspec against the ``scope:`` of
+    every plan THIS session holds a claim on (``claims``, C1a's
+    ``list_held_plan_claims`` shape -- ``[(plan_path, claimed_at), ...]``),
+    rather than any session-keyed tier below it.
+
+    "Covered" is STRICT: every entry of ``paths`` (normalized to the same
+    repo-relative, forward-slash shape ``scope:`` entries are authored in --
+    see ``_normalize_committed_path``) must be a member of that ONE plan's
+    scope list. If the pathspec is strictly covered by exactly ONE claimed
+    plan, that plan's own ``deliverable_id`` frontmatter value is returned.
+    Zero covering plans OR two-or-more covering plans both mean "this tier
+    has nothing to say" -- returns ``""`` and the caller falls through.
+    NEVER picks among multiple covering plans, and never partial-matches (a
+    pathspec straddling two plans' scopes, or spilling outside every claimed
+    plan's scope, abstains rather than guessing which plan it belongs to).
+
+    Standalone and importable independent of the rest of `_resolve_deliverable_id`'s
+    ladder (AC4/AC11) -- callers (this module's own ladder, and C4) pass
+    ``claims`` in rather than this function re-deriving them, so it carries
+    no dependency on session-keyed state beyond what it is given.
+
+    Deliberately measured to abstain often: this is the accepted cost of a
+    strict-covered predicate that produces zero over-matches on real data,
+    not a shortfall to relax.
+    """
+    if not paths or not claims:
+        return ""
+
+    normalized_paths = [_normalize_committed_path(p, cwd) for p in paths]
+
+    covering_deliverable_ids: List[str] = []
+    for plan_path, _claimed_at in claims:
+        scope_paths = set(_read_plan_scope_paths(cwd, plan_path))
+        if not scope_paths:
+            continue
+        if all(p in scope_paths for p in normalized_paths):
+            covering_deliverable_ids.append(
+                _read_deliverable_id_from_frontmatter(Path(cwd) / plan_path)
+            )
+
+    # NOTE: counts DUPLICATES, not distinct values -- two claimed plans that
+    # both cover this pathspec and agree on the same deliverable_id still
+    # abstain here, per spec § (1)'s literal "zero or two-or-more covering
+    # plans" reading (review-integrator P3, slice B,
+    # coordinatorcode-reviewer-f5f569aa.md). A plausible false-negative in a
+    # genuinely unambiguous case (a plan claimed twice, or two sibling plans
+    # sharing a deliverable_id by design) -- left as-is, not a deviation.
+    if len(covering_deliverable_ids) != 1:
+        return ""
+    return covering_deliverable_ids[0]
+
+
+def session_holds_multiple_plan_claims(claims: Sequence[tuple]) -> bool:
+    """The ambiguity-gate predicate (C2, spec § (2)): does this session hold
+    more than one plan claim, per C1a's ``list_held_plan_claims`` enumeration
+    (``claims``, the same ``[(plan_path, claimed_at), ...]`` shape). A pure
+    predicate over what it is given -- no re-derivation of the enumeration
+    itself, so a caller (this module's own ladder, and C4) that already has
+    ``claims`` in hand does not pay for a second lookup.
+
+    ``_resolve_deliverable_id_at`` (the ``session-shape.json`` pickup tier)
+    and ``_resolve_deliverable_id_from_claimed_plan`` (the claimed-plan
+    tier) both answer ONLY when this predicate is False -- see
+    ``_resolve_deliverable_id``'s own ladder. True means "omit, do not
+    guess": holding two-or-more plan claims is a legitimate supported shape
+    (``/pickup a AND b``), not an error, and neither session-keyed tier can
+    tell which of the held claims a given commit is actually for.
+    """
+    return len(claims) > 1
+
+
 def _resolve_deliverable_id_from_claimed_plan(cwd: Union[str, Path]) -> str:
     """Tier-3 fallback: the same-session plan-execute path (no handoff).
 
@@ -344,28 +511,50 @@ def _resolve_deliverable_id(
     paths: Optional[Sequence[str]] = None,
 ) -> str:
     """Tier 0 (artifact-first, see `_resolve_deliverable_id_from_paths`),
-    then check `git_dir`, then fall back to example-doctrine-repo's own git-dir -- the
+    then the scope-match tier (`resolve_deliverable_id_from_scope_match`,
+    C2 spec § (1)) over every plan this session holds a claim on, then --
+    gated by the ambiguity predicate `session_holds_multiple_plan_claims`
+    (C2 spec § (2)), which OMITS rather than guesses whenever the session
+    holds more than one plan claim and neither tier above disambiguated --
+    check `git_dir`, then fall back to example-doctrine-repo's own git-dir -- the
     cross-repo case where a commit lands directly into claude-klabauter under
     the standing example-doctrine-repo->claude-klabauter write grant while `session-shape.json` was
     written into example-doctrine-repo's git-dir (wherever `/pickup` actually ran).
-    When all of those miss, fall back to the session's claimed PLAN (tier
-    3 -- see `_resolve_deliverable_id_from_claimed_plan`), the same-session
-    plan-execute-without-a-handoff door. Never fabricates a value; every
-    lookup in the cascade is omit-rather-than-guess (tier 0's divergent-
-    artifact case is the one exception -- it raises rather than omits, see
-    that tier's own docstring). Tiers 1/1a stay verbatim parity with the
-    hook's `_resolve_deliverable_id()` (2026-07-27 cross-repo-fallback
-    mirror); tier 3 is shared with both mirrors; tier 0 is new to this
-    engine module only -- `paths` is an addition to this module's own
-    signature (not the hook script's), so mirroring tier 0 into the hook
-    requires the hook to gain its own path-discovery leg (e.g.
-    `git diff --cached --name-only`, safe there because the hook always
-    runs with the correct index already in its own env) before it can carry
-    the same tier -- see this module's header docstring on the mirrored-
-    pair maintenance convention."""
+    When all of those miss (or the ambiguity gate fired), fall back to the
+    session's claimed PLAN (tier 3 -- see
+    `_resolve_deliverable_id_from_claimed_plan`), the same-session
+    plan-execute-without-a-handoff door -- itself also gated by the same
+    ambiguity predicate. Never fabricates a value; every lookup in the
+    cascade is omit-rather-than-guess (tier 0's divergent-artifact case is
+    the one exception -- it raises rather than omits, see that tier's own
+    docstring). Tiers 1/1a stay verbatim parity with the hook's
+    `_resolve_deliverable_id()` (2026-07-27 cross-repo-fallback mirror);
+    tier 3 is shared with both mirrors; tier 0, the scope-match tier, and
+    the ambiguity gate are new to this engine module only -- `paths` is an
+    addition to this module's own signature (not the hook script's), so
+    mirroring tier 0 (and the scope-match tier, which also needs `paths`)
+    into the hook requires the hook to gain its own path-discovery leg
+    (e.g. `git diff --cached --name-only`, safe there because the hook
+    always runs with the correct index already in its own env) before it
+    can carry the same tiers -- see this module's header docstring on the
+    mirrored-pair maintenance convention."""
     deliverable_id = _resolve_deliverable_id_from_paths(paths, cwd)
     if deliverable_id:
         return deliverable_id
+
+    claims = _list_held_plan_claims(cwd)
+
+    deliverable_id = resolve_deliverable_id_from_scope_match(cwd, paths, claims)
+    if deliverable_id:
+        return deliverable_id
+
+    # Ambiguity gate (C2, spec § (2)): neither tier 0 nor the scope-match
+    # tier disambiguated. When the session holds more than one plan claim,
+    # every remaining tier below is session-keyed and cannot tell which
+    # held claim this commit is for -- omit rather than guess.
+    if session_holds_multiple_plan_claims(claims):
+        return ""
+
     deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
     if deliverable_id:
         return deliverable_id
@@ -379,17 +568,69 @@ def _resolve_deliverable_id(
     return _resolve_deliverable_id_from_claimed_plan(cwd)
 
 
+_TRAILER_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*:\s")
+_TRAILER_CONT_RE = re.compile(r"^\s")
+
+
+def _extract_trailer_block(text: str) -> List[str]:
+    """Return the lines of `text`'s trailing trailer block, or `[]` if the
+    message carries none -- a minimal reimplementation of git's own
+    `interpret-trailers` block detection (see `git-interpret-trailers(1)`):
+    the trailer block is the LAST paragraph of the message (the run of
+    non-blank lines following the final blank line, or the whole message if
+    it has no blank line), and ONLY counts as a trailer block when every one
+    of its lines is either a `Token: value` line or a continuation line
+    (leading whitespace). A body paragraph that merely happens to contain a
+    colon-shaped line -- e.g. a hand-written `Deliverable-Id: <id>` sitting
+    above a real trailing `Co-Authored-By:` block, separated by a blank line
+    -- is therefore body text, not part of the trailer block, matching what
+    `git log --format='%(trailers:...)'` actually parses.
+
+    `_has_trailer_line` is this function's only caller; both Session-Id and
+    Deliverable-Id idempotency checks route through it, so this fix's
+    stricter semantics apply uniformly to both prefixes -- there is no
+    caller relying on the old any-occurrence-anywhere behaviour to preserve.
+    """
+    lines = text.splitlines()
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    if not lines:
+        return []
+
+    start = 0
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() == "":
+            start = i + 1
+            break
+
+    block = lines[start:]
+    if not block:
+        return []
+    for line in block:
+        if not (_TRAILER_LINE_RE.match(line) or _TRAILER_CONT_RE.match(line)):
+            return []
+    return block
+
+
 def _has_trailer_line(commit_msg_file: Union[str, Path], prefix: str) -> bool:
-    """True iff `commit_msg_file` already contains a line starting with
-    `prefix` (e.g. "Session-Id:"). Any read failure -> False (caller degrades
-    gracefully, verbatim parity with the hook)."""
+    """True iff `commit_msg_file`'s trailer block (see
+    `_extract_trailer_block`) already contains a line starting with `prefix`
+    (e.g. "Session-Id:") -- NOT merely a line starting with `prefix` anywhere
+    in the message. A prior looser "any occurrence anywhere" check let a
+    hand-written `Deliverable-Id:` line sitting in the message BODY suppress
+    this engine's own correctly-placed trailer emission, leaving the commit
+    with no machine-readable trailer at all (git's own parser recognises
+    only the final paragraph as trailers, so the hand-written line was never
+    parseable in the first place). Any read failure -> False (caller
+    degrades gracefully, verbatim parity with the hook)."""
     try:
         with open(commit_msg_file, encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith(prefix):
-                    return True
+            text = fh.read()
     except Exception:
         return False
+    for line in _extract_trailer_block(text):
+        if line.startswith(prefix):
+            return True
     return False
 
 

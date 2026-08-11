@@ -485,6 +485,19 @@ _ALLOWLIST: dict[str, str] = {
         "its captured stdout/stderr for a pass/fail signal — read-only "
         "validation, not a write."
     ),
+    "policy_gate.py": (
+        "EXEMPT: the one flagged call (`subprocess.run` in `_default_probe`) "
+        "runs `_PROBE_COMMAND`, the literal string `Get-ExecutionPolicy`, "
+        "with `-NoProfile -NonInteractive` and the inherited "
+        "`PSExecutionPolicyPreference` popped from the child env — a "
+        "read-only effective-policy query, never a mutation. The module "
+        "docstring states plainly it 'is pure verdict computation — it "
+        "probes and reports. It does not emit launchers, roll back "
+        "anything, or mutate the machine in any way: no "
+        "`Set-ExecutionPolicy`, no `Unblock-File`,' per the C7 ruling "
+        "(`wont_do`, pm_approved) putting remediation out of scope for "
+        "this module."
+    ),
     # --- Known gaps: genuinely write-reaching, genuinely undeclared today.
     # Out of this dispatch's scope to fix (writer WRITE_SURFACE authorship
     # is explicitly out-of-scope) — reported to the dispatching EM instead.

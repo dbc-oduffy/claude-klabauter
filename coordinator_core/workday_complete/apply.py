@@ -306,11 +306,21 @@ def _execute_directives(
     *raise* a Python exception, so an argparse usage error, a gate's
     business-fail, or any other non-zero exit read as ceremony success —
     the report was structurally incapable of showing the failure it was
-    supposed to record). Exit code: `HALTED_AT_JUDGMENT` when anything was
-    blocked and nothing failed; `PARTIAL_MUTATION` when something failed
-    but something else also landed; `DIRECTIVE_FAILED` when something
-    failed and nothing landed at all; `SUCCESS` only when every directive
-    fired clean.
+    supposed to record). `report["degraded"]` names directive ids whose
+    dispatch returned a non-zero `exit_code` while the directive itself
+    carries `best_effort: True` (2026-08-08 "a best-effort directive cannot
+    fail a ceremony" — emit-cadence's pre-conversion bash `|| echo ...
+    skipped` fail-open shape had no directive-runner equivalent, so a
+    transport hiccup on that one step read as a ceremony that needed
+    reconciling). A `degraded` entry is NOT silence — it carries the same
+    `{"id", "error"}` shape as `failed`, the operator still sees it, it
+    simply never joins `failed` and therefore never moves the exit code.
+    Exit code: `HALTED_AT_JUDGMENT` when anything was blocked and nothing
+    failed; `PARTIAL_MUTATION` when something failed but something else
+    also landed; `DIRECTIVE_FAILED` when something failed and nothing
+    landed at all; `SUCCESS` when every directive either fired clean or
+    only degraded (a `best_effort` non-zero exit alone does not prevent
+    `SUCCESS`).
 
     Stdin wiring (2026-07-26 backfill-leg fix): `stdout_by_id` accumulates
     the captured stdout of every directive that LANDED this pass (exit 0),
@@ -325,17 +335,25 @@ def _execute_directives(
     empty stream and letting the CLI's own exit code decide) keeps the
     honesty property `e2f3a25f` established — the failure is visible on the
     id whose input was actually missing, not laundered through a downstream
-    CLI's own no-input-is-success shortcut."""
+    CLI's own no-input-is-success shortcut. An `already_satisfied` producer
+    is a THIRD case, distinct from failed/blocked: it is genuinely in
+    `landed` (see below) but produced no stdout this pass, so a `stdin_from`
+    consumer naming it still refuses to dispatch — the refusal is correct,
+    only the message differs, naming the id as already-satisfied-with-no-
+    output rather than as never-landed (2026-08-08 defect C)."""
     jp_by_id = _judgment_points_by_id(judgment_points)
     landed: list[str] = []
     blocked: list[str] = []
     failed: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
+    already_satisfied_ids: set[str] = set()
 
     for directive in directives:
         if directive.get("already_satisfied"):
             landed.append(directive["id"])
+            already_satisfied_ids.add(directive["id"])
             continue
         try:
             gate_open = _directive_gate_open(directive, jp_by_id, decisions)
@@ -350,17 +368,21 @@ def _execute_directives(
         stdin_text: Optional[str] = None
         if stdin_from is not None:
             if stdin_from not in stdout_by_id:
-                failed.append(
-                    {
-                        "id": directive["id"],
-                        "error": (
-                            f"stdin producer {stdin_from!r} did not land before "
-                            f"{directive['id']!r} this pass (failed, blocked, or "
-                            "not yet dispatched) — refusing to dispatch with "
-                            "missing stdin rather than feeding an empty stream"
-                        ),
-                    }
-                )
+                if stdin_from in already_satisfied_ids:
+                    reason = (
+                        f"stdin producer {stdin_from!r} was already-satisfied "
+                        f"before this pass and produced no stdout to feed "
+                        f"{directive['id']!r} — refusing to dispatch with "
+                        "missing stdin rather than feeding an empty stream"
+                    )
+                else:
+                    reason = (
+                        f"stdin producer {stdin_from!r} did not land before "
+                        f"{directive['id']!r} this pass (failed, blocked, or "
+                        "not yet dispatched) — refusing to dispatch with "
+                        "missing stdin rather than feeding an empty stream"
+                    )
+                failed.append({"id": directive["id"], "error": reason})
                 continue
             stdin_text = stdout_by_id[stdin_from]
 
@@ -370,15 +392,18 @@ def _execute_directives(
             failed.append({"id": directive["id"], "error": str(exc)})
             continue
         if result.get("exit_code", 0) != 0:
-            failed.append(
-                {
-                    "id": directive["id"],
-                    "error": (
-                        f"{directive['cli']} exited {result['exit_code']} "
-                        f"(args={result.get('args', [])})"
-                    ),
-                }
+            error = (
+                f"{directive['cli']} exited {result['exit_code']} "
+                f"(args={result.get('args', [])})"
             )
+            stderr_text = (result.get("stderr") or "").strip()
+            if stderr_text:
+                error = f"{error} — stderr: {stderr_text}"
+            entry = {"id": directive["id"], "error": error}
+            if directive.get("best_effort"):
+                degraded.append(entry)
+            else:
+                failed.append(entry)
             results.append(result)
             continue
         results.append(result)
@@ -389,6 +414,7 @@ def _execute_directives(
         "landed": landed,
         "blocked": blocked,
         "failed": failed,
+        "degraded": degraded,
         "results": results,
     }
 

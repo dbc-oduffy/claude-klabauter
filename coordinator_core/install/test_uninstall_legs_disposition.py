@@ -311,6 +311,7 @@ class TestOrchestrateUninstallDryRunWiring:
         for leg_name in (
             "uninstall_strip_settings_hooks",
             "uninstall_remove_shim",
+            "uninstall_strip_cmd_autorun",
             "uninstall_remove_substrate",
             "uninstall_set_plugin_endstate",
         ):
@@ -335,6 +336,7 @@ class TestOrchestrateUninstallDryRunWiring:
         for leg_name in (
             "uninstall_strip_settings_hooks",
             "uninstall_remove_shim",
+            "uninstall_strip_cmd_autorun",
             "uninstall_remove_substrate",
             "uninstall_set_plugin_endstate",
         ):
@@ -705,3 +707,138 @@ class TestUninstallReverseGitConfigGroup:
         report = build_disposition_report(records)  # raises on non-total coverage
         assert len(report.records) == 3
         report.assert_total_coverage()
+
+
+class TestUninstallStripCmdAutorunLeg:
+    """C-gap-close: composes `strip_cmd_autorun_guard` into
+    `uninstall_strip_cmd_autorun`/`orchestrate_uninstall`. Never touches a
+    real HKCU hive — monkeypatches `strip_cmd_autorun_guard` itself, the
+    same mocked seam `test_cmd_autorun_guard.py` establishes one layer
+    down."""
+
+    def test_success_returns_true(self, monkeypatch):
+        import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
+
+        monkeypatch.setattr(
+            cmd_autorun_guard,
+            "strip_cmd_autorun_guard",
+            lambda check_only=False: {"classification": "covered", "modified": True, "would_modify": False},
+        )
+        assert uninstall_legs.uninstall_strip_cmd_autorun() is True
+
+    def test_absent_autorun_is_a_clean_noop_success(self, monkeypatch):
+        import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
+
+        monkeypatch.setattr(
+            cmd_autorun_guard,
+            "strip_cmd_autorun_guard",
+            lambda check_only=False: {"classification": "uncovered", "modified": False, "would_modify": False},
+        )
+        assert uninstall_legs.uninstall_strip_cmd_autorun() is True
+
+    def test_foreign_autorun_is_a_clean_noop_success_and_not_clobbered(self, monkeypatch):
+        import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
+
+        calls = []
+
+        def _fake_strip(check_only=False):
+            calls.append(check_only)
+            return {"classification": "foreign_present", "modified": False, "would_modify": False}
+
+        monkeypatch.setattr(cmd_autorun_guard, "strip_cmd_autorun_guard", _fake_strip)
+        assert uninstall_legs.uninstall_strip_cmd_autorun() is True
+        assert calls == [False]
+
+    def test_non_windows_is_a_clean_noop_success(self, monkeypatch):
+        import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
+
+        monkeypatch.setattr(
+            cmd_autorun_guard,
+            "strip_cmd_autorun_guard",
+            lambda check_only=False: {"classification": "not_windows", "modified": False, "would_modify": False},
+        )
+        assert uninstall_legs.uninstall_strip_cmd_autorun() is True
+
+    def test_unexpected_registry_error_fails_loud(self, monkeypatch, capsys):
+        import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
+
+        def _boom(check_only=False):
+            raise OSError("registry access denied")
+
+        monkeypatch.setattr(cmd_autorun_guard, "strip_cmd_autorun_guard", _boom)
+        assert uninstall_legs.uninstall_strip_cmd_autorun() is False
+        assert "failed to strip cmd.exe AutoRun guard" in capsys.readouterr().err
+
+
+class TestOrchestrateUninstallCmdAutorunComposition:
+    """Verifies the AutoRun leg is actually composed into
+    `orchestrate_uninstall`'s ordered sequence with fail-loud semantics,
+    and is skipped entirely (never called) on the `--dry-run` path."""
+
+    def _stub_other_legs_ok(self, monkeypatch):
+        monkeypatch.setattr(uninstall_legs, "uninstall_strip_settings_hooks", lambda *a, **kw: True)
+        monkeypatch.setattr(uninstall_legs, "uninstall_remove_shim", lambda *a, **kw: True)
+        monkeypatch.setattr(uninstall_legs, "uninstall_remove_substrate", lambda *a, **kw: True)
+        monkeypatch.setattr(uninstall_legs, "uninstall_set_plugin_endstate", lambda *a, **kw: True)
+
+    def test_autorun_leg_runs_between_remove_shim_and_remove_substrate(self, monkeypatch):
+        order = []
+        self._stub_other_legs_ok(monkeypatch)
+        monkeypatch.setattr(
+            uninstall_legs,
+            "uninstall_strip_settings_hooks",
+            lambda *a, **kw: (order.append("strip-settings-hooks"), True)[1],
+        )
+        monkeypatch.setattr(
+            uninstall_legs, "uninstall_remove_shim", lambda *a, **kw: (order.append("remove-shim"), True)[1]
+        )
+        monkeypatch.setattr(
+            uninstall_legs,
+            "uninstall_strip_cmd_autorun",
+            lambda *a, **kw: (order.append("strip-cmd-autorun"), True)[1],
+        )
+        monkeypatch.setattr(
+            uninstall_legs,
+            "uninstall_remove_substrate",
+            lambda *a, **kw: (order.append("remove-substrate"), True)[1],
+        )
+        monkeypatch.setattr(
+            uninstall_legs,
+            "uninstall_set_plugin_endstate",
+            lambda *a, **kw: (order.append("set-plugin-endstate"), True)[1],
+        )
+
+        rc = uninstall_legs.orchestrate_uninstall([])
+        assert rc == 0
+        assert order == [
+            "strip-settings-hooks",
+            "remove-shim",
+            "strip-cmd-autorun",
+            "remove-substrate",
+            "set-plugin-endstate",
+        ]
+
+    def test_autorun_leg_failure_fails_loud_and_stops_sequencing(self, monkeypatch, capsys):
+        self._stub_other_legs_ok(monkeypatch)
+        monkeypatch.setattr(uninstall_legs, "uninstall_strip_cmd_autorun", lambda *a, **kw: False)
+
+        def _boom(*a, **kw):
+            raise AssertionError("sequencing continued past a failed leg")
+
+        monkeypatch.setattr(uninstall_legs, "uninstall_remove_substrate", _boom)
+        monkeypatch.setattr(uninstall_legs, "uninstall_set_plugin_endstate", _boom)
+
+        rc = uninstall_legs.orchestrate_uninstall([])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "FAILED at surface: cmd.exe AutoRun guard" in err
+
+    def test_dry_run_never_calls_the_autorun_leg(self, monkeypatch, capsys):
+        monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: None)
+
+        def _boom(*a, **kw):
+            raise AssertionError("strip-cmd-autorun leg called during --dry-run")
+
+        monkeypatch.setattr(uninstall_legs, "uninstall_strip_cmd_autorun", _boom)
+        rc = uninstall_legs.orchestrate_uninstall(["--dry-run"])
+        assert rc == 0

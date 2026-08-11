@@ -25,6 +25,20 @@ Public surface (pinned contract — do not change without updating consumers):
     def legacy_machine_local_dir() -> Path: ...
     def check_machine_local_divergence() -> None: ...  # raises SettingsHomeDivergenceError
     class SettingsHomeDivergenceError(RuntimeError): ...
+    def claude_config_dir() -> Path: ...
+    def check_claude_config_divergence() -> None: ...  # raises ClaudeConfigDivergenceError
+    class ClaudeConfigDivergenceError(RuntimeError): ...
+
+`claude_config_dir()` (added 2026-08-08, CLAUDE_CONFIG_DIR resolution seam) closes a naming
+mismatch, not a new resolver: `CLAUDE_HOME` is a coordinator invention naming the *parent* of
+`.claude`; `CLAUDE_CONFIG_DIR` is the harness's own env var (in its env-passthrough allowlist,
+54 references in the installed bundle) naming the config directory *itself*. Every existing
+`<home>/.claude` call site — `home_dir() / ".claude"` and its hand-rolled equivalents — computes
+the same directory `CLAUDE_CONFIG_DIR` names directly, so a caller that honours one convention
+and ignores the other silently diverges the day both are set to different things. Route new
+`<home>/.claude`-shaped call sites through `claude_config_dir()` instead of hand-rolling
+`home_dir() / ".claude"`; call `check_claude_config_divergence()` from any caller in a position
+to fail loud (mirrors `check_machine_local_divergence()`'s placement contract).
 
 `home_dir()` (added 2026-07-29, home-resolution-lint bare_home_or_chain sweep) is the
 CLAUDE_HOME-analog resolver (CLAUDE_HOME override, else the platform home via
@@ -215,4 +229,73 @@ def check_machine_local_divergence() -> None:
             "    export COORDINATOR_SETTINGS_HOME=/path/to/settings-home\n\n"
             f"  Legacy resolved : {resolved_legacy}\n"
             f"  New    resolved : {resolved_new}"
+        )
+
+
+def claude_config_dir() -> Path:
+    """Resolve the harness's own config-directory root.
+
+    Precedence: `CLAUDE_CONFIG_DIR` (the harness's own env var, validated
+    rooted via `_require_rooted` like every other override in this module),
+    else `home_dir() / ".claude"` — the same computation every pre-existing
+    `<home>/.claude` call site performs by hand. See module docstring's
+    "Public surface" block for the naming distinction from `CLAUDE_HOME`.
+    """
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    if override:
+        return _require_rooted("CLAUDE_CONFIG_DIR", override)
+    return home_dir() / ".claude"
+
+
+class ClaudeConfigDivergenceError(RuntimeError):
+    """Raised when `CLAUDE_CONFIG_DIR` is set, resolves to a directory other
+    than `home_dir() / ".claude"`, and BOTH hold content — the harness-vs-
+    coordinator split-brain `claude_config_dir()` exists to close. Mirrors
+    `SettingsHomeDivergenceError`'s fail-loud contract.
+    """
+
+
+def check_claude_config_divergence() -> None:
+    """Fail loud if `CLAUDE_CONFIG_DIR` is set, resolves elsewhere than
+    `home_dir() / ".claude"`, AND both hold content.
+
+    Safe (no-op, returns None) in all of:
+      - `CLAUDE_CONFIG_DIR` unset — `claude_config_dir()` falls back to the
+        same default this function compares against, so there is nothing to
+        diverge from.
+      - Either side is absent or an empty post-migration husk.
+      - Resolved paths are equal (e.g. a compat symlink, or `CLAUDE_CONFIG_DIR`
+        pointed at `~/.claude` under a different spelling) — NOT a second home.
+
+    Raises `ClaudeConfigDivergenceError` on genuine divergence. Never silently
+    picks one: a hook or subprocess honouring the harness's `CLAUDE_CONFIG_DIR`
+    while coordinator code reads `~/.claude` (or vice versa) is exactly the
+    silent-mis-resolution failure mode this seam exists to close.
+    """
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not override:
+        return
+
+    configured = _require_rooted("CLAUDE_CONFIG_DIR", override)
+    default = home_dir() / ".claude"
+
+    if _is_absent_or_empty_husk(configured) or _is_absent_or_empty_husk(default):
+        return
+
+    resolved_configured = configured.resolve()
+    resolved_default = default.resolve()
+
+    if resolved_configured != resolved_default:
+        raise ClaudeConfigDivergenceError(
+            "coordinator-settings-home: DIVERGENT CLAUDE CONFIG DIRS — cannot safely resolve.\n\n"
+            "CLAUDE_CONFIG_DIR is set and resolves to a directory other than the\n"
+            "CLAUDE_HOME-derived ~/.claude, and both hold content. Reading from either\n"
+            "risks missing markers or caches the harness (honouring CLAUDE_CONFIG_DIR) or\n"
+            "coordinator code (honouring CLAUDE_HOME) actually wrote.\n\n"
+            "Remediation — pick one and align the other:\n"
+            "  - If CLAUDE_CONFIG_DIR is authoritative, point CLAUDE_HOME at its parent\n"
+            "    directory, or migrate the ~/.claude content into it, or\n"
+            "  - Unset CLAUDE_CONFIG_DIR to use the CLAUDE_HOME-derived location.\n\n"
+            f"  CLAUDE_CONFIG_DIR resolved : {resolved_configured}\n"
+            f"  ~/.claude       resolved : {resolved_default}"
         )

@@ -38,6 +38,7 @@ Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C17a/C17b.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -115,7 +116,11 @@ def test_failure_is_logged(repo_root: str) -> None:
     line = lines[0]
     assert line.startswith("[")
     assert "SPAWN FAILED" in line
-    assert "script=/some/script.py" in line
+    # Both loggers record `os.path.abspath(script_path)`, so the expected
+    # spelling is platform-dependent (Windows anchors a rooted path to the
+    # cwd's drive and uses backslashes) -- the literal POSIX form is only
+    # correct on POSIX.
+    assert "script=%s" % (os.path.abspath("/some/script.py"),) in line
     assert "args=['--y']" in line
     assert "OSError: boom" in line
 
@@ -145,7 +150,7 @@ def test_record_child_failure_exit_code(repo_root: str) -> None:
     assert len(lines) == 1
     assert "CHILD FAILED" in lines[0]
     assert "SPAWN FAILED" not in lines[0]
-    assert "script=/some/child.py" in lines[0]
+    assert "script=%s" % (os.path.abspath("/some/child.py"),) in lines[0]
     assert "non-zero exit 2" in lines[0]
 
 

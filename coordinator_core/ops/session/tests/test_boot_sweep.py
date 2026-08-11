@@ -1031,6 +1031,74 @@ def test_live_claim_dir_lock_blocks_boot_path_archival(boot_repo):
     )
 
 
+def test_rename_via_sanctioned_entrypoint_keeps_the_archival_liveness_gate_intact(boot_repo):
+    """Fix-side regression net for the defect this test's old
+    `_KNOWN_DEFECT` name documented (Check 4, module docstring "4. No live
+    claim-dir holder"): `_is_terminal` derives the claim dir from the
+    handoff's CURRENT basename only (`handoff_claim_dir(common_dir,
+    handoff_path)`). A handoff renamed while claimed and live via a bare,
+    un-tooled rename kept its claim dir under the OLD basename — a path
+    Check 4 never looks at, since it only ever asks about the file's
+    basename AS IT EXISTS ON DISK RIGHT NOW.
+
+    Pinned incident: state/bug-backlog/2026-08-10-two-sessions-held-one-
+    baton-the-claim-di-1d9d62d1d8af.yaml — the archival move fired despite
+    session fe113177 still holding a live claim, because that claim lived
+    under the handoff's pre-rename basename ("2026-08-10-untitled.md"), and
+    the handoff had since been renamed to
+    "...review-owed-close-boundary-fix-then-cap.md" before the sweep ran.
+
+    FIX (this dispatch): renaming through the sanctioned entrypoint
+    (`claims.relocate_handoff_claim`) relocates the claim dir alongside the
+    basename change, so Check 4's SAME derivation
+    (`handoff_claim_dir(common_dir, handoff_path)` off the CURRENT basename)
+    now finds the (correctly relocated) live claim without any change to
+    Check 4 itself — no widening of claim identity was needed (module
+    negative-spec, "BASENAME-ONLY"), only keeping the claim dir in lockstep
+    with the rename. This does not retroactively fix a pre-existing orphan
+    left by a rename performed OUTSIDE the entrypoint before it existed —
+    see `relocate_artifact_claim`'s own negative-spec; that is a separate,
+    out-of-scope reconciliation sweep.
+    """
+    old_basename = "2026-08-10-untitled.md"
+    new_basename = "2026-08-10-review-owed-close-boundary-fix-then-cap.md"
+    boot_repo.seed_handoff(new_basename, "claimed")
+    cid = f"state/handoffs/{new_basename}"
+
+    # The baton is picked up (claimed) under its OLD, pre-rename basename...
+    old_claim_dir = (
+        boot_repo.common_dir / "coordinator-sessions" / "handoff-claims" / old_basename
+    )
+    old_claim_dir.mkdir(parents=True, exist_ok=True)
+    (old_claim_dir / "session_id").write_text("fe113177-19f4-4220-a8be-e2ae0c711dea")
+
+    # ...then the handoff is renamed through the sanctioned entrypoint,
+    # which relocates the claim dir alongside the basename change.
+    from coordinator_core.session import claims
+
+    assert claims.relocate_handoff_claim(
+        old_basename, new_basename, cwd=str(boot_repo.root)
+    ) is True
+
+    new_claim_dir = (
+        boot_repo.common_dir / "coordinator-sessions" / "handoff-claims" / new_basename
+    )
+    assert not old_claim_dir.exists()
+    assert new_claim_dir.is_dir()
+
+    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True):
+        result = _run(_handler({}, repo_root=boot_repo.common_dir))
+
+    archived_ids = [a["id"] for a in result["consumed_handoffs"]["archived"]]
+    assert cid not in archived_ids, (
+        "live-holder claim-dir lock relocated by the sanctioned rename "
+        f"entrypoint must block archival; got archived={archived_ids!r}"
+    )
+    assert boot_repo.path_exists(cid), (
+        "handoff with a live claim-dir holder (relocated by rename) must NOT be moved"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Two-repo split helpers and tests (AC3 / AC4 / AC5 / AC6 / AC7)
 # ---------------------------------------------------------------------------

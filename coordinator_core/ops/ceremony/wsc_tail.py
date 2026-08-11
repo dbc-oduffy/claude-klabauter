@@ -177,7 +177,10 @@ background push spawned after step 5d (see step 5e). Setting
 synchronous, byte-for-byte behavior (all three pushes happen in-op, `pushed`/
 `follow_up_pushed` are real booleans) -- for tests and any caller that
 genuinely needs a synchronous confirmation. `push_status` result matrix
-(4 values, mutually exclusive):
+(6 values, mutually exclusive -- C6b, docs/plans/2026-08-08-the-push-leg-
+that-never-asked-which-branch.md, reconciles this module's vocabulary
+against `commit_pipeline.PUSH_STATUS_*`'s canonical five; see
+`_CANONICAL_PUSH_STATUS_TO_LOCAL` for the literal mapping):
   - `"deferred"`   -- `push_mode="deferred"` (the default), NOT a resumed
                       pass. ALWAYS this value at result-return time, whether
                       or not a commit landed -- the detached child hasn't
@@ -186,10 +189,22 @@ genuinely needs a synchronous confirmation. `push_status` result matrix
                       via `.git/push-failures.log`, never synchronous).
                       `pushed`/`follow_up_pushed` are `None`,
                       `integrity_breach` is `False`.
-  - `"pushed"`     -- `push_mode="sync"`, NOT resumed, and the push(es) that
-                      were attempted genuinely landed.
+  - `"pushed"`     -- `push_mode="sync"`, NOT resumed, and either the
+                      push(es) that were attempted genuinely landed, or the
+                      pipeline never reached a push at all (canonical
+                      `push_status="not-attempted"`, e.g. nothing to
+                      commit) -- this second case is a DIFFERENT "no push
+                      happened" reason than `"declined"` below and must
+                      never collapse into it.
   - `"failed"`     -- `push_mode="sync"`, NOT resumed, and a push was
-                      attempted and did NOT land.
+                      attempted and did NOT land (canonical
+                      `push_status="push-failed"`).
+  - `"declined"`   -- `push_mode="sync"`, NOT resumed, and a push was
+                      refused by branch policy (canonical
+                      `push_status="declined"`) -- a real policy refusal,
+                      distinct from `"pushed"`'s not-attempted case above.
+  - `"no-remote"`  -- `push_mode="sync"`, NOT resumed, and no remote is
+                      configured (canonical `push_status="no-remote"`).
   - `"unknown_resumed"` -- ANY resumed pass (crash-recovered via the AC18
                       sentinel), regardless of `push_mode` -- the ORIGINAL
                       pre-crash push outcome was never persisted anywhere
@@ -197,9 +212,13 @@ genuinely needs a synchronous confirmation. `push_status` result matrix
                       stay at their initialized `None`/`False`. Folds the
                       old standalone `push_status_unknown_resumed` boolean
                       into this one enum rather than shipping a second,
-                      overlapping push-status signal (F4).
+                      overlapping push-status signal (F4). Has NO
+                      counterpart in `commit_pipeline`'s canonical set --
+                      derived from resumption bookkeeping the pipeline has
+                      no visibility into, and preserved as its own member
+                      rather than dropped.
 `cs_release_artifact` (step 6) reuses the release-under-unknown precedent
-and releases under ALL FOUR values -- see step 6 below.
+and releases under ALL SIX values -- see step 6 below.
 
 Op-name decision (plan § "Notes for the reviewer"): registered as
 `ceremony.wsc_tail` -- the `ceremony.wsc_commit` name (retired 2026-07-29,
@@ -369,6 +388,11 @@ from coordinator_core.ops.ceremony.commit_message import SweptRenameError, parse
 from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_MODE_DEFERRED,
     PUSH_MODE_SYNC,
+    PUSH_STATUS_DECLINED,
+    PUSH_STATUS_FAILED,
+    PUSH_STATUS_NO_REMOTE,
+    PUSH_STATUS_NOT_ATTEMPTED,
+    PUSH_STATUS_PUSHED,
     run_commit_pipeline,
 )
 from coordinator_core.ops.ceremony.git_native import add_paths
@@ -410,6 +434,23 @@ _SENTINEL_NAME = "wsc-tail-commit-landed"
 #: byte -- for tests and callers that genuinely need a synchronous push
 #: confirmation. Unset/anything else keeps the default `"deferred"` mode.
 _ENV_SYNC_PUSH = "COORDINATOR_WSC_SYNC_PUSH"
+
+#: C6b (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md):
+#: canonical `commit_pipeline.PUSH_STATUS_*` -> this module's own
+#: `push_status` spelling, for the `push_mode="sync"`, NOT-resumed case (see
+#: module docstring result matrix). `PUSH_STATUS_NOT_ATTEMPTED` (no push ever
+#: reached the pipeline -- e.g. nothing to commit, commit itself failed)
+#: intentionally maps to this module's `"pushed"`, matching the pre-C6b
+#: behavior for that case -- it is a DIFFERENT "no push happened" reason than
+#: a policy `"declined"` refusal, and must stay distinct from it, never
+#: collapsed together.
+_CANONICAL_PUSH_STATUS_TO_LOCAL = {
+    PUSH_STATUS_PUSHED: "pushed",
+    PUSH_STATUS_FAILED: "failed",
+    PUSH_STATUS_DECLINED: "declined",
+    PUSH_STATUS_NO_REMOTE: "no-remote",
+    PUSH_STATUS_NOT_ATTEMPTED: "pushed",
+}
 
 #: Non-tail-step D-node id/resolving_op carrying this pass's per-step wall-clock
 #: timing map (see `_TailTiming` below). `tail_step=False` -- this node is a pure
@@ -1098,6 +1139,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                           # pass -- meaningful ONLY under
                                           # push_mode="sync" (see push_status).
           "push_status":             "deferred" | "pushed" | "failed" |
+                                          "declined" | "no-remote" |
                                           "unknown_resumed",  # see module
                                           # docstring "Push-mode / result-
                                           # contract decision" for the full
@@ -1575,6 +1617,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # --- Step 6: F1 exit-verdict ordering for cs_release_artifact
     # (see module docstring "F1 exit-verdict ordering" for the full rationale) ---
+    # Review: coordinator:code-reviewer -- checked this gate against the
+    # `sha_unverified` state (W3, 2026-08-08-a-landed-commit-reported-as-
+    # failed.md) and it needs no change. It keys on `commit_failed`/
+    # `integrity_breach` alone, never on `committed_sha`, so a
+    # `sha_unverified=True` landing already takes the release branch below --
+    # correct, since the work landed and the claim should release. This is a
+    # claim-release decision, not a did-anything-happen one, so it is a
+    # different discriminator than `_commit_gap_reason` even though it shares
+    # the `commit_failed` variable; do not fold it into that sweep.
     with timing.measure("cs_release_artifact"):
         if governing_plan_slug and not commit_failed and not integrity_breach:
             cs_release_result = tail_ops.cs_release_artifact(
@@ -1716,11 +1767,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # when this returns, so "failed" can never legitimately appear here.
         push_status = "deferred"
     else:
-        # push_mode="sync" (COORDINATOR_WSC_SYNC_PUSH=1): `pushed` is a real
-        # tri-state from run_commit_pipeline's push_with_retry -- False is
-        # the only genuine-failure value; True/None (no remote configured,
-        # nothing to breach) both count as "pushed".
-        push_status = "failed" if pushed is False else "pushed"
+        # push_mode="sync" (COORDINATOR_WSC_SYNC_PUSH=1): read the canonical
+        # `push_status` directly off `pipeline_result` (C6b) -- NEVER
+        # re-derived from the `pushed` tri-state, which double-books `None`
+        # across three distinct meanings (no remote, nothing to breach, a
+        # policy decline) and, before this fix, silently reported a policy
+        # decline as `push_status="pushed"`. See
+        # `_CANONICAL_PUSH_STATUS_TO_LOCAL` for the mapping.
+        push_status = _CANONICAL_PUSH_STATUS_TO_LOCAL[pipeline_result.push_status]
 
     # Self-evidencing on a soft-failed pass (exit_code=2): fold the per-step
     # timing map into `diagnostics` too, not just the receipt, so a caller

@@ -111,8 +111,14 @@ _TELL_CITES_DIRECTIVE = re.compile(
 # Tell B — the EM asking the PM for permission to dispatch. Dispatch sequencing
 # is EM remit (First Officer Doctrine § Engineering Remit), so this question is
 # itself the error, independent of how the EM arrived at it.
+#
+# The leading `\b` is load-bearing, not decoration: without it the `ok(?:ay)?`
+# alternative matches the "ok" INSIDE "ho-ok", so any sentence pairing the word
+# "hook" with a dispatch term within 60 characters trips — a shape this repo's
+# own subject matter produces constantly ("the hook fires on every subagent
+# dispatch"). Observed live across four sessions before the boundary landed.
 _TELL_ASKS_PERMISSION = re.compile(
-    r"(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
+    r"\b(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
     r"[^.?!\n]{0,60}?"
     r"\b(?:dispatch|delegate|fan[- ]out|spawn|subagent|sub-agent)\b",
     re.IGNORECASE,
@@ -205,8 +211,13 @@ def _tell_misattributes_to_pm(text: str) -> bool:
 # "which files should I include", "should I leave X out", "out of scope" —
 # which asks about the CONTENTS of a commit the EM is already going to make,
 # not for permission to make it.
+#
+# The leading `\b` carries the same load as Tell B's — see that pattern's note.
+# Unanchored, "ho-ok" supplies the permission phrase and the commit vocabulary
+# is one clause away, so ordinary engine prose about commit hooks ("hook path
+# and `commit-tree` path both") reads as a permission ask.
 _TELL_ASKS_COMMIT_PERMISSION = re.compile(
-    r"(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
+    r"\b(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
     r"[^.?!\n]{0,60}?"
     r"\b(?:commit|committing|stage|staging)\b",
     re.IGNORECASE,

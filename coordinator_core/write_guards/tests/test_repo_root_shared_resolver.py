@@ -78,15 +78,13 @@ class TestSharedResolver:
         outside.mkdir()
         assert _repo_root.resolve_repo_root(str(outside)) is None
 
-    def test_single_invocation_across_multiple_guard_calls_does_not_respawn(
-        self, scratch_repo, monkeypatch
-    ):
-        """Multiple guards resolving the SAME cwd within one process must
-        hit the delegate's memo, not each spawn their own `git
-        rev-parse`. Asserts by counting spawns via the delegate's own
-        spawn-fallback path -- forcing the walk to "find nothing" so every
-        call would spawn if NOT memoized, then asserting only one spawn
-        actually happens across three resolutions.
+    def test_ordinary_repo_walk_never_spawns(self, scratch_repo, monkeypatch):
+        """Multiple guards resolving the SAME ordinary-repo cwd within one
+        process must hit the walk-based path, not the spawn fallback at
+        all -- names what it actually checks (walk-only, no spawn), not the
+        memoization guarantee (see
+        `test_spawn_fallback_memoizes_across_repeat_calls_for_same_cwd`
+        below for that).
         """
         spawn_calls = []
         real_spawn = _git_repo_root._spawn_rev_parse
@@ -107,6 +105,40 @@ class TestSharedResolver:
 
         assert first == second == third
         assert spawn_calls == []
+
+    def test_spawn_fallback_memoizes_across_repeat_calls_for_same_cwd(
+        self, scratch_repo, monkeypatch
+    ):
+        """Pins the "no duplicate spawn" guarantee the prior version of this
+        test claimed to cover but didn't: forces `_walk_for_dot_git` to find
+        nothing (as if no `.git` entry were discoverable), so every one of
+        three same-cwd resolutions WOULD spawn if `_spawn_cached`'s memo
+        were broken. Asserts only one spawn actually happens.
+
+        Review finding (coordinatorcode-reviewer-a0de0949.md, P3): the prior
+        version's own docstring admitted the walk always succeeds for an
+        ordinary repo, so its `spawn_calls == []` assertion was trivially
+        true regardless of whether memoization worked -- no regression in
+        `_spawn_cached` would have been caught.
+        """
+        monkeypatch.setattr(_git_repo_root, "_walk_for_dot_git", lambda start: None)
+
+        spawn_calls = []
+        real_spawn = _git_repo_root._spawn_rev_parse
+
+        def _counting_spawn(args, cwd):
+            spawn_calls.append((tuple(args), cwd))
+            return real_spawn(args, cwd)
+
+        monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", _counting_spawn)
+
+        first = _repo_root.resolve_repo_root(str(scratch_repo))
+        second = _repo_root.resolve_repo_root(str(scratch_repo))
+        third = _repo_root.resolve_repo_root(str(scratch_repo))
+
+        assert first == second == third
+        assert first is not None  # the spawn fallback DID resolve a root
+        assert len(spawn_calls) == 1
 
 
 class TestMigratedGuardVerdictsUnchanged:

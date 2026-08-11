@@ -180,6 +180,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "deliverable.cascade_terminal" (C6 terminal-state-propagation cascade)',
     ),
     (
+        "coordinator_core.ops.sizing_decline",
+        'registers "sizing.decline" (2026-08-10, single-target applier for the sizing-object '
+        '`declined` terminal status)',
+    ),
+    (
         "coordinator_core.ops.cascade_backstop_sweep",
         'registers "deliverable.cascade_backstop_sweep" (C6c read-only backstop sweep, AC6d)',
     ),
@@ -282,6 +287,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ensure_python3_exe_shim", 'registers "install.detect_python3_appx_stub"'),
     ("coordinator_core.ops.draft_plan_aging", 'registers "plan.list_stale_executing", "plan.list_orphaned"'),
     ("coordinator_core.ops.ceremony.scoped_git_commit", 'registers "ceremony.scoped_git_commit"'),
+    ("coordinator_core.ops.ceremony.chunk_commits", 'registers "ceremony.chunk_commits"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
     ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
     ("coordinator_core.ops.workday_drain_pending_push", 'registers "workday.drain_pending_push"'),
@@ -377,6 +383,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.resolve_baton_path", 'registers "baton.resolve_path_and_repo"'),
     ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
+    ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
     ("coordinator_core.ops.memo_fate_backfill", 'registers "memo.fate_backfill"'),
     ("coordinator_core.ops.distill_curation_status", 'registers "distill.curation_status"'),

@@ -378,21 +378,25 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     shared = repo_b / "shared.yaml"
     shared.write_text("z")  # dirty, untracked in B
 
-    # B has its own live native session, resolved via the tier-4 sentinel
-    # (no platform env var) — mirrors "a example-doctrine-repo session that relies on
-    # the sentinel" from the review.
+    # B has its own live native session with a real claim on disk.
+    #
+    # This block used to establish B's identity via the `.current-session-id`
+    # sentinel (then tier 4 of `core.resolve_session_id`). That tier was REMOVED
+    # by KS-4 (2026-08-07) — unsound under concurrency, and its sole writer was
+    # deleted — so `resolve_session_id` is env-tier only now and the sentinel
+    # resolves nothing. The surviving env tier carries B's identity here
+    # instead; what this test is actually about (A's declaration cannot steal
+    # B's claim, materialize a phantom session dir in B, or perturb B's own
+    # resolution) is unchanged by which tier answers.
     core.init("sid-bnative", cwd=str(repo_b))
     scope.touch("sid-bnative", "shared.yaml", cwd=str(repo_b))
-    sentinel = repo_b / ".git" / "coordinator-sessions" / ".current-session-id"
-    sentinel.write_text("sid-bnative", encoding="utf-8")
 
     monkeypatch.setattr(liveness, "live_session_ids", _live_dirs_liveness)
 
-    # Confirm B resolves its own id BEFORE the attack (sanity — tier-4,
-    # unambiguous: 1 live session, sentinel matches it).
+    # Confirm B resolves its own id BEFORE the attack (sanity).
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-bnative")
     assert core.resolve_session_id(cwd=str(repo_b)) == "sid-bnative"
 
     # A dispatches a declaration naming B's file, under a distinct sid.
@@ -416,9 +420,8 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     excluded_paths = {e["path"] for e in offer["excluded"]}
     assert "shared.yaml" not in excluded_paths
 
-    # B's own identity resolution is unperturbed AFTER the attack (tier-4
-    # still unambiguous — live_count is still 1, not 2).
-    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    # B's own identity resolution is unperturbed AFTER the attack.
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-bnative")
     assert core.resolve_session_id(cwd=str(repo_b)) == "sid-bnative"
 
     # The skip was observable, not silent.
@@ -519,7 +522,10 @@ def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, mon
     assert _SCOPE_TOUCH_PATHS_KEY not in d["result"]
     out_path = d["result"]["out_path"]
 
-    rel = os.path.relpath(out_path, str(repo))
+    # `offer["safe_paths"]` carries git-style repo-relative paths (forward
+    # slashes on every platform); `os.path.relpath` renders native separators,
+    # so the raw result only matched on POSIX.
+    rel = Path(os.path.relpath(out_path, str(repo))).as_posix()
     offer = compute_offer("sid-13", cwd=str(repo))
     assert rel in offer["safe_paths"], (rel, offer)
     assert rel not in offer["orphans"]

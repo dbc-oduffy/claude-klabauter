@@ -526,7 +526,7 @@ def test_premise_not_applicable_fires_on_pm_decision_routed_large():
     assert "premise_not_applicable" in decision["detents"]
 
 
-@pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
+@pytest.mark.parametrize("tshirt", ["XS", "S"])
 def test_premise_detents_do_not_fire_below_large(tshirt):
     read_decision = sa.route(
         appetite="large", estimate={"tshirt": tshirt}, premise_provenance="read"
@@ -550,27 +550,57 @@ def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance)
         assert "premise_not_applicable" not in decision["detents"]
 
 
-def test_premise_unproven_keys_on_resized_size_not_pre_resize_size():
-    # An S estimate raised to L by the probe must still fire the detent —
-    # keyed on the RESIZED size, never the pre-resize tshirt (memo: "key it
-    # on resized SIZE, not resolved ROUTE" — this asserts the size half of
-    # that same requirement).
+def test_premise_unproven_fires_at_m_plan_routed():
+    # M is in _PREMISE_DETENT_TSHIRTS but NOT in _LARGE_TSHIRTS — the gap
+    # this dispatch closes (example-doctrine-repo-em was hand-reading M for this).
     decision = sa.route(
+        appetite="large", estimate={"tshirt": "M"}, premise_provenance="read"
+    )
+    assert decision["route"] == "plan"
+    assert "premise_unproven" in decision["detents"]
+
+
+def test_premise_not_applicable_fires_at_m_plan_routed():
+    decision = sa.route(
+        appetite="large", estimate={"tshirt": "M"}, premise_provenance="not-applicable"
+    )
+    assert decision["route"] == "plan"
+    assert "premise_not_applicable" in decision["detents"]
+
+
+def test_m_jtbd_unclear_still_routes_to_plan_not_shape():
+    # Regression guard: _LARGE_TSHIRTS (which gates the shape-route
+    # condition) must NOT have been widened to include "M" as a side effect
+    # of closing the premise-detent gap above.
+    decision = sa.route(
+        appetite="large",
+        estimate={"tshirt": "M"},
+        jtbd_unclear=True,
+    )
+    assert decision["route"] == "plan"
+
+
+def test_premise_unproven_keys_on_resized_size_not_pre_resize_size():
+    # An XS estimate raised to S by the probe must still NOT fire the
+    # detent — keyed on the RESIZED size, never the pre-resize tshirt (memo:
+    # "key it on resized SIZE, not resolved ROUTE" — this asserts the size
+    # half of that same requirement).
+    decision = sa.route(
+        appetite="large",
+        estimate={"tshirt": "XS"},
+        probe_signal="raise",
+        premise_provenance="read",
+    )
+    assert decision["resolved_estimate"]["tshirt"] == "S"
+    assert "premise_unproven" not in decision["detents"]
+
+    decision2 = sa.route(
         appetite="large",
         estimate={"tshirt": "S"},
         probe_signal="raise",
         premise_provenance="read",
     )
-    assert decision["resolved_estimate"]["tshirt"] == "M"
-    assert "premise_unproven" not in decision["detents"]
-
-    decision2 = sa.route(
-        appetite="large",
-        estimate={"tshirt": "M"},
-        probe_signal="raise",
-        premise_provenance="read",
-    )
-    assert decision2["resolved_estimate"]["tshirt"] == "L"
+    assert decision2["resolved_estimate"]["tshirt"] == "M"
     assert "premise_unproven" in decision2["detents"]
 
 
@@ -779,14 +809,44 @@ def test_absent_appetite_next_move_excludes_closed_fork_tokens():
     assert "raise_appetite" not in decision["next_move"]
 
 
-def test_absent_appetite_next_move_suppressed_at_pm_decision():
-    # AC6a: at XL, post_size_prompt_pending still fires as a detent, but the
-    # next_move open-question append is suppressed because pm-decision's own
-    # branch already asks a PM question (precedence rule #1 — ONE ask).
+def test_absent_appetite_next_move_bundles_open_question_at_pm_decision():
+    # AC6a, re-cut: the appetite plan specced SUPPRESSION here, on the premise
+    # that the pm-decision branch offered `split` as one of its enumerated
+    # exits. The XXL plan landed second and dropped `split` from that text,
+    # leaving XL — the size where "want to split it?" is the likeliest PM
+    # answer — as the one size whose next_move carried no open question at
+    # all. The two now arrive BUNDLED as one ask, mirroring the
+    # appetite_exceeded + pm-decision combined arm.
     decision = sa.route(estimate={"tshirt": "XL"})
     assert decision["route"] == "pm-decision"
     assert "post_size_prompt_pending" in decision["detents"]
-    assert "shall we go with that or want to split it" not in decision["next_move"]
+    assert "shall we go with that or want to split it" in decision["next_move"]
+    # AC6a's live invariant: exactly one PM-facing question in next_move.
+    assert decision["next_move"].count("?") == 1
+    # AC6: the appetite-absent path never offers the closed pair.
+    assert "cut_to_fit" not in decision["next_move"]
+    assert "raise_appetite" not in decision["next_move"]
+
+
+def test_pm_decision_enumerated_exits_still_omit_split():
+    # The XXL plan's C2 item 4 ruling stands — `split` is a vocabulary value
+    # in XL_EXIT_ENUM, not a menu item in the enumerated exits. The bundled
+    # open question above reintroduces splitting as an OPEN answer, which is
+    # a different thing; this pins that the menu itself did not grow back.
+    decision = sa.route(estimate={"tshirt": "XL"})
+    exits_text = decision["next_move"].split("Put that to the PM")[0]
+    assert "split (" not in exits_text
+
+
+def test_absent_appetite_question_precedes_advisory_at_pm_decision():
+    # The ordering rule holds on the pm-decision path too: a live PM question
+    # must never sit behind a non-actionable advisory.
+    decision = sa.route(estimate={"tshirt": "XL"}, premise_provenance="not-applicable")
+    assert "post_size_prompt_pending" in decision["detents"]
+    assert "premise_not_applicable" in decision["detents"]
+    assert decision["next_move"].index("shall we go with that") < decision[
+        "next_move"
+    ].index("ADVISORY")
 
 
 def test_absent_appetite_next_move_question_precedes_premise_advisory():
@@ -926,7 +986,16 @@ def test_sizing_object_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
         ).read_text(encoding="utf-8")
     )
-    assert schema["x-schema-version"] == "1.7.0"
+    # 1.9.0 since the sizing-guard-flags widen (cross-repo memo
+    # 2026-08-10-example-doctrine-repo-em-sizing-guard-flags.md) appended
+    # `boundary_counted_in_notch` and `scout_evidence_mention_count` to
+    # `detents.items.enum`. The bump class moves back DOWN to
+    # `enum-value-additive`: unlike 1.8.0's bundle, this bump adds no field at
+    # all — two values on one existing enum, nothing else shape-visible. This
+    # is the version example-doctrine-repo stamps against to bring their detent-parity and
+    # version-parity gates green; do not bump past it before they land (see
+    # the schema's own x-bump-note).
+    assert schema["x-schema-version"] == "1.9.0"
     assert schema["x-bump-class"] == "enum-value-additive"
 
 
@@ -940,7 +1009,10 @@ def test_completion_entry_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/completion-entry.schema.json"
         ).read_text(encoding="utf-8")
     )
-    assert schema["x-schema-version"] == "1.3.0"
+    # 1.4.0 since 62b27af07 re-vendored this mirror for the XXL tier (leg 3 of
+    # a three-leg coordinated landing). The bump class is unchanged; only the
+    # version pin here was left behind.
+    assert schema["x-schema-version"] == "1.4.0"
     assert schema["x-bump-class"] == "enum-value-additive"
 
 
@@ -983,6 +1055,12 @@ def test_vendored_schema_widened_enums_order_exact():
         "post_size_prompt_pending",
         "xxl_unprobed",
         "goal_setting_pm_gated",
+        # Appended by the sizing-guard-flags widen (1.9.0). Order-exact and
+        # append-at-end: enum ORDER is load-bearing against example-doctrine-repo's
+        # EQUAL_VERSION_SHAPE_DRIFT gate, and these are the exact bytes their
+        # side stamps 1.9.0 against.
+        "boundary_counted_in_notch",
+        "scout_evidence_mention_count",
     ]
 
     completion_schema = json.loads(
@@ -1021,6 +1099,201 @@ def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up():
     m_index = sa.TSHIRT_ORDER.index("M")
     for tshirt in sa.TSHIRT_ORDER[m_index:]:
         assert tshirt in sa._POST_SIZE_PROMPT_TSHIRTS
+
+
+# --- Sizing-lobby guards become required flags (cross-repo memo
+# --- 2026-08-10-example-doctrine-repo-em-sizing-guard-flags.md) ------------------------
+#
+# Both flags replay the --premise-provenance shape: a typed answer that
+# reaches the validator, an advisory detent, a next_move advisory, and no
+# effect on route/xl_exit. The premise block above is the parity reference —
+# where a property holds for both, it is asserted for both.
+
+
+def test_boundary_and_scout_kind_detents_in_detent_enum():
+    assert "boundary_counted_in_notch" in sa.DETENT_ENUM
+    assert "scout_evidence_mention_count" in sa.DETENT_ENUM
+
+
+def test_boundary_in_notch_yes_fires_detent():
+    decision = sa.route(estimate={"tshirt": "S"}, boundary_in_notch="yes")
+    assert "boundary_counted_in_notch" in decision["detents"]
+
+
+def test_boundary_in_notch_no_and_absent_fire_nothing():
+    for value in ("no", None):
+        decision = sa.route(estimate={"tshirt": "S"}, boundary_in_notch=value)
+        assert "boundary_counted_in_notch" not in decision["detents"], value
+
+
+@pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL", "XXL"])
+def test_boundary_in_notch_is_not_size_gated(tshirt):
+    # The deliberate asymmetry against _PREMISE_DETENT_TSHIRTS. The motivating
+    # incident was an S sized XL: a detent gated at M-and-above would exempt
+    # it the moment the collapse it is meant to prompt actually landed.
+    decision = sa.route(estimate={"tshirt": tshirt}, boundary_in_notch="yes")
+    assert "boundary_counted_in_notch" in decision["detents"], tshirt
+
+
+def test_boundary_advisory_names_the_memo_vs_co_design_discriminator():
+    # The engine cannot apply the discriminator (the flag has two values, not
+    # three), so the advisory must HAND it over rather than render a verdict.
+    decision = sa.route(estimate={"tshirt": "L"}, boundary_in_notch="yes")
+    text = decision["next_move"]
+    assert "ADVISORY (warn, never block; does not alter the route above)" in text
+    assert "co-design" in text
+    assert "GATE, not a size" in text
+
+
+def test_scout_evidence_kind_mention_count_fires_detent():
+    decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="mention-count")
+    assert "scout_evidence_mention_count" in decision["detents"]
+
+
+@pytest.mark.parametrize("kind", ["change-set", "site-count", None])
+def test_scout_evidence_kind_qualified_answers_fire_nothing(kind):
+    decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind=kind)
+    assert "scout_evidence_mention_count" not in decision["detents"]
+
+
+def test_scout_evidence_kind_advisory_names_the_compat_shim():
+    decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="mention-count")
+    text = decision["next_move"]
+    assert "ADVISORY (warn, never block; does not alter the route above)" in text
+    assert "MENTION-COUNT" in text
+    assert "back-compat shim" in text
+
+
+def test_scout_evidence_kind_is_independent_of_scout_evidence_contents():
+    # The negative-spec leg: the KIND is never inferred from the list. A long
+    # list with kind=change-set stays silent; an EMPTY list with
+    # kind=mention-count still fires. Neither length nor contents is read.
+    long_list = [f"file_{n}.py mentions the literal" for n in range(108)]
+    quiet = sa.route(
+        estimate={"tshirt": "M"}, scout_evidence=long_list, scout_evidence_kind="change-set"
+    )
+    assert "scout_evidence_mention_count" not in quiet["detents"]
+
+    loud = sa.route(
+        estimate={"tshirt": "M"}, scout_evidence=[], scout_evidence_kind="mention-count"
+    )
+    assert "scout_evidence_mention_count" in loud["detents"]
+
+    # And the echo-back stays byte-identical — passthrough, never rewritten.
+    assert quiet["scout_evidence"] == long_list
+
+
+@pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL", "XXL"])
+def test_neither_new_detent_alters_route_or_xl_exit(tshirt):
+    baseline = sa.route(estimate={"tshirt": tshirt})
+    flagged = sa.route(
+        estimate={"tshirt": tshirt},
+        boundary_in_notch="yes",
+        scout_evidence_kind="mention-count",
+    )
+    assert flagged["route"] == baseline["route"], tshirt
+    assert flagged["xl_exit"] is None, tshirt
+    assert baseline["xl_exit"] is None, tshirt
+    assert flagged["resolved_estimate"] == baseline["resolved_estimate"], tshirt
+
+
+def test_unknown_boundary_in_notch_raises_usage_error():
+    with pytest.raises(sa.SizingAssembleError):
+        sa.route(estimate={"tshirt": "M"}, boundary_in_notch="maybe")
+
+
+def test_unknown_scout_evidence_kind_raises_usage_error():
+    with pytest.raises(sa.SizingAssembleError):
+        sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="grep-count")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"boundary_in_notch": "maybe"},
+        {"scout_evidence_kind": "grep-count"},
+    ],
+)
+def test_new_validators_fire_even_on_express_lane_path(kwargs):
+    # Same unconditional-validation property as _validate_probe_signal /
+    # _validate_premise_provenance (Finding 5): validation runs BEFORE the
+    # express_lane short-circuit, not only on paths reaching detent
+    # computation.
+    with pytest.raises(sa.SizingAssembleError):
+        sa.route(estimate={"tshirt": "M"}, express_lane=True, **kwargs)
+
+
+def test_new_detents_never_populated_on_express_lane():
+    decision = sa.route(
+        estimate={"tshirt": "L"},
+        express_lane=True,
+        boundary_in_notch="yes",
+        scout_evidence_kind="mention-count",
+    )
+    assert decision["detents"] == []
+    assert decision["route"] == "dispatch"
+
+
+def test_new_advisories_follow_the_premise_advisory_in_next_move():
+    # Append-not-reorder discipline: the ordering contract is route text ->
+    # appetite question -> xxl_unprobed -> premise -> boundary -> scout-kind.
+    decision = sa.route(
+        estimate={"tshirt": "L"},
+        premise_provenance="read",
+        boundary_in_notch="yes",
+        scout_evidence_kind="mention-count",
+    )
+    text = decision["next_move"]
+    premise_at = text.index("mechanism premise was READ")
+    boundary_at = text.index("contributed to this notch")
+    scout_at = text.index("MENTION-COUNT")
+    assert premise_at < boundary_at < scout_at
+
+
+def test_cli_main_boundary_and_scout_kind_flags(capsys):
+    rc = sa.main(
+        [
+            "--tshirt",
+            "L",
+            "--boundary-in-notch",
+            "yes",
+            "--scout-evidence-kind",
+            "mention-count",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == sa.EXIT_OK
+    assert '"boundary_counted_in_notch"' in out
+    assert '"scout_evidence_mention_count"' in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--tshirt", "M", "--boundary-in-notch", "maybe"],
+        ["--tshirt", "M", "--scout-evidence-kind", "grep-count"],
+    ],
+)
+def test_cli_main_unknown_new_flag_values_usage_error(argv, capsys):
+    rc = sa.main(argv)
+    capsys.readouterr()
+    assert rc == sa.EXIT_USAGE
+
+
+def test_usage_string_advertises_both_new_flags(capsys):
+    sa.main([])
+    err = capsys.readouterr().err
+    assert "--boundary-in-notch yes|no" in err
+    assert "--scout-evidence-kind mention-count|change-set|site-count" in err
+
+
+def test_vendored_schema_validates_object_carrying_both_new_detents():
+    from coordinator_core.frontmatter.schema_validate import validate
+
+    fixture = _vendored_sizing_object_fixture()
+    fixture["detents"] = ["boundary_counted_in_notch", "scout_evidence_mention_count"]
+    result = validate("sizing-object", fixture)
+    assert result["ok"], result.get("errors")
 
 
 # --- C6: mechanical two-sense guard over the pejorative "appetite" sense ----

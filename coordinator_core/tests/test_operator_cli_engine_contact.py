@@ -80,13 +80,50 @@ def _entrypoints() -> list[Path]:
     )
 
 
+def _is_private_ops_module(dotted: str) -> bool:
+    """True when the final segment of an `coordinator_core.ops.*` path is private.
+
+    `coordinator_core.ops.fleet._common` is a shared helper module; the op that
+    lives beside it is `coordinator_core.ops.fleet.memo_send`. The leading
+    underscore is this package's own marker for "not an op entrypoint".
+    """
+    return dotted.rsplit(".", 1)[-1].startswith("_")
+
+
 def _imports_an_op_in_process(source: str) -> bool:
-    """True when the file imports `coordinator_core.ops.*` directly.
+    """True when the file imports an op ENTRYPOINT from `coordinator_core.ops.*`.
 
     AST-based, never a substring scan: the triage's own first census was wrong
     because it keyed on the literal `coordinator_core` token and so counted
     docstring mentions as imports while missing `cc_invoke`-routed callers
     entirely. Do not replace this with a grep.
+
+    A PRIVATE import from that package is not an op reach, and crediting it as
+    one made this gate unfixable at three of its four live findings. The
+    specimens: `coordinator/bin/cross-repo-memo` imports
+    `ops.fleet._outbox_frontmatter_rules.validate_outbox_frontmatter`,
+    `handoff-reconcile-close-terminal.py` imports
+    `ops.fleet._common.handoff_archive_dest`, and
+    `coordinator-harvest-deferrals` imports
+    `ops.plan_status_transition._refuse_if_live_foreign_holder` — a
+    frontmatter-rule table, a path derivation, and a read-only refusal
+    predicate. All three route every actual mutation through
+    `cc_invoke.route_mutation`, which spawns `coordinator_core.invoke` as a
+    subprocess, so the ENGINE declares those writes and nothing lands in
+    `orphans`. None of the three has a `main` to route, so the remedy this
+    gate names (`run_op_main("coordinator_core.ops.<name>", ...)`) is not
+    merely unnecessary for them but inapplicable — a gate whose only available
+    disposition is its own baseline is measuring the wrong property.
+
+    Fail-closed narrowness: the exemption requires the import to be private,
+    either in the module path (`ops.fleet._common`) or in every name bound
+    (`from ops.plan_status_transition import _helper`). A public name out of a
+    public ops module — `from ops.cmd_autorun_guard import main` — still
+    counts, aliased or not, and a plain `import coordinator_core.ops.<public>`
+    still counts. Residual, stated rather than hidden: a private helper that
+    itself writes undeclared files is outside this gate's reach. It always was
+    — `run_op_main` can only route a module-level entrypoint — so the honest
+    scope is op entrypoints, which is what this now measures.
     """
     try:
         tree = ast.parse(source)
@@ -94,11 +131,20 @@ def _imports_an_op_in_process(source: str) -> bool:
         return False
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            if (node.module or "").startswith("coordinator_core.ops"):
-                return True
+            module = node.module or ""
+            if not module.startswith("coordinator_core.ops"):
+                continue
+            if _is_private_ops_module(module):
+                continue
+            if all(alias.name.startswith("_") for alias in node.names):
+                continue
+            return True
         elif isinstance(node, ast.Import):
-            if any(a.name.startswith("coordinator_core.ops") for a in node.names):
-                return True
+            for alias in node.names:
+                if alias.name.startswith("coordinator_core.ops") and not _is_private_ops_module(
+                    alias.name
+                ):
+                    return True
     return False
 
 
@@ -216,7 +262,15 @@ def _uses_the_seam(source: str) -> bool:
 
 
 def _bypassing() -> list[str]:
-    """Entrypoints importing an op in-process without routing through the seam."""
+    """Entrypoints importing an op in-process without routing through the seam.
+
+    Paths are emitted POSIX-spelled (`coordinator/bin/x.py`), matching the
+    baseline file's on-disk spelling. A native `str(PurePath)` here yields
+    backslashes on Windows, which shares no element with the forward-slash
+    baseline: every entry then reads as simultaneously NEW (regrowth failure)
+    and STALE (delete-me warning), and the gate is red on the whole population
+    regardless of the property it measures. Do not reintroduce `str(...)`.
+    """
     found = []
     for path in _entrypoints():
         try:
@@ -224,7 +278,7 @@ def _bypassing() -> list[str]:
         except OSError:
             continue
         if _imports_an_op_in_process(source) and not _uses_the_seam(source):
-            found.append(str(path.relative_to(REPO_ROOT)))
+            found.append(path.relative_to(REPO_ROOT).as_posix())
     return sorted(found)
 
 
@@ -381,6 +435,54 @@ def test_module_attribute_seam_call_still_counts_as_using_it():
     )
     assert _imports_an_op_in_process(source)
     assert _uses_the_seam(source)
+
+
+def test_private_helper_import_from_an_ops_module_is_not_an_op_reach():
+    """`from ops.<public> import _helper` is a helper import, not an op call.
+
+    The live shape: `coordinator-harvest-deferrals` imports
+    `plan_status_transition._refuse_if_live_foreign_holder`, a read-only
+    refusal predicate, and routes its writes out through subprocess CLIs.
+    There is no entrypoint here for `run_op_main` to route.
+    """
+    source = (
+        "from coordinator_core.ops.plan_status_transition import "
+        "_refuse_if_live_foreign_holder\n"
+        "_refuse_if_live_foreign_holder('p', 'r', None)\n"
+    )
+    assert not _imports_an_op_in_process(source)
+
+
+def test_import_from_a_private_ops_module_is_not_an_op_reach():
+    """`ops.fleet._common` / `ops.fleet._outbox_frontmatter_rules` are shared
+    helper modules; the underscore is the package's own not-an-op marker."""
+    source = (
+        "from coordinator_core.ops.fleet._common import handoff_archive_dest\n"
+        "handoff_archive_dest(root, path)\n"
+    )
+    assert not _imports_an_op_in_process(source)
+
+
+def test_public_op_entrypoint_import_still_counts_even_when_aliased():
+    """The narrowing must not leak: a public name from a public ops module is
+    an op reach however it is spelled, which is the whole population this gate
+    was built to watch."""
+    assert _imports_an_op_in_process(
+        "from coordinator_core.ops.cmd_autorun_guard import main\n"
+    )
+    assert _imports_an_op_in_process(
+        "from coordinator_core.ops.cmd_autorun_guard import main as _op_main\n"
+    )
+    assert _imports_an_op_in_process("import coordinator_core.ops.cmd_autorun_guard\n")
+
+
+def test_mixed_public_and_private_names_still_count_as_an_op_reach():
+    """The exemption requires EVERY bound name to be private — one public name
+    alongside a private one is still an op reach (fail closed)."""
+    source = (
+        "from coordinator_core.ops.plan_status_transition import _helper, main\n"
+    )
+    assert _imports_an_op_in_process(source)
 
 
 def test_no_new_entrypoint_bypasses_the_declare_write_seam():

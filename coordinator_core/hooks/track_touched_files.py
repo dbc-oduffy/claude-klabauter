@@ -8,7 +8,7 @@ tool call into two append-only T-event logs:
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
-Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Port of the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-touched-files.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
@@ -138,6 +138,13 @@ def _get_lock(path: str) -> "asyncio.Lock":
 #       via cs_build_canonical_agent_id equivalent: "<name>@session-<short>".
 #   (c) Unrecognised shape — return "" (fail-closed; agent-keyed write skipped).
 # ---------------------------------------------------------------------------
+#: Already-canonical teammate shape, matching _subagent_identity's
+#: _TEAMMATE_CANONICAL_RE. A subagent-context PostToolUse fire can carry the
+#: agent_id in this form too (not just the raw a<name>-16hex shape below) —
+#: see the (d) branch's docstring note.
+_TEAMMATE_CANONICAL_RE = re.compile(r"^[A-Za-z0-9_.-]+@session-[a-z0-9-]+$")
+
+
 def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     """Translate a raw subagent-side agent_id to the canonical EM-side id.
 
@@ -158,6 +165,21 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
             short = session_id[:8]
             return f"{name}@session-{short}"
         return ""
+
+    # (d) Already-canonical <name>@session-<short> — rebuild against the LIVE
+    # session_id rather than trusting the embedded short verbatim. The harness
+    # stamps that short once at team creation and never refreshes it across
+    # /clear, resume, compact, or fork, so a verbatim id here would key a
+    # DIFFERENT .agents/<id>/ directory than the one branch (b) above (and
+    # track_dispatched_agents, once normalized) uses for the same teammate.
+    # See coordinator_core.write_guards._subagent_identity.
+    # normalize_teammate_agent_id for the full mechanism.
+    if _TEAMMATE_CANONICAL_RE.match(agent_id):
+        from coordinator_core.write_guards._subagent_identity import (
+            normalize_teammate_agent_id,
+        )
+
+        return normalize_teammate_agent_id(agent_id, session_id)
 
     # (c) Unrecognised shape — fail-closed.
     return ""
@@ -282,7 +304,7 @@ def _bootstrap_session(
 
     Primary: the canonical ``coordinator_core.session.core.init`` writer, which
     is idempotent (backfills into an existing dir) and stamps ``stable_pid`` via
-    Guard-1 when the parent process resolves to ``claude`` — the case on this
+    Guard-1 when the session's ``claude`` process resolves — the case on this
     in-process PostToolUse hook path. Falls back to the self-contained
     ``_ensure_session_dir`` bootstrap when core.init cannot resolve a git session
     hub (non-git test fixtures) or is unavailable.
@@ -459,9 +481,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # session dir before the first edit, which previously skipped bootstrap and
     # left meta.json — the Layer-1 stable_pid liveness signal — unwritten. Route
     # through the canonical core.init() writer whenever meta.json is missing OR
-    # its stable_pid is unpopulated; on this in-process path the hook's parent is
-    # `claude`, so Guard-1 stamps stable_pid with the live claude pid on the
-    # first edit. The gate goes quiet once stable_pid lands (no per-edit git
+    # its stable_pid is unpopulated; Guard-1 stamps stable_pid with the live
+    # claude pid on the first edit — from `CLAUDE_PID` where the harness exports
+    # it, falling back to POSIX direct-parent comm-verify or the bounded Windows
+    # ancestor walk. The gate goes quiet once stable_pid lands (no per-edit git
     # subprocess cost in steady state). See _needs_session_init / _bootstrap_session.
     if await asyncio.to_thread(_needs_session_init, session_dir, meta_file):
         await asyncio.to_thread(
@@ -488,7 +511,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # worktree root. Untested; see TestHandlerRuntimeErrorFallbackNonGitFixture.
     _worktree_root = str(main_worktree_root(_common_dir)) if _common_dir else git_root
     file_path_norm = await asyncio.to_thread(
-        normalize_touch_path, file_path, _worktree_root
+        normalize_touch_path, file_path, _worktree_root, root=_worktree_root
     )
     if not file_path_norm:
         return no_advisory()

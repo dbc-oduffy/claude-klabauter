@@ -99,8 +99,17 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
         "",  # extensionless: hook shims, CLI entrypoints, LICENSE-likes
         ".allow",
         ".archived",
+        # `coordinator_core/**/<module>.py.wip.<pid>.bak` — tool-written WIP
+        # backups of a source file. Inert: nothing reads them, nothing compares
+        # them byte-exactly. Classified unpinned rather than pinned because the
+        # honest answer is that they should not be tracked at all — see the
+        # bug-backlog entry on tracked scratch; pinning would dignify them.
+        ".bak",
         ".bats",
         ".body",
+        # `tasks/**/<name>.err` — captured stderr from a scratch run. `tasks/`
+        # is swept ephemera by CLAUDE.md; read by humans, never byte-compared.
+        ".err",
         # `setup/.percolate-identity.example` — a template/comment-only file,
         # human-read, never byte-compared.
         ".example",
@@ -113,6 +122,10 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
         ".log",
         ".md",
         ".mjs",
+        # `.structural-index/symbols.ndjson` — a generated index, parsed
+        # line-wise by a JSON reader that strips trailing whitespace. Regenerated
+        # wholesale, never patched or byte-compared.
+        ".ndjson",
         # `setup/publish-targets.portable` — a `#`-commented config file,
         # parsed line-by-line and human-read, never byte-compared.
         ".portable",

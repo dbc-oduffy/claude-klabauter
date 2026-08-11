@@ -672,6 +672,23 @@ and denies today). A reader must not conclude from this divergence that
 "PowerShell support" means PowerShell got any less strict than Bash already
 was -- it did not; it got its OWN equally strict, equally narrow allowlist.
 
+Divergence 14 (2026-08-10, confinement-policy self-edit close): a confined
+type's ENFORCED Bash ruleset is now resolved exclusively from code
+(`_default_ruleset()` / `_DEFAULT_RULESET_TYPE_OVERRIDES`), never from a
+YAML-supplied `bash_policy:` per-type entry -- see `_resolve_ruleset`'s own
+comment for the full mechanism, the two rejected alternatives (per-process
+cache -- moot under this codebase's documented spawn-per-call architecture,
+DR-215; relocating the policy file -- out of this module's repo/scope), and
+the exact threat closed vs. left open. `_is_confined_type`'s YAML-driven
+SET-MEMBERSHIP leg (Divergence 7/AC10) is UNCHANGED and deliberately not
+touched by this divergence -- it is a widen-only lever, not an escape
+lever. This narrows AC10's original "second confined type is a pure-data
+YAML addition" promise: a new confined type now needs a
+`_DEFAULT_RULESET_TYPE_OVERRIDES` code entry for anything beyond the shared
+conservative default, since the ruleset itself is code-pinned now.
+Reported: `state/bug-backlog/2026-08-10-a-reviewer-s-confinement-policy-is-
+edita-459e2790ebb7.yaml`.
+
 Test surface: `coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist.py`
 -- the eight probe commands from the verdict record
 (`docs/research/spike-verdicts/2026-08-07-powershell-guard-detection-and-
@@ -971,8 +988,9 @@ _READONLY_POWERSHELL_CMDLETS = frozenset(
 #: ``Where-Object`` has no data source of its own and admitting it as a
 #: first-segment entry would buy nothing. ``Where-Object`` is the one
 #: measured in the verdict record's eighth probe
-#: (``Get-ChildItem | Where-Object { $_.Length -gt 100 } -> deny``, now
-#: intended to allow) -- filtering an already-read-only object stream is
+#: (a ``Get-ChildItem`` piped into a ``Where-Object`` length filter, which
+#: that probe recorded as a deny verdict and this entry now intends to
+#: allow) -- filtering an already-read-only object stream is
 #: itself read-only (it drops or keeps objects already produced upstream; it
 #: creates, deletes, and executes nothing). Its built-in alias ``?`` is
 #: included for the same reason ``gci``/``sls``/``gc`` are; ``where`` (the
@@ -1181,6 +1199,15 @@ def _validate_ruleset(raw: Any) -> Optional[Dict[str, Any]]:
     malformed policy silently widen or narrow the surface in an
     unreviewable, field-by-field way).
 
+    Negative spec (Divergence 14, 2026-08-10): this function's return value
+    is no longer consumed by ``_resolve_ruleset`` for enforcement -- see
+    that function's own comment. Kept, not deleted, purely as living
+    documentation of the shape a future policy-driven ruleset would need to
+    satisfy if a non-self-editable delivery path for one is ever built (e.g.
+    a signed/read-only-mounted policy file outside any confined agent's
+    write surface); do not read its continued presence as evidence the
+    guard still honours a YAML-supplied ruleset today -- it does not.
+
     (Amendment 1, 2026-08-01) Two additional keys --
     ``interpreter_allowed_modules`` (a string list) and
     ``interpreter_allow_scripts`` (a bool) -- are OPTIONAL, unlike every key
@@ -1298,15 +1325,71 @@ def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
     whatever the validated entry (or ``_default_ruleset``) already produced,
     never a more-permissive ruleset by virtue of being unrecognized.
     """
-    raw = getattr(policy, "bash_policy", None)
-    entry = raw.get(effective_type) if isinstance(raw, dict) else None
-    validated = _validate_ruleset(entry) if entry is not None else None
-    if validated is not None:
-        overrides = _DEFAULT_RULESET_TYPE_OVERRIDES.get(effective_type, {})
-        if overrides:
-            validated = dict(validated)
-            validated.update(overrides)
-        return validated
+    # Divergence 14 (2026-08-10, confinement-editable-by-its-own-subject
+    # close, this change): a validated `bash_policy:` YAML entry for
+    # `effective_type` USED to be returned here (optionally topped up by
+    # `_DEFAULT_RULESET_TYPE_OVERRIDES`), which is what made the enforced
+    # ALLOW/DENY surface for a confined type editable by anyone who could
+    # write that YAML file. `coordinator:code-reviewer` and
+    # `coordinator:executor` both hold an unconfined `Edit` tool (see
+    # Amendment 2 above) that reaches
+    # `coordinator/subagent-sandbox-policy.yaml` -- so the confined subject
+    # of this guard could rewrite its own `bash_policy:` row, and because
+    # `load_policy()` re-reads the file fresh on every `check()` call (by
+    # design, for `report_sidecar`'s legitimate hot-reload need -- see that
+    # function's own docstring), the very next Bash call honoured the
+    # rewrite. Confirmed live in a throwaway fixture (never the fleet
+    # policy): denied `python3 /tmp/evil.py` before, allowed after flipping
+    # `interpreter_allow_scripts` to `true` in the YAML mid-session, no
+    # process restart. Reported by coordinatorstaff-eng
+    # (`state/bug-backlog/2026-08-10-a-reviewer-s-confinement-policy-is-
+    # edita-459e2790ebb7.yaml`).
+    #
+    # A per-process cache keyed on `policy_path` (the obvious "resolve once
+    # at a trust boundary" fix) was considered and REJECTED: this guard's
+    # own host module documents itself as stateless/spawn-per-call (DR-215,
+    # see `subagent_sandbox.engine`'s module docstring) -- each PreToolUse
+    # invocation is a fresh interpreter process, so a process-lifetime cache
+    # would be re-populated, and thus re-defeated, on literally the next
+    # Bash call. It buys nothing here; it only would in a resident-daemon
+    # architecture this codebase deliberately does not have.
+    #
+    # Moving the YAML to a location a confined agent's tools cannot write
+    # was also considered and rejected as OUT OF SCOPE for this module: the
+    # policy file lives in example-doctrine-repo's tree
+    # (`coordinator/subagent-sandbox-policy.yaml`), not this repo, and this
+    # guard does not own that repo's write-surface or its Edit-tool sandbox
+    # definition.
+    #
+    # Fix landed: the enforced RULESET is now hard-pinned in code --
+    # `_default_ruleset()`/`_DEFAULT_RULESET_TYPE_OVERRIDES` ONLY, never a
+    # YAML-supplied `bash_policy:` entry for `effective_type`, for ANY
+    # confined type. `_validate_ruleset` is kept (not deleted) as dead code
+    # documenting the shape a future policy-driven ruleset would need to
+    # satisfy IF a non-editable delivery path for it is built later -- see
+    # its own docstring negative-spec note. `entry`/`raw` above are computed
+    # for `_is_confined_type` only now (see that function): a `bash_policy:`
+    # key can still WIDEN which types are confined (safe -- it only adds
+    # confinement, never removes or loosens the ruleset a confined type is
+    # held to), but it can no longer narrow or widen what a confined type is
+    # ALLOWED to run. This is deliberately narrower than AC10's original
+    # promise ("a second confined type lands as a pure-data YAML addition,
+    # no code change") -- a genuinely new confined type now needs its own
+    # `_DEFAULT_RULESET_TYPE_OVERRIDES` code entry to get anything other
+    # than the shared conservative default. That regression is the
+    # necessary cost of closing this hole under the option-3 shape (hard-pin
+    # confined-type entries in code) -- see the module docstring's
+    # Divergence 14 section for the full writeup.
+    #
+    # THREAT CLOSED: a confined agent's own Edit-tool rewrite of
+    # `bash_policy:`'s per-type RULESET content no longer has any effect on
+    # what that guard enforces for it.
+    # THREAT LEFT OPEN: `_is_confined_type` below still consults the YAML to
+    # decide SET MEMBERSHIP -- this is intentionally unclosed because it is
+    # a widen-only lever (adding a type to `bash_policy:` can only ADD
+    # confinement, it cannot remove a type from the hardcoded
+    # `_CONFINED_FINDINGS_AGENTS` set or loosen its ruleset), so a confined
+    # subject rewriting it cannot use it to escape its own confinement.
     return _default_ruleset(effective_type)
 
 

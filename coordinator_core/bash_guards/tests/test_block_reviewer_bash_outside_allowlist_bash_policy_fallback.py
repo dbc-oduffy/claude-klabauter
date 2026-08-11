@@ -278,9 +278,16 @@ def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(t
 
 
 # ---------------------------------------------------------------------------
-# Proof the refactor is not decorative: a well-formed policy genuinely
-# drives the ALLOW/DENY decision, in both directions, relative to the
-# hardcoded fallback that governs when no policy is supplied.
+# Divergence 14 (2026-08-10): the enforced ruleset is now hard-pinned in
+# code (`_default_ruleset()`/`_DEFAULT_RULESET_TYPE_OVERRIDES`) -- a
+# well-formed `bash_policy:` YAML entry for a confined type's RULESET no
+# longer changes the ALLOW/DENY decision at all, in EITHER direction. This
+# is the fix for the confinement-editable-by-its-own-subject defect (a
+# confined agent's own Edit tool could rewrite this YAML and the very next
+# Bash call honoured the rewrite) -- these two tests used to prove the
+# opposite (that the policy genuinely widened/narrowed the surface); they
+# now pin that a YAML ruleset entry is INERT for enforcement, which is the
+# whole point of the fix. See _resolve_ruleset's own comment.
 # ---------------------------------------------------------------------------
 
 
@@ -304,7 +311,9 @@ def _well_formed_policy_yaml(readonly_fs_binaries) -> str:
     )
 
 
-def test_well_formed_policy_grants_a_binary_the_hardcoded_fallback_denies(tmp_path, monkeypatch):
+def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallback_denies(
+    tmp_path, monkeypatch
+):
     _confine(monkeypatch)
     payload = _payload("sed -n 1p some-file.txt")
 
@@ -312,55 +321,47 @@ def test_well_formed_policy_grants_a_binary_the_hardcoded_fallback_denies(tmp_pa
     # "sed" is not in _READONLY_FS_BINARIES, so this denies.
     assert _assert_denied(guard.check(payload)) is not None
 
-    # A well-formed policy that adds "sed" to readonly_fs_binaries: flips
-    # the SAME command to allow -- proving the ruleset is genuinely
-    # consumed, not ignored.
+    # A YAML policy that adds "sed" to readonly_fs_binaries: no longer has
+    # any effect -- the ruleset is code-pinned now (Divergence 14), so the
+    # SAME command still denies even with that entry present.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
         _well_formed_policy_yaml(["ls", "sed"]), encoding="utf-8"
     )
-    assert guard.check(payload, policy_path=str(policy_file)) is None
+    result = guard.check(payload, policy_path=str(policy_file))
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_well_formed_policy_narrows_git_subcommands_relative_to_fallback(tmp_path, monkeypatch):
+def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_fallback(
+    tmp_path, monkeypatch
+):
     _confine(monkeypatch)
     payload = _payload("git log")
 
     # Hardcoded fallback: "log" is a read-only subcommand -- allowed.
     assert guard.check(payload) is None
 
-    # A well-formed policy whose git_readonly_subcommands omits "log"
-    # (only "show" is declared) denies the SAME command -- the policy
-    # genuinely narrows the surface, not just widens it.
+    # A YAML policy whose git_readonly_subcommands omits "log" (only "show"
+    # is declared) no longer narrows the surface (Divergence 14) -- the
+    # SAME command still allows, because the ruleset is code-pinned and this
+    # YAML entry is never consulted for enforcement.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
     result = guard.check(payload, policy_path=str(policy_file))
-    assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
-# Regression: a pre-existing, well-formed ``bash_policy:`` entry for a
-# confined type -- authored BEFORE ``_DEFAULT_RULESET_TYPE_OVERRIDES`` grew
-# an entry for that same type -- must NOT shadow the newer, Python-side
-# override. This is the green-tests-inert-production defect: every OTHER
-# test exercising ``_DEFAULT_RULESET_TYPE_OVERRIDES`` (see
-# test_block_reviewer_bash_outside_allowlist.py's
-# "test_confined_python3_dash_m_pytest_now_allows" and siblings) calls
-# ``guard.check(payload)`` with the DEFAULT ``policy_path=None``, which in a
-# bare test/dev environment makes ``load_policy`` fail open to an EMPTY
-# ``Policy`` -- ``_resolve_ruleset`` then always takes the
-# ``_default_ruleset()`` branch, the ONLY branch that used to apply
-# ``_DEFAULT_RULESET_TYPE_OVERRIDES``. That is NOT the path the live
-# dispatcher takes: ``bash_guards/dispatch.py`` always threads an explicit
-# ``policy_file`` (example-doctrine-repo's real, long-lived ``subagent-sandbox-policy.yaml``,
-# which already carries a well-formed ``coordinator:code-reviewer``
-# ``bash_policy:`` row predating the pytest grant). This test is the first
-# in this file's suite to combine BOTH: a confined type with a live
-# ``_DEFAULT_RULESET_TYPE_OVERRIDES`` entry AND a well-formed policy-file
-# entry for that exact type that predates it (no interpreter keys at all) --
-# the shape that was silently inert in production while 263 other tests,
-# none of which drove this combination, passed.
+# Regression, updated for Divergence 14 (2026-08-10): a pre-existing
+# ``bash_policy:`` YAML entry for a confined type -- authored before
+# ``_DEFAULT_RULESET_TYPE_OVERRIDES`` grew an entry for that same type --
+# has never been able to shadow the Python-side override, and as of
+# Divergence 14 this is unconditionally true: the YAML ruleset entry is
+# never consulted for enforcement at all (see ``_resolve_ruleset``'s own
+# comment), so there is nothing left for it to shadow. This test now pins
+# that outcome directly rather than via the original green-tests-inert-
+# production layering story (retained in the comment below for history).
 # ---------------------------------------------------------------------------
 
 
@@ -375,7 +376,10 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
     # interpreter_allow_scripts -- exactly what a policy row authored before
     # the pytest grant existed looks like (both keys are OPTIONAL per
     # _validate_ruleset, defaulting to the conservative deny-more value so
-    # an already-deployed row does not fail validation).
+    # an already-deployed row does not fail validation). Under Divergence 14
+    # this entry is never consulted for enforcement at all, so its presence
+    # is inert either way -- the pytest allowance comes exclusively from
+    # _DEFAULT_RULESET_TYPE_OVERRIDES via _default_ruleset() now.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
 
@@ -388,16 +392,14 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
         "about it; it must not silently shadow it."
     )
 
-    # The rest of that pre-existing policy row's OWN declared surface is
-    # still fully in force -- this is a targeted layer, not a blanket
-    # bypass of the policy file. "log" is not in this fixture's
-    # git_readonly_subcommands (only "show" is declared), so it still
-    # denies exactly as test_well_formed_policy_narrows_git_subcommands_
-    # relative_to_fallback pins above.
+    # The rest of that pre-existing policy row's OWN declared surface is now
+    # INERT for enforcement (Divergence 14) -- "log" IS in the hardcoded
+    # fallback's git_readonly_subcommands regardless of what this fixture's
+    # YAML declares, so it allows, not denies, unlike the pre-Divergence-14
+    # version of this test.
     other_payload = _payload("git log")
     other_result = guard.check(other_payload, policy_path=str(policy_file))
-    assert other_result is not None
-    assert other_result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert other_result is None
 
     # And the unconditional python3 -c/-e inline-code deny is untouched by
     # this layering -- it is never gated by ruleset content at all.

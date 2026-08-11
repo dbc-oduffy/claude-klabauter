@@ -17,6 +17,19 @@ literal dispatch table naming every `CONSUMES_MANIFEST` member (C3).
 Deliberately does NOT build or depend on `coordinator_core.contract.
 apply_base` (the D1 shared mutating-apply runner) — see Negative-spec.
 
+Best-effort directives (docs/plans/2026-08-08-a-best-effort-directive-
+cannot-fail-a-ce.md, chunk C1): a directive carrying `best_effort: True`
+(absent key means `False` — every pre-existing directive keeps today's
+behaviour) that dispatches and exits non-zero lands in `report["degraded"]`
+instead of `report["failed"]` — recorded, never silent, but never able to
+move the exit code off `SUCCESS` the way a `failed` entry does. The
+captured stderr (when the CLI produced any) is folded into the `error`
+string on BOTH the `failed` and `degraded` paths, after the existing
+`"<cli> exited <n> (args=[...])"` prefix — the field an operator actually
+reads back previously named only the args, which is why every one of the
+three cross-repo reporters this plan cites suspected the argument instead
+of the real cause.
+
 Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, chunk C4
 Spec backlink (no-commit row guard): example-doctrine-repo docs/plans/2026-07-29-pm-approved-
@@ -83,6 +96,19 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        survives substitution) fails the directive loud into `report["failed"]`
        — see `_resolve_arg_tokens` — it is NEVER dispatched with the literal
        token string as a live argument.
+
+       Defect C fix (same plan, chunk C1): an `already_satisfied` directive
+       is registered in `stdout_by_id` with `""` (empty string) the moment
+       `_execute_directives` appends it to `landed`, rather than being
+       skipped entirely. A `{<id>.landed}` token naming such a producer now
+       resolves (it substitutes the empty string, same as any other landed
+       producer's ordering-only use) instead of failing with "did not land
+       before this directive this pass" — a false statement about a
+       directive that IS in `landed`. A `{<id>.entry_path}` token naming the
+       same producer still fails, correctly: the empty-stdout guard in
+       `_resolve_arg_tokens` fires on the registered `""`, producing the
+       honest "landed but captured no stdout to resolve its {entry_path}
+       token from" rather than the dishonest "did not land" message.
     4. `directives_commit_tail.build_release_plan_claim_directive`/
        `build_emit_cadence_directive` set `depends_on="d-run-wsc-tail"` —
        a sibling-directive id, which `_directive_gate_open` deliberately
@@ -698,11 +724,21 @@ def _execute_directives(
     names directive ids whose dispatch either raised (including the
     documented `scan_unresolved_ubt_records.py` `FileNotFoundError` gap) OR
     returned a non-zero `exit_code` — a directive never joins `landed`
-    merely because dispatch didn't raise. Exit code: `HALTED_AT_JUDGMENT`
+    merely because dispatch didn't raise. `report["degraded"]` is `failed`'s
+    best-effort sibling (docs/plans/2026-08-08-a-best-effort-directive-
+    cannot-fail-a-ce.md, chunk C1): a directive carrying `best_effort: True`
+    whose dispatch returns a non-zero `exit_code` lands its `{"id",
+    "error"}` record here INSTEAD of in `failed` — still visible to an
+    operator, never silent, but never able to move the exit code. Both
+    `failed` and `degraded` entries fold the directive's captured stderr
+    into `error` (after the `"<cli> exited <n> (args=[...])"` prefix) when
+    the CLI produced any. Exit code: `HALTED_AT_JUDGMENT`
     when anything was blocked and nothing failed; `PARTIAL_MUTATION` when
     something failed but something else also landed; `DIRECTIVE_FAILED`
-    when something failed and nothing landed at all; `SUCCESS` only when
-    every directive fired clean.
+    when something failed and nothing landed at all; `SUCCESS` when every
+    directive fired clean OR the only non-zero exits were `degraded` ones —
+    the exit-code ladder reads `failed` only, never `degraded`, by
+    construction.
 
     Inter-directive arg-token threading (module docstring, deviation 3):
     `stdout_by_id` accumulates the captured stdout of every directive that
@@ -739,12 +775,20 @@ def _execute_directives(
     blocked: list[str] = []
     blocked_remedy: dict[str, Any] = {}
     failed: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
 
     for directive in directives:
         if directive.get("already_satisfied"):
             landed.append(directive["id"])
+            # Defect C (docs/plans/2026-08-08-a-best-effort-directive-
+            # cannot-fail-a-ce.md, chunk C1): register the producer with an
+            # empty captured-stdout value even though it never dispatched
+            # this pass, so a `{<id>.landed}` token naming it resolves
+            # instead of falsely reporting "did not land" — see module
+            # docstring, deviation 3.
+            stdout_by_id[directive["id"]] = ""
             continue
 
         try:
@@ -770,18 +814,22 @@ def _execute_directives(
         try:
             result = _dispatch_directive(directive, args=resolved_args)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
-            failed.append({"id": directive["id"], "error": str(exc)})
+            entry = {"id": directive["id"], "error": str(exc)}
+            if directive.get("best_effort"):
+                degraded.append(entry)
+            else:
+                failed.append(entry)
             continue
         if result.get("exit_code", 0) != 0:
-            failed.append(
-                {
-                    "id": directive["id"],
-                    "error": (
-                        f"{directive['cli']} exited {result['exit_code']} "
-                        f"(args={result.get('args', [])})"
-                    ),
-                }
-            )
+            error = f"{directive['cli']} exited {result['exit_code']} (args={result.get('args', [])})"
+            captured_stderr = (result.get("stderr") or "").strip()
+            if captured_stderr:
+                error = f"{error} — stderr: {captured_stderr}"
+            entry = {"id": directive["id"], "error": error}
+            if directive.get("best_effort"):
+                degraded.append(entry)
+            else:
+                failed.append(entry)
             results.append(result)
             continue
         results.append(result)
@@ -793,6 +841,7 @@ def _execute_directives(
         "blocked": blocked,
         "blocked_remedy": blocked_remedy,
         "failed": failed,
+        "degraded": degraded,
         "results": results,
     }
 

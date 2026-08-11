@@ -19,9 +19,13 @@ journal back at the end of the run.
 Append-only JSONL is the concurrency story: two writer processes racing to
 record different rows never risk clobbering each other, because neither
 ever reads-modifies-writes the file — each call to `record_resolution`
-performs exactly one `os.write` of one already-serialized line, appended
-via `O_APPEND`. This module never opens the journal for anything but a
-single append or a single full read.
+performs exactly one `os.write` of one already-serialized line, via
+`coordinator_core.atomic_append.append_line` (plain `O_APPEND` on POSIX,
+genuinely atomic there for a single small write; `CreateFileW` with
+`FILE_APPEND_DATA` on Windows, where the CRT's `O_APPEND` emulation is
+NOT atomic across processes — see that module's docstring for the
+reproduced failure). This module never opens the journal for anything but
+a single append or a single full read.
 
 The journal path is resolved from `RESOLUTION_JOURNAL_ENV_VAR` so a
 subprocess phase inherits the SAME run-scoped path its parent orchestrator
@@ -64,6 +68,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from coordinator_core import atomic_append
 from coordinator_core.install._shared import require_home
 from coordinator_core.install.receipt import ClauseResolution
 from coordinator_core.install.write_surface import (
@@ -191,12 +196,14 @@ def record_resolution(
 
     Writes exactly one line: a JSON object with `writer_id`, `clause_index`,
     and `entries` (each entry serialized via `dataclasses.asdict`),
-    appended via a single `O_APPEND`-flagged write so concurrent callers in
-    different processes cannot interleave or clobber each other's rows.
-    Silently refuses (prints the reason to stderr, does not raise, does not
-    write) when `_refuse_machine_mutation` says so — matching
-    `substrate.py`'s delete-leg pattern of failing loud-but-non-fatal
-    rather than aborting the writer's own run over a journal-write refusal.
+    appended via `coordinator_core.atomic_append.append_line` — the shared
+    atomic-append primitive (real `O_APPEND` on POSIX, `CreateFileW`/
+    `FILE_APPEND_DATA` on Windows) so concurrent callers in different
+    processes cannot interleave or clobber each other's rows. Silently
+    refuses (prints the reason to stderr, does not raise, does not write)
+    when `_refuse_machine_mutation` says so — matching `substrate.py`'s
+    delete-leg pattern of failing loud-but-non-fatal rather than aborting
+    the writer's own run over a journal-write refusal.
     """
     path = _journal_path()
     blocked = _refuse_machine_mutation(str(path), what="append an install resolution-journal row")
@@ -213,14 +220,7 @@ def record_resolution(
     data = line.encode("utf-8")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
-    if hasattr(os, "O_BINARY"):
-        flags |= os.O_BINARY  # type: ignore[attr-defined]
-    fd = os.open(str(path), flags, 0o644)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
+    atomic_append.append_line(path, data)
 
 
 def read_journal() -> dict[str, dict[int, ClauseResolution]]:

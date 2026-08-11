@@ -507,11 +507,84 @@ def _sha_canonically_matches(supplied: str, prior_value: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _attribute_claim_holder(
+    fm: str, handoff_abs: Path, repo_root: Path, warnings: list
+) -> str:
+    """Stamp `claimed_by`/`claimed_at` from the durable ledger onto frontmatter
+    text whose `status` is being flipped to `claimed`, when the mirror names no
+    holder. Returns the frontmatter text, unchanged when a holder is already
+    present or the ledger holds no record.
+
+    Spec: the schema's `status: claimed` + `claimed_at` => `claimed_by`
+    cross-field rule (`frontmatter/schemas/handoff.schema.json`) — this writes
+    both halves of that pair together, never `claimed_at` alone, so the flip can
+    only ever produce a record the rule actually constrains.
+
+    Negative-spec:
+      - Does NOT overwrite an existing holder. A mirror that already names one
+        is the authority for its own claim event; the ledger is consulted only
+        to fill an absence.
+      - Does NOT fall back to the calling session, the `shipped_in` commit's
+        `Session-Id:` trailer, or any other inference. Those identify who ran
+        the supersede or who landed the code, not who claimed the baton, and
+        stamping one as `claimed_by` would fabricate exactly the attribution
+        DR-242 forbids inventing.
+    """
+    from coordinator_core.claim_state import resolve_historical_claim
+
+    # DR-084 dual-tolerant, and read off the in-flight `fm` text rather than
+    # the file: this runs inside `locked_rmw`'s mutate closure, where the text
+    # in hand is newer than anything on disk.
+    for field in ("claimed_by", "consumed_by"):
+        existing = read_fm_field_unquoted(fm, field)
+        if existing and existing.strip().lower() not in ("", "null", "none"):
+            return fm
+
+    record = resolve_historical_claim(handoff_abs, repo_root=repo_root)
+    if record is None:
+        warnings.append(
+            f"supersede stamped status:claimed on {handoff_abs.name} with no "
+            "claimed_by — neither the frontmatter mirror nor the durable claim "
+            "ledger names a holder, so this record cannot be attributed to a "
+            "consumer. No session id was inferred."
+        )
+        return fm
+
+    session_id, claimed_at = record
+    for key, value in (("claimed_by", session_id), ("claimed_at", claimed_at)):
+        if value is None:
+            continue
+        if read_fm_field(fm, key) is None:
+            fm = insert_fm_field(fm, key, value, "status")
+        else:
+            fm = replace_fm_field(fm, key, value)
+    return fm
+
+
 def _supersede_continued(
     handoff_abs: Path, continued_into: str, repo_root: Path
 ) -> dict:
     """Apply the supersede-verb split: status->claimed, deployment_state->continued,
     continued_into->the caller-supplied successor id-or-path.
+
+    Holder attribution (2026-08-10). The status flip writes the CLAIMED
+    vocabulary, so it must also answer who claimed it: a record reading
+    `status: claimed` with no `claimed_by` is internally inconsistent and, once
+    the ledger holder goes non-live, unattributable to any consumer forever.
+    This path produced that shape at corpus scale — the op's DR-242 gate admits
+    a predecessor that is claimed OR shipped, so a shipped-but-unmirrored
+    predecessor reached the flip with no holder on either the mirror or the
+    caller's side. Whenever the mirror carries no holder, the durable ledger is
+    consulted (`claim_state.resolve_historical_claim`) and its
+    `claimed_by`/`claimed_at` stamped alongside the flip. Nothing is invented:
+    a silent ledger yields a warning, never a manufactured session id.
+
+    The ledger read is LIVENESS-FREE by design and is not a weakening of
+    `resolve_claim_state`'s holder-liveness gate (which stays as documented in
+    that module's Negative-spec). Superseding is retrospective — the question
+    here is "who consumed this baton", not "who holds it now" — and a
+    session that claimed a baton, worked it, and exited is the correct answer
+    to the first question and the wrong answer to the second.
 
     Idempotency: no-op when status==claimed AND deployment_state==continued AND
     continued_into already equals the requested successor.
@@ -529,9 +602,14 @@ def _supersede_continued(
     serialisation. Domain-abort paths raise MutateAbort from inside the mutate
     closure so no write occurs.
     """
-    _state: dict = {"applied": False, "message": ""}
+    _state: dict = {"applied": False, "message": "", "warnings": []}
 
     def mutate(old_text: str) -> str:
+        # Cleared per attempt, not appended across them: locked_rmw may call
+        # this closure more than once, and a warning is a fact about the write
+        # that actually landed, not a tally of attempts.
+        _state["warnings"].clear()
+
         split = split_frontmatter(old_text)
         if split is None:
             raise MutateAbort(f"supersede: no parseable YAML frontmatter in {handoff_abs}")
@@ -562,6 +640,8 @@ def _supersede_continued(
                 fm = insert_fm_field(fm, "status", "claimed", "title")
             else:
                 fm = replace_fm_field(fm, "status", "claimed")
+
+        fm = _attribute_claim_holder(fm, handoff_abs, repo_root, _state["warnings"])
 
         # deployment_state → continued (replace existing; insert after 'status' if missing).
         if deployment != "continued":
@@ -609,7 +689,12 @@ def _supersede_continued(
             "error": exc.args[0] if exc.args else "supersede: mutation aborted",
         }
 
-    return {"exit_code": 0, "applied": _state["applied"], "message": _state["message"]}
+    return {
+        "exit_code": 0,
+        "applied": _state["applied"],
+        "message": _state["message"],
+        "warnings": _state["warnings"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1221,6 +1306,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out["stamped"] = stamped
             out["warnings"] = warnings
             return out
+        warnings.extend(supersede_res.get("warnings") or [])
         superseded = True
 
     # ------------------------------------------------------------------

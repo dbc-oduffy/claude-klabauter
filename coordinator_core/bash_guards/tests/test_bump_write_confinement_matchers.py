@@ -30,6 +30,13 @@ from coordinator_core.bash_guards._write_bump_session_start import (
 )
 
 
+# Declared, not excused: this file spawns real processes because the behaviour under
+# test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
+# not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.spawns_process]
+
+
+
 def _set_anchor(monkeypatch, home_dir, anchor_dir, session_id: str) -> None:
     monkeypatch.setenv("HOME", str(home_dir))
     write_session_start_record(session_id, launch_cwd=str(anchor_dir))

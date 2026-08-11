@@ -266,6 +266,80 @@ def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str,
     return {"cli": "handoff.stamp_phase", "args": args, "result": result}
 
 
+class _CarryGatePredecessorUnreadable(RuntimeError):
+    """Raised by `_dispatch_handoff_carry_gate` when the predecessor handoff
+    path is missing, unreadable, or does not carry parseable frontmatter --
+    DISTINCT from `CarryGateError`/a gate refusal, so a caller inspecting the
+    exception class (or the CLI's exit contract this module composes) can
+    tell "the predecessor is unreadable" from "the predecessor's carried
+    items declare undeclared state" without string-matching a message."""
+
+
+def _dispatch_handoff_carry_gate(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """kind=handoff's d7: the disposition gate for the PREDECESSOR's own
+    `## Carried Forward` items, run INSIDE `apply()`'s transaction rather
+    than hand-invoked from `/handoff`'s SKILL.md prose -- see this module's
+    own plan backlink (docs/plans/2026-08-10-the-carry-gate-nobody-put-
+    inside-the-transaction.md) for why "the operator remembers to run a CLI"
+    is the exact shape this fix exists to remove.
+
+    Reads the predecessor's `carried_items` frontmatter array directly and
+    calls `coordinator_core.ops.handoff_carry_gate.evaluate_gate` IN-PROCESS
+    -- `handoff_carry_gate` is deliberately NOT a registered op (no
+    `handoff.carry_gate` entry in `_registry_map.py`/`op_scopes.py`/
+    `authz/classification.py`), so `_invoke_op_in_process` is not the seam
+    here.
+
+    FAIL POSTURE (models `_dispatch_handoff_stamp_phase` above): a non-ok
+    `GateResult` RAISES -- `apply_base.execute_directives` treats only a
+    raised exception as failure, and `evaluate_gate`'s own return value is an
+    ordinary value that would otherwise land in `landed` under a green
+    `APPLY_EXIT_OK` (the exact defect `_dispatch_handoff_author_fork` and
+    `_dispatch_handoff_stamp_phase` were each fixed for). The gate's own
+    per-item violation lines are preserved VERBATIM in the raised message --
+    they already name the `carry_id` and the concrete reason, so re-wording
+    them destroys the actionable part.
+
+    A missing/unreadable predecessor file, or one with no parseable
+    frontmatter, raises `_CarryGatePredecessorUnreadable` -- a DISTINCT error
+    class from a gate refusal (`RuntimeError` carrying the gate's own
+    `CarryGateError`), mirroring `coordinator/bin/handoff-carry-gate`'s own
+    CLI exit contract (1 = refusal, 2 = malformed/unreadable/usage).
+
+    Read/parse/validate of the predecessor's `carried_items` array is NOT
+    reimplemented here -- it calls
+    `coordinator_core.ops.handoff_carry_gate.read_carried_items` (the same
+    read path the `handoff-carry-gate` CLI's own `main()` uses) and maps its
+    `CarryGateError` onto `_CarryGatePredecessorUnreadable`, so a future
+    malformed-input check added there is inherited automatically rather than
+    drifting out of sync with a second copy. See Review:
+    coordinatorcode-reviewer-625ab891 finding 1."""
+    from coordinator_core.ops.handoff_carry_gate import CarryGateError, evaluate_gate, read_carried_items
+
+    predecessor_path = args[0] if args else ""
+    target = repo_root / predecessor_path
+    try:
+        items = read_carried_items(str(target))
+    except CarryGateError as exc:
+        raise _CarryGatePredecessorUnreadable(
+            f"handoff-carry-gate: {predecessor_path!r} at {target}: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise _CarryGatePredecessorUnreadable(
+            f"handoff-carry-gate: could not read predecessor {predecessor_path!r} "
+            f"at {target}: {exc}"
+        ) from exc
+
+    result = evaluate_gate(items)
+    if not result.ok:
+        raise RuntimeError(
+            "handoff-carry-gate REFUSED -- "
+            f"{predecessor_path!r} carries carried_items with undeclared "
+            "state:\n" + "\n".join(result.violations)
+        )
+    return {"cli": "handoff-carry-gate", "args": args, "result": {"ok": True}}
+
+
 def _dispatch_handoff_author_fork(args: list[str], repo_root: Path) -> dict[str, Any]:
     """kind=spinoff's d3 directive: STAMPS the five origin_* provenance fields
     onto d1's already-minted readable-slug artifact, via `handoff.author_fork`'s
@@ -863,6 +937,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "handoff.author_fork": _dispatch_handoff_author_fork,
     "render-project-tracker": _dispatch_render_project_tracker,
     "handoff.supersede_predecessor": _dispatch_handoff_supersede_predecessor,
+    "handoff-carry-gate": _dispatch_handoff_carry_gate,
 }
 
 

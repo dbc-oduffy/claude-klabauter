@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.gen_claude_doe_shim import (
     EXPECTED_SOURCE_LINE,
+    EXPECTED_SOURCE_LINE_POWERSHELL,
     SENTINEL_BEGIN,
     SENTINEL_END,
     main,
@@ -393,3 +394,72 @@ def test_check_only_ready_noop_row_after_real_render(tmp_path, capsys):
 
     assert rc == 0
     assert "claude_shim: ready (no-op) (" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# --shell powershell family
+# ---------------------------------------------------------------------------
+
+
+def test_default_no_flag_still_produces_bash_line_and_path(tmp_path):
+    """Regression that matters most: omitting --shell entirely must be
+    byte-identical to today's behaviour (bash source line, .sh shim path)."""
+    home = Path(os.environ["HOME"])
+    tmpl = _make_template(tmp_path)
+    rc = main(["--template", str(tmpl)])
+    assert rc == 0
+    shim_dest = home / ".claude" / "shell" / "claude-doe-shim.sh"
+    assert shim_dest.exists()
+    rc_text = (home / ".zshrc").read_text()
+    assert EXPECTED_SOURCE_LINE in rc_text
+    assert "Test-Path" not in rc_text
+
+
+def test_shell_powershell_writes_dot_source_line_and_ps1_shim(tmp_path):
+    home = Path(os.environ["HOME"])
+    tmpl = _make_template(tmp_path)
+    custom_rc = tmp_path / "profile.ps1"
+    rc = main(["--template", str(tmpl), "--shell", "powershell", "--rc", str(custom_rc)])
+    assert rc == 0
+    shim_dest = home / ".claude" / "shell" / "claude-doe-shim.ps1"
+    assert shim_dest.exists()
+    assert not (home / ".claude" / "shell" / "claude-doe-shim.sh").exists()
+    rc_text = custom_rc.read_text()
+    assert EXPECTED_SOURCE_LINE_POWERSHELL in rc_text
+    assert ". $__claude_doe_shim_path" in rc_text
+
+
+def test_shell_powershell_rerun_is_idempotent_noop(tmp_path):
+    tmpl = _make_template(tmp_path)
+    custom_rc = tmp_path / "profile.ps1"
+    assert main(["--template", str(tmpl), "--shell", "powershell", "--rc", str(custom_rc)]) == 0
+    before = custom_rc.read_text()
+    assert main(["--template", str(tmpl), "--shell", "powershell", "--rc", str(custom_rc)]) == 0
+    after = custom_rc.read_text()
+    assert before == after
+
+
+def test_shell_powershell_hand_modified_fails_loud(tmp_path, capsys):
+    tmpl = _make_template(tmp_path)
+    custom_rc = tmp_path / "profile.ps1"
+    custom_rc.write_text(f"{SENTINEL_BEGIN}\nWrite-Host 'hand modified'\n{SENTINEL_END}\n")
+    rc = main(["--template", str(tmpl), "--shell", "powershell", "--rc", str(custom_rc)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "hand-modified" in err
+    assert "Write-Host 'hand modified'" in err
+    assert custom_rc.read_text() == (
+        f"{SENTINEL_BEGIN}\nWrite-Host 'hand modified'\n{SENTINEL_END}\n"
+    )
+
+
+def test_shell_unknown_value_exits_one(tmp_path, capsys):
+    rc = main(["--template", str(_make_template(tmp_path)), "--shell", "fish"])
+    assert rc == 1
+    assert "--shell must be one of" in capsys.readouterr().err
+
+
+def test_shell_missing_value_exits_one(tmp_path, capsys):
+    rc = main(["--template", str(_make_template(tmp_path)), "--shell"])
+    assert rc == 1
+    assert "--shell requires a value" in capsys.readouterr().err

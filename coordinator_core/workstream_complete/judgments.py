@@ -516,8 +516,8 @@ def build_predecessor_distill_fate_judgment_point() -> dict[str, Any]:
         },
         id="predecessor-distill-fate",
         question=(
-            "The predecessor handoff lacks distill_fate: -- how did its open loop "
-            "actually resolve: ephemeral, commitment, or ratification?"
+            "This predecessor handoff has no distill_fate: to reuse -- how did its open "
+            "loop actually resolve: ephemeral, commitment, or ratification?"
         ),
         dispositions=[
             build_disposition("ephemeral", resolves=[]),
@@ -1054,7 +1054,10 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
     )
 
 
-def build_stage_paths_missing_judgment_point(candidate_paths: list[str] | None = None) -> dict[str, Any]:
+def build_stage_paths_missing_judgment_point(
+    candidate_paths: list[str] | None = None,
+    known_concurrent_paths: "frozenset[str] | set[str] | tuple[str, ...] | None" = None,
+) -> dict[str, Any]:
     """Blocks `d-run-wsc-tail` when `decisions['stage_paths']` did not
     resolve to a non-empty value. `wsc-tail.py --stage-paths` is OPTIONAL
     at the CLI layer (unlike `--subject`, which argparse hard-requires) --
@@ -1079,6 +1082,15 @@ def build_stage_paths_missing_judgment_point(candidate_paths: list[str] | None =
     only advisory evidence for this gate -- the EM reviews and narrows it
     before handing back `decisions['stage_paths']`, never auto-staged.
 
+    `known_concurrent_paths` is the CALLER's own already-computed exclusion
+    set (the SAME `directives_commit_tail.resolve_known_concurrent_paths`
+    result the caller already threaded into `classify_session_authored_
+    files` to PRODUCE `candidate_paths` above) -- passed through here purely
+    so `evidence` can report the real set that was actually applied, rather
+    than a hardcoded `frozenset()` literal that claimed no exclusion ever
+    ran. This function still does not compute it, call it, or read disk for
+    it -- it only echoes what the caller already has.
+
     Offered as EVIDENCE only, in a structurally unresolvable gate (its one
     disposition's `resolves` list is deliberately empty, mirroring
     `build_commit_subject_missing_judgment_point`'s own contract) -- never
@@ -1093,6 +1105,11 @@ def build_stage_paths_missing_judgment_point(candidate_paths: list[str] | None =
     else:
         candidate_line = "(none derived -- no dirty-tree path matched the session-authored predicate)"
 
+    if known_concurrent_paths:
+        known_concurrent_line = "{" + ", ".join(sorted(known_concurrent_paths)) + "}"
+    else:
+        known_concurrent_line = "frozenset()"
+
     return build_untrusted_gate_judgment_point(
         id="jp-stage-paths-missing",
         question=(
@@ -1104,15 +1121,17 @@ def build_stage_paths_missing_judgment_point(candidate_paths: list[str] | None =
         evidence=(
             "decisions['stage_paths'] absent. CANDIDATE session-authored path set "
             "(resolve_session_start_time -> classify_session_authored_files -> "
-            f"accumulate_session_paths, known_concurrent_paths=frozenset()): {candidate_line}"
+            f"accumulate_session_paths, known_concurrent_paths={known_concurrent_line}): {candidate_line}"
         ),
         reason=(
-            "there is no producer anywhere in this codebase for the Step 3.0 case-(b) "
-            "known_concurrent_paths exclusion set, so the candidate list above may include "
-            "a live peer session's untracked files on a shared branch -- auto-staging it "
-            "would trade a silent under-commit for a silent over-commit onto another "
-            "session's work. The EM must review and narrow this candidate list before "
-            "supplying it back as decisions['stage_paths']; this gate never stages or "
+            "directives_commit_tail.resolve_known_concurrent_paths is the Step 3.0 case-(b) "
+            "known_concurrent_paths exclusion-set producer, wired into this candidate set "
+            "above; the EM must still review and narrow this candidate list before "
+            "supplying it back as decisions['stage_paths'] -- that producer is best-effort "
+            "and conservative, not a guarantee, so the candidate list above may still "
+            "include a live peer session's untracked files this pass's exclusion set did "
+            "not catch. Auto-staging it unreviewed would trade a silent under-commit for a "
+            "silent over-commit onto another session's work; this gate never stages or "
             "commits anything itself."
         ),
     )

@@ -662,7 +662,7 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
             _before_waived = await asyncio.to_thread(
                 chain_ancestry_waived_shas, repo_root_str, closing_session_id
             )
-            await asyncio.to_thread(
+            _refused_shas = await asyncio.to_thread(
                 record_chain_ancestry_waiver,
                 repo_root_str,
                 frozenset(result.uncovered_shas),
@@ -703,6 +703,19 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
                     f"chain_ancestry_waivers: no NEW waivers minted for chain "
                     f"{closing_session_id!r} — all {len(_after_waived)} uncovered "
                     f"commit(s) already carried a waiver under {_waiver_dir}/"
+                )
+            if _refused_shas:
+                # 2026-08-10: `record_chain_ancestry_waiver` refused these shas
+                # outright — a positively-established LIVE foreign owner (see
+                # that function's own `_refuse_if_live_foreign_chain_sha`
+                # docstring). Surfaced loudly here too, not just via that
+                # function's own `logger.warning` calls, so a caller that only
+                # reads `result.notes` (the operator-facing surface every
+                # ceremony-close subcommand relays) is never left reading
+                # silence as "minted everything".
+                _mint_note += (
+                    f" — {len(_refused_shas)} sha(s) REFUSED (LIVE foreign "
+                    f"chain owner): {', '.join(sorted(_refused_shas))}"
                 )
         except Exception as exc:  # noqa: BLE001 — best-effort mint, never fatal
             # `record_chain_ancestry_waiver` itself already swallows OSError

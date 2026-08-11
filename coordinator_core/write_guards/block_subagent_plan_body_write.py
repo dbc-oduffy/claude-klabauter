@@ -241,9 +241,20 @@ def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
     ``subprocess.run``, so no verdict changes. Note the timeout is now the
     shared resolver's fixed 2.0s house value (``coordinator_core.git.
     repo_root._TIMEOUT_SECS``), which already matched this guard's own prior
-    2.0s (2026-08-05 hardening pass) -- no change in practice.
+    2.0s (2026-08-05 hardening pass) -- no change in practice. The prior
+    inline spawn also logged a forensic diagnostic on ``OSError`` ("skipping
+    deny-log"); the shared resolver swallows all failures silently (never
+    raises), so that diagnostic is restored here explicitly rather than
+    lost.
     """
-    return resolve_repo_root(cwd)
+    result = resolve_repo_root(cwd)
+    if result is None:
+        print(
+            f"block_subagent_plan_body_write: no git root resolved for cwd="
+            f"{cwd!r}, skipping deny-log (decision unaffected)",
+            file=sys.stderr,
+        )
+    return result
 
 
 def _resolve_git_dir(cwd: Optional[str]) -> Optional[str]:

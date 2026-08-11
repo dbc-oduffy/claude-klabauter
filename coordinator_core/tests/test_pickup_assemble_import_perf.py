@@ -61,8 +61,13 @@ heavy pydantic/asyncio tree transitively via `ops/__init__.py::_EAGER_OP_MODULES
 A proxy that cannot be measured reliably on a loaded machine is the wrong primary
 guard. The primary assertion is now on the imported module SET (deterministic,
 sampled once, no timing involved): named-absence checks for heavy modules
-confirmed absent today, plus a module-count ceiling with a modest margin to catch
-an unnamed new subtree. The timing check is retained only as a widened
+confirmed absent today, a third-party-package allowlist, plus a count ceiling on
+the EXTERNAL (non-`coordinator_core`) slice of that set to catch an unnamed new
+subtree. The ceiling deliberately excludes `coordinator_core`'s own modules --
+that count tracks `ops/__init__.py::_EAGER_OP_MODULES` growth, not import
+cleanliness, and a whole-set ceiling went red on ordinary op growth alone
+(522 -> 576 in a week) with the external slice unmoved. See
+`_EXTERNAL_MODULE_COUNT_CEILING`. The timing check is retained only as a widened
 catastrophic-regression sanity bound (see `test_pickup_assemble_import_floor`)
 now that the module-set check carries the precision for *new-subtree*
 regressions specifically — NOT for every import-cost regression. Reviewed and
@@ -112,14 +117,29 @@ _SAMPLE_COUNT = 2
 # red test. Add it back here only once that residual is actually closed.
 _HEAVY_MODULES_EXPECTED_ABSENT = ("pydantic",)
 
-# Modest margin above the measured module count (522, as of this test's authorship
-# on this machine/Python version) at the point `coordinator_core.pickup_assemble`
-# finishes importing -- 38 modules of headroom, ~7%. Wide enough to absorb
-# platform-specific stdlib substitutions (e.g. POSIX's
-# `_posixsubprocess`/`psutil._psosx` vs Windows's `_winapi`/`psutil._pswindows`,
-# which swap names without changing the net count by much) without masking a
-# genuine new subtree being pulled in.
-_MODULE_COUNT_CEILING = 560
+# Third-party (non-stdlib, non-`coordinator_core`) top-level packages this import is
+# allowed to pull in. `yaml` is the only real entry; `_cython_3_1_4` and
+# `cython_runtime` are artifacts of PyYAML's C extension (`yaml._yaml`) and appear
+# only where libyaml is installed, so both are tolerated rather than required.
+# This is the guard that actually answers "did a new heavy subtree get dragged in
+# transitively" -- by NAME, deterministically, with no count to keep re-pinning.
+_THIRD_PARTY_ALLOWED = frozenset({"yaml", "_cython_3_1_4", "cython_runtime"})
+
+# Ceiling on the EXTERNAL (non-`coordinator_core`) module count -- 133 measured on
+# this machine/Python version, ~28% headroom. Deliberately NOT a ceiling on the
+# whole imported set: 443 of the 576 modules imported here are `coordinator_core`'s
+# own, and that number grows every time an op module is added to
+# `ops/__init__.py::_EAGER_OP_MODULES` -- a whole-set ceiling therefore rots by
+# construction (it went red in a week of ordinary op growth, 522 -> 576, with the
+# external set unchanged and no heavy subtree anywhere near it). The external count
+# is what a genuine new subtree moves, and it is stable against in-repo growth.
+# Headroom here absorbs platform-specific stdlib substitutions (POSIX's
+# `_posixsubprocess` vs Windows's `_winapi`/`_wmi`, psutil's per-OS leaf modules).
+#
+# Negative-spec: do NOT re-add a whole-set count ceiling "for completeness" -- the
+# in-repo module count is not a property this test has any opinion about, and pinning
+# it only buys a recurring red test with no signal in it.
+_EXTERNAL_MODULE_COUNT_CEILING = 170
 
 
 def _imported_module_names() -> list[str]:
@@ -183,13 +203,16 @@ def _sample_import_cost_ms() -> float:
 def test_pickup_assemble_import_modules() -> None:
     """PRIMARY guard: the imported module SET stays stdlib-clean, deterministically.
 
-    See module docstring's "Primary guard" section. Two assertions, neither
-    timing-sensitive and both immune to scheduler contention:
+    See module docstring's "Primary guard" section. Three assertions, none
+    timing-sensitive and all immune to scheduler contention:
 
     1. Named heavy modules confirmed absent today (`_HEAVY_MODULES_EXPECTED_ABSENT`)
        stay absent.
-    2. The total imported-module count stays under `_MODULE_COUNT_CEILING`, to catch
-       an unnamed new subtree that the named check wouldn't trip.
+    2. No third-party top-level package outside `_THIRD_PARTY_ALLOWED` appears --
+       the by-name form of "a new heavy subtree got dragged in transitively".
+    3. The EXTERNAL (non-`coordinator_core`) module count stays under
+       `_EXTERNAL_MODULE_COUNT_CEILING`, catching a new stdlib subtree that (2)
+       would not name.
     """
     imported = _imported_module_names()
     imported_set = set(imported)
@@ -202,11 +225,29 @@ def test_pickup_assemble_import_modules() -> None:
             f"names as part of the heavy tree this module must stay clear of."
         )
 
-    count = len(imported)
-    assert count <= _MODULE_COUNT_CEILING, (
-        f"coordinator_core.pickup_assemble pulled in {count} modules, exceeding the "
-        f"ceiling of {_MODULE_COUNT_CEILING} -- likely a new heavy subtree dragged in "
-        f"transitively. Newly-imported modules: {imported}"
+    top_level = {mod.split(".")[0] for mod in imported_set}
+    third_party = {
+        name
+        for name in top_level
+        if name != "coordinator_core"
+        and name not in sys.stdlib_module_names
+        and name not in _THIRD_PARTY_ALLOWED
+    }
+    assert not third_party, (
+        f"coordinator_core.pickup_assemble now transitively imports third-party "
+        f"package(s) {sorted(third_party)} -- a new heavy subtree. Allowed today: "
+        f"{sorted(_THIRD_PARTY_ALLOWED)}."
+    )
+
+    external = [
+        mod for mod in imported
+        if mod != "coordinator_core" and not mod.startswith("coordinator_core.")
+    ]
+    assert len(external) <= _EXTERNAL_MODULE_COUNT_CEILING, (
+        f"coordinator_core.pickup_assemble pulled in {len(external)} non-"
+        f"coordinator_core modules, exceeding the ceiling of "
+        f"{_EXTERNAL_MODULE_COUNT_CEILING} -- likely a new subtree dragged in "
+        f"transitively. Newly-imported external modules: {external}"
     )
 
 

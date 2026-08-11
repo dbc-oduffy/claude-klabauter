@@ -24,9 +24,9 @@ least one write per 60s during any continuous Bash activity.
 
 Write target: .git/coordinator-sessions/<session_id>/meta.json (last_activity
 field) — session-runtime layer. NOT state/ substrate (see SC-2 correction in
-the pcore-08 plan). last_activity is written via the canonical bash bridge
-_cs_update_meta_field (via liveness.py::update_last_activity) — NOT a Python
-read-modify-write (dual-writer hazard; see D4).
+the pcore-08 plan). last_activity is written via liveness.py::update_last_activity,
+which delegates to the native core.update_meta_field (atomic tempfile +
+os.replace) — NOT a Python read-modify-write here (dual-writer hazard; see D4).
 
 Input (flat scalar):
     session_id — the coordinator session identifier
@@ -35,25 +35,24 @@ Always returns no_advisory() — the product is the on-disk write side-effect.
 Never blocks tool calls (bookkeeping op, not a gate).
 
 Negative-spec:
-    Do NOT do a Python read-modify-write of meta.json — that would create a
-    dual-writer hazard with concurrent _cs_update_meta_field calls and clobber
-    other fields. All last_activity writes MUST route through update_last_activity()
-    (coordinator_core/liveness.py), which calls _cs_update_meta_field via bash.
+    Do NOT do a Python read-modify-write of meta.json here — that would put a
+    second writer beside the canonical one and clobber other fields. All
+    last_activity writes MUST route through update_last_activity()
+    (coordinator_core/liveness.py) and so through core.update_meta_field, the
+    single-writer implementation every other meta write also routes through;
+    that sole-routing IS the enforcement of the single-liveness-key invariant.
     Do NOT write to state/ or archive/ — only .git/coordinator-sessions/ is
     sanctioned for bookkeeping ops (D2, pcore-08).
 
-Intentional engine-context deviation — lib-missing no-op (Review: code-reviewer F3):
+Intentional engine-context deviation — no fallback writer (Review: code-reviewer F3):
     Port of: session-heartbeat.sh (example-doctrine-repo d39ab164, 2026-07-16), whose bash source
     fell back to an inline sed read-modify-write of meta.json when
     coordinator-session.sh was not found.
-    The Python engine does NOT implement this fallback: when _lib_path() returns
-    None, update_last_activity() silently no-ops (liveness.py). This is intentional.
-    In the engine context the bash lib is a hard prerequisite — a missing lib means
-    the engine is misconfigured, not merely degraded. Heartbeats are best-effort
-    (see "Never blocks tool calls" above), so silent omission under a broken install
-    is acceptable. The sed-pattern fallback is omitted deliberately; implementing it
-    here would add a dual-writer hazard (Python + bash both writing meta.json) for a
-    scenario the engine's install contract is designed to prevent.
+    The Python engine does NOT implement that fallback. update_last_activity()
+    silently no-ops on a missing or non-writable meta.json instead. Heartbeats are
+    best-effort (see "Never blocks tool calls" above), so silent omission under a
+    broken install is acceptable, and a second writer for a scenario the engine's
+    install contract is designed to prevent is not worth the clobber risk.
 
 Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C2, D4
 """
@@ -105,9 +104,19 @@ def _bootstrap_meta(session_id: str, git_root: str) -> None:
     concurrent last_activity stamp (there is no existing meta.json to race; this
     is called ONLY on the absent-file branch). This is the deliberate, bounded
     exception to the module's "no Python meta.json write" negative-spec: it does
-    not modify an existing file. core.init stamps stable_pid via Guard-1 when the
-    parent process resolves to `claude` — the case on this in-process hook path —
-    and writes last_activity as part of the create.
+    not modify an existing file. core.init stamps stable_pid via Guard-1 and
+    writes last_activity as part of the create.
+
+    Negative-spec — Guard-1 does NOT resolve `claude` from the immediate parent on
+    every platform, and this hook path is no exception. On Windows the session
+    binary sits several rungs up behind the Git-Bash trampoline; ``os.getppid()``
+    has never named `claude` on a Windows host. Guard-1 therefore prefers the
+    harness-exported ``CLAUDE_PID`` (comm-verified, measured present in every hook
+    fire 2026-08-08) and falls back to ``core._find_windows_claude_ancestor``'s
+    bounded ancestor walk. A stamp is still not guaranteed here — when neither
+    source comm-verifies, stable_pid stays empty and liveness falls through to the
+    Layer-2 recency window, which is the skip-safe design, not a defect at this
+    call site.
     """
     try:
         from coordinator_core.session import core as _session_core
@@ -124,7 +133,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     Reads session_id from the flat-scalar input; resolves the session dir via
     the repo_root parameter; applies the 60-second mtime throttle (stat in to_thread);
     then invokes update_last_activity() (in to_thread) to write the field via
-    the canonical _cs_update_meta_field bash bridge.
+    the canonical native writer, core.update_meta_field.
 
     Returns no_advisory() unconditionally — the product is the write side-effect.
     """
@@ -178,10 +187,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
         # already wrote within the 60 s bucket (same idempotent throttle as source).
         return no_advisory()
 
-    # --- Write last_activity via canonical bash bridge ---
-    # update_last_activity() calls _cs_update_meta_field via _bash() — NOT a Python
-    # read-modify-write. Wrapped in to_thread because _bash() calls subprocess.run()
-    # (blocking).
+    # --- Write last_activity via the canonical native writer ---
+    # update_last_activity() delegates to core.update_meta_field — NOT a
+    # read-modify-write of our own. Wrapped in to_thread because that writer does
+    # blocking disk I/O (tempfile write + os.replace).
     iso = _now_iso()
     await asyncio.to_thread(update_last_activity, session_dir, iso)
 

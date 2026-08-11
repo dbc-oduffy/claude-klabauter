@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, c
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1862,21 +1863,36 @@ def test_build_pinboard_directive_not_satisfied_when_existing_line_unverified() 
 
 
 def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -> None:
-    """Review: coordinator:code-reviewer (P3) — `directives_session_hygiene.py`'s
-    module-docstring idempotence table names directive ids emitted by five
-    sibling `directives_*.py` modules it does not own, with no mechanical link
-    back; nothing failed if the table drifted. This is that link: a plain
-    source-text scan (not builder invocation — several builders need
-    elaborate fixture args out of this test's scope) asserting every id the
-    table names is still a literal substring of its owning module's source.
+    """Review: coordinator:code-reviewer (P3, later P0) —
+    `directives_session_hygiene.py`'s module-docstring idempotence table
+    names directive ids emitted by five sibling `directives_*.py` modules it
+    does not own, with no mechanical link back; nothing failed if the table
+    drifted. This is that link: a plain source-text scan (not builder
+    invocation — several builders need elaborate fixture args out of this
+    test's scope) asserting every id the table names is still constructed by
+    its owning module's source.
 
-    `d-harvest-deferrals-<n>` and `d-flip-memo-status:<basename>` need
-    PREFIX handling, not exact match — an exact-id assumption on the
+    `d-harvest-deferrals-<n>`, `d-flip-memo-status:<basename>`, and
+    `d-freeze-and-dispatch-review-partition-<slice-id>` need PREFIX
+    handling, not exact match — an exact-id assumption on the
     ordinal-suffixed `d-harvest-deferrals-<n>` id already caused one real
     defect this session (F6/directives_lessons_plan.py's own id-matching
     docstring warns of the same pitfall). A prefix check still catches a
     rename/removal of the base id; it does not (and cannot, without invoking
     the builder) catch a suffix-only change.
+
+    P0 fix (coordinator:code-reviewer, commit d560db720's follow-up review):
+    the prefix branch originally checked `directive_id in source` against the
+    WHOLE module text — vacuous, because each of these three prefixes also
+    appears in the owning module's own docstring prose (e.g.
+    `directives_memo_lifecycle.py`'s docstring says "`d-flip-memo-status`" in
+    backtick-quoted prose, independent of the real `f"d-flip-memo-
+    status:{basename}"` construction). A changed construction site kept
+    passing as long as the prose mention survived. The prefix branch below
+    instead requires the needle to appear as the START of an f-string literal
+    immediately followed (before the closing quote) by a `{` — i.e. the
+    actual interpolation site, not any textual occurrence — so prose can no
+    longer satisfy it.
     """
     siblings_dir = Path(directives_session_hygiene.__file__).parent
 
@@ -1917,12 +1933,26 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
     for module_basename, ids in table.items():
         source = (siblings_dir / module_basename).read_text(encoding="utf-8")
         for directive_id, is_prefix in ids:
-            needle = directive_id if is_prefix else f'"{directive_id}"'
-            assert needle in source, (
-                f"idempotence table names {directive_id!r} for {module_basename}, "
-                f"but {needle!r} is no longer a literal substring of that module's "
-                "source — the table has drifted from the builder(s) it describes"
-            )
+            if is_prefix:
+                # Require an f-string literal that OPENS with this prefix and
+                # is followed (before its closing quote) by an interpolation
+                # `{` — the real construction site, never a bare textual
+                # mention (docstring prose, a comment, etc.) of the prefix.
+                pattern = re.compile(rf'f"{re.escape(directive_id)}[^"\n]*\{{')
+                assert pattern.search(source), (
+                    f"idempotence table names prefix {directive_id!r} for "
+                    f"{module_basename}, but no f-string construction site "
+                    f"(f\"{directive_id}...{{...) was found in that module's "
+                    "source — the table has drifted from the builder(s) it "
+                    "describes, or the id is now only a textual mention"
+                )
+            else:
+                needle = f'"{directive_id}"'
+                assert needle in source, (
+                    f"idempotence table names {directive_id!r} for {module_basename}, "
+                    f"but {needle!r} is no longer a literal substring of that module's "
+                    "source — the table has drifted from the builder(s) it describes"
+                )
 
 
 def test_build_machine_local_regeneratability_directive_stays_false_by_design() -> None:
@@ -1933,3 +1963,382 @@ def test_build_machine_local_regeneratability_directive_stays_false_by_design() 
     (`directives_session_hygiene.py`'s own docstring)."""
     directive = directives_session_hygiene.build_machine_local_regeneratability_directive()
     assert directive["already_satisfied"] is False
+
+
+# ---------------------------------------------------------------------------
+# best_effort / degraded — docs/plans/2026-08-08-a-best-effort-directive-
+# cannot-fail-a-ce.md, chunk C1 (defects A, B, C). Each test fails against
+# the unfixed `_execute_directives` — never a mocked runner.
+# ---------------------------------------------------------------------------
+
+
+def test_best_effort_nonzero_exit_lands_in_degraded_not_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: a `best_effort` directive that exits non-zero must never appear
+    in `report["failed"]` — only in `report["degraded"]`."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 3
+
+    modules = {"fake-degraded": _fake_module(failing_main, "fake_degraded")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directive = _directive("d_degraded", "fake-degraded")
+    directive["best_effort"] = True
+    exit_code, report = ws_apply._execute_directives([directive], [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d_degraded"]
+    assert report["landed"] == []
+
+
+def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: with every OTHER directive clean, a run whose only non-zero exit
+    was a `best_effort` one returns SUCCESS, never PARTIAL_MUTATION — the
+    exact regression this plan exists to close (a clean close reporting
+    PARTIAL_MUTATION on a tolerated cadence-emission failure)."""
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    def degraded_main(argv: list[str]) -> int:
+        return 3
+
+    modules = {
+        "fake-ok": _fake_module(ok_main, "fake_ok"),
+        "fake-degraded": _fake_module(degraded_main, "fake_degraded"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    degraded_directive = _directive("d_degraded", "fake-degraded")
+    degraded_directive["best_effort"] = True
+    directives = [_directive("d_ok", "fake-ok"), degraded_directive]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["landed"] == ["d_ok"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_degraded"]
+    assert report["failed"] == []
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_non_best_effort_nonzero_exit_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: a directive with no `best_effort` key (or an explicit `False`)
+    keeps today's behaviour — still `failed`, still moves the exit code off
+    SUCCESS."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 1
+
+    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_fail", "fake-fail")]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["degraded"] == []
+    assert [entry["id"] for entry in report["failed"]] == ["d_fail"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
+
+
+def test_failed_entry_error_carries_captured_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4 (failed path): the one field an operator reads back must name
+    the reason, not just the args — the defect all three cross-repo
+    reporters hit."""
+    import sys as _sys
+
+    def failing_main(argv: list[str]) -> int:
+        print("route_mutation: transport failure detail here", file=_sys.stderr)
+        return 3
+
+    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_fail", "fake-fail")]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert len(report["failed"]) == 1
+    error = report["failed"][0]["error"]
+    assert "fake-fail exited 3" in error
+    assert "route_mutation: transport failure detail here" in error
+
+
+def test_degraded_entry_error_carries_captured_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4 (degraded path): same fold, on the tolerated side."""
+    import sys as _sys
+
+    def failing_main(argv: list[str]) -> int:
+        print("route_mutation: transport failure detail here", file=_sys.stderr)
+        return 3
+
+    modules = {"fake-degraded": _fake_module(failing_main, "fake_degraded")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directive = _directive("d_degraded", "fake-degraded")
+    directive["best_effort"] = True
+    exit_code, report = ws_apply._execute_directives([directive], [], {})
+
+    assert len(report["degraded"]) == 1
+    error = report["degraded"][0]["error"]
+    assert "fake-degraded exited 3" in error
+    assert "route_mutation: transport failure detail here" in error
+
+
+def test_best_effort_dispatch_exception_lands_in_degraded_not_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-emit-cadence-
+    30s-timeout.md): `_dispatch_directive` raising — an IPC timeout, a
+    transport error, anything that never reaches the `exit_code != 0`
+    branch — must route through the SAME `best_effort` gate as a non-zero
+    exit. Before this fix, `_execute_directives`'s `except Exception`
+    around `_dispatch_directive` unconditionally appended to `failed`,
+    so a best-effort directive that raised (rather than returning
+    nonzero) still forced PARTIAL_MUTATION on an otherwise clean close."""
+
+    def raising_main(argv: list[str]) -> int:
+        raise TransportFailure("op 'emit.cadence' timed out after 30.0s")
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {
+        "fake-ok": _fake_module(ok_main, "fake_ok"),
+        "fake-raising": _fake_module(raising_main, "fake_raising"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    degraded_directive = _directive("d-emit-cadence", "fake-raising")
+    degraded_directive["best_effort"] = True
+    directives = [_directive("d-run-wsc-tail", "fake-ok"), degraded_directive]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d-emit-cadence"]
+    assert report["landed"] == ["d-run-wsc-tail"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_non_best_effort_dispatch_exception_still_reports_partial_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine partial mutation must still surface as exit 4: a non-
+    best-effort directive that raised, alongside another directive that
+    already landed, keeps PARTIAL_MUTATION — the fix must not weaken this
+    case while fixing the best-effort one above."""
+
+    def raising_main(argv: list[str]) -> int:
+        raise TransportFailure("transport failure")
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {
+        "fake-ok": _fake_module(ok_main, "fake_ok"),
+        "fake-raising": _fake_module(raising_main, "fake_raising"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_ok", "fake-ok"), _directive("d_raising", "fake-raising")]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["degraded"] == []
+    assert [entry["id"] for entry in report["failed"]] == ["d_raising"]
+    assert report["landed"] == ["d_ok"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+
+def test_error_string_omits_stderr_block_when_stderr_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean-stderr failure must not grow a noisy empty trailing block —
+    the existing `"<cli> exited <n> (args=[...])"` prefix stays intact and
+    unadorned when there is nothing to append."""
+
+    def failing_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_fail", "fake-fail")]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["failed"][0]["error"] == "fake-fail exited 2 (args=[])"
+
+
+def test_already_satisfied_producer_registers_empty_stdout_for_landed_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC5: an `already_satisfied` producer is registered in `stdout_by_id`
+    so a `{<id>.landed}` token naming it resolves rather than reporting the
+    producer never landed."""
+
+    def consumer_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"fake-consumer": _fake_module(consumer_main, "fake_consumer")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    producer = _directive("d-run-wsc-tail", "wsc-tail", already_satisfied=True)
+    consumer = _directive(
+        "d-emit-cadence",
+        "fake-consumer",
+        args=["{d-run-wsc-tail.landed}"],
+        depends_on="d-run-wsc-tail",
+    )
+    exit_code, report = ws_apply._execute_directives([producer, consumer], [], {})
+
+    assert report["failed"] == []
+    assert "d-run-wsc-tail" in report["landed"]
+    assert "d-emit-cadence" in report["landed"]
+
+
+def test_already_satisfied_producer_still_fails_an_entry_path_token_honestly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC6: an `{<id>.entry_path}` token naming an `already_satisfied`
+    producer must still fail loud — a value that was never produced this
+    pass must not be threaded — but with the honest "landed but captured no
+    stdout" message, never the dishonest "did not land"."""
+
+    def dispatched_main(argv: list[str]) -> int:
+        raise AssertionError("the consumer must never dispatch with an unresolved token")
+
+    monkeypatch.setattr(
+        ws_apply, "_load_cli_module", lambda cli_name: _fake_module(dispatched_main, cli_name)
+    )
+
+    producer = _directive("d-complete-entry", "coordinator-complete-entry", already_satisfied=True)
+    consumer = _directive(
+        "d-reconcile-completion-commits",
+        "reconcile-completion-commits",
+        args=["--append", "{d-complete-entry.entry_path}"],
+        depends_on="d-complete-entry",
+    )
+    exit_code, report = ws_apply._execute_directives([producer, consumer], [], {})
+
+    assert "d-complete-entry" in report["landed"]
+    assert [entry["id"] for entry in report["failed"]] == ["d-reconcile-completion-commits"]
+    error = report["failed"][0]["error"]
+    assert "did not land" not in error
+    assert "landed but captured no stdout" in error
+
+
+def test_execute_directives_repro_from_plan_dispatch_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact repro shape from the dispatch message: `d-run-wsc-tail`
+    lands clean, `d-emit-cadence` (its `{d-run-wsc-tail.landed}` consumer)
+    exits 3 with a stderr diagnostic. Before this chunk this returned
+    DIRECTIVE_FAILED with `failed: [{'id': 'd-emit-cadence', 'error':
+    "emit-cadence exited 3 (args=[''])"}]`. With `best_effort: True` on the
+    second directive, it must return SUCCESS with that record in `degraded`
+    and the stderr text folded into the error string."""
+    import sys as _sys
+
+    def ok_tail_main(argv: list[str]) -> int:
+        return 0
+
+    def failing_cadence_main(argv: list[str]) -> int:
+        print("route_mutation: transport failure detail here", file=_sys.stderr)
+        return 3
+
+    modules = {
+        "wsc-tail": _fake_module(ok_tail_main, "fake_tail"),
+        "emit-cadence": _fake_module(failing_cadence_main, "fake_cadence"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    cadence_directive = _directive(
+        "d-emit-cadence",
+        "emit-cadence",
+        args=["{d-run-wsc-tail.landed}"],
+        depends_on="d-run-wsc-tail",
+    )
+    cadence_directive["best_effort"] = True
+    directives = [_directive("d-run-wsc-tail", "wsc-tail"), cadence_directive]
+
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d-emit-cadence"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-10 depends_on-repointed-but-never-gating sweep: `d-coverage-gate`
+# carries no `depends_on` (see `workstream_complete.__init__._build_legacy_
+# coverage_and_trail_directives`'s own docstring for why a `depends_on`
+# naming the plan-claim directive would have been decorative, not
+# enforcement, and why neither `wsc-coverage-gate-runner` subcommand this
+# pair dispatches has a positional slot to carry a real `{<id>.landed}`
+# binding token). This is a BEHAVIOURAL pin, not a `depends_on`-field
+# assertion (a bare field check is exactly what let the prior inert guard
+# ship green) -- it dispatches `d-coverage-gate` through the real
+# `_execute_directives` seam with its plan-claim PRODUCER FAILED, and
+# asserts the consumer still lands: ordering between this pair and the
+# plan-claim directives is incidental (append order in `__init__.py`'s
+# `build_directives`), never enforced by the halt gate.
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_gate_directive_carries_no_depends_on() -> None:
+    from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
+
+    gate = type(
+        "FakeGate", (), {"disposition": "predecessor-consumed", "consumed_handoff": "state/handoffs/x.md"}
+    )()
+    directives = _build_legacy_coverage_and_trail_directives(
+        gate, decisions={}, plan_claim_directives=[{"id": "d-claim-plan-execution-lock"}]
+    )
+    ids = {d["id"]: d for d in directives}
+    assert ids["d-coverage-gate"]["depends_on"] is None
+
+
+def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
+
+    def failing_claim_main(argv: list[str]) -> int:
+        return 1
+
+    def ok_gate_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {
+        "wsc-coverage-gate-runner-claim": _fake_module(failing_claim_main, "fake_claim"),
+        "wsc-coverage-gate-runner": _fake_module(ok_gate_main, "fake_gate"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    gate = type(
+        "FakeGate", (), {"disposition": "predecessor-consumed", "consumed_handoff": "state/handoffs/x.md"}
+    )()
+    plan_claim_directive = _directive("d-claim-plan-execution-lock", "wsc-coverage-gate-runner-claim")
+    pair = _build_legacy_coverage_and_trail_directives(
+        gate, decisions={}, plan_claim_directives=[plan_claim_directive]
+    )
+    directives = [plan_claim_directive] + pair
+
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["failed"] == [
+        {"id": "d-claim-plan-execution-lock", "error": "wsc-coverage-gate-runner-claim exited 1 (args=[])"}
+    ]
+    assert "d-coverage-gate" in report["landed"], (
+        "d-coverage-gate must still dispatch when the plan-claim producer "
+        "failed -- depends_on naming a sibling directive id never gates "
+        "(apply_halt._directive_gate_open), so this pair's ordering is "
+        "incidental, never an enforced block"
+    )
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)

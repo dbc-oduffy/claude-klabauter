@@ -48,6 +48,20 @@ from coordinator_core import pickup_assemble as pa  # noqa: E402
 _NO_CONSOLE = {"creationflags": __import__("subprocess").__dict__.get("CREATE_NO_WINDOW", 0)}
 
 
+def _same_path(mine: Path | None, real_toplevel: str) -> bool:
+    """Compare a read-model repo root against `git rev-parse --show-toplevel`.
+
+    Path-level, never string-level: on Windows git ALWAYS emits forward slashes
+    (forward-slashed, drive-lettered) while `str(Path(...))` renders native
+    backslash separators. Both name the same directory, and every production
+    consumer of `resolve_repo_root` takes the `Path`, not its rendering — so a
+    raw `str(...) == stdout` comparison here was asserting a POSIX-only
+    accident of separator style, not parity.
+    """
+    assert mine is not None
+    return mine == Path(real_toplevel)
+
+
 def _real_git(args, cwd):
     return subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -67,7 +81,7 @@ def claude_klabauter_root() -> Path:
 def test_resolve_repo_root_matches_spawn(claude_klabauter_root):
     real = _real_git(["rev-parse", "--show-toplevel"], REPO_ROOT)
     assert real.returncode == 0
-    assert str(claude_klabauter_root) == real.stdout.strip()
+    assert _same_path(claude_klabauter_root, real.stdout.strip())
 
 
 def test_current_branch_matches_spawn(claude_klabauter_root):
@@ -301,7 +315,7 @@ def test_detached_head_fixture():
 
         real_toplevel = _real_git(["rev-parse", "--show-toplevel"], root).stdout.strip()
         mine_toplevel = pa.resolve_repo_root(root)
-        assert str(mine_toplevel) == real_toplevel
+        assert _same_path(mine_toplevel, real_toplevel)
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +404,7 @@ def test_linked_worktree_fixture():
 
         real_toplevel = _real_git(["rev-parse", "--show-toplevel"], worktree_dir).stdout.strip()
         mine_toplevel = pa.resolve_repo_root(worktree_dir)
-        assert str(mine_toplevel) == real_toplevel
+        assert _same_path(mine_toplevel, real_toplevel)
 
         real_branch = _real_git(["rev-parse", "--abbrev-ref", "HEAD"], worktree_dir).stdout.strip()
         mine_branch = pa._current_branch(worktree_dir)

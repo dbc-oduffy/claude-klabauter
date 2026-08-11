@@ -31,9 +31,12 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
   - the target path resolves under `state/subagent-share/` (never any other
     tree — in particular never the caller's OWN run-report sidecar, which
     lives in the same directory but carries a different `agent_type`),
-  - the target's frontmatter `agent_type:` is exactly `coordinator:code-reviewer`
-    (the ONE sidecar family this guard gates on — see that module's
-    `_REVIEWER_AGENT_TYPE`),
+  - the target's frontmatter `agent_type:` is one of `_REVIEWER_AGENT_TYPES` —
+    the code-reviewer family plus the six Opus reviewer personas, i.e. every
+    agent whose deliverable IS a finding set. This is deliberately WIDER than
+    the sibling guard's own single-literal `_REVIEWER_AGENT_TYPE`, which gates
+    a different question (which sidecars block an EM hand-edit); see that
+    constant's own comment below for why the two must not be reconciled,
   - the target actually carries filled-in findings — the `## Findings`
     section body (everything between that heading and whichever comes
     first of the `## Exit interview` heading, the `## Integrator
@@ -131,7 +134,42 @@ _BUCKET_YAML_KEY = {
     "verified-no-action": "verified-no-action",
 }
 
-_REVIEWER_AGENT_TYPE = "coordinator:code-reviewer"
+#: The agent types whose DELIVERABLE is a finding set, and which may therefore
+#: receive an `## Integrator Dispositions` block: the code-reviewer family plus
+#: the six Opus reviewer personas. Membership mirrors exactly the types
+#: example-doctrine-repo's `report_type_map:` routes to the `review-findings` or
+#: `staff-eng-review` provisioning templates — that map is the REASON for this
+#: membership, never a runtime input. This module must not read a peer repo's
+#: policy file to decide a gate; the drift risk is carried by
+#: `test_reviewer_agent_types_pinned` instead, so widening this set is a
+#: deliberate edit against a failing test rather than a silent slide.
+#:
+#: Deliberately WIDER than the single-literal `_REVIEWER_AGENT_TYPE` in the
+#: sibling guard `write_guards/block_em_hand_edit_pending_review_integration.py`.
+#: The two answer different questions and must not be "reconciled": that guard
+#: decides which sidecars BLOCK an EM hand-edit — advisory, fail-open, and
+#: narrow by an explicit negative-spec in its own module docstring — while this
+#: set decides which sidecars can RECEIVE a disposition block. Widening the
+#: guard to match would start blocking EM edits on every persona review, which
+#: nothing asks for. The divergence is intentional; it is not drift.
+# Membership verified 2026-08-10 against example-doctrine-repo's live
+# `coordinator/subagent-sandbox-policy.yaml` `report_type_map:` block — the
+# six `staff-eng-review`-mapped personas below match that file's rows
+# verbatim. Re-check against that file if either side drifts; this repo has
+# no automated way to catch a mismatch at authorship time, only the pin
+# test below catching FUTURE accidental drift.
+_REVIEWER_AGENT_TYPES = frozenset(
+    {
+        "coordinator:code-reviewer",
+        "coordinator:code-reviewer-weekly",
+        "coordinator:staff-eng",
+        "coordinator:staff-data-sci",
+        "coordinator:senior-front-end",
+        "coordinator:staff-ux",
+        "coordinator:vp-product",
+        "coordinator:eng-director",
+    }
+)
 _DISPOSITIONS_HEADING = "## Integrator Dispositions"
 _FINDINGS_HEADING = "## Findings"
 _EXIT_INTERVIEW_HEADING = "## Exit interview"
@@ -152,6 +190,39 @@ def _normalize(value: str) -> str:
     return normalized
 
 
+def _find_heading(text: str, heading: str) -> Optional[int]:
+    """Index of ``heading`` where it occurs as a REAL ATX heading line, or None.
+
+    Line-anchored on purpose. Every one of these headings is a string that
+    reviewers, integrators, and this module's own docstrings quote in running
+    prose — usually in backticks, while explaining the very mechanism it
+    drives. A bare ``heading in text`` substring test cannot tell the heading
+    from a mention of it, and both failure directions are silent:
+
+      - ``_DISPOSITIONS_HEADING``: a sidecar whose findings body merely NAMES
+        the block reads as already-dispositioned. `append_dispositions` then
+        no-ops with ``already_dispositioned=True`` and the block is never
+        written, and the sibling guard
+        (``write_guards/block_em_hand_edit_pending_review_integration``, which
+        keeps its own line-anchored copy of this check for the same reason)
+        reads the loop as closed and stops blocking.
+      - ``_FINDINGS_HEADING``: a body quoting the heading before the real one
+        carves the section from the wrong offset.
+
+    Observed live 2026-08-10: a code-reviewer's summary quoted
+    ``` `## Integrator Dispositions` ``` while explaining the extractor's
+    boundary logic, and the CLI silently refused to write that sidecar's block.
+    Trailing whitespace is tolerated; leading whitespace is not (an indented
+    ``##`` inside a fenced block is not a heading).
+    """
+    match = re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text)
+    return match.start() if match is not None else None
+
+
+def _has_heading(text: str, heading: str) -> bool:
+    return _find_heading(text, heading) is not None
+
+
 class DispositionsError(ValueError):
     """Raised for every fail-loud validation failure in this module."""
 
@@ -170,14 +241,14 @@ def _extract_findings_section(text: str) -> Optional[str]:
     section boundaries. This function does not parse or count individual
     findings; it only carves out the span later checked by
     `_findings_section_is_empty` for pristine-scaffold vs. filled."""
-    idx = text.find(_FINDINGS_HEADING)
-    if idx == -1:
+    idx = _find_heading(text, _FINDINGS_HEADING)
+    if idx is None:
         return None
     rest = text[idx + len(_FINDINGS_HEADING):]
     end = len(rest)
     for boundary in (_EXIT_INTERVIEW_HEADING, _DISPOSITIONS_HEADING):
-        boundary_idx = rest.find(boundary)
-        if boundary_idx != -1 and boundary_idx < end:
+        boundary_idx = _find_heading(rest, boundary)
+        if boundary_idx is not None and boundary_idx < end:
             end = boundary_idx
     return rest[:end]
 
@@ -299,12 +370,13 @@ def append_dispositions(
     text = sidecar_path.read_text(encoding="utf-8", errors="replace")
 
     agent_type = _extract_frontmatter_agent_type(text)
-    if agent_type != _REVIEWER_AGENT_TYPE:
+    if agent_type not in _REVIEWER_AGENT_TYPES:
         raise DispositionsError(
-            f"target's frontmatter agent_type is {agent_type!r}, expected "
-            f"{_REVIEWER_AGENT_TYPE!r} — this tool only writes to a "
-            "code-reviewer findings sidecar, never a run-report, "
-            "staff-eng-review, or any other sidecar type."
+            f"target's frontmatter agent_type is {agent_type!r}, which is not one "
+            f"of the reviewer agent types this tool writes to "
+            f"({', '.join(sorted(_REVIEWER_AGENT_TYPES))}) — it only ever writes to "
+            "a sidecar whose deliverable IS a finding set, never a run-report, an "
+            "assessment, or your OWN sidecar."
         )
 
     findings_section = _extract_findings_section(text)
@@ -314,7 +386,7 @@ def append_dispositions(
             "review-findings sidecar."
         )
 
-    if _DISPOSITIONS_HEADING in text:
+    if _has_heading(text, _DISPOSITIONS_HEADING):
         return {"path": str(sidecar_path), "already_dispositioned": True}
 
     if _findings_section_is_empty(findings_section):
@@ -357,9 +429,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="append-integrator-dispositions",
         description=(
             "Append the canonical `## Integrator Dispositions` block to a "
-            "code-reviewer findings sidecar — the ONE sanctioned sidecar "
-            "write review-integrator dispatches make (agents/review-"
-            "integrator.md § Sidecar Disposition Annotation)."
+            "reviewer findings sidecar (see `_REVIEWER_AGENT_TYPES`) — the "
+            "ONE sanctioned sidecar write review-integrator dispatches make "
+            "(agents/review-integrator.md § Sidecar Disposition Annotation)."
         ),
     )
     parser.add_argument(

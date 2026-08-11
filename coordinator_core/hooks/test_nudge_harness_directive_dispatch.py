@@ -126,6 +126,11 @@ def test_tell_c_misattribution_trips(text):
         # in the turn must not bleed across sentences.
         "Your rule about commit messages is clear, so I followed it. "
         "Also dispatched a reviewer for the diff.",
+        # Tell B negative, mirroring the Tell D case below: the "ok" inside
+        # "hook" must not supply the permission phrase for a dispatch term
+        # one clause away.
+        "The hook fires on every subagent dispatch.",
+        "That hook logs the agent_id so a spawn can be reconciled later.",
     ],
 )
 def test_ordinary_turns_stay_silent(text):
@@ -168,6 +173,13 @@ def test_tell_d_commit_permission_ask_trips(text):
         # A sentence combining a commit verb with an outward/gated cue must
         # be treated as the correct outward/gated ask, not this tell.
         "Should I commit and then push this to the remote?",
+        # The permission alternation is word-anchored: the "ok" inside "hook"
+        # must not supply the permission phrase. Every one of these is ordinary
+        # engine prose about commit hooks, observed live tripping the nudge
+        # before the leading \b landed.
+        "We already do — hook path and `commit-tree` path both.",
+        "Their hook is a shim that execs my working-tree Python at commit time.",
+        "The pre-commit hook stages nothing on its own.",
     ],
 )
 def test_tell_d_commit_permission_ask_does_not_trip(text):

@@ -76,7 +76,7 @@ def test_every_static_family_member_is_byte_identical_to_its_source(monkeypatch,
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
-        python3_cmd_rendered=None, check_only=False,
+        check_only=False,
         python3_cmd_resolved_bin="/usr/bin/python3",
     )
 

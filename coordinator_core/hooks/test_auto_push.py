@@ -513,6 +513,38 @@ def test_module_provenance_survives_a_long_exception_message(monkeypatch, tmp_pa
     assert f"module={Path(auto_push.__file__).resolve().as_posix()}" in content
 
 
+def test_module_provenance_prefers_host_python_env_when_set(monkeypatch):
+    """A wrapper-launched hook reports the real host interpreter, not the
+    wrapper's own `sys.executable`, when COORDINATOR_HOST_PYTHON is set."""
+    monkeypatch.setenv(auto_push._ENV_HOST_PYTHON, r"C:\host\python.exe")
+
+    provenance = auto_push._module_provenance()
+
+    assert "interp=C:/host/python.exe" in provenance
+
+
+def test_module_provenance_falls_back_to_sys_executable_when_unset(monkeypatch):
+    """Absent COORDINATOR_HOST_PYTHON, the interpreter field is unchanged
+    from `sys.executable`."""
+    monkeypatch.delenv(auto_push._ENV_HOST_PYTHON, raising=False)
+
+    provenance = auto_push._module_provenance()
+
+    expected = Path(sys.executable).as_posix() if sys.executable else "<unknown>"
+    assert f"interp={expected}" in provenance
+
+
+def test_module_provenance_treats_blank_host_python_as_unset(monkeypatch):
+    """Whitespace-only COORDINATOR_HOST_PYTHON must not be trusted -- it
+    falls back to sys.executable exactly as if unset."""
+    monkeypatch.setenv(auto_push._ENV_HOST_PYTHON, "   ")
+
+    provenance = auto_push._module_provenance()
+
+    expected = Path(sys.executable).as_posix() if sys.executable else "<unknown>"
+    assert f"interp={expected}" in provenance
+
+
 # ---------------------------------------------------------------------------
 # log_failure -- git-dir topology resolution (2026-08-01: log_failure moved
 # from a literal `<repo_root>/.git` join to `resolve_git_common_dir`, so

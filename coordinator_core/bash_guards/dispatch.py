@@ -131,6 +131,19 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      comparison against entries 5/5g. Registered directly adjacent to 5g --
      same `offer-git-c` short-circuit ordering requirement as every entry in
      this CONFINEMENT_DENY run.
+ 5i. block_subagent_grant_acquisition       (hard, fail-closed) -- NO legacy
+     bash predecessor; added 2026-08-08 (C2, docs/plans/2026-08-08-
+     discriminate-the-caller-on-the-write-grant.md) to close a caller-
+     discrimination gap on the CLAUDE.md write grant: a dispatched subagent
+     (resolved `agent_id` present) invoking `coordinator_core.session.
+     claude_md_grant grant` was structurally indistinguishable from the
+     EM acquiring its own grant, letting a subagent self-grant write access
+     to doctrine it has no dispatch authority over. Identity-gated to
+     subagents only, same posture as `block-subagent-stash-creation` (5h) --
+     the EM remains the sole allow signal (raw `agent_id` ABSENT). Registered
+     directly adjacent to `check-test-suite-invocation`, at the tail of the
+     hard-deny run -- same `offer-git-c` short-circuit ordering requirement
+     as every entry in this CONFINEMENT_DENY run.
 
 Because each of the (now 5, post-2026-07-24 retirement of the former #6
 advisory nudge) legacy-shaped processes only ever emits EITHER nothing
@@ -289,6 +302,10 @@ from coordinator_core.bash_guards.block_stash_destruction import (
 from coordinator_core.bash_guards.block_subagent_stash_creation import (
     check as _check_subagent_stash_creation,
     MATCHERS as _matchers_subagent_stash_creation,
+)
+from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
+    check as _check_subagent_grant_acquisition,
+    MATCHERS as _matchers_subagent_grant_acquisition,
 )
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
@@ -1092,9 +1109,28 @@ def evaluate_payload_json(
             # any deny envelope reaches stdout) if a guard ever returned
             # `{"hookSpecificOutput": None}` or another non-dict value there.
             _hso = out.get("hookSpecificOutput")
+            # Gated on the ENVELOPE ALONE (permissionDecision == "deny"),
+            # NOT on `fail_closed` -- `fail_closed` is this entry's own
+            # crash-routing policy (module docstring F1), orthogonal to
+            # whether the envelope its `fn()` actually returned is a real
+            # deny. Before this fix the `fail_closed and` conjunct silently
+            # excluded every `fail_closed=False` guard that nonetheless
+            # emits a genuine deny verdict on its NORMAL (non-crash) path --
+            # `bump-foreign-repo-write`/`bump-outside-repo-write` are
+            # deliberately `fail_closed=False` (a crash must swallow to
+            # allow, per each one's own registration comment) while still
+            # returning `permissionDecision: "deny"` as their real, intended
+            # verdict, so their deny was neither `guard_unlock_sentinel`-
+            # clearable nor advertised one. Every other `fail_closed=False`
+            # entry in `guard_chain` returns only `"allow"` envelopes on its
+            # own normal path (audited: `block-dev-repo-sentinel-removal-
+            # advisory`'s registered `check_advisory` leg renders
+            # `permissionDecision: "allow"` unconditionally; no other
+            # ADVISORY_REWRITE entry's backing module ever composes a
+            # `"deny"` string), so dropping the `fail_closed and` conjunct
+            # changes behaviour for exactly these two bump guards.
             _is_hard_deny_envelope = (
-                fail_closed
-                and isinstance(out, dict)
+                isinstance(out, dict)
                 and isinstance(_hso, dict)
                 and _hso.get("permissionDecision") == "deny"
             )
@@ -1436,6 +1472,15 @@ def _build_guard_chain(
         # liveness`, formerly its sibling in this pair, RETIRED from here in C13
         # -- see its own new ADVISORY_REWRITE registration below.)
         GuardEntry("check-test-suite-invocation", lambda: _check_test_suite_invocation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_test_suite_invocation)),
+        # block-subagent-grant-acquisition -- see module docstring entry 5i.
+        # Hard-deny, identity-gated to subagents only (same posture as
+        # block-subagent-stash-creation, 5h): denies a resolved subagent
+        # acquiring the CLAUDE.md write grant via `coordinator_core.session.
+        # claude_md_grant grant`. Registered directly adjacent to
+        # check-test-suite-invocation, at the tail of the hard-deny run --
+        # same `offer-git-c` short-circuit ordering requirement as every
+        # entry in this CONFINEMENT_DENY run.
+        GuardEntry("block-subagent-grant-acquisition", lambda: _check_subagent_grant_acquisition(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_grant_acquisition)),
         # Advisory (never a deny) sibling of `destructive-git-revert` above
         # (Review: staff-eng, Finding 0). Registered here -- after EVERY
         # CONFINEMENT_DENY hard-deny guard, and ahead of `offer-git-c`'s

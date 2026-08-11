@@ -952,7 +952,7 @@ def test_install_bin_resolvers_agent_helper_pairs_resolve_at_destination(
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
-        None, False,
+        False,
         python3_cmd_resolved_bin="",
     )
 
@@ -1300,7 +1300,7 @@ def test_install_bin_resolvers_sweeps_orphan_in_install_dir(
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
-        None, False,
+        False,
         python3_cmd_resolved_bin="",
     )
 
@@ -1324,13 +1324,13 @@ def test_install_bin_resolvers_sweep_idempotent_over_two_runs(
     from coordinator_core.install.substrate import _install_bin_resolvers
 
     _install_bin_resolvers(
-        ml_bin, ch_bin, bin_dst, None, False, python3_cmd_resolved_bin="",
+        ml_bin, ch_bin, bin_dst, False, python3_cmd_resolved_bin="",
     )
     assert not (bin_dst / "deleted-cli").exists()
     capsys.readouterr()
 
     _install_bin_resolvers(
-        ml_bin, ch_bin, bin_dst, None, False, python3_cmd_resolved_bin="",
+        ml_bin, ch_bin, bin_dst, False, python3_cmd_resolved_bin="",
     )
     out = capsys.readouterr().out
     assert "removed orphaned agent-helper forwarder" not in out
@@ -1434,7 +1434,7 @@ def test_install_bin_resolvers_sweeps_legacy_marker_orphan_but_keeps_doe_templat
     from coordinator_core.install.substrate import _install_bin_resolvers
 
     _install_bin_resolvers(
-        ml_bin, ch_bin, bin_dst, None, False, python3_cmd_resolved_bin="",
+        ml_bin, ch_bin, bin_dst, False, python3_cmd_resolved_bin="",
     )
 
     assert not orphan.exists(), "legacy-marker orphan for a deleted CLI must be swept"
@@ -1561,7 +1561,7 @@ def test_install_bin_resolvers_prunes_retired_static_name_across_two_runs(
     from coordinator_core.install.substrate import _install_bin_resolvers
 
     _install_bin_resolvers(
-        ml_bin, ch_bin, bin_dst, None, False, python3_cmd_resolved_bin="",
+        ml_bin, ch_bin, bin_dst, False, python3_cmd_resolved_bin="",
     )
 
     assert not (bin_dst / "platform-localize.sh").exists(), (
@@ -1591,7 +1591,7 @@ def test_install_bin_resolvers_prune_never_touches_operator_file_never_in_manife
     from coordinator_core.install.substrate import _install_bin_resolvers
 
     _install_bin_resolvers(
-        ml_bin, ch_bin, bin_dst, None, False, python3_cmd_resolved_bin="",
+        ml_bin, ch_bin, bin_dst, False, python3_cmd_resolved_bin="",
     )
 
     assert operator_file.is_file()

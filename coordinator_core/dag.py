@@ -1,7 +1,7 @@
 """
 dag.py — Python port of bin/lib/walk-handoff-dag.js.
 
-Port source: plugins/coordinator/bin/lib/walk-handoff-dag.js
+Port source: plugins/coordinator-claude/coordinator/bin/lib/walk-handoff-dag.js
 Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § Primitive interface
 
 Purpose: edge-kind-aware handoff DAG traversal primitive. Shared kernel for forward
@@ -837,16 +837,26 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 #     one-off spawns.)
 #   - This widening (isolated before/after trees, only dag.py differing,
 #     PYTHONHASHSEED pinned) measured fallback spawns 313 -> 308 (-5) on
-#     example-doctrine-repo and 39 -> 38 (-1) on claude-klabauter's own corpus. Inspecting
-#     the ~304-309 spawns that remain: every one is for a path with ZERO git
-#     history under ANY resolve_target candidate string, ever (orphaned /
-#     malformed predecessor references, not renames) — a correct cache
-#     cannot and must not resolve a genuinely-absent path to True, so these
-#     spawns are the fail-open contract working as designed, not a residual
-#     cache-coverage gap. Verified independently: the widened cache is a
-#     strict superset of the ADD-only one (12064 -> 14473 raw entries on
-#     example-doctrine-repo, zero entries lost) and none of the remaining fallback
-#     candidates are in it.
+#     example-doctrine-repo and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
+#     (measured against claude-klabauter's own corpus only — the example-doctrine-repo
+#     figures above are left as historical record, not re-verified here):
+#     the prior text characterized the residual spawns on THIS corpus as
+#     "orphaned / malformed predecessor references" hitting a correct
+#     fail-open contract. That was wrong on both halves for
+#     ops/emit/priority_resolve.py::_build_parent_map's call path — ~210 of
+#     ~239 spawns there were well-formed `predecessor_id` handoff-ids (e.g.
+#     "hnd-consolidate-the-resolver-seam--13b7fa") reaching this tier-3 PATH
+#     oracle only because that call site omitted `id_index`, not because the
+#     refs were malformed; an id can never resolve as a path, so every one
+#     was a guaranteed miss, and all 42 distinct ids also carried a sibling
+#     `predecessor:` path that already resolved on disk. Fixed at the call
+#     site via `resolve_target(..., include_history_tier=False)` rather than
+#     by passing `id_index` there (which would have changed which parents
+#     that call site finds — a deliberately preserved behaviour, see
+#     priority_resolve.py's NEGATIVE-SPEC block). Verified independently: the
+#     widened cache is a strict superset of the ADD-only one (12064 -> 14473
+#     raw entries on example-doctrine-repo, zero entries lost) and none of the remaining
+#     fallback candidates are in it.
 #   - FRESH PROCESS ONLY: _EVER_TRACKED_CACHE (below) is process-lifetime, so
 #     a second emit() in the SAME process serves most lookups from that cache
 #     and under-reports the true per-run spawn count by roughly 3x. This is
@@ -1109,9 +1119,19 @@ def _memoized_ever_tracked(
     before this change — this function's behaviour for such a caller is
     byte-for-byte unchanged.
     """
-    if repo_rel_path in memo:
-        return memo[repo_rel_path]
-    if git_history_cache is not None and repo_rel_path in git_history_cache:
+    # Separator normalization is load-bearing, not cosmetic. `git log
+    # --name-only` emits forward-slash repo-relative paths on EVERY platform,
+    # so a cache primed by build_git_history_cache() is keyed with '/'. Callers
+    # derive repo_rel_path by slicing an os.path.normpath()-ed absolute
+    # candidate, which on Windows is backslash-separated — so every lookup
+    # missed, and under `complete=True` (cache-miss-is-authoritative) that miss
+    # was reported as the authoritative verdict "provably never-existed" for
+    # paths git demonstrably tracked. Normalize before both the memo key and
+    # the membership test so the two key spaces agree.
+    key = repo_rel_path.replace('\\', '/')
+    if key in memo:
+        return memo[key]
+    if git_history_cache is not None and key in git_history_cache:
         result = True
     elif git_history_cache is not None and getattr(git_history_cache, 'complete', False):
         # Authoritative miss — the cache is a confirmed-complete enumeration
@@ -1119,8 +1139,8 @@ def _memoized_ever_tracked(
         # absence from it means "never tracked", no subprocess needed.
         result = False
     else:
-        result = _git_path_ever_tracked(repo_rel_path, repo_root)
-    memo[repo_rel_path] = result
+        result = _git_path_ever_tracked(key, repo_root)
+    memo[key] = result
     return result
 
 
@@ -1137,6 +1157,8 @@ def resolve_target(
     repo_root: str,
     git_history_cache: Optional[Set[str]] = None,
     id_index: Optional[Dict[str, str]] = None,
+    *,
+    include_history_tier: bool = True,
 ) -> Optional[str]:
     """Resolve an edge-target reference to an absolute path on disk, or the
     sentinel string 'git-history' if the path is disk-absent but was ever
@@ -1173,6 +1195,17 @@ def resolve_target(
             miss. A miss against id_index (index absent, or ref not in it)
             falls through to the normal tiers unchanged, so behaviour for
             path/filename-shaped refs is byte-for-byte unaffected.
+        include_history_tier: keyword-only, defaults to True (current
+            behaviour unchanged for every existing caller). Set False when
+            the caller has no use for a 'git-history' answer — it discards
+            the sentinel identically to None (see e.g.
+            ops/emit/priority_resolve.py::_build_parent_map, whose only
+            consumer of this return value treats 'git-history' and None as
+            the same "no parent" outcome). Skips tier 3 entirely, including
+            any `ever_tracked()` subprocess spawn, and returns None instead
+            of 'git-history' at every point below that would otherwise
+            return the sentinel. Tiers 1-2 (on-disk resolution) are
+            unaffected either way.
     """
     if ref is None:
         return None
@@ -1201,7 +1234,7 @@ def resolve_target(
         if os.path.exists(target):
             return target
         # Tier 3 for an absolute path: derive repo-relative form if possible.
-        if repo_root:
+        if repo_root and include_history_tier:
             norm_root = repo_root.rstrip('/\\')
             if target.startswith(norm_root):
                 rel = target[len(norm_root):].lstrip('/\\')
@@ -1243,15 +1276,37 @@ def resolve_target(
     # Tier 3 — git-history. Try the ref as given (relative to repo_root, the
     # conventional form) and, if candidates[] resolve inside repo_root, also
     # try each of those re-derived as repo-relative.
-    if repo_root:
+    if repo_root and include_history_tier:
         if ever_tracked(target):
             return 'git-history'
         norm_root_rel = repo_root.rstrip('/\\')
+        # Month-foldered archive paths must be offered to tier 3 explicitly.
+        # The on-disk month-folder sweep above enumerates only directories that
+        # still EXIST; a target age-pruned from disk leaves no such directory to
+        # enumerate, and `archive/handoffs/<basename>` (flat) is not the path git
+        # tracked it under. Derive the month from the basename's own YYYY-MM
+        # prefix (the corpus's filename convention) and additionally offer every
+        # month directory currently on disk, so a reference from anywhere
+        # resolves a target ever tracked under archive/handoffs/YYYY-MM/.
+        tier3_extra: List[str] = []
+        month_match = re.match(r'^(\d{4}-\d{2})-\d{2}', basename)
+        if month_match:
+            tier3_extra.append(f'archive/handoffs/{month_match.group(1)}/{basename}')
+        if os.path.isdir(archive_dir):
+            try:
+                for entry in os.listdir(archive_dir):
+                    if re.match(r'^\d{4}-\d{2}$', entry):
+                        tier3_extra.append(f'archive/handoffs/{entry}/{basename}')
+            except OSError:
+                pass
         for cand_abs in candidates:
             if cand_abs.startswith(norm_root_rel):
                 cand_rel = cand_abs[len(norm_root_rel):].lstrip('/\\')
                 if ever_tracked(cand_rel):
                     return 'git-history'
+        for cand_rel in tier3_extra:
+            if ever_tracked(cand_rel):
+                return 'git-history'
 
     return None
 

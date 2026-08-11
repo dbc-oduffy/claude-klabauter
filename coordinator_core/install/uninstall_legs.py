@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1002,6 +1003,70 @@ def uninstall_remove_shim() -> bool:
     return overall_ok
 
 
+def uninstall_strip_cmd_autorun() -> bool:
+    """Reverses the cmd.exe `AutoRun`-registry interception leg (DR-285,
+    ``coordinator_core.ops.cmd_autorun_guard``) — closes the uninstall gap
+    that mechanism's own module docstring names as its residual: applying
+    the AutoRun write with no composed strip leg would leave HKCU machine
+    state behind with no automated removal path.
+
+    Grouped with ``uninstall_remove_shim`` (same dependency tier, run
+    immediately after it) because both reverse `claude`-invocation
+    interception surfaces — the shell-function shim and the cmd.exe AutoRun
+    macro are the two halves of the same "intercept a bare `claude`" family,
+    and neither leg reads state the other produces, so their relative order
+    is a grouping choice, not a correctness requirement. Placed before
+    ``uninstall_remove_substrate``/``uninstall_set_plugin_endstate`` since
+    those still resolve `plugin_root` and machine-local registry state this
+    leg has no dependency on either way.
+
+    Idempotent (a no-op on absent-or-foreign AutoRun content — see
+    ``strip_cmd_autorun_guard``'s own classification handling) and
+    self-gates to a no-op on non-Windows and under
+    ``COORDINATOR_DISABLE_MACHINE_MUTATION`` (belt-and-braces
+    ``_refuse_machine_mutation`` gate, honoured inside
+    ``strip_cmd_autorun_guard`` itself — this leg never needs its own dry-run
+    branch because ``orchestrate_uninstall``'s ``--dry-run`` short-circuit
+    never calls this function at all, matching every other mutating leg).
+
+    Returns True on success (including the absent/foreign no-op cases),
+    False only on an unexpected registry error (fail-loud, matches every
+    other leg's bool contract)."""
+    from coordinator_core.ops.cmd_autorun_guard import strip_cmd_autorun_guard
+
+    try:
+        strip_cmd_autorun_guard(check_only=False)
+    except Exception as exc:
+        print(f"uninstall_strip_cmd_autorun: failed to strip cmd.exe AutoRun guard: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+def _unlink_clearing_readonly(path: Path) -> None:
+    """Unlink ``path``, clearing a read-only attribute first if that is what
+    blocks the delete.
+
+    Windows refuses ``DeleteFile`` on a file carrying FILE_ATTRIBUTE_READONLY
+    (surfacing as ``PermissionError``/WinError 5), while POSIX only consults
+    the *parent directory's* write bit -- so a residual that deletes fine on
+    macOS/Linux can be undeletable here. The case this actually hits is a
+    foreign git repo left inside the installed ``setup/`` tree: every loose
+    object under ``.git/objects/`` is written read-only by design.
+
+    Clears the write bit and retries once. A genuine permission problem (an
+    ACL denial, a file held open) fails the retry and propagates, so a real
+    error is still reported rather than swallowed.
+    """
+    try:
+        path.unlink()
+    except PermissionError:
+        try:
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        except OSError:
+            raise
+        path.unlink()
+
+
 def _rm_target(path: Path, label: str, errors: List[str]) -> None:
     """rm -f semantics: remove a file/symlink if present; append to errors on failure."""
     if path.exists() or path.is_symlink():
@@ -1103,7 +1168,7 @@ def _uninstall_remove_setup_dir(claude_home: str, errors: List[str]) -> None:
             continue
 
         try:
-            path.unlink()
+            _unlink_clearing_readonly(path)
         except OSError as exc:
             errors.append(f"failed to remove setup/ residual {rel} ({path}): {exc}")
 
@@ -1278,6 +1343,12 @@ def uninstall_remove_substrate(
             # coordinator_core.install.substrate._install_bin_resolvers'
             # rm_family) — must be swept the same as the forwarders it backs.
             "_resolve_claude_klabauter.py",
+            # hook-sitepackages.txt: the site-packages pointer
+            # ensure_coordinator_venv publishes for a sibling repo's hook
+            # bootstrap (2026-08-10-interpreter-surface-four-asks.md chunk
+            # C5) — see coordinator_core.install.ensure_venv.
+            # SITEPACKAGES_POINTER_NAME.
+            "hook-sitepackages.txt",
         )
         # Agent-helper forwarders (_install_bin_resolvers writes both the bare
         # name via _write_agent_forwarder and a "<name>.cmd" via _install_one,
@@ -1640,10 +1711,13 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     """Top-level orchestration: CLI-flag parsing, ordered-plan printing,
     --dry-run short-circuit (ZERO filesystem writes / registry-key clears —
     the mutating leg functions below are never even called on that path),
-    and fail-loud sequencing of the four legs in dependency order (strip
-    settings hooks -> remove shim -> remove substrate -> set plugin
-    end-state — see module-level leg functions for the per-surface
-    rationale this order depends on).
+    and fail-loud sequencing of the five legs in dependency order (strip
+    settings hooks -> remove shim -> strip cmd.exe AutoRun guard -> remove
+    substrate -> set plugin end-state — see module-level leg functions for
+    the per-surface rationale this order depends on; the AutoRun leg sits
+    immediately after remove-shim because both reverse `claude`-invocation
+    interception surfaces and neither leg depends on the other or on
+    `plugin_root`).
 
     Calls the leg functions in-process (direct Python call, not a
     subprocess re-exec of this module) — the orchestrator and the legs
@@ -1693,13 +1767,14 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     print("coordinator-uninstall: ordered plan:")
     print("  1. strip settings.json generated hooks (resolves coordinator-root)")
     print("  2. remove shell shim + wrapper (#4a/#4b/#4c/#10)")
+    print("  3. strip cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)")
     print(
-        "  3. remove substrate (registry keys, whoami/venv, .doe-root, "
+        "  4. remove substrate (registry keys, whoami/venv, .doe-root, "
         "~/.claude/bin forwarders, settings-home tree)"
     )
     if purge_operator_config:
         print(f"     (+ purge operator config, force={1 if force else 0})")
-    print(f"  4. set plugin end-state ({mode})")
+    print(f"  5. set plugin end-state ({mode})")
 
     if dry_run:
         print(
@@ -1742,6 +1817,14 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
             "after a manual fix is safe).",
         )
 
+    if not uninstall_strip_cmd_autorun():
+        return fail_loud(
+            "cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)",
+            "Check stderr above for the specific registry error; this leg is idempotent "
+            "(re-running after a manual fix is safe), and non-Windows/foreign-AutoRun "
+            "content are always clean no-ops, never a failure source.",
+        )
+
     if not uninstall_remove_substrate(
         mode,
         purge_operator_config=purge_operator_config,
@@ -1781,6 +1864,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     sub.add_parser("strip-settings-hooks")
     sub.add_parser("remove-shim")
+    sub.add_parser("strip-cmd-autorun")
 
     p_substrate = sub.add_parser("remove-substrate")
     p_substrate.add_argument("mode", nargs="?", default="full-remove")
@@ -1811,6 +1895,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         ok = uninstall_strip_settings_hooks()
     elif args.leg == "remove-shim":
         ok = uninstall_remove_shim()
+    elif args.leg == "strip-cmd-autorun":
+        ok = uninstall_strip_cmd_autorun()
     elif args.leg == "remove-substrate":
         ok = uninstall_remove_substrate(
             args.mode,
@@ -1866,7 +1952,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 """Every OTHER filesystem/registry mutation this module performs (unlink,
 rmtree, os.replace-atomic block-strips in `uninstall_strip_settings_hooks`/
 `uninstall_remove_shim`, registry-key clears in `uninstall_remove_substrate`/
-`uninstall_set_plugin_endstate`'s full-remove branch) is a REVERSAL of a
+`uninstall_set_plugin_endstate`'s full-remove branch, the HKCU AutoRun strip
+in `uninstall_strip_cmd_autorun`) is a REVERSAL of a
 surface `install` itself wrote — this manifest describes what install PUTS
 on a machine, so a leg that only ever deletes/clears what install created is
 a CONSUMER of the manifest, not a contributor to it: declaring those

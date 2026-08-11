@@ -224,6 +224,43 @@ def test_reviewed_set_union_across_records(tmp_path, monkeypatch, capsys):
     assert {sha1, sha2, sha3} <= lines
 
 
+def test_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(tmp_path, monkeypatch, capsys):
+    """2026-08-10 coverage-gate wedge (cross-repo/inbox/2026-08-10-project-
+    rag-ue-addon-em-coverage-gate-crashes-on-chunk-and-inline-dispatch-
+    kinds.md): a trail record with an unrecognized scope_kind ("inline-
+    dispatch") must not take the whole --reviewed-set run down. It earns zero
+    credit (its sha is absent from the output) and a WARN naming the kind is
+    emitted; a sibling "diff" record in the same run is credited normally."""
+    repo = _make_fixture(tmp_path)
+    unrecognized_sha = _add_commit(repo, "src/inline.py")
+    diff_sha = _add_commit(repo, "src/normal.py")
+    trail_bad = _write_trail(
+        repo, "bad.json",
+        {
+            "scope_kind": "inline-dispatch",
+            "sha_range": f"{unrecognized_sha}^..{unrecognized_sha}",
+            "verdict": "ok",
+            "artifact": "bad",
+        },
+    )
+    trail_good = _write_trail(
+        repo, "good.json",
+        {"scope_kind": "diff", "sha_range": f"{diff_sha}^..{diff_sha}", "verdict": "ok", "artifact": "good"},
+    )
+    monkeypatch.chdir(repo)
+    rc = main(["--reviewed-set", str(trail_bad), str(trail_good)], cwd=str(repo))
+    out, err = capsys.readouterr()
+    assert rc == 0
+    lines = set(out.splitlines())
+    assert diff_sha in lines, "the sibling diff record must still be credited normally"
+    assert unrecognized_sha not in lines, (
+        "an unrecognized scope_kind must credit nothing — fail-closed, not fatal"
+    )
+    assert "WARN" in err and "inline-dispatch" in err, (
+        "the unrecognized kind must be named in a loud WARN to stderr"
+    )
+
+
 def test_reviewed_set_garbage_file_default_fail(tmp_path, monkeypatch):
     repo = _make_fixture(tmp_path)
     _add_commit(repo, "src/g.py")

@@ -300,6 +300,10 @@ def _skew_fixture(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    # The advisory is opt-in (PM-ruled 2026-08-10). Every test below that
+    # asserts on emitted text opts in here; the default-silent contract gets
+    # its own tests, which delete this var again.
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", "1")
 
     return SimpleNamespace(
         ml_dir=ml_dir,
@@ -319,7 +323,7 @@ def test_shim_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys):
     expected_live = shim._resolve_claude_klabauter_root(shim._ml_dir())
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "NOTE" in captured.err
+    assert "note:" in captured.err
     assert expected_live in captured.err
     assert str(_skew_fixture.published_dir) in captured.err or (
         _skew_fixture.published_dir.as_posix() in captured.err
@@ -358,7 +362,7 @@ def test_shim_skew_advisory_once_per_process(_skew_fixture, capsys):
     shim.resolve_claude_klabauter_root_with_class()
 
     captured = capsys.readouterr()
-    assert captured.err.count("NOTE") == 1
+    assert captured.err.count("note:") == 1
 
 
 def test_shim_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
@@ -387,7 +391,65 @@ def test_shim_skew_advisory_kill_switch_falsey_value_does_not_suppress(
 
     assert cls == shim.RESOLUTION_RESOLVED_ENGINE
     captured = capsys.readouterr()
-    assert "NOTE" in captured.err
+    assert "note:" in captured.err
+
+
+# --- opt-in contract (PM-ruled 2026-08-10) ---------------------------------
+#
+# The advisory rode on every forwarder's stderr, so it surfaced on the
+# `claude` startup banner — PM-facing chrome about an engine-side
+# configuration. Silence is now the default; VERBOSE is the only way in.
+
+
+def test_shim_skew_advisory_silent_by_default(_skew_fixture, monkeypatch, capsys):
+    _skew_fixture.write_registry(claude_klabauter=True)
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", raising=False)
+    shim = _load_shim_for_test()
+
+    root, cls = shim.resolve_claude_klabauter_root_with_class()
+
+    assert cls == shim.RESOLUTION_RESOLVED_ENGINE
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "FALSE"])
+def test_shim_skew_advisory_falsey_verbose_stays_silent(
+    _skew_fixture, monkeypatch, capsys, value
+):
+    _skew_fixture.write_registry(claude_klabauter=True)
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", value)
+    shim = _load_shim_for_test()
+
+    shim.resolve_claude_klabauter_root_with_class()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_shim_skew_advisory_quiet_beats_verbose(_skew_fixture, monkeypatch, capsys):
+    """An install that already exports the old kill-switch keeps its silence
+    even if something downstream sets VERBOSE."""
+    _skew_fixture.write_registry(claude_klabauter=True)
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", "1")
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "1")
+    shim = _load_shim_for_test()
+
+    shim.resolve_claude_klabauter_root_with_class()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_wrapper_skew_advisory_silent_by_default(_skew_fixture, monkeypatch, capsys):
+    _skew_fixture.write_registry(claude_klabauter=True)
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", raising=False)
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert cls == "resolved-engine"
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""
 
 
 def test_wrapper_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys):
@@ -398,7 +460,7 @@ def test_wrapper_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys)
     assert cls == "resolved-engine"
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "NOTE" in captured.err
+    assert "note:" in captured.err
 
 
 def test_wrapper_skew_advisory_silent_single_tier(_skew_fixture, capsys):
@@ -431,7 +493,7 @@ def test_wrapper_skew_advisory_once_per_process(_skew_fixture, capsys):
     claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
 
     captured = capsys.readouterr()
-    assert captured.err.count("NOTE") == 1
+    assert captured.err.count("note:") == 1
 
 
 def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):

@@ -43,6 +43,7 @@ from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.ops.ceremony.commit_pipeline import (
     StageOutcome,
     commit,
+    condense_git_diagnostic,
     derive_pushed_tristate,
     explicit_stage,
     run_commit_pipeline,
@@ -104,6 +105,25 @@ def _commit_message_at_head(repo: Path) -> str:
         cwd=str(repo), capture_output=True, text=True, check=True,
     )
     return result.stdout
+
+
+def _trailer_value_at_head(repo: Path, key: str) -> str:
+    """The value git's OWN trailer parser extracts for `key` at HEAD.
+
+    Review: staff-eng R1 F3, state/review-trail/2026-08-08-landed-commit-
+    close-review/r1-w1.md -- a raw substring check on the commit message
+    (`"Plan-Id: ..." in message`) passes whether or not the key is actually
+    inside the LAST paragraph git recognises as trailers; this reads
+    `%(trailers:key=...,valueonly)`, the same predicate a real consumer
+    (`commit-trailer-producer-contract.md` SS2.1) uses, so a message that
+    demotes the key to body prose reports empty here even though the raw
+    string is still present somewhere in the message.
+    """
+    result = subprocess.run(
+        ["git", "log", "-1", f"--format=%(trailers:key={key},valueonly)", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +393,131 @@ def test_pipeline_dirty_tree_gate_failure_short_circuits_before_commit(tmp_path)
         ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head_after == head_before
+
+
+def _seed_handoff(repo: Path, rel_path: str, frontmatter_body: str) -> None:
+    _seed_file(
+        repo,
+        rel_path,
+        f"---\nstatus: open\n{frontmatter_body}---\n\n# handoff\n",
+    )
+
+
+def test_pipeline_carry_gate_failure_short_circuits_before_commit(tmp_path):
+    """The C1 carry_gate, wired at the gate seam alongside its two
+    siblings: a staged `state/handoffs/*.md` whose `carried_items` declare
+    undeclared state (here: a terminal `blocked` disposition with no
+    `disposition_detail`) REFUSES the commit -- HEAD unmoved, the
+    per-item violation reaches `diagnostics` verbatim (AC1, AC3)."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    # Seed the directory as tracked (a placeholder) so `git status
+    # --porcelain` reports the individual file path below rather than
+    # collapsing an entirely-untracked directory into a single "dirname/"
+    # porcelain line (mirrors `test_dirty_tree_gate_known_concurrent_owner_
+    # skipped`'s own seeding, same rationale).
+    _seed_file(repo, "state/handoffs/.keep", "x")
+    _git(["add", "--", "README.md", "state/handoffs/.keep"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-defective.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    description: stuck\n"
+        "    disposition: blocked\n",
+    )
+
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: feature",
+        stage_paths=["state/handoffs/2026-08-10-defective.md"],
+        caller_paths={"state/handoffs/2026-08-10-defective.md"},
+    )
+
+    assert result.commit_failed is True
+    assert result.commit is None
+    assert result.push is None
+    assert result.committed_sha is None
+    assert result.carry_gate is not None
+    assert result.carry_gate.passed is False
+    assert any("disposition_detail" in line for line in result.carry_gate.diagnostics)
+    assert any("disposition_detail" in line for line in result.diagnostics)
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head_after == head_before
+
+    status_lines = _porcelain(repo)
+    assert any(
+        line.strip() == "?? state/handoffs/2026-08-10-defective.md" for line in status_lines
+    )
+
+
+def test_pipeline_carry_gate_well_formed_handoff_commits(tmp_path):
+    """AC4: a staged handoff with well-formed `carried_items` commits
+    normally -- the carry gate passes and is not the reason for any
+    failure."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_handoff(
+        repo,
+        "state/handoffs/2026-08-10-clean.md",
+        "carried_items:\n"
+        "  - carry_id: c1\n"
+        "    description: still open\n"
+        "    disposition: carried\n",
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: feature",
+        stage_paths=["state/handoffs/2026-08-10-clean.md"],
+        caller_paths={"state/handoffs/2026-08-10-clean.md"},
+    )
+
+    assert result.commit_failed is False
+    assert result.committed_sha is not None
+    assert result.carry_gate is not None
+    assert result.carry_gate.passed is True
+    assert result.carry_gate.skipped is False
+
+
+def test_pipeline_carry_gate_skipped_when_no_handoff_staged(tmp_path):
+    """AC5: a commit staging no `state/handoffs/*.md` path is unaffected --
+    the carry gate reports `skipped=True`, and the commit proceeds exactly
+    as it did before this gate existed."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "docs/notes.md", "ordinary content")
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: feature",
+        stage_paths=["docs/notes.md"],
+        caller_paths={"docs/notes.md"},
+    )
+
+    assert result.commit_failed is False
+    assert result.committed_sha is not None
+    assert result.carry_gate is not None
+    assert result.carry_gate.passed is True
+    assert result.carry_gate.skipped is True
 
 
 # ---------------------------------------------------------------------------
@@ -825,28 +970,40 @@ def test_commit_trailer_output_byte_identical_across_agree_and_diverged_branches
     agree_head_message = _commit_message_at_head(agree_repo)
     diverged_head_message = _commit_message_at_head(diverged_repo)
     # W1 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md): each
-    # call mints its OWN `Commit-Nonce:` trailer, so the two landed messages
+    # call mints its OWN `Commit-Token:` trailer, so the two landed messages
     # can never be byte-identical including that line -- strip it from both
     # before the parity comparison, but assert each message got its own
-    # (distinct) nonce line, proving the mechanism ran on both branches.
-    agree_nonce_lines = [ln for ln in agree_head_message.splitlines() if ln.startswith("Commit-Nonce: ")]
-    diverged_nonce_lines = [ln for ln in diverged_head_message.splitlines() if ln.startswith("Commit-Nonce: ")]
-    assert len(agree_nonce_lines) == 1
-    assert len(diverged_nonce_lines) == 1
-    assert agree_nonce_lines != diverged_nonce_lines
-    # Non-blank line SET/ORDER-independent comparison (not full byte
-    # identity) once the nonce line is excluded: the two branches insert
-    # their (distinct) `Commit-Nonce:` trailer at different points relative
-    # to the AC18 hook's own Session-Id trailer replay -- the agree branch's
-    # hook replay runs BEFORE `commit()` mints and appends the nonce, the
-    # diverged branch's private-index hook replay runs AFTER -- so exact
-    # blank-line placement around that boundary is expected to differ; the
-    # CONTENT set is what AC7 parity is actually about.
-    agree_lines_no_nonce = [ln for ln in agree_head_message.splitlines() if ln and ln not in agree_nonce_lines]
-    diverged_lines_no_nonce = [ln for ln in diverged_head_message.splitlines() if ln and ln not in diverged_nonce_lines]
-    assert agree_lines_no_nonce == diverged_lines_no_nonce
+    # (distinct) token line, proving the mechanism ran on both branches.
+    agree_token_lines = [ln for ln in agree_head_message.splitlines() if ln.startswith("Commit-Token: ")]
+    diverged_token_lines = [ln for ln in diverged_head_message.splitlines() if ln.startswith("Commit-Token: ")]
+    assert len(agree_token_lines) == 1
+    assert len(diverged_token_lines) == 1
+    assert agree_token_lines != diverged_token_lines
+    # Byte parity modulo the token line (Review: staff-eng R1 F3,
+    # state/review-trail/2026-08-08-landed-commit-close-review/r1-w1.md):
+    # strip ONLY the `Commit-Token:` line itself, in place -- every other
+    # byte, including blank-line placement, must match. A blank-line-
+    # insensitive content-set comparison (the pre-fix shape) cannot detect a
+    # token append that splits the trailer block, because a split moves a
+    # blank line, not a content line -- exactly the F1 defect this rewrite
+    # exists to keep caught.
+    agree_message_no_token = "\n".join(
+        ln for ln in agree_head_message.splitlines() if not ln.startswith("Commit-Token: ")
+    )
+    diverged_message_no_token = "\n".join(
+        ln for ln in diverged_head_message.splitlines() if not ln.startswith("Commit-Token: ")
+    )
+    assert agree_message_no_token == diverged_message_no_token
     assert "Session-Id: 22222222-2222-2222-2222-222222222222" in agree_head_message
     assert "Plan-Id: pln-00000000000000000000000000000000" in agree_head_message
+    # Real trailer-parse assertions (F1/F3): a raw substring check passes
+    # even when the key has been demoted to body prose by a split trailer
+    # block -- ask git's OWN parser, the same predicate a real consumer
+    # (commit-trailer-producer-contract.md SS2.1) uses.
+    for repo in (agree_repo, diverged_repo):
+        assert _trailer_value_at_head(repo, "Nature") == "chore"
+        assert _trailer_value_at_head(repo, "Plan-Id") == "pln-00000000000000000000000000000000"
+    assert _trailer_value_at_head(agree_repo, "Session-Id") == "22222222-2222-2222-2222-222222222222"
 
 
 # ---------------------------------------------------------------------------
@@ -993,11 +1150,11 @@ def test_commit_ac4_real_peer_containing_this_calls_subject_is_not_ambiguous(
     inside this call's own `commit_paths`, INSIDE the verification window
     (spying on `git_native.commit_scoped`, never after `commit()` returns) --
     must NOT produce a second candidate now that the match target is the
-    minted `Commit-Nonce:` trailer rather than a subject substring. This is
+    minted `Commit-Token:` trailer rather than a subject substring. This is
     exactly the shape that used to collide (see the deleted
     `..._identical_subject_peer_is_ambiguous` test this replaces) -- proving
     this goes red against the reverted subject-match code is the point:
-    reverting the nonce-match back to a subject-substring `git log --grep`
+    reverting the token-match back to a subject-substring `git log --grep`
     reproduces the exact 2-candidate ambiguity this test asserts against."""
     from coordinator_core.ops.ceremony import git_native
 
@@ -1022,10 +1179,9 @@ def test_commit_ac4_real_peer_containing_this_calls_subject_is_not_ambiguous(
         return result
 
     monkeypatch.setattr(git_native, "commit_scoped", _spy_commit_scoped)
-    try:
-        outcome = commit(repo, message=f"{subject}\n", commit_paths=["a.txt"])
-    finally:
-        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+    # Review: staff-eng R1 F5 -- `monkeypatch` already undoes its own patches
+    # at teardown; no manual `finally` restore needed here.
+    outcome = commit(repo, message=f"{subject}\n", commit_paths=["a.txt"])
 
     assert outcome.exit_code == 0
     assert outcome.committed_sha is not None
@@ -1043,8 +1199,8 @@ def test_commit_ac4_real_peer_containing_this_calls_subject_is_not_ambiguous(
     assert outcome.committed_sha == this_call_sha
 
 
-def test_commit_nonce_appears_exactly_once_in_landed_commit_message(tmp_path):
-    """W1: the minted `Commit-Nonce:` trailer appears exactly once in the
+def test_commit_token_appears_exactly_once_in_landed_commit_message(tmp_path):
+    """W1: the minted `Commit-Token:` trailer appears exactly once in the
     landed commit's message -- proves the trailer is actually written to the
     committed message, not merely used as an in-memory match target."""
     repo = _init_repo(tmp_path)
@@ -1053,11 +1209,11 @@ def test_commit_nonce_appears_exactly_once_in_landed_commit_message(tmp_path):
     _git(["commit", "-q", "-m", "seed"], repo)
     _seed_file(repo, "README.md", "changed")
 
-    outcome = commit(repo, message="chore: nonce trailer\n", commit_paths=["README.md"])
+    outcome = commit(repo, message="chore: token trailer\n", commit_paths=["README.md"])
 
     assert outcome.exit_code == 0
     head_message = _commit_message_at_head(repo)
-    assert head_message.count("Commit-Nonce: ") == 1
+    assert head_message.count("Commit-Token: ") == 1
 
 
 def test_commit_landed_true_on_head_unresolvable_verification_failure(tmp_path, monkeypatch):
@@ -1083,20 +1239,24 @@ def test_commit_landed_true_on_head_unresolvable_verification_failure(tmp_path, 
         return git_native.GitResult(returncode=1, stdout="", stderr="fatal: forced")
 
     monkeypatch.setattr(git_native, "rev_parse_head", _fake_rev_parse_head)
-    try:
-        outcome = commit(repo, message="chore: root commit\n", commit_paths=["README.md"])
-    finally:
-        monkeypatch.setattr(git_native, "rev_parse_head", real_rev_parse_head)
+    # Review: staff-eng R1 F5 -- `monkeypatch` already undoes its own patches
+    # at teardown; no manual `finally` restore needed here.
+    outcome = commit(repo, message="chore: root commit\n", commit_paths=["README.md"])
 
     assert outcome.exit_code != 0
     assert outcome.committed_sha is None
     assert outcome.landed is True
-    # The commit genuinely landed -- HEAD moved even though this call
-    # could not confirm it via the (forced-failing) probe.
-    head_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    # The commit genuinely landed -- HEAD moved even though this call could
+    # not confirm it via the (forced-failing) probe. Review: staff-eng R1 F4
+    # -- `head_sha != ""` after a `check=True` rev-parse is near-tautological
+    # (the subprocess would already have raised on an unborn branch); assert
+    # something real: exactly one commit exists (the root commit this call's
+    # own `git commit` created, not a phantom/pre-existing one).
+    rev_count = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
     ).stdout.strip()
-    assert head_sha != ""
+    assert rev_count == "1"
 
 
 def test_commit_ac8_agree_branch_fails_loud_when_no_message_match_found(tmp_path, monkeypatch):
@@ -1127,10 +1287,13 @@ def test_commit_ac8_agree_branch_fails_loud_when_no_message_match_found(tmp_path
     assert outcome.landed is True
     # The commit genuinely landed (verification failure, not a commit
     # failure) -- HEAD moved even though this call could not confirm it.
-    head_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    # Review: staff-eng R1 F4 -- assert something real (two commits: seed +
+    # this call's own), not a near-tautological `head_sha != ""`.
+    rev_count = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
     ).stdout.strip()
-    assert head_sha != ""
+    assert rev_count == "2"
 
 
 def test_commit_ac8_agree_branch_fails_loud_on_ambiguous_message_match(tmp_path, monkeypatch):
@@ -1375,8 +1538,11 @@ def _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit):
     change), then reports the outcome as `landed=True`/`exit_code=1`/
     `committed_sha=None` -- exactly the shape `commit()`'s own
     verification-failure returns produce, without needing to fabricate a
-    genuinely ambiguous nonce match. Proves the pipeline-level branch, not
-    `commit()`'s own discriminator (W1 already covers that)."""
+    genuinely ambiguous token match. Proves the pipeline-level branch, not
+    `commit()`'s own discriminator (W1 already covers that; a REAL
+    verification failure reaching this branch is separately covered by
+    `test_pipeline_landed_but_unverified_via_genuine_commit_token_match_
+    failure` below, R2 nitpick/testing)."""
 
     def _wrapped(*args, **kwargs):
         outcome = real_commit(*args, **kwargs)
@@ -1443,15 +1609,17 @@ def test_pipeline_landed_but_unverified_skips_rollback_not_by_coincidence(
     tmp_path, monkeypatch
 ):
     """AC2: the `finally` rollback does not run on the landed-but-unverified
-    path. Proven by asserting the working tree is clean AND that the commit
-    that landed is really at HEAD -- if the rollback ran, `git reset` would
-    have reverted `staged_this_call` back to a state that, on this path
-    (unlike the ordinary empty-commit-set no-op), does NOT already match
-    HEAD, since HEAD moved. Reverting `landed = True` on this branch (so the
-    `finally` treats it like an ordinary failure) makes the second assertion
-    below fail: the file would still be tracked in history from the wrapped
-    real commit, but a reset call would additionally be issued -- covered
-    directly by spying on `git_native.reset_paths`."""
+    path. Proven two ways: directly, by spying on `git_native.reset_paths`
+    and asserting it was never called; and independently, by asserting the
+    working tree is clean and the commit that landed is really at HEAD --
+    if the rollback HAD run, `git reset` would have reverted
+    `staged_this_call` back toward HEAD's prior state, which on this path
+    (unlike the ordinary empty-commit-set no-op) does NOT already coincide
+    with the post-commit tree, since HEAD moved. Reverting `landed = True`
+    on this branch (so the `finally` treats it like an ordinary failure)
+    makes `reset_calls == []` fail directly -- a reset call would be
+    issued even though the file is still tracked in history from the
+    wrapped real commit."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -1478,7 +1646,174 @@ def test_pipeline_landed_but_unverified_skips_rollback_not_by_coincidence(
         caller_paths={"tasks/feature/todo.md"},
     )
 
+    # The `reset_paths` spy is the direct proof (nothing rolled back). The
+    # tree-clean + HEAD assertions below are the SECOND, independent proof
+    # the docstring promises: if the `finally` rollback had run, it would
+    # have reset `staged_this_call` back toward HEAD's PRIOR state, which on
+    # this path does not already coincide with the post-commit tree (unlike
+    # the ordinary empty-commit-set no-op) since HEAD moved.
     assert reset_calls == []
+    assert _porcelain(repo) == []
+    assert "tasks/feature/todo.md" in _committed_files_at_head(repo)
+
+
+def test_pipeline_landed_but_unverified_deferred_push_mode_skips_push(tmp_path, monkeypatch):
+    """R2 finding 1, state/review-trail/2026-08-08-landed-commit-close-
+    review/r2-w2.md: the landed-but-unverified branch's `push_mode !=
+    PUSH_MODE_SYNC` early return was untested -- a future edit moving
+    `landed = True` below it would leave the sync-path tests green while
+    rolling back a landed commit's staged paths in deferred mode. Asserts
+    `pushed is None`, `push is None`, `sha_unverified is True`, and (via the
+    `reset_paths` spy) that no rollback was issued.
+
+    Red proof: commenting out this branch's early `return` (so it falls
+    through to the sync push call below) makes `result.push` non-None and
+    `reset_calls` unchanged but `pushed` a real bool instead of `None` --
+    confirmed by temporary local revert, see run-report."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    reset_calls = []
+    real_reset_paths = commit_pipeline_mod.git_native.reset_paths
+
+    def _spy_reset_paths(*args, **kwargs):
+        reset_calls.append((args, kwargs))
+        return real_reset_paths(*args, **kwargs)
+
+    monkeypatch.setattr(commit_pipeline_mod.git_native, "reset_paths", _spy_reset_paths)
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: unverified landing deferred push",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_DEFERRED,
+    )
+
+    assert result.commit_failed is False
+    assert result.sha_unverified is True
+    assert result.committed_sha is None
+    assert result.pushed is None
+    assert result.push is None
+    assert result.integrity_breach is False
+    assert reset_calls == []
+    assert _porcelain(repo) == []
+    assert "tasks/feature/todo.md" in _committed_files_at_head(repo)
+
+
+def test_pipeline_landed_but_unverified_failed_push_reports_integrity_breach(
+    tmp_path, monkeypatch
+):
+    """R2 finding 0 + finding 2, state/review-trail/2026-08-08-landed-commit-
+    close-review/r2-w2.md: a FAILED push (not merely a no-remote skip) on
+    the landed-but-unverified sync path must report `integrity_breach=True`
+    -- a durable, unpushed, unnameable commit on a shared branch is the
+    worst outcome this plan exists to surface. Pre-fix this reported
+    `integrity_breach=False` unconditionally on this branch (`committed_sha
+    is None` made the old `committed_sha is not None and pushed is False`
+    formula always False here regardless of `pushed`).
+
+    Red proof: reverting `integrity_breach=(pushed is False)` back to the
+    unconditional `integrity_breach=False` on this branch makes this test's
+    final assertion fail -- confirmed by temporary local revert, see
+    run-report."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    failing_push_outcome = commit_pipeline_mod.PushOutcome(
+        exit_code=1, failed=["push: simulated rejection, retries exhausted"]
+    )
+    monkeypatch.setattr(
+        commit_pipeline_mod, "push_with_retry", lambda root, **kw: failing_push_outcome
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: unverified landing failed push",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.commit_failed is False
+    assert result.sha_unverified is True
+    assert result.committed_sha is None
+    assert result.push is failing_push_outcome
+    assert result.pushed is False
+    assert result.diagnostics and any(
+        "simulated rejection" in d for d in result.diagnostics
+    )
+    assert result.integrity_breach is True
+
+
+def test_pipeline_landed_but_unverified_via_genuine_commit_token_match_failure(
+    tmp_path, monkeypatch
+):
+    """R2 nitpick/testing, state/review-trail/2026-08-08-landed-commit-close-
+    review/r2-w2.md: every other landed-but-unverified test above drives
+    `run_commit_pipeline` through `_monkeypatch_commit_landed_but_unverified`,
+    which fabricates the `landed=True`/`exit_code=1`/`committed_sha=None`
+    shape via `dataclasses.replace()` on an already-succeeded `commit()`
+    call -- nothing in those tests proves a REAL `commit()` verification
+    failure (an actually zero-or-ambiguous `Commit-Token:` match) reaches
+    this pipeline branch with `landed=True`. This test closes that gap: it
+    lets `commit_pipeline_mod.commit()` run completely for real, and forces
+    ONLY the token-match `git log --grep` call
+    (`git_native.log_grep`) it makes internally to report zero candidates --
+    the same technique `test_commit_ac8_agree_branch_fails_loud_when_no_
+    message_match_found` already uses to prove `commit()`'s OWN
+    discriminator (W1); this test proves the PIPELINE branch consumes that
+    real discriminator correctly, end to end.
+
+    Red proof: reverting the `commit_outcome.landed` split in
+    `run_commit_pipeline` (treating every non-zero `exit_code` as a plain
+    failure, as before W2) makes `result.commit_failed` True and
+    `result.sha_unverified` False instead -- confirmed by temporary local
+    revert, see run-report."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    monkeypatch.setattr(
+        git_native,
+        "log_grep",
+        lambda *a, **kw: git_native.GitResult(returncode=0, stdout="", stderr=""),
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: genuine token match failure",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    # The real `git commit` genuinely landed (history changed) even though
+    # `commit()`'s own token-match verification found zero candidates.
+    assert result.commit_failed is False
+    assert result.sha_unverified is True
+    assert result.committed_sha is None
+    assert result.commit is not None
+    assert result.commit.landed is True
+    assert _porcelain(repo) == []
+    assert "tasks/feature/todo.md" in _committed_files_at_head(repo)
 
 
 def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
@@ -1716,6 +2051,404 @@ def test_pipeline_directory_pathspec_leaves_index_completely_clean(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# push_with_retry -- branch policy (C1, 2026-08-08, docs/plans/2026-08-08-
+# the-push-leg-that-never-asked-which-branch.md): consult
+# auto_push.branch_gate() before ever calling git_native.push(), so a
+# non-work/* branch (main included) is declined rather than silently
+# pushed. All three tests configure a remote via a monkeypatched
+# `git_native.remote()` so execution actually reaches the new predicate
+# instead of short-circuiting on the pre-existing no-remote skip.
+# ---------------------------------------------------------------------------
+
+
+def test_push_with_retry_declines_non_work_branch(tmp_path, monkeypatch):
+    """A policy decline on a non-`work/*` branch (e.g. `main`) must return
+    `exit_code=0`, carry `push:branch-policy` plus the verbatim
+    `branch_gate` message, and never call `git_native.push`."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    # _init_repo leaves the repo on whatever init.defaultBranch names; force
+    # a known non-work/* name so this test does not depend on box config.
+    _git(["branch", "-m", "main"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.skipped == ["push:branch-policy"]
+    assert outcome.message
+    assert "main" in outcome.message
+    assert push_calls == []
+
+
+def test_push_with_retry_branch_policy_decline_prints_gate_message_to_stderr(tmp_path, monkeypatch, capsys):
+    """AC6: a policy decline must print `branch_gate`'s message verbatim to
+    stderr AT the moment of the decline -- asserted against the exact string
+    `branch_gate` returned, not a substring authored in this test."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+    from coordinator_core.hooks import auto_push
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "main"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    _, expected_message = auto_push.branch_gate("main")
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+    captured = capsys.readouterr()
+
+    assert outcome.message == expected_message
+    assert captured.err.strip() == expected_message
+
+
+def test_push_with_retry_unresolvable_branch_declines_not_pushes(tmp_path, monkeypatch):
+    """A detached HEAD (or any `resolve_branch` failure) must decline under
+    a DISTINCT `push:branch-unresolvable` marker rather than silently
+    proceeding to push a branch it cannot name."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+    from coordinator_core.hooks import auto_push
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.skipped == ["push:branch-unresolvable"]
+    assert outcome.message is None
+    assert push_calls == []
+
+
+def test_push_with_retry_unresolvable_branch_prints_its_own_decline_line(tmp_path, monkeypatch, capsys):
+    """AC6: an unresolvable branch has no `branch_gate` message to carry
+    (`PushOutcome.message` is `None`) -- this decline must still print an
+    operator-visible line, authored here rather than carried from the gate,
+    naming the unresolvable-branch condition."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+    captured = capsys.readouterr()
+
+    assert outcome.skipped == ["push:branch-unresolvable"]
+    assert "unresolvable" in captured.err.lower() or "could not be resolved" in captured.err.lower()
+    assert captured.err.strip() != ""
+
+
+def test_push_with_retry_work_branch_still_pushes(tmp_path, monkeypatch, capsys):
+    """A `work/*` branch must push exactly as before the branch predicate
+    was added -- the gate is a pass-through, not a new obstacle, for the
+    doctrine-compliant case. Amended (C3, AC6) to additionally assert NO
+    decline line is printed on this path -- push_with_retry's stderr is not
+    silent in general any more (the two decline arms print), so this test
+    now pins the successful-push case specifically, rather than relying on
+    module-wide stderr silence."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+    captured = capsys.readouterr()
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert outcome.skipped == []
+    assert len(push_calls) == 1
+    assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# _emit_push_policy_line -- C3, AC6/AC14: single owner of every push-policy
+# operator line. The "override-exercised" arm is not called by any C3
+# production call site (C4a wires it) -- these tests call it directly, per
+# the C3 dispatch brief's instruction to author it as a real, tested,
+# callable arm ahead of that call site landing.
+# ---------------------------------------------------------------------------
+
+
+def test_emit_push_policy_line_override_exercised_names_branch_and_reason(capsys):
+    """The override arm, called directly, must print a line containing the
+    branch, an unambiguous "overridden" signal, and the supplied reason."""
+    capsys.readouterr()
+    commit_pipeline_mod._emit_push_policy_line(
+        "override-exercised", branch="main", reason="hotfix: prod outage"
+    )
+    captured = capsys.readouterr()
+
+    assert "main" in captured.err
+    assert "overridden" in captured.err.lower()
+    assert "hotfix: prod outage" in captured.err
+    assert captured.out == ""
+
+
+def test_emit_push_policy_line_override_exercised_without_reason(capsys):
+    """A caller-supplied reason is optional -- the line must still name the
+    branch and the override, just without a reason clause."""
+    capsys.readouterr()
+    commit_pipeline_mod._emit_push_policy_line("override-exercised", branch="release/1.0")
+    captured = capsys.readouterr()
+
+    assert "release/1.0" in captured.err
+    assert "overridden" in captured.err.lower()
+
+
+# ---------------------------------------------------------------------------
+# push_with_retry / run_commit_pipeline -- allow_protected_branch (C4a,
+# AC8/AC14/AC15): the argument is threaded and its skip-the-gate mechanism
+# is real, but it is inert for every EXISTING caller because none passes
+# `True` -- default behaviour (both the decline and the work/* pass-through
+# tests above) is asserted byte-identical, unchanged by this chunk.
+#
+# C7a correction (2026-08-08): the surrounding comment previously said a
+# literal `main`-push assertion was deliberately deferred to a C4b-scoped
+# test, on the theory that C4a's override was accepted-but-inert. Verified
+# against HEAD at C7a time: C4a's executor implemented the override as
+# FULLY FUNCTIONAL -- `push_with_retry`'s `should_push`/`allow_protected_
+# branch` branch (this module, `push_with_retry`) already skips the gate
+# and pushes when `True`, unconditionally, not gated behind any later
+# default-flip chunk. `test_push_with_retry_literal_main_override_pushes`
+# below asserts the real behaviour rather than the deferred one the stale
+# comment described.
+# ---------------------------------------------------------------------------
+
+
+def test_push_with_retry_literal_main_override_pushes(tmp_path, monkeypatch, capsys):
+    """AC8/AC14 (C7a): `allow_protected_branch=True` on the literal `main`
+    branch actually pushes -- not merely a synthetic non-`work/*` name.
+    Verified against HEAD at C7a dispatch time: C4a's override is fully
+    functional (unconditional on `allow_protected_branch`, not gated behind
+    a later default-flip chunk) -- see the correction note above this test."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "main"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(
+        repo,
+        allow_protected_branch=True,
+        protected_branch_override_reason="merging-to-main Step 10 item 5",
+    )
+    captured = capsys.readouterr()
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert len(push_calls) == 1
+    assert "main" in captured.err
+    assert "overridden" in captured.err.lower()
+
+
+def test_push_with_retry_default_declines_non_work_branch_unchanged(tmp_path, monkeypatch):
+    """AC15: with `allow_protected_branch` accepted but not passed, a
+    non-`work/*` branch still declines exactly as it did before this chunk
+    -- the new keyword-only arguments are byte-identical no-ops for every
+    caller that does not pass them."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "release/1.0"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.skipped == ["push:branch-policy"]
+    assert push_calls == []
+
+
+def test_push_with_retry_override_exercised_skips_gate_and_prints(tmp_path, monkeypatch, capsys):
+    """AC8/AC14: `allow_protected_branch=True` on a branch the gate would
+    have declined skips `branch_gate` entirely, lets the push proceed, and
+    prints the `override-exercised` line naming the branch and the supplied
+    reason -- the override path is never silent."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "release/1.0"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    push_calls = []
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(
+        repo,
+        allow_protected_branch=True,
+        protected_branch_override_reason="release-notes bookkeeping",
+    )
+    captured = capsys.readouterr()
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert len(push_calls) == 1
+    assert "release/1.0" in captured.err
+    assert "overridden" in captured.err.lower()
+    assert "release-notes bookkeeping" in captured.err
+
+
+def test_push_with_retry_override_on_work_branch_prints_nothing(tmp_path, monkeypatch, capsys):
+    """A `work/*` branch would have passed the gate regardless -- passing
+    `allow_protected_branch=True` here overrides nothing, so no
+    override-exercised line prints (an override line on every `work/*`
+    push would be noise, not signal)."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    capsys.readouterr()
+    outcome = commit_pipeline_mod.push_with_retry(repo, allow_protected_branch=True)
+    captured = capsys.readouterr()
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert captured.err == ""
+
+
+def test_run_commit_pipeline_accepts_override_keywords_without_error(tmp_path, monkeypatch):
+    """AC8/AC15: `run_commit_pipeline` accepts both new keyword-only
+    arguments and threads them through without altering its own signature
+    contract for existing positional/keyword callers."""
+    import inspect
+
+    sig = inspect.signature(commit_pipeline_mod.run_commit_pipeline)
+    assert "allow_protected_branch" in sig.parameters
+    assert sig.parameters["allow_protected_branch"].default is False
+    assert sig.parameters["allow_protected_branch"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert "protected_branch_override_reason" in sig.parameters
+    assert sig.parameters["protected_branch_override_reason"].default is None
+    assert (
+        sig.parameters["protected_branch_override_reason"].kind
+        == inspect.Parameter.KEYWORD_ONLY
+    )
+
+
+def test_run_commit_pipeline_no_claude_klabauter_caller_passes_override():
+    """AC8: grep-evidenced -- no `run_commit_pipeline` call site in this
+    repo passes `allow_protected_branch`. Adding a pass-through here would
+    be exactly how the default gets routed around; this pins the negative
+    space so a future caller doing so is a deliberate, reviewable diff."""
+    pipeline_module_path = Path(commit_pipeline_mod.__file__).resolve()
+    repo_root = pipeline_module_path.parents[3]
+    hits = []
+    for path in repo_root.rglob("*.py"):
+        if "tests" in path.parts or path.resolve() == pipeline_module_path:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "run_commit_pipeline(" in text and "allow_protected_branch" in text:
+            hits.append(str(path))
+    assert hits == []
+
+
+# ---------------------------------------------------------------------------
 # _is_push_reject -- 2026-08-07 fix: converge onto auto_push.classify_error()
 # instead of a bare-substring marker tuple, so a GH013 push-protection
 # refusal (which still contains "failed to push some refs") is never
@@ -1749,11 +2482,23 @@ def test_is_push_reject_genuine_non_fast_forward_is_retried():
 def test_push_with_retry_gh013_fails_loud_without_fetch_or_rebase(tmp_path, monkeypatch):
     """End-to-end: `push_with_retry` must surface a GH013 rejection as a
     hard failure on the FIRST attempt, never spinning the fetch+rebase
-    cycle (asserted by the fetch/rebase spies never being called)."""
+    cycle (asserted by the fetch/rebase spies never being called).
+
+    Checked out onto a `work/*` branch (2026-08-08 C1 amendment): `git init`
+    lands on whatever `init.defaultBranch` names -- `main` on most boxes --
+    and this test predates the branch-policy gate C1 adds to
+    `push_with_retry()`. Left on the default branch, the new gate would
+    decline the push before it ever reached the mocked `git_native.push`,
+    which would make this test pass for the wrong reason (a policy decline
+    looks like a benign early return, not the GH013 hard-failure this test
+    actually exercises). `work/*` keeps the branch predicate a pass-through
+    so the GH013 behaviour under test is what's asserted.
+    """
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
     repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
@@ -2087,3 +2832,780 @@ def test_commit_failure_bare_exit_code_preserved_for_downstream_quiet_rendering(
 
     assert outcome.exit_code != 0
     assert outcome.stderr == "exit_code=1"
+
+
+def test_ends_with_trailer_block_false_for_subject_only_type_text_message():
+    """A subject-only `type: text` message ("fix: a thing\\n") is "Key:
+    value" shaped but is the message's FIRST (and only) paragraph, never a
+    trailer block -- `_ends_with_trailer_block` must return False so
+    `commit()`'s token mint starts its own paragraph (blank line before the
+    trailer) instead of joining the subject line into one two-line
+    paragraph, which git's trailer parser then refuses to parse at all
+    (verified below via `git interpret-trailers --parse`, not just the
+    predicate's boolean -- this is the shape that slipped through review)."""
+    from coordinator_core.ops.ceremony.commit_pipeline import _ends_with_trailer_block
+
+    subject_only = "fix: a thing\n"
+    assert _ends_with_trailer_block(subject_only) is False
+
+    token_line = "Commit-Token: deadbeefcafe"
+    if _ends_with_trailer_block(subject_only):
+        out_msg = subject_only + token_line + "\n"
+    else:
+        out_msg = subject_only + "\n" + token_line + "\n"
+
+    parsed = _parse_trailers_via_git(out_msg)
+    assert "Commit-Token" in parsed
+
+
+def test_ends_with_trailer_block_false_for_conventional_commit_subjects():
+    """Broader sweep of subject-only shapes that are all "Key: value"
+    shaped at the LINE level but are the message's only paragraph -- none
+    of them are trailer blocks."""
+    from coordinator_core.ops.ceremony.commit_pipeline import _ends_with_trailer_block
+
+    assert _ends_with_trailer_block("wsc: subject only") is False
+    assert _ends_with_trailer_block("fix: a thing\n") is False
+    assert _ends_with_trailer_block("docs: stop describing X\n") is False
+    assert _ends_with_trailer_block("plan(x): y\n") is False
+    assert _ends_with_trailer_block("Just a plain subject\n") is False
+    # A genuine trailer block (subject + blank line + trailer) still True.
+    assert _ends_with_trailer_block("sub\n\nSession-Id: a\n") is True
+
+
+def test_token_join_normalizes_trailing_newlines_on_a_trailer_block():
+    """A message ending in a trailer block AND a trailing blank line must
+    still have the `Commit-Token:` trailer joined to that block, with no
+    blank line between.
+
+    Regression: `commit()`'s join branch used to read
+    `base = message if message.endswith("\\n") else message + "\\n"`, which
+    keeps BOTH newlines when the message ends "\\n\\n" -- so the branch whose
+    whole purpose is to avoid a paragraph break introduced one anyway.
+
+    That shape is not exotic, it is the `-F <file>` path:
+    `scoped-git-commit` passes the message file's whole text (trailing
+    newline included) as `subject`, and `compose_message()` returns
+    `subject + "\\n"`. Landed instances: b1e0881d39a7 and 3301a8d1f68c, whose
+    `Deliverable-Id:` trailers read EMPTY to
+    `%(trailers:key=Deliverable-Id,valueonly)` and so cannot be joined to
+    their plan by `close_out_and_stamp`.
+    """
+    from coordinator_core.ops.ceremony.commit_message import _ends_with_trailer_block
+
+    message = "subject\n\nprose.\n\nDeliverable-Id: dlv-abc123\n\n"
+    assert _ends_with_trailer_block(message) is True
+
+    base = message.rstrip("\n") + "\n"
+    composed = base + "Commit-Token: deadbeefcafe\n"
+
+    assert "dlv-abc123\nCommit-Token: " in composed
+    assert "dlv-abc123\n\nCommit-Token: " not in composed
+    # The last paragraph -- git's trailer block -- carries BOTH trailers.
+    last_paragraph = composed.rstrip("\n").split("\n\n")[-1].splitlines()
+    assert "Deliverable-Id: dlv-abc123" in last_paragraph
+    assert "Commit-Token: deadbeefcafe" in last_paragraph
+
+
+# ---------------------------------------------------------------------------
+# C2 -- push_status canonical vocabulary, and integrity_breach re-derived off
+# it rather than off `pushed is False` (docs/plans/2026-08-08-the-push-leg-
+# that-never-asked-which-branch.md, C2).
+# ---------------------------------------------------------------------------
+
+
+def test_derive_pushed_tristate_none_on_branch_policy_decline():
+    """AC9/AC4: `derive_pushed_tristate` must return `None` -- not `True`,
+    the pre-C2 known-wrong behaviour C1's docstring flagged -- on a
+    `push:branch-policy` decline.
+
+    Red proof: reverting the new `push:branch-policy`/`push:branch-
+    unresolvable` branch in `derive_pushed_tristate` back to the pre-C2
+    shape (falls through to `return True`) makes this assert `True`
+    instead."""
+    decline = commit_pipeline_mod.PushOutcome(
+        exit_code=0,
+        skipped=["push:branch-policy"],
+        message="coordinator-auto-push: skipping main (not a work/* branch; doctrine: work/* only)",
+    )
+    assert commit_pipeline_mod.derive_pushed_tristate(decline) is None
+
+
+def test_derive_pushed_tristate_none_on_unresolvable_branch_decline():
+    """Same as above, for the distinct `push:branch-unresolvable` marker."""
+    decline = commit_pipeline_mod.PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
+    assert commit_pipeline_mod.derive_pushed_tristate(decline) is None
+
+
+def test_derive_push_status_mapping():
+    """`derive_push_status` maps each `PushOutcome` shape onto the
+    canonical vocabulary named in `commit_pipeline.py`'s module comment."""
+    mod = commit_pipeline_mod
+    assert (
+        mod.derive_push_status(mod.PushOutcome(exit_code=0, skipped=["push:branch-policy"]))
+        == mod.PUSH_STATUS_DECLINED
+    )
+    assert (
+        mod.derive_push_status(
+            mod.PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
+        )
+        == mod.PUSH_STATUS_DECLINED
+    )
+    assert (
+        mod.derive_push_status(mod.PushOutcome(exit_code=0, skipped=["push:no-remote"]))
+        == mod.PUSH_STATUS_NO_REMOTE
+    )
+    assert (
+        mod.derive_push_status(mod.PushOutcome(exit_code=0, acted=["push"]))
+        == mod.PUSH_STATUS_PUSHED
+    )
+    assert (
+        mod.derive_push_status(mod.PushOutcome(exit_code=1, failed=["git push: rejected"]))
+        == mod.PUSH_STATUS_FAILED
+    )
+    assert mod.derive_push_status(None) == mod.PUSH_STATUS_NOT_ATTEMPTED
+
+
+def test_pipeline_normal_path_branch_policy_decline_push_status_and_no_breach(
+    tmp_path, monkeypatch
+):
+    """AC4/AC9, normal (non-`sha_unverified`) path: a branch-policy decline
+    must report `push_status="declined"`, `pushed=None` (never the pre-C2
+    `True`), and `integrity_breach=False` -- a decline is not a breach.
+
+    Red proof: reverting `derive_pushed_tristate` to its pre-C2 shape (no
+    `push:branch-policy`/`push:branch-unresolvable` branch) makes the
+    `pushed is None` assertion below fail -- it falls through to `True`
+    instead, which is the exact known-wrong behaviour C1's docstring
+    flagged."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    decline = commit_pipeline_mod.PushOutcome(
+        exit_code=0,
+        skipped=["push:branch-policy"],
+        message="coordinator-auto-push: skipping main (not a work/* branch; doctrine: work/* only)",
+    )
+    monkeypatch.setattr(commit_pipeline_mod, "push_with_retry", lambda root, **kw: decline)
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: declined push, normal path",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.commit_failed is False
+    assert result.committed_sha is not None
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_DECLINED
+    assert result.pushed is None
+    assert result.integrity_breach is False
+
+
+def test_pipeline_normal_path_unresolvable_branch_decline_push_status_and_no_breach(
+    tmp_path, monkeypatch
+):
+    """Same as above for `push:branch-unresolvable`."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    decline = commit_pipeline_mod.PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
+    monkeypatch.setattr(commit_pipeline_mod, "push_with_retry", lambda root, **kw: decline)
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: declined push, unresolvable branch",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_DECLINED
+    assert result.pushed is None
+    assert result.integrity_breach is False
+
+
+def test_pipeline_normal_path_push_failed_reports_push_status_failed_and_breach(
+    tmp_path, monkeypatch
+):
+    """A genuine push failure on the normal path must still report
+    `push_status="push-failed"` and `integrity_breach=True` -- C2 must not
+    weaken the genuine-failure case while fixing the decline case."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    failing_push_outcome = commit_pipeline_mod.PushOutcome(
+        exit_code=1, failed=["push: simulated rejection, retries exhausted"]
+    )
+    monkeypatch.setattr(
+        commit_pipeline_mod, "push_with_retry", lambda root, **kw: failing_push_outcome
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: failed push, normal path",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_FAILED
+    assert result.pushed is False
+    assert result.integrity_breach is True
+
+
+def test_pipeline_landed_but_unverified_branch_policy_decline_no_breach(tmp_path, monkeypatch):
+    """AC4/AC9, `sha_unverified` path: a branch-policy decline must report
+    `push_status="declined"`, `pushed=None`, and `integrity_breach=False` --
+    same rule as the normal path, at the OTHER return site
+    (`integrity_breach=(push_status == PUSH_STATUS_FAILED)`).
+
+    Red proof: reverting that site's predicate back to `(pushed is False)`
+    would report `integrity_breach=False` for the WRONG reason (`pushed` was
+    `True` pre-C2) -- the load-bearing assertion here is `push_status` and
+    `pushed` themselves, not `integrity_breach` alone."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    decline = commit_pipeline_mod.PushOutcome(
+        exit_code=0,
+        skipped=["push:branch-policy"],
+        message="coordinator-auto-push: skipping main (not a work/* branch; doctrine: work/* only)",
+    )
+    monkeypatch.setattr(commit_pipeline_mod, "push_with_retry", lambda root, **kw: decline)
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: declined push, unverified sha path",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.sha_unverified is True
+    assert result.committed_sha is None
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_DECLINED
+    assert result.pushed is None
+    assert result.integrity_breach is False
+
+
+def test_pipeline_landed_but_unverified_push_failed_still_reports_breach(tmp_path, monkeypatch):
+    """Companion regression guard to the pre-existing
+    `test_pipeline_landed_but_unverified_failed_push_reports_integrity_breach`
+    -- re-asserts `push_status="push-failed"` alongside the pre-existing
+    `integrity_breach is True` assertion, so a future edit collapsing
+    `push_status` derivation cannot silently regress while that older test
+    (which does not know about `push_status`) stays green."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    real_commit = commit_pipeline_mod.commit
+    _monkeypatch_commit_landed_but_unverified(monkeypatch, real_commit)
+
+    failing_push_outcome = commit_pipeline_mod.PushOutcome(
+        exit_code=1, failed=["push: simulated rejection, retries exhausted"]
+    )
+    monkeypatch.setattr(
+        commit_pipeline_mod, "push_with_retry", lambda root, **kw: failing_push_outcome
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: unverified landing failed push, push_status",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_FAILED
+    assert result.integrity_breach is True
+
+
+def _parse_trailers_via_git(message: str) -> list[str]:
+    """Writes `message` to a temp file and asks git's own trailer parser
+    what it recognises -- ground truth for whether a trailer got orphaned,
+    not a re-implementation of the predicate's branch logic."""
+    import tempfile
+
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, newline="\n"
+    ) as fh:
+        fh.write(message)
+        path = fh.name
+    try:
+        result = subprocess.run(
+            ["git", "interpret-trailers", "--parse", path],
+            capture_output=True,
+            text=True,
+            creationflags=no_window,
+        )
+    finally:
+        Path(path).unlink(missing_ok=True)
+    return [ln.split(":", 1)[0] for ln in result.stdout.splitlines() if ln.strip()]
+
+
+# ---------------------------------------------------------------------------
+# push_with_retry -- pushed-range reporting (C3b, AC7, 2026-08-08,
+# docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md): on a
+# landed push, `PushOutcome`/`PipelineResult` now report the commit count
+# and `<old-sha>..<new-sha>` range this call actually pushed, from real
+# `git_native.rev_parse`/`rev_list_count` reads against a real local bare
+# remote -- not mocked git output, since the whole point under test is what
+# the real rev-parse/rev-list calls resolve to.
+# ---------------------------------------------------------------------------
+
+
+def _init_bare_remote(tmp_path: Path) -> Path:
+    bare = tmp_path / "bare.git"
+    _git(["init", "-q", "--bare", str(bare)], tmp_path)
+    return bare
+
+
+def test_push_with_retry_landed_push_reports_count_and_range(tmp_path):
+    """A push that lands with a pre-existing upstream tracking ref must
+    report a real `<old>..<new>` range and a correct commit count."""
+    bare = _init_bare_remote(tmp_path)
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["push", "-q", "-u", "origin", "work/x"], repo)
+    old_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    _seed_file(repo, "README.md", "second change")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "second"], repo)
+    new_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert outcome.pushed_range == f"{old_sha}..{new_sha}"
+    assert outcome.pushed_count == 1
+
+
+def test_push_with_retry_first_push_no_upstream_reports_unknown_not_zero(tmp_path, monkeypatch):
+    """A first push with no resolvable upstream tracking ref must still
+    land, but report the count/range as the documented explicit-unknown
+    sentinel -- never omitted, never zero. `rev_parse_upstream` is
+    monkeypatched to the real "no upstream configured" failure shape
+    (`git`'s own bare `git push` requires `-u`/an already-tracked branch to
+    land at all -- production's `git_native.push()` never passes `-u`, so a
+    genuine from-scratch first push is exercised at the `rev_parse_upstream`
+    boundary here rather than by omitting `-u` from a real push, which
+    would fail for an unrelated reason)."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    bare = _init_bare_remote(tmp_path)
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["push", "-q", "-u", "origin", "work/x"], repo)
+
+    monkeypatch.setattr(
+        git_native,
+        "rev_parse_upstream",
+        lambda *a, **kw: GitResult(returncode=128, stdout="", stderr="fatal: no upstream configured"),
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert outcome.pushed_range is None
+    assert outcome.pushed_count is None
+
+
+def test_push_with_retry_decline_issues_no_rev_parse_call(tmp_path, monkeypatch):
+    """A branch-policy decline must never pay for the AC7 rev-parse reads --
+    that information a decline will never report (Finding 5 ordering)."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "main"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    rev_parse_upstream_calls = []
+    monkeypatch.setattr(
+        git_native,
+        "rev_parse_upstream",
+        lambda *a, **kw: rev_parse_upstream_calls.append(a) or GitResult(returncode=1, stdout="", stderr=""),
+    )
+    rev_parse_calls = []
+    monkeypatch.setattr(
+        git_native,
+        "rev_parse",
+        lambda *a, **kw: rev_parse_calls.append(a) or GitResult(returncode=1, stdout="", stderr=""),
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.skipped == ["push:branch-policy"]
+    assert rev_parse_upstream_calls == []
+    assert rev_parse_calls == []
+
+
+def test_push_with_retry_no_remote_issues_no_rev_parse_call(tmp_path, monkeypatch):
+    """A no-remote skip must likewise never pay for the AC7 rev-parse reads."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    rev_parse_upstream_calls = []
+    monkeypatch.setattr(
+        git_native,
+        "rev_parse_upstream",
+        lambda *a, **kw: rev_parse_upstream_calls.append(a) or GitResult(returncode=1, stdout="", stderr=""),
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.skipped == ["push:no-remote"]
+    assert rev_parse_upstream_calls == []
+
+
+def test_push_with_retry_rebase_retry_range_excludes_concurrent_commit(tmp_path):
+    """A push that lands only after a reject-triggered fetch+rebase retry
+    must report a range covering ONLY the commits this call itself pushed --
+    NOT the commits a concurrent peer pushed to the same branch in between,
+    which already reached the remote via that peer's own push."""
+    bare = _init_bare_remote(tmp_path)
+
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["push", "-q", "-u", "origin", "work/x"], repo)
+
+    # A concurrent peer clones the same remote, adds its own commit, and
+    # pushes it -- advancing origin/work/x past what `repo` has fetched.
+    peer = tmp_path / "peer"
+    _git(["clone", "-q", "--branch", "work/x", str(bare), str(peer)], tmp_path)
+    _git(["config", "user.email", "peer@t.example"], peer)
+    _git(["config", "user.name", "peer"], peer)
+    _seed_file(peer, "PEER.md", "peer content")
+    _git(["add", "--", "PEER.md"], peer)
+    _git(["commit", "-q", "-m", "peer commit"], peer)
+    peer_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(peer), capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(["push", "-q", "origin", "work/x"], peer)
+
+    # Back in `repo`, unaware of the peer's push, add this call's own
+    # commit -- pushing it will be rejected (non-fast-forward) first.
+    _seed_file(repo, "README.md", "own change")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "own commit"], repo)
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    # `own_new_sha` is read AFTER `push_with_retry` -- the rebase step
+    # rewrites this commit onto the peer's tip, so its sha post-rebase
+    # differs from the pre-rebase sha captured above.
+    own_new_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    # The reported range's lower bound must be the peer's commit (the tip
+    # this call fetched right before rebasing), never the pre-loop tip from
+    # before the peer's push -- and its count must be 1 (this call's own
+    # commit only), never 2 (which would double-count the peer's).
+    assert outcome.pushed_range == f"{peer_sha}..{own_new_sha}"
+    assert outcome.pushed_count == 1
+
+
+def test_pipeline_landed_push_populates_pushed_range_and_count(tmp_path):
+    """`run_commit_pipeline`'s own `PipelineResult` (not just the inner
+    `PushOutcome`) must carry `pushed_range`/`pushed_count` through on a
+    landed push, plus a diagnostics line naming what was pushed."""
+    bare = _init_bare_remote(tmp_path)
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["push", "-q", "-u", "origin", "work/x"], repo)
+    old_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: C3b pushed-range",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+    new_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_PUSHED
+    assert result.pushed_range == f"{old_sha}..{new_sha}"
+    assert result.pushed_count == 1
+    assert any("push landed" in d for d in result.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# C7b (docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md) --
+# `run_commit_pipeline`'s new `deliverable_id` kwarg threads through
+# `commit()` to `git_native.commit_scoped()` and lands as this commit's
+# `Deliverable-Id:` trailer. Read the trailer OFF THE LANDED COMMIT (AC16),
+# never off `trailer_args`/argv in isolation -- the same discipline
+# `test_commit_scoped.py`'s own AC17 coverage uses.
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_deliverable_id_round_trips_onto_landed_commit_trailer(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # `_validate_explicit_deliverable_id` (C7a) resolves an explicit
+    # `deliverable_id` against a `docs/plans/` frontmatter artifact carrying
+    # the same id -- not against this commit's own pathspec (see that
+    # function's own docstring, and `test_commit_scoped.py`'s
+    # `_seed_deliverable_artifact` sibling helper).
+    plans_dir = repo / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    (plans_dir / "seed-plan.md").write_text(
+        "---\ndeliverable_id: dlv-c7btest\n---\n\n# seed plan\n",
+        encoding="utf-8",
+    )
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed plan artifact"], repo)
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: C7b deliverable_id round-trip",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+        deliverable_id="dlv-c7btest",
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.committed_sha is not None
+    assert _trailer_value_at_head(repo, "Deliverable-Id") == "dlv-c7btest"
+
+
+def test_pipeline_op_scope_gate_failure_short_circuits_before_commit(tmp_path):
+    """The op-scope-coverage gate, wired at the gate seam alongside its three
+    siblings: a staged `_registry_map.py` registering an op with no matching
+    `op_scopes._OP_KEY_SCOPE` entry REFUSES the commit -- HEAD unmoved."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    registry_relpath = "coordinator_core/ops/_registry_map.py"
+    op_scopes_relpath = "coordinator_core/op_scopes.py"
+
+    _seed_file(
+        repo,
+        registry_relpath,
+        "from typing import Dict\n\n"
+        'OP_MODULE_MAP: Dict[str, str] = {\n'
+        '    "known.op": "some.module",\n'
+        '    "unclassified.op": "some.module",\n'
+        "}\n",
+    )
+    # `op_scopes.py` need not itself be staged -- read from the worktree
+    # regardless (matches `op_scope_coverage_gate`'s own docstring).
+    _seed_file(
+        repo,
+        op_scopes_relpath,
+        "from typing import Dict\n\n"
+        '_OP_KEY_SCOPE: Dict[str, str] = {\n'
+        '    "known.op": "none",\n'
+        "}\n",
+    )
+
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="feat: register an op",
+        stage_paths=[registry_relpath],
+        caller_paths={registry_relpath},
+    )
+
+    assert result.commit_failed is True
+    assert result.commit is None
+    assert result.push is None
+    assert result.committed_sha is None
+    assert result.op_scope_gate is not None
+    assert result.op_scope_gate.passed is False
+    assert any("unclassified.op" in line for line in result.op_scope_gate.diagnostics)
+    assert any("unclassified.op" in line for line in result.diagnostics)
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head_after == head_before
+
+
+def test_pipeline_op_scope_gate_clean_registry_edit_commits(tmp_path):
+    """An ordinary commit that touches `_registry_map.py` but leaves it fully
+    covered by `_OP_KEY_SCOPE` passes -- the gate must not fire on a clean
+    registry."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    registry_relpath = "coordinator_core/ops/_registry_map.py"
+    op_scopes_relpath = "coordinator_core/op_scopes.py"
+
+    _seed_file(
+        repo,
+        registry_relpath,
+        "from typing import Dict\n\n"
+        'OP_MODULE_MAP: Dict[str, str] = {\n'
+        '    "known.op": "some.module",\n'
+        "}\n",
+    )
+    _seed_file(
+        repo,
+        op_scopes_relpath,
+        "from typing import Dict\n\n"
+        '_OP_KEY_SCOPE: Dict[str, str] = {\n'
+        '    "known.op": "none",\n'
+        "}\n",
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="feat: register a fully-classified op",
+        stage_paths=[registry_relpath],
+        caller_paths={registry_relpath},
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.op_scope_gate is not None
+    assert result.op_scope_gate.passed is True
+    assert result.committed_sha is not None
+
+
+class TestCondenseGitDiagnostic:
+    """Regression guard for the 2026-08-10 incident: four consecutive
+    `scoped-git-commit` refusals reported nothing but CRLF line-ending
+    warnings, hiding the `detect-staged-rollback` pre-commit BLOCK that was
+    the real cause. Head-truncating git's output is what lost the diagnosis.
+    """
+
+    def test_advisory_lines_are_dropped_when_a_real_diagnosis_exists(self):
+        blob = (
+            "warning: in the working copy of 'a.md', LF will be replaced by CRLF\n"
+            "warning: in the working copy of 'b.md', LF will be replaced by CRLF\n"
+            "fatal: pathspec 'c.md' did not match any files\n"
+        )
+        assert condense_git_diagnostic(blob) == "fatal: pathspec 'c.md' did not match any files"
+
+    def test_hint_lines_are_advisory_too(self):
+        blob = "hint: use --force\nerror: failed to push some refs\n"
+        assert condense_git_diagnostic(blob) == "error: failed to push some refs"
+
+    def test_all_advisory_blob_is_preserved_not_emptied(self):
+        blob = "warning: LF will be replaced by CRLF\n"
+        assert condense_git_diagnostic(blob) == "warning: LF will be replaced by CRLF"
+
+    def test_empty_stays_empty_so_the_bare_exit_code_fallback_still_fires(self):
+        assert condense_git_diagnostic("") == ""
+        assert condense_git_diagnostic("   \n  ") == ""
+
+    def test_oversized_output_keeps_the_tail_where_the_verdict_lands(self):
+        body = "\n".join(f"  offending path {i}" for i in range(400))
+        blob = f"detect-staged-rollback: BLOCKED\n{body}\npre-commit: BLOCKED -- gate [staged-rollback]"
+        condensed = condense_git_diagnostic(blob, limit=200)
+        assert condensed.startswith("...(truncated) ")
+        assert condensed.endswith("pre-commit: BLOCKED -- gate [staged-rollback]")
+
+    def test_a_pre_commit_block_survives_a_large_crlf_warning_preamble(self):
+        preamble = "\n".join(
+            f"warning: in the working copy of 'archive/f{i}.md', "
+            "LF will be replaced by CRLF the next time Git touches it"
+            for i in range(20)
+        )
+        blob = f"{preamble}\ndetect-staged-rollback: BLOCKED -- 20 staged path(s)"
+        assert condense_git_diagnostic(blob) == "detect-staged-rollback: BLOCKED -- 20 staged path(s)"
+
+
+def test_make_pipeline_result_covers_every_field():
+    """The drift guard for `fixtures/pipeline_result.py`'s `_FIELD_DEFAULTS`.
+
+    That helper exists to retire a defect class: `PipelineResult` gained
+    `carry_gate` (6a4d013d2) and `op_scope_gate` (b7b650bc6) on consecutive
+    days, and every hand-built test double had to be swept by hand both
+    times. A newly-added REQUIRED field still raises inside the helper, which
+    is loud and correct. A newly-added field carrying a DEFAULT would not --
+    the double would silently take a value nobody in this package chose. This
+    test is what fires on that case, and it fails in the same edit that adds
+    the field rather than in an unrelated assertion much later.
+    """
+    from .fixtures.pipeline_result import _FIELD_DEFAULTS
+
+    declared = {f.name for f in dataclasses.fields(commit_pipeline_mod.PipelineResult)}
+    # `diagnostics` is owned by the helper's own per-call fresh-list handling,
+    # never by the shared default map -- see `make_pipeline_result`.
+    assert set(_FIELD_DEFAULTS) | {"diagnostics"} == declared, (
+        "PipelineResult's fields and fixtures/pipeline_result.py's "
+        "_FIELD_DEFAULTS have drifted -- add the new field to _FIELD_DEFAULTS "
+        "with a deliberate default so ceremony test doubles do not silently "
+        "inherit one"
+    )

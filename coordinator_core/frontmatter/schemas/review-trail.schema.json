@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/review-trail.schema.json",
   "x-schema-name": "review-trail",
-  "x-schema-version": "1.1.0",
-  "x-bump-class": "nested-field-additive",
-  "x-bump-note": "1.0.0 -> 1.1.0 added the optional `reviewed_paths` array — the path set a scope_kind:diff review actually covered, so a record attests coverage instead of implying it from its sha_range time window.",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "major",
+  "x-bump-note": "1.1.0 -> 1.2.0 closes `scope_kind` from a bare unconstrained string to an explicit enum: [\"diff\", \"plan\", \"integration\"] — the exact set both consumer copies of `_credit_from_kind_partition` (coordinator_core/coverage.py, coordinator_core/ops/review_coverage_core.py) actually handle. This change originated on the vendored copy in claude-klabauter (commit 55cbf4ede) and never reached this SSOT until now: before the bump the schema admitted ANY string — its own description even named \"chunk\" as an example — while the consumer asserted on a closed set, so one hand-authored record with an out-of-set scope_kind (observed: \"chunk\", \"inline-dispatch\") took down the whole coverage gate with an AssertionError before it ever reached a VERDICT line. Classified `major` per this schema's own house vocabulary (a value NARROWING, from unconstrained to closed, is the more restrictive direction — a document valid under 1.1.0 with e.g. scope_kind:\"chunk\" no longer validates under 1.2.0). Fixed the misleading description at the same time — it cited \"chunk\" as an example scope_kind despite no consumer ever crediting it. \"chunk\" is NOT added as a fourth enum value at this bump: whether it should ever be creditable is a policy call outside this fix's scope. 1.0.0 -> 1.1.0 added the optional `reviewed_paths` array — the path set a scope_kind:diff review actually covered, so a record attests coverage instead of implying it from its sha_range time window.",
   "applies_to": "state/review-trail/*.json",
   "match_mode": "whole-document-yaml",
   "description": "Review-trail record — one JSON document per code-review event, written under state/review-trail/*.json (whole-document match; the record IS the whole JSON file, not frontmatter). The 8 original fields are all required; `reviewed_paths` is the sole optional property, present only on scope_kind:diff records.",
@@ -25,7 +25,8 @@
     },
     "scope_kind": {
       "type": "string",
-      "description": "Category of the reviewed scope (e.g. diff, plan, chunk)."
+      "enum": ["diff", "plan", "integration"],
+      "description": "Category of the reviewed scope. \"diff\" credits its resolved SHAs unconditionally; \"plan\" credits only the subset independently classified as planning-artifact commits; \"integration\" is a recognized shape that is always skipped (never credited). No other value is accepted — the closed set both live consumer copies of _credit_from_kind_partition (coordinator_core/coverage.py, coordinator_core/ops/review_coverage_core.py) actually handle."
     },
     "verdict": {
       "type": "string",

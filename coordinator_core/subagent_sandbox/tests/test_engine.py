@@ -290,6 +290,73 @@ def test_load_policy_reads_report_sidecar(policy_path: Path) -> None:
     assert policy.report_sidecar == {REPORT_SIDECAR_TYPE}
 
 
+def _policy_with(tmp_path: Path, name: str, body: str) -> Path:
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_load_policy_reads_report_type_map(tmp_path: Path) -> None:
+    path = _policy_with(
+        tmp_path,
+        "typed.yaml",
+        "report_sidecar:\n"
+        "  - coordinator:code-reviewer\n"
+        "report_type_map:\n"
+        "  coordinator:code-reviewer: review-findings\n"
+        "  coordinator:executor: run-report\n",
+    )
+    policy = engine.load_policy(str(path))
+    assert policy.report_type_map == {
+        "coordinator:code-reviewer": "review-findings",
+        "coordinator:executor": "run-report",
+    }
+
+
+def test_load_policy_report_type_map_absent_is_empty_mapping(policy_path: Path) -> None:
+    """Absence is the pre-existing shape of every policy — it must never raise
+    and must never look like a partial map."""
+    assert engine.load_policy(str(policy_path)).report_type_map == {}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "report_type_map: [not, a, dict]",
+        "report_type_map: a-bare-string",
+        "report_type_map: 17",
+        "report_type_map:",
+    ],
+)
+def test_load_policy_report_type_map_non_dict_fails_open(tmp_path: Path, raw: str) -> None:
+    """Same fail-open discipline report_sidecar documents: a wrong-typed value
+    voids the map rather than raising or blocking a spawn."""
+    path = _policy_with(
+        tmp_path, "bad.yaml", f"report_sidecar:\n  - coordinator:executor\n{raw}\n"
+    )
+    policy = engine.load_policy(str(path))
+    assert policy.report_type_map == {}
+    assert policy.report_sidecar == {"coordinator:executor"}
+
+
+def test_load_policy_report_type_map_drops_bad_entries_not_siblings(tmp_path: Path) -> None:
+    """Per-entry, not all-or-nothing: one malformed row must not take the
+    well-formed rows down with it."""
+    path = _policy_with(
+        tmp_path,
+        "mixed.yaml",
+        "report_sidecar:\n"
+        "  - coordinator:code-reviewer\n"
+        "report_type_map:\n"
+        "  coordinator:code-reviewer: review-findings\n"
+        "  coordinator:broken:\n"
+        "    nested: value\n"
+        "  17: run-report\n",
+    )
+    policy = engine.load_policy(str(path))
+    assert policy.report_type_map == {"coordinator:code-reviewer": "review-findings"}
+
+
 def test_load_policy_ignores_dr058_removed_keys(tmp_path: Path) -> None:
     """A YAML that still carries the DR-058-removed confined/exempt/
     sanctioned_dirs keys (pending example-doctrine-repo's lockstep strip) must not raise or

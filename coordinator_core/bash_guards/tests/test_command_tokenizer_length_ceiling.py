@@ -504,7 +504,8 @@ _GRAMMAR_PRESENT = all(
 
 #: The PowerShell parse cases below need the grammar package actually
 #: importable. C8 of this plan DECLARES it in ``[project].dependencies``
-#: (`tree-sitter>=0.21,<1`, `tree-sitter-pwsh>=0.38,<1`) so
+#: (`tree-sitter` at 0.21 or above and below 1; `tree-sitter-pwsh` at 0.38
+#: or above and below 1) so
 #: ``scripts/setup.py`` derives it into the provisioning list -- but
 #: declaring a dep in pyproject.toml does NOT retroactively install it into
 #: the ~20 live peer sessions' existing environments on this shared branch.

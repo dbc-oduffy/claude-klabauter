@@ -126,6 +126,16 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_REVIEW_INTEGRATION_PENDING"
 #: The one code-reviewer-identity agent_type this guard gates on. Any other
 #: agent_type sidecar (run-report, staff-eng-review, assessment, or a
 #: different reviewer persona) is out of scope — see module Negative-spec.
+#:
+#: NARROWER, deliberately, than `ops.append_integrator_dispositions`'
+#: `_REVIEWER_AGENT_TYPES` frozenset, which covers the reviewer personas too.
+#: The two constants answer different questions and must not be reconciled into
+#: one: that set decides which sidecars can RECEIVE a disposition block, while
+#: this literal decides which sidecars BLOCK an EM hand-edit. Widening this one
+#: to match would make every persona review start blocking EM edits — a
+#: behaviour change nothing has asked for, and the reason Negative-spec bullet 3
+#: above is stated as a deliberate scope choice rather than a gap. If you are
+#: here because the two "look out of sync": they are, on purpose.
 _REVIEWER_AGENT_TYPE = "coordinator:code-reviewer"
 
 #: The review-integrator's ONE sanctioned sidecar write
@@ -162,6 +172,27 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
     if not isinstance(tool_input, dict):
         return ""
     return tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+
+
+def _heading_present(text: str, heading: str) -> bool:
+    """True only where ``heading`` occurs as a REAL ATX heading line.
+
+    Line-anchored for the same reason as the sibling writer's own
+    ``_find_heading`` (``ops/append_integrator_dispositions``) — kept as a
+    separate copy rather than a shared import, matching this module's existing
+    ``_normalize`` discipline (write_guards must not import ops; different
+    package, different fail-open contract).
+
+    The failure a bare substring test produces here is the dangerous
+    direction, not the annoying one: a reviewer sidecar that merely QUOTES
+    ``## Integrator Dispositions`` in its findings prose — which is exactly
+    what a reviewer explaining this mechanism writes — would read as already
+    integrated and this guard would stop firing, silently, while the findings
+    sat undispositioned. A guard that disarms itself when someone describes it
+    is worse than no guard, because the absence of an advisory reads as "all
+    clear". Observed live 2026-08-10.
+    """
+    return re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text) is not None
 
 
 def _normalize(value: str) -> str:
@@ -217,11 +248,11 @@ def _find_pending_sidecar(
 
         if _extract_frontmatter_agent_type(text) != _REVIEWER_AGENT_TYPE:
             continue
-        if _FINDINGS_HEADING not in text:
+        if not _heading_present(text, _FINDINGS_HEADING):
             continue
         if _FINDINGS_SENTINEL in text:
             continue  # unfilled scaffold — reviewer hasn't returned yet
-        if _DISPOSITIONS_HEADING in text:
+        if _heading_present(text, _DISPOSITIONS_HEADING):
             continue  # already integrated
 
         if _sidecar_covers_target(text, normalized_target, basename):

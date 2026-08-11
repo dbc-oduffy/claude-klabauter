@@ -67,6 +67,7 @@ Negative-spec (hard-won, preserved from the bash original):
 
 from __future__ import annotations
 
+import re
 from typing import List, Sequence, Tuple
 
 #: U+2014 EM DASH, surrounded by single spaces -- the separator between a Kept
@@ -80,6 +81,66 @@ _STEP267_FOOTER = "--- end Step 2.67 blocks ---"
 
 _DELETED_HEADER = "Deleted (Step 2.67):"
 _KEPT_HEADER = "Kept (Step 2.67):"
+
+
+#: Matches one git-trailer-shaped line ("Key: value") -- used only to decide
+#: whether an appended trailer/token must join a message's EXISTING trailer
+#: block rather than start a new paragraph. Shared home for this predicate
+#: (moved here from `commit_pipeline.py`, staff-eng R1 F1,
+#: state/review-trail/2026-08-08-landed-commit-close-review/r1-w1.md):
+#: `compose_message()` ends a trailered message with exactly ONE trailing
+#: "\n" (`"\n" + trailers + "\n"`), so a caller that blindly appends another
+#: block after a blank line inserts a NEW paragraph -- git's trailer parser
+#: (`interpret-trailers`, `%(trailers:key=...)`) recognises only the LAST
+#: paragraph as trailers, so that blank line silently demotes every
+#: pre-existing trailer to body prose. `commit_pipeline.commit()`'s
+#: `Commit-Token:` mint relies on this same predicate to avoid repeating
+#: that mistake; do not fork a second copy -- import from here.
+_TRAILER_LINE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
+
+
+def _ends_with_trailer_block(message: str) -> bool:
+    """True iff `message`'s LAST paragraph is entirely "Key: value" lines.
+
+    Walks backward from the end, collecting the trailing run of non-blank
+    lines (git's own notion of "the last paragraph") -- stops at the first
+    blank line. Empty (no non-blank trailing run) is False, never
+    vacuously True. Handles all five message shapes callers must
+    distinguish: a trailer block (True, however the message ends -- with a
+    bare "\\n", no trailing newline at all, or followed by a blank line
+    would already have broken the block itself); prose-only body (False); a
+    message ending in a blank line (False, no trailing non-blank run before
+    that blank line's own predecessor content still gets evaluated on ITS
+    run); a message with no trailing newline (handled the same as any other
+    -- `str.split("\\n")` does not require a trailing newline to enumerate
+    lines correctly); and a subject-only message shaped like "Key: value"
+    (e.g. a conventional-commit subject "wsc: subject only") -- False,
+    because that trailing run reaches the START of the message with no
+    preceding blank line, so it IS the subject line, never a trailer
+    paragraph. Git's own rule is that trailers live in the message's last
+    paragraph and that paragraph is never the first one -- a trailing run
+    that consumes the whole message cannot be a trailer block under that
+    rule.
+    """
+    stripped = message.rstrip("\n")
+    if not stripped:
+        return False
+    lines = stripped.split("\n")
+    block: List[str] = []
+    reached_start = True
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx]
+        if line.strip() == "":
+            reached_start = False
+            break
+        block.append(line)
+    if not block:
+        return False
+    if reached_start:
+        # The trailing non-blank run consumed the entire message -- it is
+        # the subject line (first paragraph), never a trailer block.
+        return False
+    return all(_TRAILER_LINE_RE.match(ln) is not None for ln in block)
 
 
 class SweptRenameError(ValueError):
@@ -167,10 +228,21 @@ def compose_message(
     if has_blocks:
         msg += _STEP267_FOOTER + "\n"
 
-    # Trailer block -- new (not in the bash original); appended last, its own
-    # blank-line separator, only when the caller supplied non-empty trailers.
+    # Trailer block -- new (not in the bash original); appended last, only
+    # when the caller supplied non-empty trailers. When `subject`/`prose`
+    # ALREADY ends in a trailer block (e.g. the caller's own prose closed
+    # with "Deliverable-Id: ..."), joining with a blank line would start a
+    # NEW paragraph and demote that existing block to body prose for git's
+    # trailer parser (see `_ends_with_trailer_block`'s docstring) -- join it
+    # onto the same paragraph instead (single "\n", no blank line). Only
+    # when no trailer block already terminates the message does today's
+    # blank-line-separated convention apply.
     if trailers:
-        msg += "\n" + trailers + "\n"
+        if _ends_with_trailer_block(msg):
+            base = msg if msg.endswith("\n") else msg + "\n"
+            msg = base + trailers + "\n"
+        else:
+            msg += "\n" + trailers + "\n"
 
     return msg
 

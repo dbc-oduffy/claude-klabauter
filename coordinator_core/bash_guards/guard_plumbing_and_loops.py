@@ -3,11 +3,13 @@ head/tail-plumbing and for-loop guard (`docs/plans/2026-07-29-windows-
 viability-stop-the-spawn-storms.md` § BX-8, upstream
 `docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md` § C5).
 
-Purpose: two of the five ranked fork-tax shapes, folded into one guard
-because BX-8 covers both -- head/tail plumbing (`... | head` / `... | tail`,
-25% of measured forks: truncating a subprocess's output via ANOTHER
-subprocess) and for-loops (9.0%: forking one child process per loop
-iteration). The founding incident's own flagship example
+Purpose: three of the six ranked fork-tax shapes, folded into one guard
+because BX-8 covers all three -- head/tail plumbing (`... | head` / `... |
+tail`, 25% of measured forks: truncating a subprocess's output via ANOTHER
+subprocess), for-loops (9.0%: forking one child process per loop
+iteration), and while-read loops (unmeasured in the founding sample, the
+structural twin of the for-loop shape -- see `_shape_classifier`'s own
+docstring). The founding incident's own flagship example
 (`find ... -exec sh -c ...` piped through `head`, 293 `sh` + 293 `head` +
 293 `grep`) is a for-loop-shaped `find -exec` wrapper, not this module's
 head/tail half -- see `check_find_exec_rewrite`'s own docstring, which
@@ -68,6 +70,14 @@ than re-deriving a parallel judgment of "is this translatable":
     2026-08-07: the deny leg that template could also render is retired as
     structurally unreachable -- see `check()`'s own docstring).
 
+  - WHILE_READ_LOOP -> no seam consulted at all -- goes straight to
+    `_generic_advisory` (docs/plans/2026-08-10-the-one-fan-out-shape-the-
+    classifier-nev.md § C2). `check_find_exec_rewrite`'s only confirmed-
+    outlet path is a lone `find ... -exec` segment; a `while read` loop's
+    own first token is `while`, never `find`, so that seam could never
+    confirm a rewrite for it -- consulting it here would buy a branch that
+    can never fire. Advisory on every platform, no deny leg (DR-280).
+
     FOR_LOOP's leg of AC-5 is, ARCHITECTURALLY, advisory-only on every
     platform, full stop -- not merely "usually" (Review: code-reviewer --
     Finding 4, spec completion, traced across this module + `_shape_
@@ -107,8 +117,12 @@ Negative-spec
   - Does NOT reimplement `_shape_classifier`'s shape detection or
     `_platform_verdict`'s envelope shaping -- both are imported, never
     duplicated.
-  - Does NOT fire when HEAD_TAIL_PLUMBING or FOR_LOOP is present but NOT the
-    precedence winner -- see the module comment above (AC-7).
+  - Does NOT fire when HEAD_TAIL_PLUMBING, FOR_LOOP, or WHILE_READ_LOOP is
+    present but NOT the precedence winner -- see the module comment above
+    (AC-7).
+  - Does NOT route WHILE_READ_LOOP through `check_find_exec_rewrite` --
+    unlike FOR_LOOP, it has no seam to consult (see the module comment
+    above); it goes straight to `_generic_advisory`.
   - Does NOT deny toward a bare glob for-loop, toward any command for which
     the relevant BX-16 seam check returns ``None``, NOR toward one for which
     the seam returns a bare `_advisory` with no `updatedInput` (no confirmed
@@ -247,6 +261,18 @@ _EVENT_NAME = "PreToolUse"
 _FOR_LOOP_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
 _FOR_LOOP_GENERIC_EXAMPLE = (
     "python3 -c 'import glob\\nfor f in glob.glob(\"*.txt\"):\\n    ...'  "
+    "# do the per-item work in-process, zero per-iteration forks"
+)
+
+#: WHILE-READ LOOP -- always a `_generic_advisory` (no seam to consult, see
+#: module docstring's WHILE_READ_LOOP paragraph). The example reads the item
+#: list in-process instead of spawning a shell `while read` loop, the same
+#: honest outlet `_FOR_LOOP_GENERIC_EXAMPLE` offers for its own shape --
+#: no auto-rewrite outlet is synthesized here either (plan Out of scope).
+_WHILE_READ_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
+_WHILE_READ_GENERIC_EXAMPLE = (
+    "<generator> | python3 -c 'import sys\\nfor line in sys.stdin:\\n"
+    "    f = line.strip()\\n    ...'  "
     "# do the per-item work in-process, zero per-iteration forks"
 )
 
@@ -520,6 +546,25 @@ def _verdict_for_loop(
     )
 
 
+def _verdict_while_read(
+    cmd: str, session_id: str, host_is_windows: Optional[bool]
+) -> Dict[str, Any]:
+    """Advisory-only-on-every-platform verdict for a WHILE_READ_LOOP-primary
+    command. Goes straight to `_generic_advisory` -- no seam is consulted
+    (unlike `_verdict_for_loop`, which calls `check_find_exec_rewrite`):
+    that seam's only confirmed-outlet path requires a lone `find ... -exec`
+    segment, which a `while read` loop's own first token (`while`) can never
+    be, so calling it here would buy a branch that can never fire (module
+    docstring, WHILE_READ_LOOP paragraph). `session_id` is accepted for
+    signature parity with the other verdict helpers but unused, per the same
+    reason -- no seam call means no session-scoped state to thread.
+    """
+    del session_id
+    return _generic_advisory(
+        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _WHILE_READ_GENERIC_EXAMPLE
+    )
+
+
 def _verdict_powershell(
     cmd: str, session_id: str, host_is_windows: Optional[bool]
 ) -> Optional[Dict[str, Any]]:
@@ -635,4 +680,6 @@ def check(
         return _verdict_head_tail(cmd, session_id, host_is_windows)
     if primary.shape is Shape.FOR_LOOP:
         return _verdict_for_loop(cmd, session_id, host_is_windows)
+    if primary.shape is Shape.WHILE_READ_LOOP:
+        return _verdict_while_read(cmd, session_id, host_is_windows)
     return None

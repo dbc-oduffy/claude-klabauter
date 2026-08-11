@@ -511,6 +511,47 @@ def test_main_no_flags_calls_brief_with_defaults(monkeypatch, capsys) -> None:
     capsys.readouterr()
 
 
+def test_step4_evidence_reports_resolved_state_not_unevaluated_rule() -> None:
+    """C1 fix: `jp_step4b_analyst_dispatch`/`jp_step4c_observer_dispatch`'s
+    `evidence` must no longer assert the "zero new commits AND no
+    agent-driven changes" boolean as an observed fact -- no producer in this
+    repo computes it (falsifier search, brief.py's own docstring). Each
+    string must instead report the honest unevaluated state, and `jp_step4c`
+    must carry its OWN string, not a bare "mirrors jp_step4b" cross-
+    reference."""
+    points = wc_brief._build_judgment_points(_EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
+    by_id = {p["id"]: p for p in points}
+
+    step4b_evidence = by_id["jp_step4b_analyst_dispatch"]["evidence"]
+    step4c_evidence = by_id["jp_step4c_observer_dispatch"]["evidence"]
+
+    assert "zero new commits" not in step4b_evidence
+    assert "no producer computes this condition" in step4b_evidence
+
+    assert step4c_evidence != step4b_evidence
+    assert "mirrors jp_step4b_analyst_dispatch" not in step4c_evidence
+    assert "no producer computes" in step4c_evidence
+
+    step4_5_evidence = by_id["jp_step4_5_clustering_dispatch"]["evidence"]
+    assert "<today>" not in step4_5_evidence
+    assert not step4_5_evidence.rstrip().endswith(":")
+
+
+def test_step4_points_still_emitted_unconditionally() -> None:
+    """Regression guard (this plan's anti-scope: 'do NOT make jp_step4b /
+    jp_step4c / jp_step4_5 conditional on the computed boolean' -- they gate
+    no directive and the skip condition IS a disposition, not a filter on
+    emission). All three must be present regardless of open-day-goals /
+    dirty-tree axis combination."""
+    for open_day_goals in (_EMPTY_OPEN_DAY_GOALS, _NONEMPTY_OPEN_DAY_GOALS):
+        for dirty_tree_verdict in (_CLEAN_TREE, _DIRTY_TREE):
+            points = wc_brief._build_judgment_points(open_day_goals, dirty_tree_verdict)
+            ids = {p["id"] for p in points}
+            assert "jp_step4b_analyst_dispatch" in ids
+            assert "jp_step4c_observer_dispatch" in ids
+            assert "jp_step4_5_clustering_dispatch" in ids
+
+
 def test_main_threads_scope_summary_eq_form_into_brief(monkeypatch, capsys) -> None:
     """`--scope-summary=VALUE` (single-token eq-form, the spelling
     `workday-complete.md` Step 2 uses) reaches `brief()` verbatim, including

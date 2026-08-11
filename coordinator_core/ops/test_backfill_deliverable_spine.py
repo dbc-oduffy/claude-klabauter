@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import stat
 from pathlib import Path
 from typing import List
@@ -27,6 +28,7 @@ import pytest
 
 import coordinator_core.ops.backfill_deliverable_spine as mod
 from coordinator_core.ops.backfill_deliverable_spine import (
+    build_plan_sizing_index,
     classify_artifact,
     detect_ambiguous_groups,
     enumerate_corpus,
@@ -38,10 +40,38 @@ from coordinator_core.ops.backfill_deliverable_spine import (
     main,
 )
 
+# Declared, not excused: this file spawns a real process (git/python) because
+# the property under test is that binary's own behaviour, which no fixture
+# stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for a new file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.spawns_process]
+
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+# Schema-valid whole-document sizing-object YAML body (1.8.0) — for tests that
+# exercise the WRITE path (`_stamp_yaml_document` schema-validates before
+# landing a mutation); tests that only read `sizing_object`/`workstream` don't
+# need every required field and use a minimal body instead.
+_SCHEMA_VALID_SIZING_BODY = (
+    "schema: sizing-object\n"
+    "intent: Test intent, verbatim.\n"
+    "estimate:\n"
+    "  tshirt: M\n"
+    "  provisional: true\n"
+    "route: plan\n"
+    "detents: []\n"
+    "fork: null\n"
+    "xl_exit: null\n"
+    "status: routed\n"
+    "premise:\n"
+    "  provenance: read\n"
+    "  evidence: test fixture, no real premise verified\n"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +213,175 @@ def test_get_workstream_key_uses_workstream_for_non_completions(tmp_path: Path):
     p = tmp_path / "h.md"
     _write(p, "---\nworkstream: my-ws\nchain: should-not-be-used\n---\nbody\n")
     assert get_workstream_key(str(p), "handoff") == "my-ws"
+
+
+# ---------------------------------------------------------------------------
+# build_plan_sizing_index / get_workstream_key's sizing arm (AC1-AC3)
+# ---------------------------------------------------------------------------
+
+
+def test_build_plan_sizing_index_maps_sizing_object_to_deliverable_id(tmp_path: Path):
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert index == {"state/sizings/2026-01-01-s.yaml": "dlv-citer-000000"}
+    assert ambiguous == {}
+
+
+def test_build_plan_sizing_index_sees_already_threaded_plans(tmp_path: Path):
+    """The load-bearing case: `group_corpus`'s own grouping loop would have
+    short-circuited this plan into `already_threaded` (it carries
+    `deliverable_id`) before ever computing a grouping key — the index must
+    be built independently, by its own pass, so it still sees this edge."""
+    _write(
+        tmp_path / "docs/plans/2026-01-01-threaded.md",
+        "---\nslug: threaded\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-already-threaded-0\n---\nBody\n",
+    )
+    corpus = enumerate_corpus(str(tmp_path))
+    result = group_corpus(corpus)
+    plan_path = str(tmp_path / "docs" / "plans" / "2026-01-01-threaded.md")
+    assert result.already_threaded == [(plan_path, "dlv-already-threaded-0")]
+    assert all(plan_path not in files for files in result.group_files.values())
+
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert index["state/sizings/2026-01-01-s.yaml"] == "dlv-already-threaded-0"
+    assert ambiguous == {}
+
+
+def test_build_plan_sizing_index_excludes_plan_with_no_deliverable_id(tmp_path: Path):
+    _write(
+        tmp_path / "docs/plans/2026-01-01-unthreaded.md",
+        "---\nslug: unthreaded\nsizing_object: state/sizings/2026-01-01-s.yaml\n---\nBody\n",
+    )
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert index == {}
+    assert ambiguous == {}
+
+
+def test_build_plan_sizing_index_excludes_sidecar_plan(tmp_path: Path):
+    _write(
+        tmp_path / "docs/plans/2026-01-01-x.code-review.md",
+        "---\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-sidecar-000000\n---\nBody\n",
+    )
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert index == {}
+    assert ambiguous == {}
+
+
+def test_build_plan_sizing_index_collision_is_dropped_and_flagged(tmp_path: Path):
+    """Finding 1 (P2): two distinct plans citing the same `sizing_object:`
+    with DIFFERENT `deliverable_id`s must never silently pick a winner —
+    the colliding key is absent from `index` (so it falls through to
+    UNKEYED via get_workstream_key's existing miss path, never a wrong
+    id) and is reported in `ambiguous_sizing_refs` instead."""
+    _write(
+        tmp_path / "docs/plans/2026-01-01-alpha.md",
+        "---\nslug: alpha\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-alpha-000000\n---\nBody\n",
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-02-beta.md",
+        "---\nslug: beta\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-beta-000000\n---\nBody\n",
+    )
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert "state/sizings/2026-01-01-s.yaml" not in index
+    assert ambiguous == {"state/sizings/2026-01-01-s.yaml": ["alpha", "beta"]}
+
+
+def test_build_plan_sizing_index_two_sizings_same_deliverable_id_not_a_collision(
+    tmp_path: Path,
+):
+    """The other direction (2 distinct sizing_object keys resolving to the
+    SAME deliverable_id, e.g. via two plan docs sharing one id) is legitimate
+    and must stay working — it is why 56 moved sizings produced 57 groups in
+    the live corpus. This is NOT a collision: collision means one KEY
+    (sizing_object) with 2+ DIFFERENT deliverable_ids, not one deliverable_id
+    reached via 2+ different keys."""
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-a.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-02-citer-again.md",
+        "---\nslug: citer-again\nsizing_object: state/sizings/2026-01-02-b.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    index, ambiguous = build_plan_sizing_index(str(tmp_path))
+    assert index == {
+        "state/sizings/2026-01-01-a.yaml": "dlv-citer-000000",
+        "state/sizings/2026-01-02-b.yaml": "dlv-citer-000000",
+    }
+    assert ambiguous == {}
+
+
+def test_get_workstream_key_sizing_resolves_via_citing_plan_deliverable_id(tmp_path: Path):
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    _write(sizing, "schema: sizing-object\n")
+    index = {"state/sizings/2026-01-01-s.yaml": "dlv-citer-000000"}
+    assert get_workstream_key(str(sizing), "sizing", str(tmp_path), index) == "dlv-citer-000000"
+
+
+def test_get_workstream_key_sizing_no_citing_plan_is_unkeyed(tmp_path: Path):
+    sizing = tmp_path / "state/sizings/2026-01-01-orphan.yaml"
+    _write(sizing, "schema: sizing-object\n")
+    index: dict = {}
+    assert (
+        get_workstream_key(str(sizing), "sizing", str(tmp_path), index)
+        == mod._UNKEYED_SIZING_GROUP_KEY
+    )
+
+
+def test_get_workstream_key_sizing_without_index_is_unkeyed(tmp_path: Path):
+    """Backward-compat: a caller (or a corpus with no plan_sizing_index built
+    yet) that omits coordinator_root/plan_sizing_index must still resolve
+    UNKEYED, never raise and never invent a key."""
+    sizing = tmp_path / "state/sizings/2026-01-01-orphan.yaml"
+    _write(sizing, "schema: sizing-object\n")
+    assert get_workstream_key(str(sizing), "sizing") == mod._UNKEYED_SIZING_GROUP_KEY
+
+
+def test_get_workstream_key_sizing_ignores_workstream_document_key(tmp_path: Path):
+    """AC2: the `workstream:` whole-document-YAML read is GONE for sizings —
+    even a sizing that carries that (never-real) key must not be keyed by
+    it; only the plan-FK index resolves a key."""
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    _write(sizing, "schema: sizing-object\nworkstream: should-not-be-read\n")
+    assert get_workstream_key(str(sizing), "sizing") == mod._UNKEYED_SIZING_GROUP_KEY
+
+
+def test_group_corpus_sizing_keyed_by_citing_plan_deliverable_id(tmp_path: Path):
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    _write(sizing, "schema: sizing-object\nintent: test\n")
+
+    corpus = enumerate_corpus(str(tmp_path))
+    index, _ambiguous = build_plan_sizing_index(str(tmp_path))
+    result = group_corpus(corpus, str(tmp_path), index)
+
+    assert str(sizing) in result.group_files["dlv-citer-000000"]
+    assert mod._UNKEYED_SIZING_GROUP_KEY not in result.group_files
+
+
+def test_group_corpus_sizing_with_no_citing_plan_stays_unkeyed(tmp_path: Path):
+    sizing = tmp_path / "state/sizings/2026-01-01-orphan.yaml"
+    _write(sizing, "schema: sizing-object\nintent: test\n")
+
+    corpus = enumerate_corpus(str(tmp_path))
+    index, _ambiguous = build_plan_sizing_index(str(tmp_path))
+    result = group_corpus(corpus, str(tmp_path), index)
+
+    assert str(sizing) in result.group_files[mod._UNKEYED_SIZING_GROUP_KEY]
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +591,44 @@ def test_write_blocked_when_ambiguous(tmp_path: Path):
         assert "deliverable_id:" not in p.read_text(encoding="utf-8")
 
 
+def test_write_stamps_sizing_with_citing_plans_deliverable_id_unchanged(tmp_path: Path):
+    """AC6, end to end: the write pass must stamp the CITING PLAN's own
+    deliverable_id onto the sizing verbatim — not a brand-new id minted from
+    that id treated as a workstream slug (the bug `_find_group_id`'s
+    generic mint-or-carry search would produce if it were reached here).
+
+    A sizing writes through `_stamp_yaml_document` -> `locked_write.locked_rmw`,
+    which needs a real git repo to resolve a lock directory — unlike the
+    fence-anchored `_stamp_file` path the other write-mode tests below
+    exercise, so this fixture needs its own `git init`.
+    """
+    import subprocess
+
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        check=True,
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    _write(sizing, _SCHEMA_VALID_SIZING_BODY)
+
+    out = io.StringIO()
+    err = io.StringIO()
+    rc = main(["--write", "--root", str(tmp_path)], out=out, err=err)
+    assert rc == 0, f"stderr: {err.getvalue()}"
+
+    stamped = sizing.read_text(encoding="utf-8")
+    assert "deliverable_id: dlv-citer-000000" in stamped
+    assert "[stamp]" in out.getvalue()
+    assert "state/sizings/2026-01-01-s.yaml  -> dlv-citer-000000" in out.getvalue()
+
+
 def test_write_stamps_mutable_artifacts_and_skips_immutable(tmp_path: Path):
     _build_clean_corpus(tmp_path)
     out = io.StringIO()
@@ -504,6 +741,198 @@ def test_main_default_root_from_trampoline_arg(tmp_path: Path):
     assert str(tmp_path) in out.getvalue()
 
 
+def test_main_only_kind_unknown_returns_1_and_writes_nothing(tmp_path: Path):
+    _build_clean_corpus(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(["--write", "--only-kind", "bogus", "--root", str(tmp_path)], out=out, err=err)
+    assert rc == 1
+    h1 = (tmp_path / "state/handoffs/h1.md").read_text(encoding="utf-8")
+    assert "deliverable_id:" not in h1
+
+
+def test_main_only_kind_scope_label_differs_from_default_mode_line(tmp_path: Path):
+    """Narrowly named per the code-review P3 finding: this ONLY checks the
+    Mode: line's scoping label — the report-body/write-pass parity claim
+    lives in `test_main_only_kind_absent_is_byte_identical_to_default`
+    below, which actually diffs full report bodies and --write bytes."""
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    _build_clean_corpus(root_a)
+    _build_clean_corpus(root_b)
+    out_a, err_a = io.StringIO(), io.StringIO()
+    out_b, err_b = io.StringIO(), io.StringIO()
+    rc_a = main(["--dry-run", "--root", str(root_a)], out=out_a, err=err_a)
+    rc_b = main(["--dry-run", "--only-kind", "plan", "--root", str(root_b)], out=out_b, err=err_b)
+    # sanity: scoped run's report differs (Mode: line), unscoped stays default
+    assert rc_a == 0
+    assert "Mode: dry-run\n" in out_a.getvalue()
+    assert "Mode: dry-run (scope: plan)\n" in out_b.getvalue()
+    assert rc_b == 0
+
+
+_DLV_ID_RE = re.compile(r"dlv-\S+")
+
+
+def _normalize_minted_ids(text: str) -> str:
+    """Replace every `dlv-...` token with a positional placeholder, keyed by
+    order of first appearance, so two independent `--write` runs (each
+    minting its own random hex suffix via `mint_deliverable_id.mint()`) can
+    be diffed for identical STRUCTURE — same files grouped, same files
+    stamped vs skipped, same relative id-sharing — without requiring the
+    literal random hex to match, which it structurally never will."""
+    seen: dict = {}
+
+    def _repl(m: "re.Match") -> str:
+        tok = m.group(0)
+        if tok not in seen:
+            seen[tok] = f"<ID{len(seen)}>"
+        return seen[tok]
+
+    return _DLV_ID_RE.sub(_repl, text)
+
+
+def test_main_only_kind_absent_is_byte_identical_to_default(tmp_path: Path):
+    """Review: coordinator:code-reviewer — the original version of this test
+    only ran `--dry-run` and only compared the `Mode:` line, so the actual
+    "unscoped run is unaffected by the --only-kind machinery" claim its name
+    promised was established by code inspection, not by this test. This
+    version diffs the FULL report body (Mode: line aside) between two
+    identically-built, independently-run unscoped invocations, for both
+    `--dry-run` and `--write`, and for `--write` additionally diffs the
+    resulting on-disk bytes of every touched file (minted-id tokens
+    normalized to positional placeholders, since `mint()` draws fresh random
+    hex per invocation by design — see `mint_deliverable_id.mint`)."""
+
+    def _strip_mode_line(report: str) -> str:
+        # `Root:` and `Generated:` are per-invocation (tmp_path, wall clock) —
+        # not part of the parity claim under test; strip both alongside
+        # `Mode:` so the diff is scoped to actual write-decision content.
+        return "\n".join(
+            line
+            for line in report.splitlines()
+            if not line.startswith("Mode:")
+            and not line.startswith("Root:")
+            and not line.startswith("Generated:")
+        )
+
+    # --- dry-run leg ---
+    root_a = tmp_path / "dry-a"
+    root_b = tmp_path / "dry-b"
+    _build_clean_corpus(root_a)
+    _build_clean_corpus(root_b)
+    out_a, err_a = io.StringIO(), io.StringIO()
+    out_b, err_b = io.StringIO(), io.StringIO()
+    rc_a = main(["--dry-run", "--root", str(root_a)], out=out_a, err=err_a)
+    rc_b = main(["--dry-run", "--root", str(root_b)], out=out_b, err=err_b)
+    assert rc_a == 0
+    assert rc_b == 0
+    assert _strip_mode_line(out_a.getvalue()) == _strip_mode_line(out_b.getvalue())
+    assert "Mode: dry-run\n" in out_a.getvalue()
+    assert "Mode: dry-run\n" in out_b.getvalue()
+
+    # --- write leg: identical write decisions AND identical on-disk bytes ---
+    root_c = tmp_path / "write-c"
+    root_d = tmp_path / "write-d"
+    _build_clean_corpus(root_c)
+    _build_clean_corpus(root_d)
+    out_c, err_c = io.StringIO(), io.StringIO()
+    out_d, err_d = io.StringIO(), io.StringIO()
+    rc_c = main(["--write", "--root", str(root_c)], out=out_c, err=err_c)
+    rc_d = main(["--write", "--root", str(root_d)], out=out_d, err=err_d)
+    assert rc_c == 0, f"stderr: {err_c.getvalue()}"
+    assert rc_d == 0, f"stderr: {err_d.getvalue()}"
+
+    report_c = _normalize_minted_ids(_strip_mode_line(out_c.getvalue()))
+    report_d = _normalize_minted_ids(_strip_mode_line(out_d.getvalue()))
+    assert report_c == report_d
+
+    touched_rel_paths = [
+        "state/handoffs/h1.md",
+        "state/handoffs/h2-spinoff.md",
+        "archive/handoffs/h4-archived.md",
+        "docs/plans/2026-01-01-plan-one.md",
+        "docs/plans/2026-01-02-plan-two.md",
+        "archive/completed/c1.md",
+        "state/roadmap/rm1/OVERVIEW.md",
+    ]
+    for rel in touched_rel_paths:
+        bytes_c = (root_c / rel).read_text(encoding="utf-8")
+        bytes_d = (root_d / rel).read_text(encoding="utf-8")
+        assert _normalize_minted_ids(bytes_c) == _normalize_minted_ids(bytes_d), rel
+
+
+def test_main_only_kind_sizing_stamps_sizing_leaves_handoff_unchanged(tmp_path: Path):
+    import subprocess
+
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        check=True,
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    _write(sizing, _SCHEMA_VALID_SIZING_BODY)
+
+    handoff = tmp_path / "state/handoffs/h1.md"
+    _write(
+        handoff,
+        "---\nkind: handoff\nworkstream: alpha-thing\nstatus: open\n---\nBody h1\n",
+    )
+    handoff_before = handoff.read_text(encoding="utf-8")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(["--write", "--only-kind", "sizing", "--root", str(tmp_path)], out=out, err=err)
+    assert rc == 0, f"stderr: {err.getvalue()}"
+
+    stamped = sizing.read_text(encoding="utf-8")
+    assert "deliverable_id: dlv-citer-000000" in stamped
+    handoff_after = handoff.read_text(encoding="utf-8")
+    assert handoff_after == handoff_before
+
+
+def test_main_only_kind_group_with_only_out_of_scope_files_skipped_no_mint(tmp_path: Path):
+    _write(
+        tmp_path / "state/handoffs/h1.md",
+        "---\nkind: handoff\nworkstream: alpha-thing\nstatus: open\n---\nBody h1\n",
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-01-plan-one.md",
+        "---\nslug: plan-one\nworkstream: alpha-thing\n---\nPlan one body\n",
+    )
+    before = (tmp_path / "state/handoffs/h1.md").read_text(encoding="utf-8")
+    before_plan = (tmp_path / "docs/plans/2026-01-01-plan-one.md").read_text(encoding="utf-8")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(["--write", "--only-kind", "roadmap", "--root", str(tmp_path)], out=out, err=err)
+    assert rc == 0
+
+    assert "[mint] alpha-thing" not in err.getvalue()
+    after = (tmp_path / "state/handoffs/h1.md").read_text(encoding="utf-8")
+    after_plan = (tmp_path / "docs/plans/2026-01-01-plan-one.md").read_text(encoding="utf-8")
+    assert after == before
+    assert after_plan == before_plan
+
+
+def test_main_only_kind_repeated_scopes_to_both(tmp_path: Path):
+    _build_clean_corpus(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(
+        ["--write", "--only-kind", "sizing", "--only-kind", "handoff", "--root", str(tmp_path)],
+        out=out,
+        err=err,
+    )
+    assert rc == 0
+    h1 = (tmp_path / "state/handoffs/h1.md").read_text(encoding="utf-8")
+    assert "deliverable_id: dlv-alpha-thing-" in h1
+    plan_one = (tmp_path / "docs/plans/2026-01-01-plan-one.md").read_text(encoding="utf-8")
+    assert "deliverable_id:" not in plan_one
+
+
 def test_main_no_root_and_no_default_fails_loud(tmp_path: Path):
     """Neither --root nor default_coordinator_root: must fail loud (exit 1),
     never silently fall back to this module's own coordinator_core/ops/
@@ -516,4 +945,72 @@ def test_main_no_root_and_no_default_fails_loud(tmp_path: Path):
     rc = main(["--dry-run"], default_coordinator_root=None, out=out, err=err)
     assert rc == 1
     assert "no corpus root available" in err.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# main() — write-failure reporting (a refused write must not be reported as
+# a stamp; regression guard for the "Stamped: 56" over-report bug)
+# ---------------------------------------------------------------------------
+
+
+def test_main_write_reports_schema_invalid_sizing_as_write_failed_not_stamped(tmp_path: Path, capsys):
+    """A sizing whose post-mutation content fails schema validation must be
+    reported as a refused write, not a stamp: the file is unchanged on disk,
+    the report carries `[skip-write-failed]` and NOT `[stamp]` for it,
+    `Stamped:` counts only records that really landed, `Write failures: 1`
+    appears, and `main()` returns 4.
+    """
+    import subprocess
+
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        check=True,
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    _write(
+        tmp_path / "docs/plans/2026-01-01-citer.md",
+        "---\nslug: citer\nsizing_object: state/sizings/2026-01-01-s.yaml\n"
+        "deliverable_id: dlv-citer-000000\n---\nBody\n",
+    )
+    sizing = tmp_path / "state/sizings/2026-01-01-s.yaml"
+    # Schema-invalid: missing the required fields _SCHEMA_VALID_SIZING_BODY
+    # carries (e.g. `estimate`/`route`/`detents`/etc.) — post-mutation
+    # validate_frontmatter must reject this, raising MutateAbort inside
+    # `_stamp_yaml_document`.
+    _write(sizing, "schema: sizing-object\nintent: bare, invalid record\n")
+    sizing_before = sizing.read_text(encoding="utf-8")
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(["--write", "--root", str(tmp_path)], out=out, err=err)
+
+    assert rc == 4
+    sizing_after = sizing.read_text(encoding="utf-8")
+    assert sizing_after == sizing_before, "refused write must not mutate the file on disk"
+    report = out.getvalue()
+    assert "[skip-write-failed]" in report
+    assert "state/sizings/2026-01-01-s.yaml" in report
+    assert "[stamp]" not in report
+    assert "Stamped:            0" in report
+    assert "Write failures:     1" in report
+    # `_stamp_yaml_document`'s skip message is printed to the real
+    # `sys.stderr` (module-level `print(..., file=sys.stderr)`), not the
+    # `err` StringIO passed to `main()` — asserted via `capsys` instead of
+    # `err.getvalue()`.
+    captured = capsys.readouterr()
+    assert "skip: _stamp_yaml_document:" in captured.err
+
+
+def test_main_write_clean_run_still_returns_0_and_matches_prior_report_shape(tmp_path: Path):
+    """A clean --write run (no write failures) still returns 0 and its
+    WRITE COMPLETE block is byte-identical to the pre-fix shape — no
+    `Write failures:` line appears when the count is zero.
+    """
+    _build_clean_corpus(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    rc = main(["--write", "--root", str(tmp_path)], out=out, err=err)
+    assert rc == 0, f"stderr: {err.getvalue()}"
+    report = out.getvalue()
+    assert "WRITE COMPLETE:" in report
+    assert "Write failures:" not in report
     assert "ops" not in out.getvalue()

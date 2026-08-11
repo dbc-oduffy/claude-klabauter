@@ -23,6 +23,7 @@ Public surface (imported by C2/C3/C4/C5 executors):
   serialize_yaml_scalar(v, *, numeric_quoting=False)   → str
   replace_fm_field(fm, key, v)                         → str
   insert_fm_field(fm, key, v, after_key=None)          → str
+  insert_fm_field_raw(fm, key, raw_value, after_key=None) → str
   remove_fm_field(fm, key)                             → str
   read_fm_nested_field(fm, key)                        → str | None
   write_fm_nested_field(fm, key, block_text)           → str
@@ -733,6 +734,44 @@ def insert_fm_field(
     eol = '\r\n' if '\r\n' in fm else '\n'
     trimmed = fm.rstrip()
     return trimmed + eol + new_line + eol
+
+
+def insert_fm_field_raw(fm: str, key: str, raw_value: str, after_key: str | None = None) -> str:
+    """Insert ``key: value`` into frontmatter text using ALREADY-SERIALIZED text.
+
+    The insert-side counterpart to ``replace_fm_field_raw`` — same rationale:
+    a caller holding a pre-serialized value (e.g. this file's own
+    ``_yaml_quote``-forced-double-quote convention) cannot route it through
+    ``insert_fm_field``, because that function's ``serialize_yaml_scalar``
+    call would see the caller's own quote characters as structural and
+    re-quote them, producing a doubled/malformed value. Mirrors
+    ``insert_fm_field``'s anchored/append-only line-ending discipline
+    exactly — only the value's construction differs.
+
+    Review: coordinator:code-reviewer — the insert branch of
+    ``coordinator-doc-new::_mutate_sizing_reverse_edge`` used to call
+    ``insert_fm_field`` with a raw unquoted path, so a first-time scaffold
+    left ``plan:`` bare while a re-run (replace branch, which already used a
+    raw-value primitive) left it double-quoted — the function's own
+    docstring claimed both were always double-quoted. This primitive closes
+    that gap in the primitives module rather than hand-rolling a fourth
+    line-surgery site in the CLI.
+    """
+    if after_key is not None:
+        after_pattern = re.compile(
+            r'^' + re.escape(after_key) + r':(?=[ \t]|\r?$).*$',
+            re.MULTILINE,
+        )
+        m = after_pattern.search(fm)
+        if m:
+            insert_at = m.end()
+            cr = '\r' if m.group(0).endswith('\r') else ''
+            return fm[:insert_at] + '\n' + f'{key}: {raw_value}' + cr + fm[insert_at:]
+        # after_key absent — fall through to append (same as insert_fm_field)
+
+    eol = '\r\n' if '\r\n' in fm else '\n'
+    trimmed = fm.rstrip()
+    return trimmed + eol + f'{key}: {raw_value}' + eol
 
 
 # ---------------------------------------------------------------------------

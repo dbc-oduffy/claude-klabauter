@@ -1047,7 +1047,6 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
         ml_bin,
         ch_bin,
         bin_dst,
-        None,
         False,  # check_only=False — real run against real tmp source dirs
         python3_cmd_resolved_bin="python3",
     )

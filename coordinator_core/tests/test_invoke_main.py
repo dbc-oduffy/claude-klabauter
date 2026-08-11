@@ -13,11 +13,12 @@ Branches covered:
   1. Happy path     — ping '{}' → exit 0, stdout JSON "ok": true, stderr empty.
   2. Invalid JSON   — ping 'not json' → _fatal_stderr → exit 1, error JSON on
                       STDERR, stdout empty.  (Also covers branch 7 — stream check.)
-  3. _origin_worktree injection — worktree-scoped op (coverage.gate) run inside
-                      the claude-klabauter repo succeeds in dispatching (proves injection fires).
+  3. _origin_worktree injection — worktree-scoped op (_WORKTREE_SCOPED_PROBE) run
+                      inside the claude-klabauter repo succeeds in dispatching (proves injection fires).
   4. C2 regression  — none-scoped op (ping) run from a non-git temp dir exits 0,
                       proving _resolve_repo_root is NOT called for none-scoped ops.
-  5. --repo honored — coverage.gate with --repo <root> resolves the repo explicitly.
+  5. --repo honored — the same worktree-scoped probe with --repo <root> resolves the
+                      repo explicitly.
   6. C3 regression  — handler internal timeout does not wedge the process; os._exit
                       fires promptly even if asyncio.to_thread work is still live.
   7. STDERR stream  — _fatal_stderr writes to STDERR, not STDOUT (explicit assertion
@@ -78,6 +79,24 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 # on Windows and 0 (no-op) on macOS/Linux.  Required for every python.exe subprocess so
 # the headless Bash-tool parent does not get a focus-stealing console window.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+# A cheap, read-only op in WORKTREE_SCOPED_OPS, used as the vehicle for the two
+# `_origin_worktree`-injection branches below. Requirements on the vehicle: it must
+# be worktree-scoped (so main() resolves a repo root and injects it) and its cost
+# must not scale with the repo's history or corpora — see
+# `test_worktree_scoped_op_dispatches_inside_repo`'s "Vehicle note" for the
+# incident behind that second requirement. The candidate path is deliberately one
+# that does not exist: the handler resolves it RELATIVE to the injected repo root
+# and reports it back, so the resulting error string is itself the witness that
+# repo_root arrived.
+_WORKTREE_SCOPED_PROBE = (
+    "handoff.has_live_children",
+    '{"candidate": "state/handoffs/does-not-exist-invoke-main-test.md"}',
+)
+_PROBE_EXPECTED_ERROR = (
+    "candidate not found on disk: state/handoffs/does-not-exist-invoke-main-test.md"
+)
 
 
 def _make_env(**overrides: str) -> dict[str, str]:
@@ -282,27 +301,39 @@ def test_params_not_a_dict_writes_to_stderr():
 # ---------------------------------------------------------------------------
 
 def test_worktree_scoped_op_dispatches_inside_repo():
-    """Branch 3: coverage.gate (show_top-scoped) run from the repo cwd dispatches.
+    """Branch 3: a worktree-scoped op run from the repo cwd dispatches.
 
     When main() detects an op in WORKTREE_SCOPED_OPS, it calls _resolve_repo_root()
     (which runs git rev-parse from cwd) and injects _origin_worktree into the
     JSON-RPC envelope.  dispatch_message then receives a valid repo_root.
 
-    Behavioral assertion: coverage.gate returns a JSON-RPC response on stdout (not
-    a fatal pre-dispatch error on stderr).  The response may be a success result or
-    a JSON-RPC error (gate may find no coverage data), but it MUST be dispatched —
-    proving _origin_worktree injection worked.
+    Behavioral assertion: the op returns a JSON-RPC response on stdout (not
+    a fatal pre-dispatch error on stderr), and its own error string is the
+    candidate-not-found one — which is only reachable AFTER repo_root resolved
+    (the handler's own `_ORIGIN_WORKTREE_MISSING_ERROR` branch fires first when
+    it did not), so this is a positive witness that injection worked, not just
+    that something got dispatched.
+
+    Vehicle note: this used to drive `coverage.gate`, which was a poor choice —
+    that op's cost scales with the repo's review-trail corpus (measured 48s on
+    this tree, past both the engine's own 30s dispatch timeout and this test's
+    subprocess timeout), so the test measured an unrelated subsystem's runtime
+    rather than invoke's argument plumbing. `handoff.has_live_children` is
+    worktree-scoped the same way (`op_scopes._OP_KEY_SCOPE`, common_dir class,
+    hence in WORKTREE_SCOPED_OPS) and returns in ~0.1s. Do NOT restore a
+    history-walking op here; the scope class is the only property this test
+    needs from its vehicle.
 
     Contrast with test_none_scoped_outside_git_tree: a none-scoped op never calls
     _resolve_repo_root(), so running OUTSIDE a git tree still exits 0.
     """
     # Run from the claude-klabauter repo root — git rev-parse will succeed here.
-    result = _invoke("coverage.gate", "{}", cwd=_PROJECT_ROOT)
+    result = _invoke(*_WORKTREE_SCOPED_PROBE, cwd=_PROJECT_ROOT)
 
     # returncode 0 = success result; returncode 1 = JSON-RPC error result.
     # Either means dispatch completed.
     assert result.returncode in (0, 1), (
-        f"coverage.gate must exit 0 or 1; got {result.returncode}.\n"
+        f"{_WORKTREE_SCOPED_PROBE[0]} must exit 0 or 1; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
@@ -317,6 +348,10 @@ def test_worktree_scoped_op_dispatches_inside_repo():
     )
     assert "result" in parsed or "error" in parsed, (
         f"Response must have 'result' or 'error'; got {parsed}"
+    )
+    assert parsed["result"]["error"] == _PROBE_EXPECTED_ERROR, (
+        f"handler must have seen a resolved repo_root (its own missing-worktree "
+        f"branch would have fired instead); got {parsed}"
     )
 
     # stderr must be empty — no fatal pre-dispatch error.
@@ -382,18 +417,24 @@ def test_none_scoped_outside_git_tree():
 # ---------------------------------------------------------------------------
 
 def test_explicit_repo_flag_honored():
-    """Branch 5: coverage.gate with --repo <root> resolves the repo explicitly.
+    """Branch 5: a worktree-scoped op with --repo <root> resolves the repo explicitly.
 
     When --repo is passed, _resolve_repo_root() uses Path(repo_arg).resolve()
     rather than calling git rev-parse from cwd.  The test runs from the project
     root with an explicit --repo flag and confirms:
       - stdout is a JSON-RPC 2.0 response (dispatch succeeded).
       - stderr is empty (no fatal pre-dispatch failure).
+
+    Same vehicle, and the same reason for it, as
+    `test_worktree_scoped_op_dispatches_inside_repo` — see its "Vehicle note".
+    The empty-stderr assertion here is what the old `coverage.gate` vehicle could
+    not satisfy at all: a dispatch that outruns the engine's 30s timeout prints a
+    timeout line to stderr, so the assertion was hostage to that op's runtime.
     """
-    result = _invoke("coverage.gate", "{}", "--repo", _PROJECT_ROOT)
+    result = _invoke(*_WORKTREE_SCOPED_PROBE, "--repo", _PROJECT_ROOT)
 
     assert result.returncode in (0, 1), (
-        f"coverage.gate with --repo must exit 0 or 1; got {result.returncode}.\n"
+        f"{_WORKTREE_SCOPED_PROBE[0]} with --repo must exit 0 or 1; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 

@@ -20,15 +20,27 @@ global-accumulator contract byte-for-byte in behavior:
     sweep_orphans(parent_roots, whitelist, *,
                   apply, json_mode, quiet, log_path=None) -> (bytes, items)
 
-A fifth phase function, `sweep_empty_toplevel_dirs`, is **NET-NEW — it has
-NO bash-oracle counterpart and is NOT part of the cruft-sweep.sh byte-parity
-port** (see "Net-new phase" section below). It shares this module's
+A fifth phase function, `sweep_empty_toplevel_dirs`, and a sixth,
+`sweep_harness_scratchpads` (class "scratchpad" — adapts
+`coordinator_core.ops.scratchpad_sweep.sweep_scratchpads`, NOT to be
+confused with the `sweep_scratch`/"scratch" class above, a different
+corpus), are **NET-NEW — neither has a bash-oracle counterpart and neither
+is part of the cruft-sweep.sh byte-parity port** (see "Net-new phase"
+section below). `sweep_empty_toplevel_dirs` shares this module's full
 signature contract (`(..., *, apply, json_mode, quiet, log_path=None,
 watchdog_ceiling_secs=None, emit_fn=None) -> (bytes, items)`) and reuses the
 same shared helpers (`_Watchdog`, `_banner`, `emit_jsonl`, `_delete_path`,
-`_resolve_repo_root`, `_get_mtime`) rather than growing private twins, but a
+`_resolve_repo_root`, `_get_mtime`) rather than growing private twins.
+`sweep_harness_scratchpads` shares the `(apply, json_mode, quiet,
+log_path=None, emit_fn=None)` slice of that contract and reuses `_banner`
+and `emit_jsonl`, but does NOT declare `watchdog_ceiling_secs` and has no
+wall-clock ceiling of any kind: it is a thin adapter over
+`scratchpad_sweep.sweep_scratchpads`, which contains no watchdog, timeout,
+or lock, so its directory walk is uninterruptible mid-loop today. A future
+maintainer should not assume ceiling protection exists on this phase. A
 future reader auditing this module against the bash oracle line-for-line
-should NOT go looking for the bash it was "ported" from — there isn't one.
+should NOT go looking for the bash either net-new phase was "ported" from
+— there isn't one.
 
 Net-new phase — sweep_empty_toplevel_dirs (added 2026-07-28, incident-driven):
   Catches, by structure rather than by name, a class of cruft the four
@@ -64,6 +76,17 @@ Net-new phase — sweep_empty_toplevel_dirs (added 2026-07-28, incident-driven):
   Tests live alongside the other four phases' tests in
   `coordinator_core/ops/test_cruft_sweep.py`, asserted purely against this
   module's own Python behavior, never against a bash byte-parity oracle.
+
+Net-new phase — sweep_harness_scratchpads (class "scratchpad"): a thin
+  adapter over `coordinator_core.ops.scratchpad_sweep.sweep_scratchpads`,
+  which owns ALL policy (TTL age gate, size-cut pass, cohort walking,
+  session-liveness) for the harness temp-root scratchpad corpus
+  (`<tempfile.gettempdir()>/claude/<slug>/<session>/scratchpad/`) — this
+  phase reimplements none of it, only translates that module's report dict
+  into the `(bytes, items)` + `emit_jsonl` contract every other phase here
+  shares. `apply` maps directly to `sweep_scratchpads(reclaim=apply)`.
+  No bash-oracle counterpart; same golden-diff exclusion rationale as
+  `sweep_empty_toplevel_dirs` above.
 
 Each accepts an optional `emit_fn: Callable[[dict], None]` — defaults to
 `print(json.dumps(rec))` on stdout (bash-parity), but a caller (golden-diff
@@ -1615,6 +1638,117 @@ def sweep_empty_toplevel_dirs(
 
 
 # ---------------------------------------------------------------------------
+# Phase F (net-new): harness scratchpad-temp-root sweep. Adapter over
+# `coordinator_core.ops.scratchpad_sweep.sweep_scratchpads`, which owns ALL
+# policy (TTL age gate, size-cut pass, cohort walking, session-liveness) —
+# this phase function does not reimplement any of it, only translates that
+# module's report dict into this module's (total_bytes, total_items) +
+# per-item emit_jsonl contract.
+#
+# NOT to be confused with `sweep_scratch` (repo-local name-anchored `tmp`/
+# `scratch`/`output` dirs) or the `"scratch"` class above — this phase sweeps
+# the OS harness temp root (`<tempfile.gettempdir()>/claude/<slug>/<session>/
+# scratchpad/`), an entirely different corpus. Registered under the
+# `"scratchpad"` class name, deliberately distinct from `"scratch"`.
+# ---------------------------------------------------------------------------
+
+
+def sweep_harness_scratchpads(
+    *,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    log_path: Optional[Path] = None,
+    temp_root: Optional[str] = None,
+    ttl_days: Optional[float] = None,
+    emit_fn: Optional[EmitFn] = None,
+    **scratchpad_sweep_kwargs,
+) -> Tuple[int, int]:
+    """Adapter phase over `scratchpad_sweep.sweep_scratchpads`. Returns
+    (total_bytes, total_items) over the "reclaimable"/"reclaimed" and
+    "size-cut-reclaimable"/"size-cut-reclaimed" verdicts (mutually exclusive
+    per `apply`, matching every other phase's dry-run-counts-as-if-pruned
+    convention).
+
+    `apply` maps to `sweep_scratchpads(reclaim=apply)` — the single most
+    important line in this adapter (see module docstring / dispatch brief):
+    getting this backwards deletes another session's live scratch on a
+    nominal dry-run.
+
+    `temp_root` / `ttl_days` / any other `sweep_scratchpads` kwarg (e.g.
+    `project_slugs`, `self_session_id`, `slug_to_root_map`,
+    `size_cut_target_bytes`, `size_cut_floor_days`) pass straight through —
+    this adapter owns none of that policy.
+    """
+    from coordinator_core.ops.scratchpad_sweep import sweep_scratchpads
+
+    kwargs = dict(scratchpad_sweep_kwargs)
+    kwargs["reclaim"] = apply
+    if temp_root is not None:
+        kwargs["temp_root"] = temp_root
+    if ttl_days is not None:
+        kwargs["ttl_days"] = ttl_days
+
+    report = sweep_scratchpads(**kwargs)
+
+    total_bytes = 0
+    total_items = 0
+
+    _RECLAIM_VERDICTS = ("reclaimable", "reclaimed", "size-cut-reclaimable", "size-cut-reclaimed")
+
+    for entry in report["entries"]:
+        verdict = entry["verdict"]
+        path = entry["path"]
+        name = f"{entry['project_slug']}/{entry['session_id']}"
+        size_bytes = entry.get("bytes") or 0
+        age_days = entry.get("age_days")
+        # Review: code-reviewer -- Finding 5: don't fabricate epoch-1970 for
+        # verdicts (e.g. "live") that never computed age_days -- fall back to
+        # a real stat of the scratchpad path itself (_get_mtime's own "real
+        # mtime, 0 only on genuine stat failure" convention, matching every
+        # other phase in this module) rather than a blind 0.
+        mtime = (
+            int(time.time() - (age_days * 86400))
+            if age_days is not None
+            else _get_mtime(Path(path))
+        )
+
+        if verdict in _RECLAIM_VERDICTS:
+            total_bytes += size_bytes
+            total_items += 1
+            if json_mode:
+                is_size_cut = verdict.startswith("size-cut-")
+                evidence = (
+                    f"age {age_days:.2f}d; size-cut pruned cohort to meet target bytes"
+                    if is_size_cut and age_days is not None
+                    else (f"age {age_days:.2f}d > ttl {report['ttl_days']}d" if age_days is not None else "dead scratchpad")
+                )
+                emit_jsonl("scratchpad", path, name, size_bytes, mtime, "auto-prune", evidence, emit_fn=emit_fn)
+        elif verdict == "error":
+            if json_mode:
+                emit_jsonl("scratchpad", path, name, size_bytes, mtime, "prune-failed",
+                           entry.get("error") or "scratchpad sweep entry error", emit_fn=emit_fn)
+        else:
+            if json_mode:
+                emit_jsonl("scratchpad", path, name, size_bytes, mtime, "skip",
+                           f"verdict={verdict}", emit_fn=emit_fn)
+
+    total_mb = total_bytes // 1048576
+    if not json_mode and not quiet:
+        mode_label = "APPLY" if apply else "DRY-RUN"
+        _banner(
+            f"[cruft-sweep] scratchpad ({mode_label}, harness temp-root): "
+            f"{total_items} items, ~{total_mb} MB reclaimable",
+            quiet=False,
+        )
+
+    if apply and total_items > 0:
+        _append_log_row(log_path, "scratchpad", total_bytes, total_items)
+
+    return total_bytes, total_items
+
+
+# ---------------------------------------------------------------------------
 # Registered op — convenience JSON-RPC façade over the four phase functions.
 # Primary call path remains the example-doctrine-repo trampoline's in-process import (recipe §
 # example-doctrine-repo-side work item 5); this registration exists for op-registry parity /
@@ -1702,11 +1836,22 @@ def _run_all_phases(
             log_path=log_path, emit_fn=emit_fn,
         )
 
+    scratchpad_bytes = scratchpad_items = 0
+    if class_ in ("scratchpad", "all"):
+        # NET-NEW class (see Phase F docstring above) — delegates all
+        # policy to scratchpad_sweep.sweep_scratchpads; folded into the
+        # grand total by this façade's own design, same as empty-dirs.
+        scratchpad_bytes, scratchpad_items = sweep_harness_scratchpads(
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+
     return {
         "harness": {"bytes": harness_bytes, "items": harness_items},
         "scratch": {"bytes": scratch_bytes + sandbox_bytes, "items": scratch_items + sandbox_items},
         "orphans": {"bytes": orphans_bytes, "items": orphans_items},
         "empty_dirs": {"bytes": empty_dirs_bytes, "items": empty_dirs_items},
+        "scratchpad": {"bytes": scratchpad_bytes, "items": scratchpad_items},
         # Grand-total components, kept separate from the display-oriented
         # "scratch" bucket above. cruft-sweep.sh's grand-total banner
         # (lines 1525-1526) is HARNESS + SCRATCH + ORPHANS only — it never
@@ -1718,8 +1863,8 @@ def _run_all_phases(
         # 1 GB reclaimable-space advisory threshold. EMPTY_DIRS is folded
         # into this facade's grand total (its own net-new design choice,
         # not an oracle mirror).
-        "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes,
-        "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items,
+        "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes + scratchpad_bytes,
+        "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items + scratchpad_items,
     }
 
 
@@ -1728,11 +1873,15 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC cruft_sweep.run handler — MUTATING when apply=True.
 
     Dispatches ONE class ("harness" | "scratch" | "orphans" | "empty-dirs" |
-    "all") against fully-resolved params. Every path/threshold/list value
-    must already be resolved by the caller — this handler does NOT touch
-    machine-local, coordinator_state_root, or any registry. "empty-dirs" is
-    the net-new phase (see module docstring) — reuses `repo_root_override`
-    and `whitelist`, no dedicated params of its own.
+    "scratchpad" | "all") against fully-resolved params. Every path/threshold/
+    list value must already be resolved by the caller — this handler does NOT
+    touch machine-local, coordinator_state_root, or any registry. "empty-dirs"
+    is a net-new phase (see module docstring) — reuses `repo_root_override`
+    and `whitelist`, no dedicated params of its own. "scratchpad" is also
+    net-new (see Phase F docstring) — a fully independent corpus (the OS
+    harness temp root, not this repo), so it takes none of the other
+    classes' params either; it delegates entirely to
+    `scratchpad_sweep.sweep_scratchpads`'s own defaults.
 
     Params:
         class_ (str, default "all")
@@ -1786,6 +1935,7 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "scratch": {"bytes": 0, "items": 0},
             "orphans": {"bytes": 0, "items": 0},
             "empty_dirs": {"bytes": 0, "items": 0},
+            "scratchpad": {"bytes": 0, "items": 0},
         }
         empty_result = {"totals": empty_totals, "total_bytes": 0, "total_items": 0}
         if json_mode:

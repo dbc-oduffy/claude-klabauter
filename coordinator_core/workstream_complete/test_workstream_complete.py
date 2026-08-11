@@ -19,6 +19,7 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -141,7 +142,16 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
     directives = decision_object["directives"]
     assert directives, "expected at least one directive on the chain-terminal path"
     for directive in directives:
-        assert set(directive.keys()) == {"id", "cli", "args", "depends_on", "already_satisfied"}
+        # `best_effort` is optional per a40dd5076 (a best-effort directive
+        # cannot fail a ceremony) — the required set is what this guard
+        # pins; an optional key landing later must not silently widen it.
+        assert set(directive.keys()) - {"best_effort"} == {
+            "id",
+            "cli",
+            "args",
+            "depends_on",
+            "already_satisfied",
+        }
         assert directive["cli"] in _KNOWN_CLIS
         # A CONSUMES_MANIFEST member ships as either `<name>.py` or a
         # bareword launcher shim (e.g. `emit-cadence`, `session-claim-cli`,
@@ -512,6 +522,172 @@ def test_review_scale_judgment_point_unresolved_carries_no_recommendation(monkey
     assert jp["recommendation"] is None
 
 
+def test_review_scale_judgment_point_unresolved_enum_is_never_a_singleton(monkeypatch, tmp_path):
+    """(e2) example-retrieval-repo-em memo (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-
+    jp-review-scale-null-is-blocked-computation.md, defect 2): dropping the
+    recommendation in (e) left `proceed-unresolved` as the enum's SOLE
+    value, so the only recordable answer was the one this point's own
+    `reason` calls routing around a missing verdict -- an EM who correctly
+    determined the close IS partition-mandatory could not say so. The
+    unresolved enum must therefore offer a settling exit alongside the
+    route-around, and must never regress to a singleton.
+
+    Review: coordinator:code-reviewer (Nit 1) — this test actually traverses
+    the PENDING branch (chain-terminal, no verdict record on disk at all)
+    under commit 2's added call-site gating, not a generic "unresolved"
+    branch distinct from it; the invariant this test uniquely protects,
+    which `test_review_scale_unresolved_pending_gate_does_not_assert_a_
+    carry_forward_failure` does NOT cover, is that the enum is never a
+    singleton and never regresses to only `proceed-unresolved` — kept here
+    rather than duplicated there.
+
+    The absent `single-reviewer-ok` counterpart is asserted deliberately:
+    a hand-declared permissive verdict is what `chain_partition_verdict_
+    store`'s fail-closed contract exists to make impossible, and the enum
+    must not reopen it here."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(chain_partition_verdict=None),
+        repo_root=tmp_path,
+    )
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+    values = [d["value"] for d in jp["dispositions"]]
+
+    # Asserted as an INVARIANT over every unresolved cause, not as literals:
+    # the three causes name their settling exit differently (run the pending
+    # gate / re-run a gate whose record is corrupt / supply a session-scoped
+    # input), and pinning one spelling here would fail the next time a cause
+    # is split out, without any safety property having regressed.
+    #
+    # Review: coordinator:code-reviewer (Nit 2) — tightened from a bare
+    # substring match (`"report" in value`) to membership in the known
+    # settling-disposition allow-list, so an unrelated future value like
+    # "reporter-stub" (contains "report", no real settling semantics)
+    # cannot satisfy this assertion.
+    _KNOWN_SETTLING_DISPOSITIONS = frozenset({
+        "run-the-pending-gate-and-recompute",
+        "rerun-gate-then-report-if-still-unreadable",
+        "resolve-input-and-recompute",
+    })
+    assert "partition-review-by-hand" in values
+    assert any(
+        (value.endswith("-recompute") or "report" in value) and value in _KNOWN_SETTLING_DISPOSITIONS
+        for value in values
+    )
+    assert "proceed-unresolved" in values
+    assert values != ["proceed-unresolved"]
+    assert not any("single-reviewer-ok" in value for value in values)
+    assert jp["recommendation"] is None
+
+
+def test_review_scale_unresolved_pending_gate_does_not_assert_a_carry_forward_failure(monkeypatch, tmp_path):
+    """(e3) PM ruling 2026-08-10. `brief()` appends `d-run-chain-plan-
+    brightline-gate` unconditionally on a chain terminal with a resolved
+    consumed handoff, so the ORDINARY reason the chain verdict is missing
+    is that the producer on this same envelope has not run yet.
+
+    The point must say exactly that, and must NOT assert the break-class
+    cause ("a verdict that was not carried forward") it has checked nothing
+    to earn -- that assertion was the defect: it told every EM their
+    persistence seam had failed when the truth was simply "not yet"."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(chain_partition_verdict=None),
+        repo_root=tmp_path,
+    )
+
+    directive_ids = [d.get("id") for d in decision_object["directives"]]
+    assert "d-run-chain-plan-brightline-gate" in directive_ids
+
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+    assert "not carried forward" not in jp["reason"]
+    assert "presence=absent" in jp["evidence"]
+    assert "d-run-chain-plan-brightline-gate" in jp["question"]
+    assert "run-the-pending-gate-and-recompute" in [d["value"] for d in jp["dispositions"]]
+
+
+def test_review_scale_unresolved_unreadable_record_is_reported_as_break_class(monkeypatch, tmp_path):
+    """(e4) The complement: when a record DOES exist for this session and
+    `read_verdict_record` rejects it, the gate really did run and its
+    verdict really did not survive the seam. That is the one cause the old
+    blanket prose described correctly, and it must be named break-class --
+    a corrupt seam is reported, never quietly answered as a scale call."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    record_path = chain_partition_verdict_store.verdict_store_path(tmp_path, "testsid123")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text("{ this is not valid json", encoding="utf-8")
+
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(chain_partition_verdict=None),
+        repo_root=tmp_path,
+    )
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+
+    assert "presence=unreadable" in jp["evidence"]
+    assert "BREAK-CLASS" in jp["question"]
+    assert "did not carry forward" in jp["reason"]
+    assert "rerun-gate-then-report-if-still-unreadable" in [d["value"] for d in jp["dispositions"]]
+
+
+def test_review_scale_chain_terminal_with_empty_consumed_handoff_does_not_claim_chain_directive_pending(monkeypatch, tmp_path):
+    """Review: coordinator:code-reviewer (P1) — regression pin for the bug
+    the finding identified: a chain-terminal gate with an EMPTY
+    `consumed_handoff` takes the SESSION-scoped brightline directive at line
+    ~970 (`d-run-review-brightline-gate`), never the chain-scoped one. Every
+    other test in this module hardcodes a non-empty `consumed_handoff`,
+    which is why the omitted `and gate.consumed_handoff` conjunct at the
+    `jp-review-scale` call site slipped through: `review_scale_chain_
+    terminal` must track the SAME condition that decides which directive is
+    actually live, so the point can never assert a chain-scoped directive
+    ("d-run-chain-plan-brightline-gate") is pending on an envelope that only
+    ever got the session-scoped one."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=""))
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(chain_partition_verdict=None),
+        repo_root=tmp_path,
+    )
+    directive_ids = [d.get("id") for d in decision_object["directives"]]
+    assert "d-run-review-brightline-gate" in directive_ids
+    assert "d-run-chain-plan-brightline-gate" not in directive_ids
+
+    jp = next((jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale"), None)
+    if jp is not None:
+        assert "d-run-chain-plan-brightline-gate" not in jp["question"]
+        assert "d-run-chain-plan-brightline-gate" not in jp.get("reason", "")
+
+
+def test_review_scale_presence_rejects_a_from_handoff_mismatched_record(monkeypatch, tmp_path):
+    """Review: coordinator:code-reviewer (P2) — a record that is well-formed
+    and session-matched but was computed against a DIFFERENT
+    `from_handoff` than this close's `gate.consumed_handoff` (e.g. a stale
+    record from an earlier attempt on the same sid) must report
+    `PRESENCE_UNREADABLE`, not `PRESENCE_PRESENT` -- `verdict_record_
+    presence` must reject exactly what `read_verdict_record` (the value
+    axis it exists to diagnose) rejects."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    chain_partition_verdict_store.write_verdict_record(
+        tmp_path,
+        session_id="testsid123",
+        verdict="single-reviewer-ok",
+        from_handoff="state/handoffs/a-different-handoff.md",
+        git_range=None,
+        basis="test",
+        tier="test",
+    )
+
+    presence = chain_partition_verdict_store.verdict_record_presence(
+        tmp_path, session_id="testsid123", expected_from_handoff="state/handoffs/x.md"
+    )
+    assert presence == chain_partition_verdict_store.PRESENCE_UNREADABLE
+
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(chain_partition_verdict=None),
+        repo_root=tmp_path,
+    )
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+    assert "presence=unreadable" in jp["evidence"]
+
+
 def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_scale(monkeypatch, tmp_path):
     """(f) the RESOLVED branch is untouched by the mechanism-3 fix: a
     resolved, non-1/2 row (here row 5) still carries the trusted
@@ -867,6 +1043,10 @@ def test_commit_subject_missing_blocks_wsc_tail_and_names_named_halt(monkeypatch
     wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
     assert "jp-commit-subject-missing" in _depends_on_list(wsc_tail)
     assert "--subject" not in wsc_tail["args"]
+
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-commit-subject-missing")
+    assert "decisions['subject']" in jp["reason"]
+    assert "no disposition" in jp["reason"]
 
 
 def test_commit_subject_resolved_from_commit_message_authoring_decision_wires_wsc_tail_args(monkeypatch, tmp_path):
@@ -2040,7 +2220,8 @@ def test_all_prefix_multi_match_surfaces_example_market_data_repo_shape(monkeypa
 
 def test_one_exact_match_in_a_larger_scope_still_flagged_by_scope_size_rule(monkeypatch, tmp_path):
     """A single EXACT match (`exact_match_count == 1`) clears the new
-    all-prefix check, but the pre-existing `scope_size >= 2` rule still
+    all-prefix check, but the pre-existing rule for a `scope_size` of 2 or
+    more still
     fires -- the exact hit alone does not corroborate the rest of a 7-entry
     scope."""
     gate = _gate(
@@ -2110,7 +2291,7 @@ def test_one_exact_plus_two_prefix_matches_still_flags_the_near_neighbour_miss(m
     """The 2026-08-06 second-pass regression: gating the weak-single-exact
     case on `matched_scope_entry_count == 1` let extra worthless prefix
     hits SILENCE an already-flagged attribution. `exact_match_count == 1`
-    and `scope_size >= 2` must flag regardless of `matched_scope_entry_
+    and a `scope_size` of 2 or more must flag regardless of `matched_scope_entry_
     count`."""
     gate = _gate(
         "predecessor-consumed",
@@ -2603,6 +2784,7 @@ def test_handoff_frontmatter_resolves_governing_plan_when_no_decisions_supplied(
     assert decision_object["preflight"]["governing_plan_resolution"] == {
         "source": "handoff_frontmatter",
         "slug": slug,
+        "path": str(tmp_path / "docs" / "plans" / f"{slug}.md"),
     }
 
 
@@ -2618,6 +2800,7 @@ def test_decisions_slug_still_wins_over_handoff_frontmatter_field(monkeypatch, t
     assert decision_object["preflight"]["governing_plan_resolution"] == {
         "source": "decisions_slug",
         "slug": decisions_slug,
+        "path": str(tmp_path / "docs" / "plans" / f"{decisions_slug}.md"),
     }
 
 
@@ -2635,6 +2818,7 @@ def test_decisions_path_still_wins_over_handoff_frontmatter_field(monkeypatch, t
     assert decision_object["preflight"]["governing_plan_resolution"] == {
         "source": "decisions_path",
         "slug": decisions_slug,
+        "path": str(tmp_path / "docs" / "plans" / f"{decisions_slug}.md"),
     }
 
 
@@ -2649,6 +2833,7 @@ def test_handoff_frontmatter_naming_a_nonexistent_plan_resolves_none_not_a_fabri
     assert decision_object["preflight"]["governing_plan_resolution"] == {
         "source": "handoff_frontmatter_not_found",
         "slug": None,
+        "path": None,
     }
 
 
@@ -2685,6 +2870,7 @@ def test_archived_consumed_handoff_still_resolves_governing_plan(monkeypatch, tm
     assert decision_object["preflight"]["governing_plan_resolution"] == {
         "source": "handoff_frontmatter",
         "slug": slug,
+        "path": str(tmp_path / "docs" / "plans" / f"{slug}.md"),
     }
 
 
@@ -2807,6 +2993,184 @@ def test_classify_session_authored_files_with_none_start_time_classifies_nothing
     for row in results:
         assert row["session_authored"] is False
         assert row["reason"] == "fails predicate (a) and (b)"
+
+
+def test_classify_session_authored_files_with_none_start_time_issues_no_git_log_call(tmp_path, monkeypatch):
+    """`session_start_time=None`: predicate (a) is not computable, so the
+    batched `_session_created_paths` git-log call must not run at all."""
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    _init_git_repo(tmp_path)
+    (tmp_path / "some-untracked.md").write_text("content\n", encoding="utf-8")
+
+    def _fail_if_called(repo_root, args):
+        if args and args[0] == "log":
+            raise AssertionError(f"git log must not be spawned when session_start_time is None, got {args}")
+        return real_run_git(repo_root, args)
+
+    real_run_git = directives_memo_lifecycle._run_git
+
+    monkeypatch.setattr(directives_memo_lifecycle, "_run_git", _fail_if_called)
+
+    results = directives_memo_lifecycle.classify_session_authored_files(
+        tmp_path, session_start_time=None, known_concurrent_paths=frozenset()
+    )
+    assert results
+
+
+def test_classify_session_authored_files_batches_one_git_log_call_regardless_of_dirty_count(tmp_path, monkeypatch):
+    """Regression guard for the N+1 hang: with N dirty files, the number of
+    `git log --diff-filter=A` calls must stay 1, not scale with N."""
+    import subprocess as subprocess_module
+    from datetime import datetime, timedelta, timezone
+
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    _init_git_repo(tmp_path)
+    for i in range(12):
+        (tmp_path / f"dirty-{i}.md").write_text(f"content {i}\n", encoding="utf-8")
+
+    session_start_time = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    real_run_git = directives_memo_lifecycle._run_git
+    log_calls: list[list[str]] = []
+
+    def _counting_run_git(repo_root, args):
+        if args and args[0] == "log" and "--diff-filter=A" in args:
+            log_calls.append(args)
+        return real_run_git(repo_root, args)
+
+    monkeypatch.setattr(directives_memo_lifecycle, "_run_git", _counting_run_git)
+
+    results = directives_memo_lifecycle.classify_session_authored_files(
+        tmp_path, session_start_time, known_concurrent_paths=frozenset()
+    )
+    assert len(results) == 12
+    assert len(log_calls) == 1, (
+        f"expected exactly one batched 'git log --diff-filter=A' call regardless of dirty-file "
+        f"count, got {len(log_calls)}: {log_calls}"
+    )
+    assert "--" not in log_calls[0], "the batched call must carry no pathspec -- per-path spawning is the regression"
+
+
+def test_classify_session_authored_files_git_failure_degrades_predicate_a_to_false(tmp_path, monkeypatch):
+    """A failing/erroring batched git-log call must degrade predicate (a) to
+    False for every path, never raise and never mark everything authored."""
+    from datetime import datetime, timedelta, timezone
+
+    import subprocess as subprocess_module
+
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    _init_git_repo(tmp_path)
+    (tmp_path / "tracked-dirty.md").write_text("committed\n", encoding="utf-8")
+    subprocess_module.run(["git", "add", "tracked-dirty.md"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "commit", "-q", "-m", "add tracked-dirty"], cwd=tmp_path, check=True)
+
+    session_start_time = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Dirty (but not untracked) the already-committed file so predicate (b)
+    # -- which requires "??" untracked status -- cannot fire regardless of
+    # the git-log failure this test is isolating predicate (a) against.
+    (tmp_path / "tracked-dirty.md").write_text("edited\n", encoding="utf-8")
+
+    real_run_git = directives_memo_lifecycle._run_git
+
+    def _fail_only_log(repo_root, args):
+        if args and args[0] == "log" and "--diff-filter=A" in args:
+            return None
+        return real_run_git(repo_root, args)
+
+    monkeypatch.setattr(directives_memo_lifecycle, "_run_git", _fail_only_log)
+
+    results = directives_memo_lifecycle.classify_session_authored_files(
+        tmp_path, session_start_time, known_concurrent_paths=frozenset()
+    )
+    row = next(r for r in results if r["path"] == "tracked-dirty.md")
+    assert row["session_authored"] is False
+    assert row["reason"] == "fails predicate (a) and (b)"
+
+
+def test_classify_session_authored_files_equivalent_to_per_path_predicate(tmp_path):
+    """Equivalence: files added since session_start_time vs. before it must
+    classify identically to the (removed) per-path `_created_this_session`
+    predicate, including exact `reason` strings."""
+    import subprocess as subprocess_module
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    _init_git_repo(tmp_path)
+
+    # Committed before session_start_time -- not session-authored via (a).
+    (tmp_path / "old-file.md").write_text("old\n", encoding="utf-8")
+    subprocess_module.run(["git", "add", "old-file.md"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "commit", "-q", "-m", "old"], cwd=tmp_path, check=True)
+
+    # `--since` compares at whole-second granularity -- pad on both sides so
+    # the old/new commits land unambiguously before/after session_start_time.
+    time.sleep(1.5)
+    session_start_time = datetime.now(timezone.utc)
+    time.sleep(1.5)
+
+    # Committed after session_start_time -- session-authored via (a).
+    (tmp_path / "new-file.md").write_text("new\n", encoding="utf-8")
+    subprocess_module.run(["git", "add", "new-file.md"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "commit", "-q", "-m", "new"], cwd=tmp_path, check=True)
+
+    # Dirty the committed files so both appear in porcelain status.
+    (tmp_path / "old-file.md").write_text("old edited\n", encoding="utf-8")
+    (tmp_path / "new-file.md").write_text("new edited\n", encoding="utf-8")
+
+    results = {
+        r["path"]: r
+        for r in directives_memo_lifecycle.classify_session_authored_files(
+            tmp_path, session_start_time, known_concurrent_paths=frozenset()
+        )
+    }
+
+    assert results["old-file.md"]["session_authored"] is False
+    assert results["old-file.md"]["reason"] == "fails predicate (a) and (b)"
+    assert results["new-file.md"]["session_authored"] is True
+    assert results["new-file.md"]["reason"] == "predicate (a): created this session"
+
+
+def test_classify_session_authored_files_batched_path_handles_quoted_filename(tmp_path):
+    """A path needing git's quoting (non-ASCII) must classify correctly
+    through the batched `--name-only` path -- exercises the normalization
+    convention this module shares with `_git_status_porcelain`: neither
+    call forces `core.quotepath=false`, so both see the SAME quoted-octal
+    form for a non-ASCII path and the string-equality membership test
+    still lines up (see this module's own docstring on why no override is
+    applied). `git status --porcelain` is the source of truth for what key
+    a caller sees; predicate (a) here proves the batched git-log path
+    produces a matching key for the same file, not an unquoted one that
+    would silently fail membership."""
+    import subprocess as subprocess_module
+    from datetime import datetime, timedelta, timezone
+
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    _init_git_repo(tmp_path)
+
+    weird_name = "café-notes.md"
+    (tmp_path / weird_name).write_text("notes\n", encoding="utf-8")
+    subprocess_module.run(["git", "add", weird_name], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "commit", "-q", "-m", "add weird name"], cwd=tmp_path, check=True)
+
+    session_start_time = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    # Dirty the committed file so it shows up in porcelain status too.
+    (tmp_path / weird_name).write_text("notes edited\n", encoding="utf-8")
+
+    results = directives_memo_lifecycle.classify_session_authored_files(
+        tmp_path, session_start_time, known_concurrent_paths=frozenset()
+    )
+    assert len(results) == 1, f"expected exactly one dirty path, got {results}"
+    row = results[0]
+    assert weird_name in row["path"] or "caf" in row["path"], f"unexpected path key: {row['path']!r}"
+    assert row["session_authored"] is True
+    assert row["reason"] == "predicate (a): created this session"
 
 
 # ---------------------------------------------------------------------------
@@ -3068,9 +3432,13 @@ def test_decisions_template_covers_every_judgment_point_id_both_directions(monke
 
 def test_decisions_template_free_value_keys_equal_union_of_module_constants(monkeypatch, tmp_path):
     """AC2/AC3: the template's non-judgment-point keys equal the UNION of
-    each `directives_*` submodule's own `FREE_VALUE_KEYS` constant (AC3),
-    every one valued `None` — never a hand-copied list, never a phantom
-    key absent from every submodule's constant."""
+    each `directives_*` submodule's own `FREE_VALUE_KEYS` constant (AC3).
+    Every key stays `None` EXCEPT the three C4/AC5-declared keys
+    (`wsc.DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS`), which now
+    pre-fill from data this SAME run already resolved rather than a
+    hand-copied list or a phantom key absent from every submodule's
+    constant — see `test_decisions_template_prefills_*` above for the
+    positive assertions on those three."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
@@ -3079,6 +3447,8 @@ def test_decisions_template_free_value_keys_equal_union_of_module_constants(monk
     free_value_keys_in_template = set(template.keys()) - jp_ids
     assert free_value_keys_in_template == _expected_free_value_keys()
     for key in free_value_keys_in_template:
+        if key in wsc.DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS:
+            continue
         assert template[key] is None
 
 
@@ -3842,3 +4212,267 @@ def test_next_move_with_no_verified_safe_directives_states_all_reFire():
     )
     assert "None of this run's directives are verified safe to replay" in next_move
     assert "re-fire" in next_move
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md) --
+# `decisions_template` threads the SAME `brief()` run's already-resolved
+# governing_plan_slug/governing_plan_path/stage_paths values instead of
+# nulling them, per the DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS
+# mapping (AC5); the three corrected false-observation strings (stage-paths
+# producer/evidence, completion-entry-scaffold absent-vs-placeholder); and
+# the AC8 regression guard that this template-population change did not
+# demote any of the five AC3-protected judgment points.
+# ---------------------------------------------------------------------------
+
+
+def test_decisions_template_prefills_governing_plan_slug_and_path_when_resolved(monkeypatch, tmp_path):
+    slug = "template-prefill-plan"
+    _write_plan(tmp_path, slug)
+    _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{slug}.md")
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    resolution = decision_object["preflight"]["governing_plan_resolution"]
+    assert resolution["slug"] == slug
+    assert resolution["path"] is not None
+
+    template = decision_object["preflight"]["decisions_template"]
+    assert template["governing_plan_slug"] == resolution["slug"]
+    assert template["governing_plan_path"] == resolution["path"]
+
+
+def test_decisions_template_governing_plan_keys_stay_none_when_unresolved(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    resolution = decision_object["preflight"]["governing_plan_resolution"]
+    assert resolution["slug"] is None
+    assert resolution["path"] is None
+    template = decision_object["preflight"]["decisions_template"]
+    assert template["governing_plan_slug"] is None
+    assert template["governing_plan_path"] is None
+
+
+def test_decisions_template_prefills_stage_paths_from_gates_candidates(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    monkeypatch.setattr(
+        wsc.directives_memo_lifecycle,
+        "classify_session_authored_files",
+        lambda root, start, known_concurrent_paths=frozenset(): [
+            {"path": "state/some-file.md", "session_authored": True}
+        ],
+    )
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+    candidates = decision_object["gates"]["stage_paths_candidates"]
+    assert candidates == ["state/some-file.md"]
+    template = decision_object["preflight"]["decisions_template"]
+    assert template["stage_paths"] == candidates
+
+
+def test_decisions_template_stage_paths_stays_none_when_caller_already_supplied_it(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions={"subject": "a commit subject", "stage_paths": ["state/already-known.md"]},
+        repo_root=tmp_path,
+    )
+    assert decision_object["gates"]["stage_paths_candidates"] is None
+    template = decision_object["preflight"]["decisions_template"]
+    assert template["stage_paths"] is None
+
+
+def test_build_decisions_template_only_declared_ac5_keys_are_ever_prefilled():
+    """Negative-spec: a key not in `DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_
+    PATHS` stays `None` even when `resolved_free_values` supplies a value for
+    it -- only the three declared keys are in scope for this chunk."""
+    resolved = {
+        "governing_plan_slug": "some-plan",
+        "governing_plan_path": "docs/plans/some-plan.md",
+        "stage_paths": ["a", "b"],
+        "review_partition": {"range": "a..b"},  # not a declared key
+    }
+    template = wsc.build_decisions_template([], resolved)
+    assert template["governing_plan_slug"] == "some-plan"
+    assert template["governing_plan_path"] == "docs/plans/some-plan.md"
+    assert template["stage_paths"] == ["a", "b"]
+    assert template["review_partition"] is None
+
+
+def test_build_decisions_template_declared_mapping_names_the_real_envelope_paths():
+    assert wsc.DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS == {
+        "governing_plan_slug": "preflight.governing_plan_resolution.slug",
+        "governing_plan_path": "preflight.governing_plan_resolution.path",
+        "stage_paths": "gates.stage_paths_candidates",
+    }
+
+
+def test_stage_paths_missing_evidence_names_the_real_known_concurrent_paths_producer(monkeypatch, tmp_path):
+    """Corrected false-observation #1: the evidence/reason no longer claims
+    'there is no producer anywhere in this codebase' for known_concurrent_
+    paths, and no longer hardcodes known_concurrent_paths=frozenset() when a
+    real (non-empty) exclusion set was actually applied."""
+    jp = judgments.build_stage_paths_missing_judgment_point(
+        ["state/some-file.md"], known_concurrent_paths=frozenset({"state/subagent-share/peer-sid/"})
+    )
+    assert "there is no producer anywhere in this codebase" not in jp["reason"]
+    assert "directives_commit_tail.resolve_known_concurrent_paths" in jp["reason"]
+    assert "known_concurrent_paths=frozenset()" not in jp["evidence"]
+    assert "state/subagent-share/peer-sid/" in jp["evidence"]
+
+
+def test_stage_paths_missing_evidence_reports_real_empty_set_when_genuinely_empty():
+    jp = judgments.build_stage_paths_missing_judgment_point(["state/some-file.md"], known_concurrent_paths=frozenset())
+    assert "known_concurrent_paths=frozenset()" in jp["evidence"]
+
+
+def test_completion_entry_scaffold_absent_file_reports_not_yet_scaffolded_not_placeholder():
+    """Corrected false-observation #2: an entry that does not exist on disk
+    is reported as 'not yet scaffolded', never 'still carries placeholder'
+    -- there was nothing on disk to carry a placeholder."""
+    jp = wsc.build_completion_entry_scaffold_judgment_point(
+        "archive/completed/2026-08/2026-08-08-x-abc123.md", ("title", "nature", "prose"), entry_exists=False
+    )
+    assert "still carries placeholder" not in jp["question"]
+    assert "not yet been scaffolded" in jp["question"]
+    assert "does not exist on disk yet" in jp["evidence"]
+
+
+def test_completion_entry_scaffold_existing_file_still_reports_placeholder():
+    jp = wsc.build_completion_entry_scaffold_judgment_point(
+        "archive/completed/2026-08/2026-08-08-x-abc123.md", ("prose",), entry_exists=True
+    )
+    assert "still carries placeholder" in jp["question"]
+    assert "does not exist on disk yet" not in jp["evidence"]
+
+
+def test_completion_entry_scaffold_gate_end_to_end_reports_absent_correctly(monkeypatch, tmp_path):
+    """End-to-end through brief(): the scaffold gate's own producer resolves
+    a not-yet-existing entry path, and the judgment point built from it must
+    say so, not claim a placeholder."""
+    (tmp_path / "archive").mkdir()
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+    jp = next(
+        j for j in decision_object["judgment_points"] if j["id"] == "jp-completion-entry-scaffold"
+    )
+    assert "not yet been scaffolded" in jp["question"]
+    assert "still carries placeholder" not in jp["question"]
+
+
+def test_wsc_tail_directive_governing_plan_slug_already_threads_through_effective_decisions(monkeypatch, tmp_path):
+    """Corrected false-observation #3: `build_wsc_tail_directive`'s
+    `--governing-plan-slug` arg is NOT built from raw, unbackfilled
+    `decisions` -- `build_directives`'s own `effective_decisions` backfill
+    (governing_plan.slug, when `decisions` didn't already supply it) is
+    threaded into `build_wsc_tail_directive`'s call site before this
+    directive is built, so a plan resolved via the handoff-frontmatter/
+    fixed-fallback legs still reaches `--governing-plan-slug`, not just the
+    decisions_slug leg."""
+    slug = "wsc-tail-slug-thread-plan"
+    _write_plan(tmp_path, slug)
+    _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{slug}.md")
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
+    assert "--governing-plan-slug" in wsc_tail["args"]
+    assert slug in wsc_tail["args"]
+
+
+def test_ac8_regression_five_protected_judgment_points_still_emit(monkeypatch, tmp_path):
+    """AC8 regression guard: the five AC3-protected judgment-point ids are
+    still emitted as judgment_points after this chunk's decisions_template
+    population change -- a template-population change, never new/removed
+    behavior for these five."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {
+        "review": {
+            "sha_range": "a..b",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        },
+        "scratch_candidates": ["state/scratch/some-file.md"],
+    }
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    for protected_id in (
+        "commit-message-authoring",
+        "session-work-summary",
+        "review-partition-strategy",
+        "finding-tradeoff-escalation-check",
+        "scratch-disposition-per-file",
+    ):
+        assert protected_id in jp_ids, f"AC3-protected judgment point {protected_id!r} missing after AC5 change"
+
+
+# ---------------------------------------------------------------------------
+# predecessor-distill-fate gate — must fire only when the predecessor
+# genuinely lacks a distill_fate: value to backfill, never on
+# disposition == PREDECESSOR_CONSUMED alone (the false-premise defect this
+# guards: the judgment point's own question asserts "the predecessor
+# handoff lacks distill_fate:" as fact, so firing it against a predecessor
+# that HAS declared one silently offers a base-rate `commitment` default
+# that overrides the author's own declaration).
+# ---------------------------------------------------------------------------
+
+
+def _write_handoff_with_distill_fate(tmp_path, rel_path: str, distill_fate: str | None) -> None:
+    handoff_path = tmp_path / rel_path
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    fate_line = f"distill_fate: {distill_fate}\n" if distill_fate is not None else ""
+    handoff_path.write_text(
+        f"---\nstatus: open\n{fate_line}---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+
+def test_predecessor_distill_fate_point_not_emitted_when_predecessor_declares_it(monkeypatch, tmp_path):
+    _write_handoff_with_distill_fate(tmp_path, "state/handoffs/x.md", "ephemeral")
+    _patch_gate(
+        monkeypatch,
+        _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
+    )
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "predecessor-distill-fate" not in jp_ids
+
+
+def test_predecessor_distill_fate_point_emitted_when_predecessor_has_no_key(monkeypatch, tmp_path):
+    _write_handoff_with_distill_fate(tmp_path, "state/handoffs/x.md", None)
+    _patch_gate(
+        monkeypatch,
+        _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
+    )
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "predecessor-distill-fate" in jp_ids
+
+
+def test_predecessor_distill_fate_point_emitted_when_one_of_plural_set_lacks_it(monkeypatch, tmp_path):
+    _write_handoff_with_distill_fate(tmp_path, "state/handoffs/a.md", "ratification")
+    _write_handoff_with_distill_fate(tmp_path, "state/handoffs/b.md", None)
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            "chain-terminal",
+            consumed_handoff="state/handoffs/a.md",
+            consumed_handoff_paths=("state/handoffs/a.md", "state/handoffs/b.md"),
+        ),
+    )
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "predecessor-distill-fate" in jp_ids
+
+
+def test_predecessor_distill_fate_point_emitted_and_no_exception_when_handoff_unreadable(monkeypatch, tmp_path):
+    # No handoff written at all -- `state/handoffs/missing.md` resolves to
+    # nothing on disk or in the archive leg, so `_predecessor_lacks_distill_
+    # fate` must fail open (fires) without raising out of `brief()`.
+    _patch_gate(
+        monkeypatch,
+        _gate("chain-terminal", consumed_handoff="state/handoffs/missing.md", consumed_handoff_paths=()),
+    )
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "predecessor-distill-fate" in jp_ids

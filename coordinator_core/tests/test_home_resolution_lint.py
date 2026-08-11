@@ -94,33 +94,30 @@ from coordinator_core.tests._home_resolution_lint_baseline import (
 # removed rather than re-baselined.
 #
 # `coordinator/bin/check-machine-path-leak.py:327` -- `os.environ.get("HOME")
-# or os.path.expanduser("~")` -- is a DIFFERENT shape (not a default-arg
-# ladder rung; C5b's fix does not touch it) and STILL reports live. Flagged
-# as an "unguarded expanduser rung" per the engine's structural rule, but the
-# line carries its own prior code-review note (`# Review: code-reviewer --
-# F4: $HOME is POSIX-only ... falls back to os.path.expanduser (which honors
-# USERPROFILE on Windows) instead of silently no-oping the soft-warn`) --
-# this exact shape was ALREADY the F4 Windows fix, independently reviewed
-# and landed for that reason, not an unreviewed leftover.
+# or os.path.expanduser("~")` -- was baselined here as a DIFFERENT shape
+# (not a default-arg ladder rung; C5b's fix does not touch it) at the prior
+# re-seed. As of the C8 re-seed (2026-08-08), it no longer matches a live
+# `find_rung_order_violations()` finding at all: an unguarded `expanduser`
+# terminal is scored as a WARNING by `find_rung_order_warnings()`, not a
+# hard violation, per this file's own `test_no_rung_order_violation`
+# docstring and the C5d fix (`e2ff100e`) that introduced that split. Removed
+# per `test_rung_order_baseline_has_no_stale_entries`, which named this
+# exact row as stale (verified: `find_rung_order_violations()` total=0
+# corpus-wide this run). The line still carries its own prior code-review
+# note (F4: falls back to `os.path.expanduser`, which honors `USERPROFILE`
+# on Windows) -- that reasoning is preserved in the rule-4 (`bare_or`)
+# adjudication instead, where the same line is evaluated under a different,
+# stricter rule that does NOT exempt an unguarded `expanduser` rung (see
+# `find_bare_home_or_chains`'s own docstring: "`expanduser` is not exempting
+# either way ... the vulnerable site itself, not evidence the chain already
+# guards against it") -- that rule's finding for this same line is a
+# genuine, unbaselined, reportable defect, not folded into this ledger.
 #
-# The remaining `EXPANDUSER`-terminal findings this run surfaced (~28
-# sites, dominant shape `CLAUDE_HOME/HOME or os.path.expanduser("~")` with
-# no USERPROFILE rung at all, plus a handful of already-C9-fixed sites
-# --`coordinator/bin/{machine-local,cross-repo-memo,coordinator-prepare-
-# commit-msg}` -- whose ladders now carry the full CLAUDE_HOME -> HOME ->
-# USERPROFILE chain but still end in an unguarded `os.path.expanduser("~")`
-# rather than `Path.home()`) are REAL per this rule and are NOT baselined
-# here -- see this chunk's own run-report for the full per-site disposition
-# and named successor. Baselining them would be exactly the "reason says
-# why the gate should pass, not why the construct is correct" shape this
-# ledger's bar forbids.
-RUNG_ORDER_BASELINE: tuple[tuple[str, int, str], ...] = (
-    (
-        "coordinator/bin/check-machine-path-leak.py",
-        327,
-        'current_home = os.environ.get("HOME") or os.path.expanduser("~")',
-    ),
-)
+# An empty tuple is the correct terminal state for this ledger the same way
+# X_OK_BASELINE going to zero was: rung_order violations are 0 corpus-wide
+# as of this run, and a NEW rung-order violation now fails
+# `test_no_rung_order_violation` outright, which is the whole point.
+RUNG_ORDER_BASELINE: tuple[tuple[str, int, str], ...] = ()
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 

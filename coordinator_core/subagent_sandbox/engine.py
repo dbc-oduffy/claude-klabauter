@@ -91,17 +91,29 @@ class Policy:
     see module docstring). A later chunk wires the actual bash_guards
     consumer; adding that wiring here would re-create exactly the splice
     DR-058 removed.
+
+    ``report_type_map`` is a mapping of exact ``subagent_type`` string to the
+    ``provision_report --type`` template that agent type's sidecar should use.
+    It is ADDITIVE on top of ``report_sidecar`` and does not restructure it: an
+    agent type must be sidecar-eligible before a template type means anything.
+    Consumed by ``coordinator/bin/provision-sidecar.py`` so a vehicle that
+    bypasses the Agent-tool hook (a Workflow ``agent()`` call) still provisions
+    the right template rather than falling through to the legacy run-report
+    shape. A lookup-miss is not an error — see that CLI for the resolution
+    order.
     """
 
-    __slots__ = ("report_sidecar", "bash_policy")
+    __slots__ = ("report_sidecar", "bash_policy", "report_type_map")
 
     def __init__(
         self,
         report_sidecar: Optional[Iterable[str]] = None,
         bash_policy: Optional[Dict[str, Any]] = None,
+        report_type_map: Optional[Dict[str, str]] = None,
     ) -> None:
         self.report_sidecar = set(report_sidecar or ())
         self.bash_policy = dict(bash_policy or {})
+        self.report_type_map = dict(report_type_map or {})
 
     @property
     def is_empty(self) -> bool:
@@ -195,7 +207,28 @@ def load_policy(policy_path: Optional[str] = None) -> Policy:
         if isinstance(value, dict)
     }
 
-    return Policy(report_sidecar=report_sidecar, bash_policy=bash_policy)
+    # report_type_map: mapping of exact subagent_type -> template type name.
+    # Same fail-open posture as the two keys above, applied at BOTH levels: a
+    # non-dict top-level value voids the whole map, and an individual entry
+    # whose key or value is not a string is dropped on its own rather than
+    # voiding its siblings. Values are NOT validated against TEMPLATE_TYPES
+    # here -- this loader does not import provision_report (that module imports
+    # THIS one), and an unknown type name already degrades safely at the point
+    # of use, where _build_doc_text falls back to the run-report template.
+    report_type_map_raw = data.get("report_type_map") or {}
+    if not isinstance(report_type_map_raw, dict):
+        report_type_map_raw = {}
+    report_type_map = {
+        key: value
+        for key, value in report_type_map_raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+    return Policy(
+        report_sidecar=report_sidecar,
+        bash_policy=bash_policy,
+        report_type_map=report_type_map,
+    )
 
 
 # ---------------------------------------------------------------------------

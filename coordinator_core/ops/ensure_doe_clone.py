@@ -46,7 +46,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 import sys
 from typing import List, Optional
 
@@ -149,7 +149,7 @@ def main(argv: List[str]) -> int:
     try:
         rc = subprocess.call(
             ["git", "clone", url, doe_clone],
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
     except OSError as exc:
         print(f"{_PROG}: git clone raised: {exc}", file=sys.stderr)

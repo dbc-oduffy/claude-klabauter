@@ -658,6 +658,18 @@ def _batch_git_commit_epochs(repo_root: Path, rel_paths: List[str]) -> Dict[str,
                 "git", "log",
                 f"--format={_BATCH_EPOCH_HEADER_PREFIX}%ct",
                 "--name-only",
+                # Merge commits print NO file-list line under plain
+                # --name-only (git suppresses it by default for merges,
+                # even ones that survive history simplification under a
+                # pathspec because they are non-TREESAME to every parent).
+                # Without this, a path whose most recent touch was a
+                # conflict-resolution merge silently attributes to the
+                # next, older commit that does print a name line — a
+                # stale timestamp with no error signal. A kept merge under
+                # default simplification is always non-TREESAME to its
+                # first parent (implied by non-TREESAME-to-every-parent),
+                # so first-parent diffing always emits its file list.
+                "--diff-merges=first-parent",
                 "--",
                 *rel_paths,
             ],

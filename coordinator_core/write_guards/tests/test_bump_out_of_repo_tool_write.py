@@ -78,8 +78,8 @@ def _payload(tool_name, file_path, session_id, cwd, agent_id="", notebook=False)
 
 
 def test_ac13_ac19_registration_attributes_are_explicit():
-    assert guard.CLASS == "advisory"
-    assert guard.CLASS != "hard-deny"
+    assert guard.CLASS == "hard-deny"
+    assert guard.CLASS != "advisory"
     assert set(guard.MATCHERS) == {"Write", "Edit", "MultiEdit", "NotebookEdit"}
     assert isinstance(guard.PRIORITY, int)
     assert guard.PRIORITY != 100  # not the engine's silent default
@@ -108,12 +108,33 @@ def test_ac2_cross_repo_write_bumps(tmp_path, tool_name):
     result = guard.check(payload)
 
     assert result is not None
-    ctx = result["hookSpecificOutput"]["additionalContext"]
+    ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "hookEventName" not in ctx  # sanity: ctx is the message string, not the envelope
     assert result["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in result["hookSpecificOutput"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert str(foreign) in ctx
     assert str(own) in ctx
+
+
+def test_unwritable_marker_gitdir_fails_open(tmp_path, monkeypatch):
+    # Mirrors `bump_foreign_repo_write._evaluate_foreign_repo_candidate`'s
+    # `marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir)`
+    # guard (STAFF-ENG F0/AC5, "never an unclearable deny") -- a marker
+    # location that resolves but is not writable/readable must fail open
+    # exactly like an unresolvable one, not advertise a `touch` that can
+    # never succeed.
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-unwritable-marker"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    monkeypatch.setattr(guard, "marker_gitdir_is_writable", lambda _gitdir: False)
+
+    target = str(foreign / "notes.txt")
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+
+    assert result is None
 
 
 def test_ac2_notebook_edit_uses_notebook_path(tmp_path):
@@ -209,7 +230,7 @@ def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(t
     result = guard.check(payload)
 
     assert result is not None
-    ctx = result["hookSpecificOutput"]["additionalContext"]
+    ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "claude-central-em" in ctx
     assert "is publish mirror" in ctx
     assert "repos you don't own" not in ctx
@@ -231,7 +252,7 @@ def test_ac1_ordinary_foreign_repo_write_keeps_foreign_class_copy(tmp_path, monk
     result = guard.check(payload)
 
     assert result is not None
-    ctx = result["hookSpecificOutput"]["additionalContext"]
+    ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "is publish mirror" not in ctx
 
 
@@ -273,6 +294,125 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
 
     result = guard.check(payload)
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# PINS THE EXACT PAYLOAD SHAPE FROM THE EM's VERIFICATION TRANSCRIPT
+# (2026-08-10, bug 2026-08-10-cross-repo-write-boundary-denies-on-bash-
+# b6fd16ed9ab9 follow-up). The EM's manual repro used a hand-typed
+# `session_id` ("verify-boundary-probe") that was never passed through a
+# SessionStart hook, so it has no session-start anchor record and no
+# `CLAUDE_PROJECT_DIR` -- `resolve_launch_anchor` returns `None`,
+# `bump_applies` is `False`, and the guard fails open BY DESIGN (see
+# `_write_bump_applicability.resolve_launch_anchor`'s own docstring, and
+# this module's negative-spec: an unresolvable anchor never bumps, on
+# EITHER surface -- confirmed by parity below). This is not a defect this
+# fix introduced or should have caught: EVERY real session gets its anchor
+# record written automatically by `session-start-write-bump-anchor.py`
+# (example-doctrine-repo repo) at SessionStart, before any Write/Edit tool call can
+# happen -- a hand-constructed payload that skips that step is testing a
+# state a live session can never actually be in. Both tests below use the
+# EM's own literal payload (same tool_input, same session_id, same cwd);
+# the first proves the fail-open is real and matches the Bash sibling
+# exactly (parity, not a hole); the second proves the SAME payload denies
+# once the session has the anchor record every live session gets for free.
+# ---------------------------------------------------------------------------
+
+
+def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(tmp_path):
+    """The EM's literal transcript payload, byte-for-byte: no session-start
+    record was ever written for `session_id`, and no `CLAUDE_PROJECT_DIR` is
+    set -- so `check()` returns `None` (ALLOW), on BOTH surfaces. Proves the
+    allow is the shared applicability contract's fail-open behaviour, not an
+    asymmetry between the Bash and tool-write legs."""
+    session_id = "verify-boundary-probe"
+    cwd = r"X:\claude-klabauter"
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": r"X:\experiments\coordinator.local.md",
+            "old_string": "a",
+            "new_string": "b",
+        },
+        "cwd": cwd,
+        "session_id": session_id,
+    }
+
+    assert applicability.resolve_launch_anchor(session_id, cwd=cwd) is None
+    assert applicability.bump_applies(session_id, cwd=cwd) is False
+
+    assert guard.check(payload) is None
+    payload_with_agent = dict(payload, agent_id="probe-agent-123")
+    assert guard.check(payload_with_agent) is None
+
+    # Bash-surface parity, same unanchored session_id -- must agree, not
+    # merely both happen to allow for unrelated reasons.
+    from coordinator_core.bash_guards.bump_foreign_repo_write import (
+        check_bump_foreign_repo_write,
+    )
+
+    bash_payload = {"session_id": session_id, "cwd": cwd, "agent_id": ""}
+    bash_result = check_bump_foreign_repo_write(
+        "git -C X:/experiments checkout -- coordinator.local.md", session_id, cwd, bash_payload
+    )
+    assert bash_result is None
+
+
+def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_path):
+    """The IDENTICAL payload from the EM's transcript, with the ONE thing a
+    hand-constructed probe skips restored: the session-start anchor record
+    every live session gets written automatically at SessionStart. This is
+    the pinned regression for the bug the dispatch brief actually names --
+    without this fix, this test's `check()` call would return `None`
+    (`additionalContext`, non-blocking) instead of a real `permissionDecision:
+    "deny"`."""
+    session_id = "verify-boundary-probe-anchored"
+    cwd = r"X:\claude-klabauter"
+    session_start.write_session_start_record(session_id, launch_cwd=cwd)
+    try:
+        payload = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": r"X:\experiments\coordinator.local.md",
+                "old_string": "a",
+                "new_string": "b",
+            },
+            "cwd": cwd,
+            "session_id": session_id,
+        }
+
+        result = guard.check(payload)
+
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "experiments" in out["permissionDecisionReason"]
+    finally:
+        # Clean up BOTH records `write_session_start_record` writes into REAL,
+        # shared locations (never a `tmp_path`-scoped fixture dir) -- this
+        # repo's own machine-local settings home AND this repo's own `.git`,
+        # both read by other concurrent sessions:
+        #   1. `_settings_home_anchor_dir()` (settings-home hub, primary read).
+        #   2. `sessions_dir(cwd)` (in-repo `.git/coordinator-sessions/<sid>`,
+        #      same-repo fallback read) -- missed on the first pass of this
+        #      test (example-doctrine-repo finding, verification transcript): leaving this one
+        #      behind poisoned a LATER test in this same file that asserts
+        #      this exact `session_id` has NO anchor, because
+        #      `resolve_launch_anchor` found this leftover record first.
+        import shutil
+
+        for anchor_dir in (
+            session_start._settings_home_anchor_dir(),
+            session_start.sessions_dir(cwd),
+        ):
+            if not anchor_dir:
+                continue
+            record_path = Path(anchor_dir) / session_id
+            if record_path.exists():
+                if record_path.is_dir():
+                    shutil.rmtree(record_path, ignore_errors=True)
+                else:
+                    record_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +592,7 @@ def test_real_git_repo_under_temp_root_still_bumps(tmp_path, monkeypatch):
 
     result = guard.check(payload)
     assert result is not None
-    assert str(foreign) in result["hookSpecificOutput"]["additionalContext"]
+    assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_foreign_repo_outside_temp_root_still_bumps(tmp_path, monkeypatch):
@@ -685,7 +825,7 @@ def test_regression_git_repo_under_temp_root_still_bumps_on_tool_surface(tmp_pat
 
     result = guard.check(payload)
     assert result is not None
-    assert str(foreign) in result["hookSpecificOutput"]["additionalContext"]
+    assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +889,7 @@ def test_real_git_repo_under_settings_home_still_bumps(tmp_path, monkeypatch):
 
     result = guard.check(payload)
     assert result is not None
-    assert str(foreign) in result["hookSpecificOutput"]["additionalContext"]
+    assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_settings_home_exemption_parity_with_bash_surface(tmp_path, monkeypatch):
@@ -859,7 +999,7 @@ def test_foreign_repo_cross_repo_inbox_write_still_bumps(tmp_path):
 
     result = guard.check(payload)
     assert result is not None
-    assert str(foreign) in result["hookSpecificOutput"]["additionalContext"]
+    assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_ordinary_foreign_repo_write_still_bumps_alongside_lessons_outbox_exemption(
@@ -878,7 +1018,7 @@ def test_ordinary_foreign_repo_write_still_bumps_alongside_lessons_outbox_exempt
 
     result = guard.check(payload)
     assert result is not None
-    assert str(foreign) in result["hookSpecificOutput"]["additionalContext"]
+    assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 # ---------------------------------------------------------------------------
@@ -963,9 +1103,16 @@ def test_agent_memory_store_exemption_covers_every_matcher(tmp_path, monkeypatch
     assert guard.check(nb) is None
 
 
-def test_settings_json_under_claude_home_still_bumps(tmp_path, monkeypatch):
-    """The exemption is scoped to `memory/`, not `~/.claude` wholesale --
-    `settings.json` is a discovery/doctrine surface and must keep bumping."""
+def test_settings_json_under_claude_home_now_allowed(tmp_path, monkeypatch):
+    """AC1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-
+    bypass.md, C1): superseded by the C1 `target_is_under_claude_home`
+    carve-out, which is unconditional across ALL of `~/.claude`, not scoped
+    to `memory/` -- `settings.json` no longer bumps. Prior to C1 this test
+    asserted the opposite (`test_settings_json_under_claude_home_still_
+    bumps`); the agent-memory exemption immediately above this section was
+    scoped to `memory/` only, and `settings.json` is exactly the case that
+    narrower exemption did not cover -- C1 widens the carve-out to the
+    whole `~/.claude` tree per AC1/AC3."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-settings")
     _isolate_home(monkeypatch, claude_home)
@@ -975,14 +1122,16 @@ def test_settings_json_under_claude_home_still_bumps(tmp_path, monkeypatch):
     target = str(claude_home / ".claude" / "settings.json")
     payload = _payload("Write", target, session_id, str(own))
 
-    result = guard.check(payload)
-    assert result is not None
-    assert "hookSpecificOutput" in result
+    assert guard.check(payload) is None
 
 
-def test_project_dir_write_not_under_memory_still_bumps_on_tool_surface(tmp_path, monkeypatch):
-    """Proves the exemption is scoped to `memory/`, not the whole
-    per-project `<slug>/` directory."""
+def test_project_dir_write_not_under_memory_now_allowed(tmp_path, monkeypatch):
+    """AC1 companion to the settings.json case immediately above: a write
+    under a project slug directory (not `memory/`) is ALSO under `~/.claude`
+    as a whole, so C1's carve-out allows it too -- superseded from this
+    test's prior name/assertion (`..._still_bumps_on_tool_surface`), which
+    predates C1 and proved only the narrower `memory/`-scoped exemption's
+    own boundary."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-project-dir")
     _isolate_home(monkeypatch, claude_home)
@@ -994,9 +1143,7 @@ def test_project_dir_write_not_under_memory_still_bumps_on_tool_surface(tmp_path
     target = str(project_dir / "not-memory.md")
     payload = _payload("Write", target, session_id, str(own))
 
-    result = guard.check(payload)
-    assert result is not None
-    assert "hookSpecificOutput" in result
+    assert guard.check(payload) is None
 
 
 def test_agent_memory_store_case_insensitive_directory_still_exempted(tmp_path, monkeypatch):
@@ -1017,6 +1164,133 @@ def test_agent_memory_store_case_insensitive_directory_still_exempted(tmp_path, 
     payload = _payload("Write", target, session_id, str(own))
 
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
+# -- `~/.claude` is exempt from the write boundary WHOLESALE, from any
+# session anchor, even though `~/.claude` is itself a real git checkout.
+# AC1/AC3/AC4.
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_settings_json_write_allowed_from_any_repo_anchor(tmp_path, monkeypatch):
+    """AC1: a Write payload targeting `~/.claude/settings.json` returns
+    allow (`None`) from `check()`, from a session anchored in an ordinary
+    repo (not `~/.claude` itself)."""
+    own = _init_repo(tmp_path, "own-repo")
+    claude_home = _init_repo(tmp_path, "claude-home-ac1")
+    _isolate_home(monkeypatch, claude_home)
+    session_id = "sess-ac1-settings"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = str(claude_home / ".claude" / "settings.json")
+    payload = _payload("Write", target, session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_ac3_claude_home_carve_out_resolves_from_env_not_a_hardcoded_path(
+    tmp_path, monkeypatch
+):
+    """AC3: the carve-out is keyed on the resolved `CLAUDE_HOME`/`HOME`/
+    `USERPROFILE` env mapping, not a hardcoded path -- proven by pointing
+    home at TWO different sandboxed locations across two checks and getting
+    the carve-out in both, plus a target under the FIRST home no longer
+    resolving as exempt once home has moved to the second (i.e. this is a
+    live env resolution, not a cached/hardcoded string)."""
+    own = _init_repo(tmp_path, "own-repo")
+    home_a = _init_repo(tmp_path, "claude-home-a")
+    home_b = _init_repo(tmp_path, "claude-home-b")
+
+    _isolate_home(monkeypatch, home_a)
+    session_id = "sess-ac3-a"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    target_a = str(home_a / ".claude" / "settings.json")
+    assert guard.check(_payload("Write", target_a, session_id, str(own))) is None
+
+    _isolate_home(monkeypatch, home_b)
+    session_id_b = "sess-ac3-b"
+    session_start.write_session_start_record(session_id_b, launch_cwd=str(own))
+    target_b = str(home_b / ".claude" / "settings.json")
+    assert guard.check(_payload("Write", target_b, session_id_b, str(own))) is None
+    # `target_a` no longer sits under the NOW-resolved home (`home_b`) --
+    # asserted directly against the predicate (not `check()`, which would
+    # also need a fresh anchor's own-gitdir to genuinely differ) to isolate
+    # exactly the env-resolution claim this test is about.
+    assert not applicability.target_is_under_claude_home(target_a)
+
+
+def test_ac4_non_repo_destination_still_bumps(tmp_path, monkeypatch):
+    """AC4 regression: an ordinary non-repo destination outside `~/.claude`
+    keeps bumping -- the carve-out must not widen anything else.
+
+    `tempfile.gettempdir()`/`_posix_tmp_literal()` are repointed off
+    `tmp_path`'s own ancestry (pytest's `tmp_path` lives under the REAL
+    system temp root) so this destination is not ALSO caught by the
+    pre-existing, unrelated `target_is_bare_temp_scratch` AC9 exemption --
+    same repoint `test_bump_outside_repo_write.py`'s own `_clean_bump_env`
+    fixture applies for the identical reason."""
+    fake_system_temp = tmp_path / "not-the-real-system-temp-ac4"
+    fake_system_temp.mkdir()
+    monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(fake_system_temp))
+    monkeypatch.setattr(applicability, "_posix_tmp_literal", lambda: str(fake_system_temp))
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.delenv(var, raising=False)
+
+    own = _init_repo(tmp_path, "own-repo")
+    claude_home = tmp_path / "claude-home-ac4-nonrepo"
+    _isolate_home(monkeypatch, claude_home)
+    session_id = "sess-ac4-nonrepo"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    outside = tmp_path / "outside-scratch-ac4"
+    outside.mkdir()
+    target = str(outside / "note.txt")
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_ac4_unregistered_repo_destination_still_bumps(tmp_path, monkeypatch):
+    """AC4 regression: an unregistered foreign git repo outside `~/.claude`
+    keeps bumping."""
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-unregistered-ac4")
+    claude_home = tmp_path / "claude-home-ac4-unreg"
+    _isolate_home(monkeypatch, claude_home)
+    session_id = "sess-ac4-unreg"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = str(foreign / "README.md")
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_ac4_registered_repo_destination_still_bumps(tmp_path, monkeypatch):
+    """AC4 regression: a REGISTERED foreign repo outside `~/.claude` keeps
+    bumping too -- same control matrix cell as the spike verdict record's
+    "(c) REGISTERED repo" row."""
+    own = _init_repo(tmp_path, "own-repo")
+    registered = _init_repo(tmp_path, "foreign-registered-ac4")
+    claude_home = tmp_path / "claude-home-ac4-reg"
+    _isolate_home(monkeypatch, claude_home)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry-ac4"))
+    _write_registry(tmp_path / "registry-ac4", claude_klabauter=str(registered))
+    session_id = "sess-ac4-reg"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+
+    target = str(registered / "README.md")
+    payload = _payload("Write", target, session_id, str(own))
+
+    result = guard.check(payload)
+    assert result is not None
+    assert "hookSpecificOutput" in result
 
 
 def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
@@ -1312,7 +1586,7 @@ def test_c4b_check_target_repo_resolved_from_translated_msys_path(tmp_path):
 
     result = guard.check(payload)
     assert result is not None
-    ctx = result["hookSpecificOutput"]["additionalContext"]
+    ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
     # The message names the foreign repo's NATIVE path (the translated
     # form), which exists on disk -- never the raw MSYS spelling.
     assert str(foreign) in ctx

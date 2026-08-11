@@ -169,6 +169,36 @@ def test_dag_scope_paths_mixed_commit_is_retained(scoped_repo, monkeypatch) -> N
     assert set(result.uncovered_shas) == {shas["mixed"]}, result.notes
 
 
+def test_filter_shas_by_scope_paths_normalizes_abbreviated_shas(tmp_path: Path) -> None:
+    """An ABBREVIATED, out-of-scope sha must not be credited. `git diff-tree
+    --stdin` echoes an unmatched abbreviation back verbatim (unlike a full
+    sha, which it suppresses on no-match) -- without normalizing to the full
+    object name first, that echo would land back in the matched set and the
+    scope filter would silently pass the commit through uncredited-checked.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    out_of_scope_full = _write_and_commit(repo, ["docs/readme.md"], "out-of-scope commit")
+    in_scope_full = _write_and_commit(repo, ["src/foo.py"], "in-scope commit")
+
+    out_of_scope_abbrev = out_of_scope_full[:8]
+    in_scope_abbrev = in_scope_full[:8]
+
+    filtered, note = cov._filter_shas_by_scope_paths(
+        [out_of_scope_abbrev, in_scope_abbrev], ["src/"], str(repo)
+    )
+
+    assert note is None, f"expected no failure note; got {note!r}"
+    assert filtered is not None
+    # Only the in-scope commit survives -- as its resolved FULL sha, never
+    # the bare abbreviation the pre-fix code would have echoed through.
+    assert set(filtered) == {in_scope_full}, (
+        f"abbreviated out-of-scope sha {out_of_scope_abbrev!r} must not be "
+        f"credited via echo-back; filtered={filtered!r}"
+    )
+
+
 def test_filter_shas_by_scope_paths_fails_closed_on_git_error(tmp_path: Path) -> None:
     """A git failure (unresolvable SHA) must return (None, note) -- never an
     unfiltered fallback and never a silently-empty result."""

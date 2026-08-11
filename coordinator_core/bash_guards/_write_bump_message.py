@@ -121,6 +121,34 @@ from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 AGENT_CLASS_EM = "em"
 AGENT_CLASS_SUBAGENT = "subagent"
 
+#: The two SURFACES this module's `clear_line()` offer is truthful (or not)
+#: about (chunk 3, state/bug-backlog/2026-08-10-cross-repo-write-boundary-
+#: denies-on-bash-b6fd16ed9ab9.yaml). Orthogonal to both the agent-class and
+#: destination-class axes above -- every one of the four templates renders
+#: under EITHER surface. `SURFACE_BASH` is the two Bash guards
+#: (`bump_foreign_repo_write.py`/`bump_outside_repo_write.py`), whose marker
+#: lives at the TARGET's own gitdir since `_write_bump_marker.py`'s "MARKER
+#: SCOPE -- NARROWED TO ONE TARGET" (chunk C3, docs/plans/2026-08-03-narrow-
+#: write-confinement-bump.md) -- one `touch` clears exactly the target named
+#: in the deny, nothing else. `SURFACE_TOOL` is the `Write`/`Edit`/
+#: `MultiEdit` tool-surface guard (`write_guards/bump_out_of_repo_tool_
+#: write.py`), whose marker instead lives at the SESSION's OWN gitdir
+#: whenever one resolves (`marker_gitdir = own_gitdir if own_gitdir is not
+#: None else target_gitdir`, that module's `check()`) -- so the identical
+#: `touch` there stands the whole Write/Edit boundary down for EVERY future
+#: target for the rest of the session, not the one named in the deny. The
+#: old copy said "clear this target" on both surfaces; that was false on
+#: the tool surface the moment the marker's own siting diverged from the
+#: Bash legs'. Defaults to `SURFACE_BASH` on every template below so the two
+#: pre-existing Bash call sites (which pass no `surface` keyword) render
+#: BYTE-IDENTICAL copy to before this axis existed; the tool-surface call
+#: site must pass `surface=SURFACE_TOOL` explicitly to pick up the honest
+#: wording -- that one-line wiring edit belongs to whichever chunk owns
+#: `bump_out_of_repo_tool_write.py` (this plan's chunk 3 scopes this module
+#: only, not its callers).
+SURFACE_BASH = "bash"
+SURFACE_TOOL = "tool"
+
 #: The two destination classes this module's copy is drafted for (see
 #: module docstring, "TWO AGENT CLASSES x TWO DESTINATION CLASSES"). An
 #: orthogonal axis over the agent-class split above -- never a third agent
@@ -187,20 +215,36 @@ def _target_phrase(target_repo: str, raw_target: str = "") -> str:
     return f"`{target_repo}` (typed `{raw_target}`)"
 
 
+def _clear_offer_phrase(surface: str) -> str:
+    """The truthful per-surface description of what `clear_line()`'s
+    `touch` actually stands down (see module docstring, `SURFACE_BASH`/
+    `SURFACE_TOOL`). Lower-case, mid-sentence form -- callers that need it
+    capitalized (a template opening a new sentence with it) title-case the
+    first character at the call site rather than here, since most call
+    sites splice it mid-sentence."""
+    if surface == SURFACE_TOOL:
+        return "stand the boundary down, session-wide"
+    return "clear this target"
+
+
 def render_em_message(
     target_repo: str,
     session_repo: str,
     gitdir: Path,
     session_id: str,
     raw_target: str = "",
+    surface: str = SURFACE_BASH,
 ) -> str:
     """The FOREIGN-class, EM-class deny copy. Self-attributed, opens on the
     bare word "instead" to hold the whole remainder in one
-    `_alternative_liveness` cue window (see module docstring, "BUDGET")."""
+    `_alternative_liveness` cue window (see module docstring, "BUDGET").
+    `surface` selects the truthful clear-scope phrase (module docstring,
+    `SURFACE_BASH`/`SURFACE_TOOL`)."""
     line = clear_line(gitdir, session_id)
+    phrase = _clear_offer_phrase(surface)
     return (
         "Coordinator guard — instead: check with your PM before writing into "
-        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`); once assented, clear this target:\n"
+        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`); once assented, {phrase}:\n"
         f"  {line}\n"
         "Still unsure? cross-repo-memo is the sanctioned channel."
     )
@@ -213,16 +257,20 @@ def render_subagent_message(
     session_id: str,
     sandbox_root: str,
     raw_target: str = "",
+    surface: str = SURFACE_BASH,
 ) -> str:
     """The FOREIGN-class, subagent-class deny copy. `sandbox_root` is
     caller-resolved (see module docstring, "CALLERS RESOLVE THE INPUTS");
-    this function only places it in the template."""
+    this function only places it in the template. `surface` selects the
+    truthful clear-scope phrase (module docstring, `SURFACE_BASH`/
+    `SURFACE_TOOL`)."""
     line = clear_line(gitdir, session_id)
+    phrase = _clear_offer_phrase(surface)
     return (
         "Coordinator guard — instead: you have no PM here, report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
         f"your sandbox `{sandbox_root}` is the place to write, or once assented, "
-        "clear this target:\n"
+        f"{phrase}:\n"
         f"  {line}"
     )
 
@@ -233,19 +281,23 @@ def render_publish_em_message(
     gitdir: Path,
     session_id: str,
     raw_target: str = "",
+    surface: str = SURFACE_BASH,
 ) -> str:
     """The PUBLISH-class, EM-class deny copy -- drafted around durability,
     not ownership (see module docstring, "DESTINATION_PUBLISH"). Names the
     mirror, its registered owner (context, never gating), and the durable
     source-side alternative via a doctrine citation. Contains no
     "repos you don't own", no ownership-violation vocabulary, and no
-    PM-checking / cross-repo-memo pointer (AC3, AC15)."""
+    PM-checking / cross-repo-memo pointer (AC3, AC15). `surface` selects the
+    truthful clear-scope phrase (module docstring, `SURFACE_BASH`/
+    `SURFACE_TOOL`)."""
     line = clear_line(gitdir, session_id)
+    phrase = _clear_offer_phrase(surface)
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
-        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. Clear this "
-        "target if you still mean to write here:\n"
+        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. "
+        f"{phrase[0].upper()}{phrase[1:]} if you still mean to write here:\n"
         f"  {line}"
     )
 
@@ -257,20 +309,24 @@ def render_publish_subagent_message(
     session_id: str,
     sandbox_root: str,
     raw_target: str = "",
+    surface: str = SURFACE_BASH,
 ) -> str:
     """The PUBLISH-class, subagent-class deny copy -- same durability
     framing as `render_publish_em_message`, routed to the dispatching EM
     rather than a PM (a dispatched agent has no PM of its own).
     `sandbox_root` is accepted for signature parity with the other
     subagent-class renderer but is not named in this copy -- the offer here
-    is the durable source-side alternative, not this session's sandbox."""
+    is the durable source-side alternative, not this session's sandbox.
+    `surface` selects the truthful clear-scope phrase (module docstring,
+    `SURFACE_BASH`/`SURFACE_TOOL`)."""
     del sandbox_root
     line = clear_line(gitdir, session_id)
+    phrase = _clear_offer_phrase(surface)
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
         f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. Report to "
-        "your EM; if assented, clear this target:\n"
+        f"your EM; if assented, {phrase}:\n"
         f"  {line}"
     )
 
@@ -286,6 +342,7 @@ def render_bump_message(
     destination_class: str = DESTINATION_FOREIGN,
     destination_owner: str = "",
     raw_target: str = "",
+    surface: str = SURFACE_BASH,
 ) -> str:
     """Dispatch to the correct one of the four templates by
     `(destination_class, agent_class)`. The single entry point C4/C5/C7
@@ -317,15 +374,29 @@ def render_bump_message(
     has already determined (in its own terms -- see `_target_phrase`'s own
     docstring) that the PRE-translation token differs from `target_repo`;
     threaded straight through to whichever template below is selected.
+
+    `surface` (chunk 3, state/bug-backlog/2026-08-10-cross-repo-write-
+    boundary-denies-on-bash-b6fd16ed9ab9.yaml) defaults to `SURFACE_BASH` --
+    same "optional, safe default" contract as every keyword above: every
+    caller written before this parameter existed (both Bash guards, at
+    authoring time) keeps rendering byte-identical copy. The tool-surface
+    caller (`write_guards/bump_out_of_repo_tool_write.py`) must pass
+    `surface=SURFACE_TOOL` to render its own truthful clear-scope wording
+    (module docstring, `SURFACE_BASH`/`SURFACE_TOOL`) -- wiring that keyword
+    into that call site is out of THIS chunk's scope (a sibling owns that
+    file); until it is wired, that surface keeps rendering the
+    `SURFACE_BASH` phrasing, which understates its marker's real breadth.
     """
     if destination_class == DESTINATION_PUBLISH:
         if agent_class == AGENT_CLASS_SUBAGENT:
             return render_publish_subagent_message(
-                target_repo, destination_owner, gitdir, session_id, sandbox_root, raw_target
+                target_repo, destination_owner, gitdir, session_id, sandbox_root, raw_target, surface
             )
-        return render_publish_em_message(target_repo, destination_owner, gitdir, session_id, raw_target)
+        return render_publish_em_message(
+            target_repo, destination_owner, gitdir, session_id, raw_target, surface
+        )
     if agent_class == AGENT_CLASS_SUBAGENT:
         return render_subagent_message(
-            target_repo, session_repo, gitdir, session_id, sandbox_root, raw_target
+            target_repo, session_repo, gitdir, session_id, sandbox_root, raw_target, surface
         )
-    return render_em_message(target_repo, session_repo, gitdir, session_id, raw_target)
+    return render_em_message(target_repo, session_repo, gitdir, session_id, raw_target, surface)

@@ -87,7 +87,7 @@ class DiagnosticsStructuralPin(RuntimeError):
 
 
 @register_op("diagnostics.always_succeeds")
-async def _always_succeeds(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _always_succeeds(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Rung: success (rc=0, result envelope on stdout). The positive control.
 
     Returns a fixed literal. `params` and `repo_root` are accepted for handler-signature
@@ -98,7 +98,7 @@ async def _always_succeeds(params: dict, repo_root: Optional[Path] = None) -> di
 
 
 @register_op("diagnostics.always_refuses")
-async def _always_refuses(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _always_refuses(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Rung: op-level refusal (rc=1, JSON-RPC error envelope on STDOUT; stderr non-empty).
 
     Raising is the only way an op produces an error envelope — `dispatch_message` builds
@@ -112,7 +112,7 @@ async def _always_refuses(params: dict, repo_root: Optional[Path] = None) -> dic
 
 
 @register_op("diagnostics.always_structural_pin")
-async def _always_structural_pin(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _always_structural_pin(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Rung: structural pin (rc=2, STRUCTURAL_PIN_ERROR, cc_invoke StructuralPinError).
 
     Unconditional, same as its sibling above. The exception message is preserved verbatim

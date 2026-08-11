@@ -361,3 +361,23 @@ def test_resolve_ledger_first_holder_still_falls_back_to_picked_up_by_on_failure
     )
 
     assert holder == "fallback-sid"
+
+
+def test_claim_grant_denied_live_reason_harness_registry_is_strong_arm():
+    """AC9: a `harness-registry` basis (C2's new, stronger-than-stable-pid
+    liveness evidence) renders in the strong arm — `live (harness-registry)`
+    — rather than falling through to the `basis unknown` hedge that made
+    registry-covered denials MORE hedged than before (staff-eng Finding 0).
+    `age_sec` is `None` on this basis per the pinned Layer-1 contract."""
+    evidence = {
+        "liveness_basis": "harness-registry",
+        "last_activity_age_sec": None,
+        "recent_paths": [],
+        "scope_overlap": None,
+    }
+
+    reason = pa._claim_grant_denied_live_reason("some-sid", evidence)
+
+    assert reason == "held by some-sid — live (harness-registry)"
+    assert "basis unknown" not in reason
+    assert "may be a stale claim" not in reason

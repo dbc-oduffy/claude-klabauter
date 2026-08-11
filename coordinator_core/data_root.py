@@ -100,12 +100,14 @@ def data_root(dir_name: str) -> Path:
       1. Co-located — `<coordinator-root>/<dir_name>`, where `<coordinator-
          root>` is computed identically to `_colocated_root()` above. Free,
          no registration, wins whenever both halves ship together.
-      2. Example-doctrine-repo-resident — `<coordinator_doe_root()>/coordinator/<dir_name>`,
-         delegating the REPO_EXAMPLE_DOCTRINE_REPO/registry/mirror/clone-root resolution
-         to `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`
+      2. Example-doctrine-repo-resident — `<coordinator_doe_root()>/coordinator/<dir_name>`
+         (private layout), falling back to `<coordinator_doe_root()>/<dir_name>`
+         (OSS-flat layout, F2 fix 2026-08-08 -- see below), delegating the
+         REPO_EXAMPLE_DOCTRINE_REPO/registry/mirror/clone-root resolution to
+         `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`
          (never reimplemented here — see module docstring).
 
-    Raises RuntimeError, naming `dir_name` and both candidate paths tried
+    Raises RuntimeError, naming `dir_name` and all candidate paths tried
     (or the example-doctrine-repo-resolution failure reason), if neither rung resolves to an
     existing directory. Never returns a path that doesn't exist.
     """
@@ -124,12 +126,29 @@ def data_root(dir_name: str) -> Path:
             "and the resolve_coordinator_clone fallback all unresolved)."
         )
 
-    candidate = Path(doe) / "coordinator" / dir_name
-    if candidate.is_dir():
-        return candidate
+    # F2 fix (2026-08-08, hermetic-ac-reverify) -- `coordinator_doe_root()`
+    # (and its `_cf_codename_free_root()` ladder in particular, see that
+    # module) accepts EITHER published manifest layout: the private example-doctrine-repo-repo
+    # shape (`<root>/coordinator/schemas/...`) AND the OSS-flat shape
+    # (`<root>/schemas/...`, no `coordinator/` segment). This terminal join
+    # previously ALWAYS inserted `coordinator/`, so a correctly-resolved
+    # OSS-flat root (e.g. a real marketplace-cache install) produced a path
+    # that cannot exist -- `data_root()` was dead for every `dir_name` on
+    # that layout. Try the private-shape join first (unchanged default for
+    # every existing caller/test resolving a private-layout root), then the
+    # OSS-flat shape -- see F2 in
+    # state/review-findings/2026-08-08-successor-partitioned/hermetic-ac-reverify.md.
+    private_candidate = Path(doe) / "coordinator" / dir_name
+    if private_candidate.is_dir():
+        return private_candidate
+
+    flat_candidate = Path(doe) / dir_name
+    if flat_candidate.is_dir():
+        return flat_candidate
 
     raise RuntimeError(
         f"coordinator_core.data_root: cannot resolve data dir {dir_name!r}. "
         f"Rung 1 (co-located) tried: {colocated} (not found). "
-        f"Rung 2 (example-doctrine-repo-resident) tried: {candidate} (not found)."
+        f"Rung 2 (example-doctrine-repo-resident) tried: {private_candidate} (private layout, not found), "
+        f"{flat_candidate} (OSS-flat layout, not found)."
     )

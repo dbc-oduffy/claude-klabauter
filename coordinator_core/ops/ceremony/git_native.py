@@ -87,11 +87,33 @@ class GitResult:
             message is still produced on those paths, since the process never
             ran and nothing was streamed either).
         ok — True iff returncode == 0. Convenience predicate for the common case.
+        worktree_excluded — repo-relative paths, sorted, whose WORKING-TREE
+            content was NOT included in this result's commit because it
+            differed from what was actually committed (the STAGED/index
+            content, per `_commit_scoped_private_index`'s "diverged" set --
+            see that function's own docstring). Empty tuple (the default,
+            and the value on every `GitResult` this module already
+            constructed before this field existed) means either "nothing was
+            excluded" or "this result was never a commit outcome at all" --
+            callers must not read an empty tuple as an affirmative "worktree
+            and staged content agreed", only as "no exclusion is being
+            reported here". Populated ONLY by `_commit_scoped_private_index`
+            (state/bug-backlog/2026-08-10-scoped-git-commit-reports-success-
+            while-334e90d707f9.yaml) -- the private-index branch commits each
+            diverged path's STAGED blob verbatim, by design (see
+            `commit_scoped`'s own module-section docstring for why that is
+            the safe behaviour on a shared tree), but previously did so with
+            no signal that the caller's own worktree edits to those paths
+            were excluded. A caller that wants the worktree version
+            committed instead must re-stage it and re-call -- this field
+            exists purely to make the exclusion visible, not to change which
+            content lands.
     """
 
     returncode: int
     stdout: str
     stderr: str
+    worktree_excluded: Tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -346,6 +368,35 @@ def cat_file_batch(repo_root: Union[str, Path], ref: str, rel_paths: Sequence[st
     if not rel_paths:
         return {}
     objects = [f"{ref}:{rel_path}" for rel_path in rel_paths]
+    resolved = cat_file_batch_objects(repo_root, objects)
+    return {rel_path: resolved[f"{ref}:{rel_path}"] for rel_path in rel_paths}
+
+
+def cat_file_batch_objects(
+    repo_root: Union[str, Path], objects: Sequence[str]
+) -> Dict[str, Optional[str]]:
+    """Resolve arbitrary `<rev>:<path>` object specs to blob text in ONE
+    `git cat-file --batch` feed, keyed by the spec string as passed.
+
+    The generalization of `cat_file_batch` (which is now a thin
+    single-ref wrapper over this): that function batches many PATHS at ONE
+    ref, which forces a caller needing many (rev, path) PAIRS into one spawn
+    per rev. A history sweep across every commit that touched a directory is
+    exactly that caller -- per-rev spawning would put a cold Windows `git`
+    process in a loop over the whole commit list, the shape CLAUDE.md's
+    Runtime conventions calls break-class. `git cat-file --batch` resolves
+    each stdin line INDEPENDENTLY, so the pairs carry none of the set-algebra
+    hazard that forbids batching a `rev-list` range feed.
+
+    Same reconciliation contract as `cat_file_batch`: every requested spec is
+    bound to an explicit slot by walking the SAME `objects` order the input
+    was written in -- resolved -> blob text, missing/truncated/malformed ->
+    `None`. Absence from git's output is never read as "resolved".
+
+    Returns `{}` for an empty `objects`, spawning no subprocess.
+    """
+    if not objects:
+        return {}
     stdin_bytes = ("\n".join(objects) + "\n").encode("utf-8")
     proc = subprocess.run(
         ["git", "-C", str(repo_root), "cat-file", "--batch"],
@@ -356,36 +407,36 @@ def cat_file_batch(repo_root: Union[str, Path], ref: str, rel_paths: Sequence[st
     stdout = proc.stdout
     results: Dict[str, Optional[str]] = {}
     pos = 0
-    for rel_path in rel_paths:
+    for spec in objects:
         nl = stdout.find(b"\n", pos)
         if nl == -1:
             # stdout ran out relative to the requested set -- every remaining
-            # path is unresolved; never guess at a partial record.
-            results[rel_path] = None
+            # spec is unresolved; never guess at a partial record.
+            results[spec] = None
             continue
         header = stdout[pos:nl]
         pos = nl + 1
         if header.endswith(b" missing"):
-            results[rel_path] = None
+            results[spec] = None
             continue
         parts = header.split(b" ")
         if len(parts) != 3:
-            results[rel_path] = None
+            results[spec] = None
             continue
         _sha, _type, size_field = parts
         try:
             size = int(size_field)
         except ValueError:
-            results[rel_path] = None
+            results[spec] = None
             continue
         content = stdout[pos:pos + size]
         pos += size
         if stdout[pos:pos + 1] == b"\n":
             pos += 1
         try:
-            results[rel_path] = content.decode("utf-8")
+            results[spec] = content.decode("utf-8")
         except UnicodeDecodeError:
-            results[rel_path] = content.decode("utf-8", errors="replace")
+            results[spec] = content.decode("utf-8", errors="replace")
     return results
 
 
@@ -641,11 +692,146 @@ def _parse_ls_files_cacheinfo(stdout: str) -> List[_CacheInfoEntry]:
     return entries
 
 
+def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
+    """Return the (stripped) value of the first line in `msg_text` starting
+    with `prefix` (e.g. `"Deliverable-Id:"`), or `None` if no such line
+    exists. Same prefix-match convention as `coordinator_core.git.
+    commit_trailers._has_trailer_line` (a plain `str.startswith`, not a
+    `git interpret-trailers --parse` round-trip), widened here to return the
+    VALUE rather than a bool -- `commit_scoped`'s precedence ruling (2) needs
+    to compare an existing message trailer's value against an explicit
+    caller-supplied `deliverable_id`, not merely know a trailer is present.
+    """
+    for line in msg_text.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    return None
+
+
+def _check_deliverable_id_precedence(msg_text: str, deliverable_id: str) -> bool:
+    """PM ruling (2), `docs/plans/2026-08-10-a-commit-trailer-that-names-
+    the-session.md` chunk C7a: the precedence between an explicit caller-
+    supplied `deliverable_id` and a pre-existing `Deliverable-Id:` trailer
+    already present in `msg_text` (most often stamped by `commit_anchors.py`
+    from staged plan frontmatter, AHEAD of this call -- a third source
+    `commit_authored_content`'s message-first precedence never has to
+    consider, which is why that sibling's precedence is NOT mirrored here;
+    see `commit_scoped`'s own docstring).
+
+    Returns:
+      True  -- (i) no existing `Deliverable-Id:` line -- the caller's
+               explicit value should be applied.
+      False -- (ii) an existing line AGREES with `deliverable_id` -- already
+               correct; the caller applies nothing further (never a
+               duplicate line).
+
+    Raises `coordinator_core.ops.deliverable_carry.DivergentDeliverableIdError`
+    -- (iii) an existing line DISAGREES. FAIL LOUD, never silently pick
+    either side (reuses the existing exception verbatim, per that class's
+    own negative-spec against forking a second copy). Both `commit_scoped`
+    branches propagate this raised, uncaught -- a deliberate, NAMED
+    exception to this module's usual "every wrapper returns a GitResult,
+    never raises" convention (see the PM ruling text itself: "FAIL LOUD by
+    raising the existing ... DivergentDeliverableIdError").
+    """
+    existing = _trailer_value(msg_text, "Deliverable-Id:")
+    if existing is None:
+        return True
+    if existing == deliverable_id:
+        return False
+
+    from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
+
+    raise DivergentDeliverableIdError(
+        f"commit_scoped: caller-supplied deliverable_id {deliverable_id!r} "
+        f"disagrees with the commit message's own pre-existing Deliverable-Id "
+        f"trailer {existing!r} (most likely stamped by commit_anchors.py from "
+        "staged plan frontmatter) -- refusing to silently pick either side. "
+        "A caller asserting one deliverable while staging another's "
+        "already-stamped artifact is an authoring error fixed by splitting "
+        "the commit, per DR-207 DD#1's earliest-artifact-wins ruling (see "
+        "DivergentDeliverableIdError's own docstring)."
+    )
+
+
+def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Optional[str]:
+    """AC19 -- the enforceable half of the negative spec on an explicit,
+    caller-supplied `deliverable_id`. Returns a diagnostic naming the
+    rejected value on failure, or `None` when `deliverable_id` clears both
+    checks. Same posture/placement as `commit_scoped`'s own empty-path-set
+    and directory-pathspec guards a few lines below where this is called:
+    FAILS LOUD (`GitResult.ok is False`), never a warning.
+
+    (a) SHAPE -- must start with `dlv-`, the convention `coordinator_core.
+        frontmatter.schema_validate._cf_deliverable_id_prefix` already
+        enforces for a plan/handoff's own frontmatter field (every value is
+        minted by `bin/mint-deliverable-id` with this prefix). Reproduced
+        here as a bare `str.startswith` rather than imported -- that
+        validator runs over a whole frontmatter dict as part of a larger
+        schema pass, not a bare string, so importing it would pull in that
+        entire pass for one prefix check.
+
+    (b) EXISTENCE -- must resolve to at least one real artifact (a plan,
+        handoff, archived handoff stub, or archived spec) whose OWN
+        frontmatter carries this EXACT `deliverable_id` -- reuses
+        `coordinator_core.ops.deliverable_rollup.
+        _scan_artifacts_by_deliverable_id`, the existing four-path corpus
+        scanner (`docs/plans`, `state/handoffs`, `archive/handoffs`,
+        `archive/specs`), rather than forking a second one. Imported
+        lazily (not at module level) to keep this low-level git module from
+        taking on `coordinator_core.ops.*`'s own import surface at load
+        time -- the same defensive convention `coordinator_core.git.
+        commit_trailers._resolve_deliverable_id_from_paths` already uses for
+        its own `DivergentDeliverableIdError` import.
+
+        `scan_incomplete` (a scan root could not be fully enumerated --
+        permission denied, etc.) is treated as UNRESOLVED, not accepted --
+        per that scanner's own docstring instruction ("callers MUST treat
+        True as this result may be missing artifacts"), an unverifiable id
+        must never be silently trusted just because the scan could not prove
+        it wrong.
+
+    Deliberately does NOT require the artifact to be among the commit's own
+    `paths` -- the whole point of this chunk (see the plan's "Scope
+    addition" paragraph) is admitting `deliverable_id` on ordinary
+    code-only commits that carry no frontmatter-capable artifact of their
+    own at all; requiring the id to resolve from THIS commit's pathspec
+    would defeat that on the very majority case it exists to serve.
+    """
+    if not deliverable_id.startswith("dlv-"):
+        return (
+            f"commit_scoped: deliverable_id {deliverable_id!r} rejected -- "
+            "does not match the 'dlv-' shape convention (every deliverable_id "
+            "is minted by bin/mint-deliverable-id with this prefix; see "
+            "coordinator_core/frontmatter/schema_validate.py's own "
+            "deliverable_id-prefix check)"
+        )
+
+    from coordinator_core.ops.deliverable_rollup import _scan_artifacts_by_deliverable_id
+
+    matches, scan_incomplete = _scan_artifacts_by_deliverable_id(root, deliverable_id)
+    if scan_incomplete or not matches:
+        incomplete_note = (
+            " (a scan root could not be fully enumerated -- treating as "
+            "unresolved rather than trusting an unverifiable id)"
+            if scan_incomplete
+            else ""
+        )
+        return (
+            f"commit_scoped: deliverable_id {deliverable_id!r} rejected -- does "
+            "not resolve to any real artifact (a plan, handoff, archived "
+            "handoff stub, or archived spec) carrying this deliverable_id in "
+            f"its own frontmatter{incomplete_note}"
+        )
+    return None
+
+
 def _commit_scoped_private_index(
     diverged: Sequence[str],
     non_diverged: Sequence[str],
     msg_file: Union[str, Path],
     cwd: Union[str, Path],
+    deliverable_id: Optional[str] = None,
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -653,6 +839,13 @@ def _commit_scoped_private_index(
     named temp file), so the shared index is never mutated, then lands the
     result with a compare-and-swap `update-ref` so a concurrent commit on
     the same branch is never silently orphaned.
+
+    `deliverable_id` (C7a, docs/plans/2026-08-10-a-commit-trailer-that-names-
+    the-session.md): when truthy, applied to the `Deliverable-Id:` trailer
+    per `commit_scoped`'s own precedence ruling (2) -- see
+    `_check_deliverable_id_precedence`. `commit_scoped` has already run the
+    AC19 existence/shape guard on this value before calling here; this
+    function trusts it and does not re-validate.
     """
     root = Path(cwd)
 
@@ -734,6 +927,20 @@ def _commit_scoped_private_index(
         trailer_args = compute_missing_trailer_args(
             msg_file, root, paths=[*diverged, *non_diverged]
         )
+        # C7a: an explicit caller `deliverable_id` folds into the SAME
+        # `interpret-trailers` call above, mirroring `commit_authored_
+        # content`'s `_drop_trailer_arg`-then-append shape -- EXCEPT for
+        # precedence against a pre-existing message trailer, which does NOT
+        # mirror that sibling (its message-first rule is silent about the
+        # THIRD source `commit_anchors.py` may have already stamped here;
+        # see `commit_scoped`'s own docstring and PM ruling (2)). May raise
+        # `DivergentDeliverableIdError` -- see `_check_deliverable_id_
+        # precedence`'s own docstring; deliberately uncaught here.
+        if deliverable_id:
+            msg_text_before = Path(msg_file).read_text(encoding="utf-8")
+            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
+                trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
+                trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
         if trailer_args:
             interpret_result = _git(
                 ["interpret-trailers", "--in-place", *trailer_args, str(msg_file)],
@@ -776,7 +983,28 @@ def _commit_scoped_private_index(
                     f"new HEAD). {update_ref_result.stderr}"
                 ),
             )
-        return GitResult(returncode=0, stdout=new_sha, stderr="")
+        # `diverged` is exactly the set this branch was called with because
+        # it IS the set that had unstaged working-tree modifications --
+        # `commit_scoped()` only reaches this function when `diverging_paths`
+        # (staged-vs-HEAD differs AND worktree-vs-staged differs, per that
+        # function's own docstring) returned a non-empty answer, and passes
+        # that exact answer through unmodified as `diverged` -- so no
+        # separate worktree-vs-staged recomputation is needed here; reusing
+        # the caller's own answer is that answer (see the P1 bug backlog
+        # entry cited on `GitResult.worktree_excluded` for the incident this
+        # closes: this field was previously not populated at all, so a
+        # caller had no way to learn its worktree edits were excluded).
+        return GitResult(
+            returncode=0,
+            stdout=new_sha,
+            stderr=(
+                "commit_scoped: worktree edits to %s were NOT included -- "
+                "the staged (index) version was committed instead (private-"
+                "index branch; see GitResult.worktree_excluded)"
+                % (", ".join(diverged),)
+            ),
+            worktree_excluded=tuple(diverged),
+        )
     finally:
         temp_index.unlink(missing_ok=True)
 
@@ -788,6 +1016,7 @@ def commit_scoped(
     *,
     known_checked: Optional[Set[str]] = None,
     known_diverged: Optional[Set[str]] = None,
+    deliverable_id: Optional[str] = None,
 ) -> GitResult:
     """Commit exactly `paths`, choosing the safe mechanism from OBSERVED
     index/worktree state -- the computed replacement for hand-picking
@@ -824,13 +1053,40 @@ def commit_scoped(
          - No divergence -> AGREE branch: `git add -- paths` then
            `git commit -F msg_file -- paths`. Retains SC-DR-008's race
            protection across the stage->commit window; this is the
-           overwhelming-majority path and stays this cheap.
+           overwhelming-majority path and stays this cheap. When
+           `deliverable_id` is truthy, this branch NOW mutates `msg_file` in
+           place before `git add`/`git commit` run (see `deliverable_id`
+           below) -- prior to C7a (docs/plans/2026-08-10-a-commit-trailer-
+           that-names-the-session.md) this branch never opened or mutated
+           `msg_file` at all, relying entirely on the `prepare-commit-msg`
+           hook that fires on `git commit` to compute trailers on its own.
          - Divergence -> PRIVATE-INDEX branch (`_commit_scoped_private_
            index`): builds the commit tree under a throwaway index copy so
            the shared index is never touched, preserves each diverged
            path's CURRENTLY STAGED content verbatim (never re-read from the
            worktree), and lands via a compare-and-swap `update-ref` that
            fails loud rather than silently orphaning a concurrent commit.
+
+    `deliverable_id` (C7a) -- OPTIONAL, a caller who already knows which
+    deliverable this commit belongs to (e.g. an execute-plan chunk-commit
+    path holding the plan's own `deliverable_id` frontmatter) should not be
+    second-guessed by the session/claimed-plan inference `compute_missing_
+    trailer_args` otherwise falls back to. Validated (AC19) BEFORE either
+    branch runs -- see `_validate_explicit_deliverable_id` -- then applied
+    on WHICHEVER branch this call takes, per the precedence ruling in
+    `_check_deliverable_id_precedence`: an explicit value wins when the
+    message carries no `Deliverable-Id:` trailer yet; is a no-op when one
+    already agrees; and raises `DivergentDeliverableIdError` (uncaught, a
+    deliberate exception to this function's own "always returns a
+    GitResult" contract -- see that ruling's own docstring) when one
+    disagrees. Advisory-only half (not enforced here, prose guidance only):
+    an explicit `deliverable_id` should be PROVENANCE-BEARING -- sourced
+    from the plan the caller is ACTUALLY EXECUTING AGAINST, never invented
+    or defaulted to satisfy this parameter. Whether the resolvable id is
+    truly the plan THIS commit's own work belongs to is genuinely
+    uncheckable at this seam; this function does not and cannot enforce
+    that half, only that the value is well-shaped and resolves to SOME real
+    artifact (AC19's enforceable half).
 
     `known_checked`/`known_diverged` -- OPTIONAL dedup seam (docs/plans/
     2026-07-27-computed-commit-mechanism-selection.md § dedup). When both
@@ -910,6 +1166,15 @@ def commit_scoped(
             stderr=f"commit_scoped: {directory_pathspec_diagnostic(dir_paths[0])}",
         )
 
+    # AC19 -- same posture as the two guards immediately above: an explicit
+    # caller-supplied `deliverable_id` is validated BEFORE either commit
+    # mechanism runs, never warned about after the fact. See
+    # `_validate_explicit_deliverable_id`'s own docstring for the two checks.
+    if deliverable_id:
+        rejection = _validate_explicit_deliverable_id(deliverable_id, root)
+        if rejection is not None:
+            return GitResult(returncode=-1, stdout="", stderr=rejection)
+
     # `fail_loud=True` -- an indeterminate `diverging_paths()` answer (a
     # `git diff` failure or timeout) must NEVER collapse to "no divergence"
     # here, unlike Check 13's advisory use of the same predicate: this
@@ -970,6 +1235,48 @@ def commit_scoped(
         # either form), so only the subset that still exists on disk is
         # (re-)added; an already-staged deletion needs no further `git
         # add` call to land correctly in the commit below.
+        # C7a (1b): the AGREE branch never opened or mutated `msg_file`
+        # before this chunk landed -- the `prepare-commit-msg` hook that
+        # fires on the `git commit` below computed trailers entirely on its
+        # own, with no knowledge of any caller parameter. An explicit
+        # `deliverable_id` requires mutating `msg_file` HERE, before that
+        # commit runs, so the hook's own idempotency check
+        # (`coordinator/bin/coordinator-prepare-commit-msg::main`,
+        # `need_deliverable_id_check = not _has_trailer_line(commit_msg_file,
+        # "Deliverable-Id:")`) sees the line already present and skips its
+        # own Deliverable-Id leg entirely -- LOAD-BEARING, not incidental:
+        # without this, the hook would independently infer (and stamp) its
+        # own session/claimed-plan-derived value, silently overriding the
+        # caller's explicit one. May raise `DivergentDeliverableIdError` --
+        # see `_check_deliverable_id_precedence`'s own docstring; deliberately
+        # uncaught here, before any staging happens.
+        #
+        # NOT `git interpret-trailers --if-exists replaceAll` as originally
+        # proposed: a live probe against this repo's own git (this chunk's
+        # own report) found that form silently APPENDS a duplicate trailer
+        # line, rather than replacing or failing, on a message with no blank
+        # line separating its subject from an already-present `Deliverable-
+        # Id:` line -- git's own trailer-block detection never recognizes
+        # the existing line as a trailer to replace. This function instead
+        # only ever asks git to ADD (never replace), and only once
+        # `_check_deliverable_id_precedence` has confirmed via a plain-text
+        # scan that no `Deliverable-Id:` line exists yet -- sidestepping
+        # that hazard rather than trusting every future caller's message
+        # shape to avoid it.
+        if deliverable_id:
+            msg_text_before = Path(msg_file).read_text(encoding="utf-8")
+            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
+                interpret_result = _git(
+                    [
+                        "interpret-trailers",
+                        "--trailer", f"Deliverable-Id: {deliverable_id}",
+                        "--in-place", str(msg_file),
+                    ],
+                    cwd=root,
+                )
+                if not interpret_result.ok:
+                    return interpret_result
+
         existing = [p for p in path_list if (root / p).exists()]
         if existing:
             add_result = add_paths(root, existing)
@@ -979,7 +1286,7 @@ def commit_scoped(
 
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]
-    return _commit_scoped_private_index(diverged, non_diverged, msg_file, root)
+    return _commit_scoped_private_index(diverged, non_diverged, msg_file, root, deliverable_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1403,8 +1710,27 @@ def fetch(cwd: Union[str, Path], remote_name: str, *, timeout: float = 120) -> G
 def rebase_onto(
     cwd: Union[str, Path], upstream_ref: str, merge_base: str, branch: str = "HEAD"
 ) -> GitResult:
-    """`git rebase --onto <upstream_ref> <merge_base> <branch>` — push-retry rebase step."""
-    return _git(["rebase", "--onto", upstream_ref, merge_base, branch], cwd=cwd)
+    """`git rebase --onto <upstream_ref> <merge_base> [<branch>]` — push-retry rebase step.
+
+    Latent-bug fix (C3b, 2026-08-08): the literal `"HEAD"` default used to be
+    passed through as git's own `<branch>` positional argument. Per git's own
+    semantics that argument, when supplied, is checked out BEFORE the rebase
+    runs -- and `git checkout HEAD` detaches, since `HEAD` resolves to a
+    commit, not a branch name. Every genuine reject-triggered retry
+    (`push_with_retry`'s fetch+rebase+re-push cycle) therefore left the
+    worktree in detached-HEAD state after a successful rebase, and the
+    re-push that follows failed outright ("You are not currently on a
+    branch") -- silently corrupting the one path C3b's pushed-range retry
+    logic exists to cover. `branch == "HEAD"` (the sentinel every existing
+    caller passes) now omits the positional argument, which is git's own
+    2-argument `--onto` form and operates on the current branch WITHOUT
+    checking anything out -- the behaviour every caller already assumed.
+    Any other explicit branch name still passes through unchanged.
+    """
+    args = ["rebase", "--onto", upstream_ref, merge_base]
+    if branch != "HEAD":
+        args.append(branch)
+    return _git(args, cwd=cwd)
 
 
 def rebase_abort(cwd: Union[str, Path]) -> GitResult:
@@ -1420,3 +1746,23 @@ def merge_base(cwd: Union[str, Path], ref_a: str, ref_b: str) -> GitResult:
 def rev_parse_upstream(cwd: Union[str, Path]) -> GitResult:
     """`git rev-parse --abbrev-ref --symbolic-full-name @{u}` — resolve the tracked upstream ref."""
     return _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=cwd)
+
+
+def rev_parse(cwd: Union[str, Path], ref: str) -> GitResult:
+    """`git rev-parse <ref>` — resolve an arbitrary ref/name to its sha.
+
+    Added for C3b (pushed-range reporting, `commit_pipeline.push_with_retry`):
+    `rev_parse_upstream` above only names the upstream ref (e.g.
+    `"origin/main"`); this resolves that name to a sha so the pre-push and
+    post-push tips can be diffed into a `<old>..<new>` range.
+    """
+    return _git(["rev-parse", ref], cwd=cwd)
+
+
+def rev_list_count(cwd: Union[str, Path], range_spec: str) -> GitResult:
+    """`git rev-list --count <range_spec>` — commit count for a `<old>..<new>` range.
+
+    Added for C3b (pushed-range reporting): the count half of "what did a
+    landed push actually push".
+    """
+    return _git(["rev-list", "--count", range_spec], cwd=cwd)

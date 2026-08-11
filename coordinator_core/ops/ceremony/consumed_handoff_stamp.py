@@ -181,7 +181,14 @@ from coordinator_core.ipc import get_op_handler
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import git_native
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_SYNC
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_SYNC,
+    PUSH_STATUS_FAILED,
+    PUSH_STATUS_NOT_ATTEMPTED,
+    PUSH_STATUS_PUSHED,
+    derive_push_status,
+    push_with_retry,
+)
 from coordinator_core.ops.ceremony.resolver import find_all_consumed_handoffs
 from coordinator_core.ops.fleet._common import main_worktree_root
 
@@ -685,6 +692,13 @@ class StampOutcome:
     #: "deferred"/"none" (DEC-1) -- no push was attempted here, not a
     #: not-yet-determined failure.
     follow_up_pushed: Optional[bool] = None
+    #: Canonical `push_status` vocabulary from `commit_pipeline.py`
+    #: (`PUSH_STATUS_PUSHED`/`_FAILED`/`_DECLINED`/`_NOT_ATTEMPTED`) --
+    #: C6e's distinct declined-signal channel. A branch-policy decline
+    #: (`PUSH_STATUS_DECLINED`) is deliberately NEVER routed through
+    #: `follow_up_error` -- it is not a failure, it is exactly-correct
+    #: policy behaviour (see `_commit_and_push_follow_up`'s docstring).
+    follow_up_push_status: str = PUSH_STATUS_NOT_ATTEMPTED
     follow_up_error: Optional[str] = None
 
 
@@ -845,7 +859,7 @@ async def post_commit_stamp_and_ship(
             errors=outcome_errors,
         )
 
-    follow_up_sha, pushed, follow_up_error = await asyncio.to_thread(
+    follow_up_sha, pushed, follow_up_push_status, follow_up_error = await asyncio.to_thread(
         _commit_and_push_follow_up, worktree_root, outcome_stamped, committed_sha, push_mode
     )
 
@@ -858,13 +872,14 @@ async def post_commit_stamp_and_ship(
         errors=outcome_errors,
         follow_up_committed_sha=follow_up_sha,
         follow_up_pushed=pushed,
+        follow_up_push_status=follow_up_push_status,
         follow_up_error=follow_up_error,
     )
 
 
 def _commit_and_push_follow_up(
     worktree_root: Path, stamped_paths: list[str], committed_sha: str, push_mode: str = PUSH_MODE_SYNC
-) -> tuple[Optional[str], Optional[bool], Optional[str]]:
+) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism commit (`git_native.commit_scoped`) of ONLY the
     stamped paths (AC17) — the commit leg is unconditional (anti-scope: never
     weakened). The push leg is gated
@@ -880,11 +895,48 @@ def _commit_and_push_follow_up(
     a PEER's commit, not this one (lesson 2026-07-21-git-index-lock-contention;
     row 10 of docs/research/2026-07-28-is-the-jettisoned-ceremony-lock-outer-ho.md).
 
-    Returns (follow_up_sha, pushed, error). ``follow_up_sha`` is the real
-    post-commit SHA of THIS follow-up commit (captured via `rev_parse_head`,
-    never a branch-tip guess). A push failure is reported, not raised — the
-    follow-up commit itself already landed locally; a caller may re-attempt
-    the push on resumption (see AC18 crash-resumption design, C9's concern).
+    Returns (follow_up_sha, pushed, push_status, error). ``follow_up_sha`` is
+    the real post-commit SHA of THIS follow-up commit (captured via
+    `rev_parse_head`, never a branch-tip guess) — Review: code-reviewer,
+    Finding 1 (P1): captured a SECOND time, AFTER a landed push, because
+    `push_with_retry` can fetch+rebase-onto this very commit on a rejected
+    push before re-pushing, which rewrites its SHA. The pre-push capture
+    above is only ever the RETURNED value on a decline/no-remote/
+    not-attempted/failed push — none of which rewrite anything; on a landed
+    push the post-push re-read is authoritative, with the pre-push value as
+    fallback only if that re-read itself fails. A push failure is reported,
+    not raised — the follow-up commit itself already landed locally; a caller
+    may re-attempt the push on resumption (see AC18 crash-resumption design,
+    C9's concern).
+
+    ``push_status`` (C6e) is the canonical `commit_pipeline.py` vocabulary
+    (`derive_push_status`: `PUSH_STATUS_PUSHED`/`_FAILED`/`_DECLINED`/
+    `_NO_REMOTE`/`_NOT_ATTEMPTED`) and is the ONLY place a branch-policy
+    decline is signalled. Before this fix a sync push attempted on a
+    non-`work/*` branch (e.g. a fixture repo's default `main`/`master`, or a
+    real `main` worktree) went straight to `git_native.push()` with no gate
+    at all; this now routes through `commit_pipeline.push_with_retry` (the
+    SAME mechanism the sibling `post_commit_tail._commit_and_push_origin_
+    stub_close` follow-up push and the main ceremony commit's push both use)
+    rather than reimplementing the resolve->gate->decline sequence inline
+    beside it — one mechanism governs the unresolvable-branch case, the skip
+    markers, the operator line it prints, and the retry ladder, with no
+    second call site that must stay in step on any of that.
+
+    A decline (or a missing remote) is deliberately NEVER routed through
+    ``error`` — `error` is reserved for a genuine git failure (commit or
+    push), and collapsing "declined by policy" into that channel would
+    surface a soft-fail for behaviour that is exactly correct, the same
+    false-alarm class this plan removed from `integrity_breach`. Nor is a
+    decline routed through `pushed=False` — `False` reads, to every other
+    caller in this repo, as "attempted and did not land" (the shape that
+    feeds `integrity_breach` and `_resolve_push_report`'s remote probe);
+    `pushed` is `None` on a decline/no-remote/no-attempt outcome, exactly as
+    on `push_mode != "sync"`, and `push_status` is what a caller must
+    inspect to tell a genuine no-attempt apart from a considered-then-
+    declined attempt. `push_mode="none"`/`"deferred"` keeps its own prior,
+    distinct shape — `pushed=None`, `push_status=PUSH_STATUS_NOT_ATTEMPTED`,
+    `error=None`.
     """
     message = _compose_follow_up_message(stamped_paths, committed_sha)
     with tempfile.NamedTemporaryFile(
@@ -912,7 +964,7 @@ def _commit_and_push_follow_up(
             pass
 
     if not commit_result.ok:
-        return None, False, f"git commit failed: {commit_result.stderr}"
+        return None, False, PUSH_STATUS_NOT_ATTEMPTED, f"git commit failed: {commit_result.stderr}"
 
     rev_result = git_native.rev_parse_head(worktree_root)
     follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
@@ -921,10 +973,39 @@ def _commit_and_push_follow_up(
     # constant (commit_pipeline.py's own enum) instead of a bare string
     # literal so this stays in sync if the canonical value ever changes.
     if push_mode != PUSH_MODE_SYNC:
-        return follow_up_sha, None, None
+        return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
-    push_result = git_native.push(worktree_root)
-    pushed = push_result.ok
-    push_error = None if pushed else f"git push failed: {push_result.stderr}"
+    # C6e: routed through `push_with_retry` (the same branch-policy gate,
+    # skip markers, operator line, and reject-detect/rebase/retry ladder the
+    # main ceremony commit's push and the sibling `post_commit_tail`
+    # follow-up push both go through) rather than a second inline
+    # resolve/gate call site.
+    push_outcome = push_with_retry(worktree_root)
+    push_status = derive_push_status(push_outcome)
 
-    return follow_up_sha, pushed, push_error
+    if push_status == PUSH_STATUS_PUSHED:
+        # Review: code-reviewer — Finding 1 (P1): `push_with_retry` can
+        # fetch+`git rebase --onto` this follow-up commit on a rejected
+        # push before re-pushing, which REWRITES its SHA. The pre-push
+        # `follow_up_sha` captured above is therefore stale in exactly the
+        # retry case this ladder exists to handle. Re-resolve HEAD now,
+        # after the push actually landed, so the SHA persisted as
+        # `shipped_in:` (durable audit data) names the commit that is
+        # really on the remote. Only the landed path pays this second
+        # `rev-parse` — decline/no-remote/not-attempted/failure paths below
+        # never rewrite anything, so they keep the pre-push value untouched.
+        # If the re-read itself fails, fall back to the pre-push SHA rather
+        # than downgrading a known-good value to None — it is correct
+        # unless a rebase-retry actually fired, and a stale-but-real SHA is
+        # a better audit trail than a hole.
+        post_push = git_native.rev_parse_head(worktree_root)
+        landed_sha = post_push.stdout.strip() if post_push.ok else follow_up_sha
+        return landed_sha, True, push_status, None
+    if push_status == PUSH_STATUS_FAILED:
+        reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
+        return follow_up_sha, False, push_status, f"git push failed: {reason}"
+    # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE -- no push landed, but
+    # this is NOT an error and NOT `pushed=False` (see docstring above): a
+    # policy decline or a missing remote is `push_with_retry`'s own honest
+    # "did not push, on purpose/by environment" outcome.
+    return follow_up_sha, None, push_status, None

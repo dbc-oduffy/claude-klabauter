@@ -56,6 +56,7 @@ import pytest
 # Import the op directly (no registration side-effect needed for these tests).
 # ---------------------------------------------------------------------------
 from coordinator_core.ops.review_trail_write import (  # noqa: E402
+    ForeignSessionRangeRefused,
     _build_json_record,
     _compute_timestamp,
     _diagnose_zero_chain_terminal_credit,
@@ -1258,6 +1259,40 @@ class TestForeignSessionScopeGuard:
             f"expected the offending SHA {foreign_sha!r} named in the error, "
             f"got: {exc_info.value}"
         )
+
+    def test_foreign_refusal_message_names_remedy_not_absolute_impossibility(
+        self, tmp_path
+    ) -> None:
+        """Regression: the case-1 refusal message must not claim there is no
+        remedy at all — a chain-terminal session that runs its own close
+        coverage gate against the picked-up handoff BEFORE this write mints
+        a chain-ancestry waiver that clears the guard on retry (ordering,
+        not impossibility). This misled real sessions into concluding the
+        review-owed close pattern is structurally unrecordable — see this
+        module's docstring update for the full incident context."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ForeignSessionRangeRefused) as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="session")
+
+        message = str(exc_info.value)
+        # Review: code-reviewer — "no remedy" not in message was dropped: that
+        # literal substring never appeared in either the old or new message text
+        # (old text read "has NO remedy this session can perform", but only in
+        # the docstring above the raise, not the raised message itself), so the
+        # assertion was trivially true against both and could not have caught a
+        # regression reintroducing the old wording verbatim. The line below
+        # (an exact substring of the old raised message) does the falsifying
+        # work, along with the two positive-content checks.
+        assert "there is no vouch, grant, or override" not in message
+        assert "coverage-gate" in message or "brightline-gate" in message
+        assert "--from-handoff" in message
 
     def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(
         self, tmp_path, caplog

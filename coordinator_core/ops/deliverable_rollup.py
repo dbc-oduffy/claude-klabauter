@@ -6,11 +6,15 @@ Purpose: Given a ``deliverable_id`` wire parameter, scans the deliverable-spine 
 their non-null ``initiative`` FKs and resolves each to its ``state/initiatives/<id>.yaml``
 entry. Returns structured fields only — no prose is composed here; example-doctrine-repo owns the render.
 
-The scan surface covers three paths:
+The scan surface covers four paths:
   docs/plans/*.md          — primary; deliverable_id + initiative FK co-occur here most
                              (plans mint the id and most often carry the initiative FK).
   state/handoffs/*.md      — secondary; stub handoffs may carry deliverable_id.
   archive/handoffs/**/*.md — archived stubs; same scan.
+  archive/specs/**/*.md    — archived plans. `fleet.archive_completed_plans` moves a plan
+                             from docs/plans/ to archive/specs/<YYYY-MM>/ the moment its
+                             status flips terminal; excluding this root would un-resolve
+                             every shipped deliverable's own plan the instant it ships.
 
 Resolution semantics: DIRECT only (slice-1). Each artifact's own ``initiative`` frontmatter
 FK is the forward-edge. Transitive resolution (DAG walk via ``blocks``/``blocked_by`` edges)
@@ -274,13 +278,17 @@ def _scan_artifacts_by_deliverable_id(
     worktree_root: Path,
     deliverable_id: str,
 ) -> tuple[List[dict], bool]:
-    """Scan the three-path surface and return frontmatter dicts for matching artifacts.
+    """Scan the four-path surface and return frontmatter dicts for matching artifacts.
 
     Purpose: collects every artifact (plan or handoff) whose frontmatter ``deliverable_id``
-    field equals the queried value. The three scan paths are:
+    field equals the queried value. The four scan paths are:
       - docs/plans/*.md          (primary: plans mint deliverable_id + initiative FK)
       - state/handoffs/*.md      (secondary: stub handoffs)
       - archive/handoffs/**/*.md (archived stubs)
+      - archive/specs/**/*.md    (archived plans — fleet.archive_completed_plans moves a
+                                  plan here from docs/plans/ the instant its status flips
+                                  terminal, so excluding this root un-resolves every
+                                  shipped deliverable's own plan)
 
     deliverable_id is used ONLY as a comparison value against the parsed frontmatter field —
     it is NEVER used as a path component. Scan roots are hard-coded constants.
@@ -302,7 +310,8 @@ def _scan_artifacts_by_deliverable_id(
     yields an empty iterator, no exception), which would make a blocked scan root
     indistinguishable from "deliverable has no artifacts" — exactly the silent
     roll-up-to-nothing bug this guards against. docs/plans and state/handoffs are
-    flat (iterdir()); archive/handoffs is recursive (os.walk(onerror=...)).
+    flat (iterdir()); archive/handoffs and archive/specs are recursive
+    (os.walk(onerror=...)).
 
     Returns (matches, scan_incomplete):
       matches         — list of frontmatter dicts (one per matching artifact). An empty
@@ -366,9 +375,14 @@ def _scan_artifacts_by_deliverable_id(
             if path.suffix == ".md" and path.is_file():
                 _collect(path)
 
-    # Recursive scan root: archive/handoffs/**/*.md.
-    archive_dir = worktree_root / "archive" / "handoffs"
-    if archive_dir.is_dir():
+    # Recursive scan roots: archive/handoffs/**/*.md, archive/specs/**/*.md.
+    recursive_dirs = [
+        worktree_root / "archive" / "handoffs",
+        worktree_root / "archive" / "specs",
+    ]
+    for archive_dir in recursive_dirs:
+        if not archive_dir.is_dir():
+            continue
         walk_errors: List[OSError] = []
         for dirpath, _dirnames, filenames in os.walk(archive_dir, onerror=walk_errors.append):
             for fn in filenames:

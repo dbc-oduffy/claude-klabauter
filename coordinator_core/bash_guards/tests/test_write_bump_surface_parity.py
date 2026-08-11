@@ -233,6 +233,20 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
 
     assert bash_result is not None, f"{kind}: Bash-surface guard did not bump for {target_repo}"
     assert tool_result is not None, f"{kind}: tool-surface guard did not bump for {target_repo}"
+
+    # Fire-vs-no-fire alone (the `is not None` pair above) would not have
+    # caught the envelope-class divergence `b280d1116` fixed -- one surface
+    # composing a real `permissionDecision: "deny"` while the other only
+    # returned `additionalContext`. Compare the actual decision value so the
+    # next divergence of this class fails a test, not a live incident.
+    bash_decision = bash_result["hookSpecificOutput"]["permissionDecision"]
+    tool_decision = tool_result["hookSpecificOutput"]["permissionDecision"]
+    assert bash_decision == tool_decision, (
+        f"{kind}: DIVERGENCE -- Bash surface's envelope carried "
+        f"permissionDecision={bash_decision!r} but the tool surface carried "
+        f"{tool_decision!r} for the SAME target."
+    )
+
     assert len(bash_captured) == 1, f"{kind}: expected exactly one Bash-surface render_bump_message call"
     assert len(tool_captured) == 1, f"{kind}: expected exactly one tool-surface render_bump_message call"
 
@@ -314,6 +328,170 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     }
     tool_result = tool_guard.check(payload)
     assert tool_result is None, "tool surface bumped on a foreign-repo state/lessons-outbox write"
+
+
+# ---------------------------------------------------------------------------
+# AC7 -- the `~/.claude` destination class C1 (docs/plans/2026-08-10-carve-
+# claude-out-and-close-the-backslash-bypass.md) introduced via
+# `target_is_under_claude_home`. A SEPARATE, focused test rather than a
+# fourth `_build_case` row, for the same reason the lessons-outbox case
+# above is separate: every `_build_case` row assumes the target BUMPS, but
+# `~/.claude` is the opposite shape -- both surfaces must stay SILENT (no
+# `permissionDecision` envelope at all), so there is no `destination_class`
+# value to compare the way AC8 compares one. The parity this test enforces
+# is therefore "identical silence, not merely `is not None`" -- both
+# surfaces are exercised against the SAME `~/.claude` target and BOTH must
+# return `None`, which is the same substance AC8's cross-surface comparison
+# has for a class that fires (a divergence here would show up as one
+# surface returning an envelope and the other staying silent, exactly the
+# shape `b280d1116` fixed on the firing classes).
+# ---------------------------------------------------------------------------
+
+
+def _init_claude_home_repo(home: Path) -> Path:
+    """`~/.claude` as a REAL git checkout, mirroring `target_is_under_claude_
+    home`'s own docstring ("`~/.claude` IS a real git checkout on this
+    machine") -- a fixture that made `~/.claude` a bare directory would not
+    exercise the unconditional-on-git-dir-state code path C1 added."""
+    claude_home = home / ".claude"
+    claude_home.mkdir()
+    _git(str(claude_home), "init", "-q")
+    _git(str(claude_home), "config", "user.email", "t@example.com")
+    _git(str(claude_home), "config", "user.name", "Test")
+    (claude_home / "README.md").write_text("init\n", encoding="utf-8")
+    _git(str(claude_home), "add", "README.md")
+    _git(str(claude_home), "commit", "-q", "-m", "init")
+    return claude_home
+
+
+def test_claude_home_write_silent_on_both_surfaces(tmp_path, monkeypatch):
+    """AC7: the `~/.claude` destination class stays SILENT on both the
+    foreign-repo Bash guard and the tool guard -- `~/.claude` is a real git
+    checkout, so a write into it is otherwise indistinguishable from an
+    ordinary foreign-sibling-repo write except for C1's carve-out."""
+    home = tmp_path / "home"
+    home.mkdir()
+    anchor = _init_repo(tmp_path, "anchor")
+    claude_home = _init_claude_home_repo(home)
+    reg_dir = tmp_path / "registry"
+    _write_registry(reg_dir)
+    session_id = "sess-parity-claude-home"
+
+    target_file = claude_home / "some-doctrine-file.md"
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setenv("HOME", str(home))
+    session_start.write_session_start_record(session_id, launch_cwd=str(anchor))
+
+    assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
+    # Fixture sanity, matching the AC8 rows' own pre-guard sanity check.
+    assert applicability.target_is_under_claude_home(str(target_file)) is True
+
+    cmd = f"git -C {_posix(claude_home)} commit --allow-empty -m x"
+    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    assert bash_result is None, (
+        "foreign-repo Bash guard bumped a ~/.claude write -- the AC7 parity "
+        "this test exists to hold."
+    )
+
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target_file)},
+        "session_id": session_id,
+        "cwd": str(anchor),
+        "agent_id": "",
+    }
+    tool_result = tool_guard.check(payload)
+    assert tool_result is None, (
+        "tool guard bumped a ~/.claude write -- the AC7 parity this test "
+        "exists to hold."
+    )
+
+
+def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, monkeypatch):
+    """Dispatch-brief probe: C1's three call sites are NOT consistent about
+    the `env` parameter threaded into `target_is_under_claude_home` --
+    `bump_outside_repo_write.py` passes `env=env` explicitly, while
+    `bump_foreign_repo_write.py` and `bump_out_of_repo_tool_write.py` call
+    it bare (see `target_is_under_claude_home`'s own docstring, and
+    `resolve_launch_anchor`'s docstring for the identical hazard named on
+    the anchor side). This is a test that WOULD expose a cross-surface
+    disagreement if that inconsistency were live -- not a claim that it is.
+
+    FINDING (do not "fix" the inconsistency this test probes -- that is a
+    reviewer's call per this chunk's own dispatch brief): it is NOT
+    observable today. `check_bump_foreign_repo_write` and
+    `check_bump_outside_repo_write` both resolve `env = os.environ`
+    UNCONDITIONALLY, before either ever reaches `target_is_under_claude_
+    home` -- there is no call-site-reachable seam on either bash guard that
+    threads anything OTHER than live `os.environ` into that predicate, and
+    `bump_out_of_repo_tool_write.check` never accepts an `env` override at
+    all. The bare-vs-`env=env` shape difference is therefore a LATENT
+    hazard for some future caller that threads a distinct env mapping
+    through these functions, not a live divergence -- this test pins that
+    by injecting the only env-mutation seam any of the three checkers
+    currently honours (`monkeypatch.setenv`, which mutates the single
+    shared `os.environ` all three read) and confirming all three surfaces
+    still agree, including when the injected `HOME` does NOT match the
+    session anchor's own home (the case that would surface a divergence
+    first, since the exemption stops firing everywhere at once rather than
+    on only one surface)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    other_home = tmp_path / "other-home"
+    other_home.mkdir()
+    anchor = _init_repo(tmp_path, "anchor")
+    claude_home = _init_claude_home_repo(home)
+    reg_dir = tmp_path / "registry"
+    _write_registry(reg_dir)
+    session_id = "sess-parity-claude-home-env"
+
+    target_file = claude_home / "some-doctrine-file.md"
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    session_start.write_session_start_record(session_id, launch_cwd=str(anchor))
+
+    # HOME injected to a DIFFERENT directory than the one `claude_home` was
+    # built under -- `target_is_under_claude_home` must now resolve `False`
+    # everywhere, since none of the three checkers' `os.environ` disagrees
+    # with any other's.
+    monkeypatch.setenv("HOME", str(other_home))
+
+    assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
+    assert applicability.target_is_under_claude_home(str(target_file)) is False
+
+    cmd = f"git -C {_posix(claude_home)} commit --allow-empty -m x"
+    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target_file)},
+        "session_id": session_id,
+        "cwd": str(anchor),
+        "agent_id": "",
+    }
+    tool_result = tool_guard.check(payload)
+
+    # Both surfaces must now BUMP (the ~/.claude exemption no longer applies
+    # against the injected HOME) -- and, per this test's own docstring, they
+    # do: no observable disagreement from the env-threading inconsistency
+    # under the only injection seam available to a black-box caller.
+    assert bash_result is not None, (
+        "foreign-repo Bash guard stayed silent despite the injected HOME no "
+        "longer matching claude_home -- would mask a cross-surface "
+        "disagreement this probe exists to catch."
+    )
+    assert tool_result is not None, (
+        "tool guard stayed silent despite the injected HOME no longer "
+        "matching claude_home -- would mask a cross-surface disagreement "
+        "this probe exists to catch."
+    )
+    bash_decision = bash_result["hookSpecificOutput"]["permissionDecision"]
+    tool_decision = tool_result["hookSpecificOutput"]["permissionDecision"]
+    assert bash_decision == tool_decision, (
+        f"DIVERGENCE under injected HOME -- Bash surface carried "
+        f"permissionDecision={bash_decision!r} but tool surface carried "
+        f"{tool_decision!r} for the SAME ~/.claude target."
+    )
 
 
 def test_ordinary_foreign_write_still_bumps_on_both_surfaces(tmp_path, monkeypatch):

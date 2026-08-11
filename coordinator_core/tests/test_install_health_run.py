@@ -331,7 +331,10 @@ def test_main_invokes_cmd_twin_alone_not_twin_plus_script(tmp_path, capsys, monk
     calls = []
     import coordinator_core.ops.install_health_run as install_health_run_module
 
-    def _fake_call(argv):
+    def _fake_call(argv, **_spawn_kwargs):
+        # **_spawn_kwargs: the call site passes no-console creationflags plus
+        # explicit std-handle fds (see `_leg_spawn_kwargs`); this test pins the
+        # argv, not the spawn plumbing.
         calls.append(argv)
         return 0
 

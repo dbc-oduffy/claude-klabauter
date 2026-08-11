@@ -8,20 +8,32 @@ human-reviewable GROUPING REPORT, then (with ``write=True``) stamp
 reported (derive-at-emit) but NEVER written. Already-threaded artifacts
 (carrying ``deliverable_id``) are never re-minted.
 
-Corpus: handoff / plan / spinoff / roadmap / completion entities ONLY.
+Corpus: handoff / plan / spinoff / roadmap / completion / sizing entities.
     In scope:  state/handoffs/*.md   (active + spinoffs)
                archive/handoffs/**   (archived handoffs — immutable)
                docs/plans/*.md       (non-sidecar plans)
                archive/completed/**  (completion entries — immutable)
                state/roadmap/**/OVERVIEW.md  (roadmaps)
                docs/ROADMAP.md
+               state/sizings/*.yaml  (whole-document YAML, no frontmatter fence — see
+                                       ``read_yaml_document``)
     Out of scope: lessons, backlogs, memos, decisions, wiki, tasks/, templates/
 
 Grouping key:
     Plans / handoffs / spinoffs: ``workstream:`` frontmatter field.
     Completions: ``chain:`` field (semantic equivalent in that artifact type).
     Roadmaps: ``workstream:`` field (if present).
-    Null / absent key -> artifact placed in UNKNOWN group.
+    Sizings: the citing plan's ``deliverable_id``, resolved via the reverse
+        edge a plan authors at mint time (``sizing_object:`` pointing AT the
+        sizing). ``build_plan_sizing_index`` walks the plan corpus once,
+        independently of this module's own grouping loop, mapping each
+        cited sizing path to its citing plan's ``deliverable_id``;
+        ``get_workstream_key`` looks a sizing up in that index. A sizing with
+        no citing plan (or whose citing plan has no ``deliverable_id`` of its
+        own yet) is reported UNKEYED — a distinct, named outcome from the
+        UNKNOWN group other kinds fall into when their workstream field is
+        absent, per AC9. UNKEYED does not invent a synthetic grouping key.
+    Null / absent key -> artifact placed in UNKNOWN group (UNKEYED for sizings).
 
 Ambiguity (fail-loud, exit 2 in dry-run; blocked in write mode):
     A group is ambiguous when it contains 2+ distinct plan slugs with NO
@@ -68,6 +80,12 @@ Exit-code contract (byte-parity with the bash oracle):
     fail-loud-gate-script rule, since this tool is a mutating fail-loud CLI,
     not a best-effort/never-block one, and codes 0/1/2 are all live business
     outcomes here. See the trampoline's own Usage comment block.)
+    4 — a --write pass refused one or more writes (a named skip fired inside
+    `_stamp_file`/`_stamp_yaml_document` — LockTimeout, MutateAbort,
+    FileNotFoundError, or UnicodeDecodeError) — codes 0-3 above keep their
+    prior meanings; 4 is additive, never overloading an existing code, and is
+    distinct from 3 (which is the example-doctrine-repo trampoline's own transport-failure
+    code, never returned by this function).
 
 Departure from the oracle (additive robustness, not a behavior change to any
 tested path):
@@ -102,6 +120,67 @@ tested path):
       either (the temp file got default/umask permissions from shell
       redirection); this port closes that latent gap defensively even though
       the corpus is markdown-only (never executable) today.
+
+Sizing corpus extension (C5, this module's second parser class):
+    `state/sizings/*.yaml` records are whole-document YAML — no `---`
+    frontmatter fence at all — so `extract_fm_field`'s fence-scanning parser
+    structurally cannot read them (it would scan for a SECOND `---` that
+    never appears and return "" for every field, silently). `read_yaml_document`
+    is a second, dedicated parser class for this shape: `yaml.safe_load` over
+    the whole file, returning `{}` (not raising) on any read/parse failure —
+    matching `extract_fm_field`'s own "absent/unreadable/empty all return
+    empty" contract so a malformed sizing record degrades to UNKEYED rather
+    than crashing the whole corpus walk. `classify_artifact` gains a
+    `"sizing"` arm, a class distinct from every existing one (AC8).
+
+    C5b (join-key leg, unblocked once C0 vendored `deliverable_id` onto
+    `sizing-object.schema.json` at 1.8.0): `extract_deliverable_id` dispatches
+    by artifact class — a sizing's `deliverable_id` is read via
+    `read_yaml_document` (there is no `---` fence to scan), every other class
+    still via `extract_fm_field`. Minting a NEW id onto a sizing reuses
+    `group_corpus`/`_find_group_id`'s existing carry-or-mint machinery
+    unmodified; the only new surface is the write mechanism itself,
+    `_stamp_yaml_document`, because `_stamp_file`'s fence-anchored injection
+    point does not exist on a fenceless whole-document YAML file — it inserts
+    `deliverable_id:` as the second line via plain text-line surgery (never a
+    `yaml.safe_load` + re-dump round-trip, which would silently drop this
+    corpus's load-bearing inline comments). `_stamp_deliverable_id` dispatches
+    between the two stamping mechanisms by artifact class.
+
+    The question C5b's own task body left open — whether the sizing group
+    key should key off `deliverable_id` once readable, rather than the
+    (never-populated) `workstream:` document key C5 originally wired up — is
+    answered here: `get_workstream_key`'s sizing arm now resolves through the
+    citing plan's `sizing_object:` back-pointer (a 1:1 reverse edge authored
+    at plan-mint time) to that plan's `deliverable_id`, via
+    `build_plan_sizing_index`. See "Grouping key" above and the "load-bearing
+    design note" in
+    docs/plans/2026-08-10-sizing-grouping-key-is-the-plan-back-pointer.md for
+    why the index must be built by its own pass over the plan corpus rather
+    than reused from this module's grouping loop (`group_corpus` short-
+    circuits an already-`deliverable_id`-threaded plan out of `group_files`
+    before any grouping key is computed, and most plans are already
+    threaded).
+
+    Backfilling the live `state/sizings/` corpus (an actual `--write` run
+    over it) is out of scope for this plan entirely (example-doctrine-repo asked for the
+    capability, not the run) — this module enumerates and groups the corpus
+    but nothing invokes `--write` against it here.
+
+Write scoping (`--only-kind`):
+    `--write` is corpus-wide by construction: the named-group write set on
+    this repo is 56 sizings PLUS 8 handoffs and 1 plan, so a run intended to
+    close the sizing retro also stamps 9 unrelated artifacts — the
+    `2026-08-01-deliverable-id-fork-remediation` anti-scope's "may stamp
+    unrelated artifacts" hazard, with no flag to discharge it.
+    `--only-kind <class>` (repeatable) restricts which artifact classes the
+    WRITE PASS may touch. It deliberately does NOT filter enumeration,
+    grouping, or the report: the ambiguity contract ("Cannot --write while
+    ambiguous groups exist") is computed over the whole corpus, and narrowing
+    the corpus would let a scoped run write into a group a full run would
+    have refused. Out-of-scope files are reported `[skip-out-of-scope]`.
+    A group with no in-scope mutable file is skipped BEFORE `_find_group_id`
+    runs, so a scoped run never mints an id it will not stamp.
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
     - `extract_fm_field` reads only the FIRST frontmatter fence block (between
@@ -147,6 +226,7 @@ from coordinator_core.wire_paths import rel_id
 
 _PROG = "backfill-deliverable-spine"
 _UNKNOWN_GROUP_KEY = "__UNKNOWN__"
+_UNKEYED_SIZING_GROUP_KEY = "__UNKEYED_SIZING__"
 
 # ---------------------------------------------------------------------------
 # unit 1 — frontmatter extraction + path-classification predicates
@@ -211,6 +291,59 @@ def extract_fm_field(path: str, field_name: str) -> str:
     return ""
 
 
+def read_yaml_document(path: str) -> Dict[str, object]:
+    """Second parser class: whole-document YAML, for `state/sizings/*.yaml`.
+
+    A sizing record carries NO `---` frontmatter fence at all — the whole
+    file IS the document. `extract_fm_field`'s fence-scanning parser cannot
+    read these (it waits for a second `---` that never comes) and this reader
+    exists precisely to close that gap, not to replace `extract_fm_field` for
+    the markdown-with-frontmatter corpus.
+
+    Returns `{}` — never raises — on a missing file, an unreadable file, a
+    YAML parse error, or a document that does not parse to a mapping (e.g. a
+    bare scalar or list at the top level). Mirrors `extract_fm_field`'s own
+    "absent/unreadable/empty -> empty" contract so a malformed sizing record
+    degrades to an UNKEYED outcome rather than crashing the corpus walk.
+    """
+    try:
+        import yaml
+    except ImportError:
+        print(f"skip: read_yaml_document: import yaml failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            data = yaml.safe_load(fh)
+    except OSError:
+        print(f"skip: read_yaml_document: with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return {}
+    except yaml.YAMLError:
+        print(f"skip: read_yaml_document: yaml.safe_load(fh) failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def extract_deliverable_id(path: str, artifact_class: str) -> str:
+    """`deliverable_id` for `path`, dispatched by `artifact_class` (C5b).
+
+    `extract_fm_field` reads only the first `---`-fenced block; a sizing
+    record has no fence at all, so a sizing must be read via
+    `read_yaml_document` instead — reusing `extract_fm_field` on a sizing
+    path would silently return "" for every sizing regardless of whether
+    `deliverable_id` is actually set (fence_count never reaches 1). Mirrors
+    the same "absent/unreadable/empty -> empty" contract both readers share.
+    """
+    if artifact_class == "sizing":
+        doc = read_yaml_document(path)
+        val = doc.get("deliverable_id")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        return ""
+    return extract_fm_field(path, "deliverable_id")
+
+
 def is_immutable_path(path: str) -> bool:
     """True when `path` lives in an immutable archive path (never written)."""
     norm = path.replace(os.sep, "/")
@@ -251,7 +384,7 @@ def is_sidecar_plan(path: str) -> bool:
 
 
 def classify_artifact(path: str) -> str:
-    """Artifact class: plan | handoff | handoff-archived | completion | roadmap | unknown."""
+    """Artifact class: plan | handoff | handoff-archived | completion | roadmap | sizing | unknown."""
     norm = path.replace(os.sep, "/")
     if "/docs/plans/" in norm and norm.endswith(".md"):
         return "plan"
@@ -265,13 +398,96 @@ def classify_artifact(path: str) -> str:
         return "roadmap"
     if "/state/roadmap/" in norm and norm.endswith("/OVERVIEW.md"):
         return "roadmap"
+    if "/state/sizings/" in norm and norm.endswith(".yaml"):
+        return "sizing"
     return "unknown"
 
 
-def get_workstream_key(path: str, artifact_class: str) -> str:
-    """Group key: `chain:` for completions, `workstream:` for everything else."""
+def build_plan_sizing_index(
+    coordinator_root: str,
+) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """Reverse edge (AC1): sizing_object path -> citing plan's deliverable_id.
+
+    Built by its OWN pass over `docs/plans/*.md` (non-sidecar), independent
+    of `group_corpus`'s grouping loop — that loop short-circuits an artifact
+    already carrying `deliverable_id` into `already_threaded` BEFORE any
+    grouping key is computed, and the majority of local plans are already
+    threaded. A plan that cites a sizing via `sizing_object:` is therefore
+    usually NOT in `group_files`, but its `deliverable_id` is exactly the
+    value a citing sizing needs to inherit — so this index must see
+    already-threaded plans too, which the grouping loop deliberately does
+    not. Only a plan carrying BOTH `sizing_object:` and `deliverable_id:` is
+    indexed; a plan that cites a sizing but is not itself threaded yet
+    contributes no edge (there is nothing yet for the sizing to inherit).
+
+    Deliberately built off `sizing_object:` (the plan -> sizing forward
+    pointer, read here as the reverse-edge SOURCE), never off a sizing's own
+    `plan:` field — that forward edge is sparsely populated on the corpus
+    this plan targets; the citing plan's `sizing_object:` is the ask.
+
+    Returns `(index, ambiguous_sizing_refs)`. This module already has a
+    fail-loud ambiguity contract ("Ambiguity (fail-loud, exit 2 in dry-run;
+    blocked in write mode)", see this module's docstring, and `main()`'s
+    `ERROR: Cannot --write while ambiguous groups exist.` guard) — a
+    colliding `sizing_object:` (two distinct plans, each with its own
+    `deliverable_id`, both citing the same sizing) must participate in that
+    same contract rather than being silently resolved by iteration order.
+    A collision is therefore NEVER written into `index` under either
+    candidate id — `index.get(key)` misses for it exactly like an
+    uncited sizing, so it falls through `get_workstream_key`'s existing
+    miss path to `_UNKEYED_SIZING_GROUP_KEY` (AC3: never invent, never
+    silently misassign) — and it is recorded in `ambiguous_sizing_refs`
+    (key -> sorted colliding citing-plan slugs) so the caller can surface
+    it as a human-review-required ambiguity rather than dropping it.
+    """
+    entries: Dict[str, List[Tuple[str, str]]] = {}
+    plans_dir = os.path.join(coordinator_root, "docs", "plans")
+    for f in _list_md_files(plans_dir, recursive=False):
+        if is_sidecar_plan(f):
+            continue
+        sizing_ref = extract_fm_field(f, "sizing_object")
+        if not sizing_ref:
+            continue
+        deliverable_id = extract_fm_field(f, "deliverable_id")
+        if not deliverable_id:
+            continue
+        key = sizing_ref.strip().replace(os.sep, "/")
+        entries.setdefault(key, []).append((_derive_plan_slug(f), deliverable_id))
+
+    index: Dict[str, str] = {}
+    ambiguous_sizing_refs: Dict[str, List[str]] = {}
+    for key, plan_entries in entries.items():
+        distinct_ids = {pid for _slug, pid in plan_entries}
+        if len(distinct_ids) > 1:
+            ambiguous_sizing_refs[key] = sorted(slug for slug, _pid in plan_entries)
+            continue
+        index[key] = plan_entries[0][1]
+    return index, ambiguous_sizing_refs
+
+
+def get_workstream_key(
+    path: str,
+    artifact_class: str,
+    coordinator_root: Optional[str] = None,
+    plan_sizing_index: Optional[Dict[str, str]] = None,
+) -> str:
+    """Group key: `chain:` for completions, `workstream:` frontmatter field
+    for plan/handoff/spinoff/roadmap, and — for a sizing (AC2) — the citing
+    plan's `deliverable_id`, resolved via `plan_sizing_index` (see
+    `build_plan_sizing_index`). A sizing with no citing plan in the index, or
+    a call site that has not built one (`coordinator_root`/`plan_sizing_index`
+    absent), resolves to `_UNKEYED_SIZING_GROUP_KEY` (AC3) — never a
+    synthetic key.
+    """
     if artifact_class == "completion":
         return extract_fm_field(path, "chain")
+    if artifact_class == "sizing":
+        if coordinator_root and plan_sizing_index:
+            rel_key = _rel(path, coordinator_root)
+            deliverable_id = plan_sizing_index.get(rel_key)
+            if deliverable_id:
+                return deliverable_id
+        return _UNKEYED_SIZING_GROUP_KEY
     return extract_fm_field(path, "workstream")
 
 
@@ -294,6 +510,24 @@ def _list_md_files(directory: str, recursive: bool) -> List[str]:
         for name in os.listdir(directory):
             full = os.path.join(directory, name)
             if name.endswith(".md") and os.path.isfile(full):
+                out.append(full)
+    out.sort()
+    return out
+
+
+def _list_yaml_files(directory: str, recursive: bool) -> List[str]:
+    if not os.path.isdir(directory):
+        return []
+    out: List[str] = []
+    if recursive:
+        for dirpath, _dirnames, filenames in os.walk(directory):
+            for name in filenames:
+                if name.endswith(".yaml"):
+                    out.append(os.path.join(dirpath, name))
+    else:
+        for name in os.listdir(directory):
+            full = os.path.join(directory, name)
+            if name.endswith(".yaml") and os.path.isfile(full):
                 out.append(full)
     out.sort()
     return out
@@ -329,6 +563,8 @@ def enumerate_corpus(coordinator_root: str) -> List[str]:
     if os.path.isfile(roadmap_doc):
         corpus.append(roadmap_doc)
 
+    corpus.extend(_list_yaml_files(os.path.join(coordinator_root, "state", "sizings"), recursive=False))
+
     return corpus
 
 
@@ -353,18 +589,28 @@ def _derive_plan_slug(path: str) -> str:
     return _DATE_PREFIX_RE.sub("", base)
 
 
-def group_corpus(corpus: List[str]) -> _GroupingResult:
+def group_corpus(
+    corpus: List[str],
+    coordinator_root: Optional[str] = None,
+    plan_sizing_index: Optional[Dict[str, str]] = None,
+) -> _GroupingResult:
+    """Group `corpus` by workstream key. `coordinator_root`/`plan_sizing_index`
+    are optional so existing single-arg callers keep working — a sizing
+    resolved without them always lands UNKEYED (AC3), never a wrong key.
+    """
     result = _GroupingResult(total_scanned=len(corpus))
 
     for f in corpus:
         artifact_class = classify_artifact(f)
 
-        existing_id = extract_fm_field(f, "deliverable_id")
+        existing_id = extract_deliverable_id(f, artifact_class)
         if existing_id:
             result.already_threaded.append((f, existing_id))
             continue
 
-        ws_key = get_workstream_key(f, artifact_class) or _UNKNOWN_GROUP_KEY
+        ws_key = get_workstream_key(
+            f, artifact_class, coordinator_root, plan_sizing_index
+        ) or _UNKNOWN_GROUP_KEY
         result.group_files.setdefault(ws_key, []).append(f)
 
         if artifact_class == "plan":
@@ -391,6 +637,7 @@ def detect_ambiguous_groups(result: _GroupingResult) -> List[str]:
 class _Metrics:
     known_group_count: int = 0
     unknown_count: int = 0
+    unkeyed_sizing_count: int = 0
     mutable_to_thread: int = 0
     mutable_unknown: int = 0
     immutable_derive: int = 0
@@ -400,14 +647,19 @@ def compute_metrics(result: _GroupingResult) -> _Metrics:
     metrics = _Metrics()
     for ws_key, files in result.group_files.items():
         is_unknown = ws_key == _UNKNOWN_GROUP_KEY
+        is_unkeyed_sizing = ws_key == _UNKEYED_SIZING_GROUP_KEY
         if is_unknown:
             metrics.unknown_count = len(files)
+        elif is_unkeyed_sizing:
+            # AC9: named and queryable, distinct from both the UNKNOWN group
+            # (other kinds' missing-workstream case) and `ambiguous`.
+            metrics.unkeyed_sizing_count = len(files)
         else:
             metrics.known_group_count += 1
         for gf in files:
             if is_immutable_path(gf):
                 metrics.immutable_derive += 1
-            elif is_unknown:
+            elif is_unknown or is_unkeyed_sizing:
                 metrics.mutable_unknown += 1
             else:
                 metrics.mutable_to_thread += 1
@@ -437,7 +689,14 @@ def _rel(path: str, coordinator_root: str) -> str:
 
 
 def _propose_id(ws_key: str, gfiles: List[str]) -> str:
-    """Dry-run-only preview string — never a real mint (no `mint()` call)."""
+    """Dry-run-only preview string — never a real mint (no `mint()` call).
+
+    A sizing-only group's `ws_key` already IS the citing plan's
+    `deliverable_id` (AC2) — not a workstream string to slugify — so it is
+    surfaced as-is rather than run through the hex-mint preview path below.
+    """
+    if gfiles and all(classify_artifact(gf) == "sizing" for gf in gfiles):
+        return f"{ws_key}  [from citing plan's deliverable_id]"
     for gf in gfiles:
         gf_class = classify_artifact(gf)
         if gf_class in ("handoff", "handoff-archived"):
@@ -452,7 +711,7 @@ def _propose_id(ws_key: str, gfiles: List[str]) -> str:
 def _find_group_id(gfiles: List[str], ws_key: str, out: IO[str], err: IO[str]) -> str:
     """Mint (or carry) ONE deliverable_id for a group. Mirrors oracle L580-616."""
     for gf in gfiles:
-        existing_id = extract_fm_field(gf, "deliverable_id")
+        existing_id = extract_deliverable_id(gf, classify_artifact(gf))
         if existing_id:
             print(f"  [carry] Using existing id from corpus: {existing_id}", file=err)
             return existing_id
@@ -475,7 +734,7 @@ def _find_group_id(gfiles: List[str], ws_key: str, out: IO[str], err: IO[str]) -
     return group_id
 
 
-def _stamp_file(path: str, deliverable_id: str) -> None:
+def _stamp_file(path: str, deliverable_id: str) -> bool:
     """Atomically inject `deliverable_id: <id>` after the opening `---` fence.
 
     Faithful port of the oracle's awk injection: insert once, immediately
@@ -523,6 +782,150 @@ def _stamp_file(path: str, deliverable_id: str) -> None:
     # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(path)
+    return True
+
+
+_SIZING_SCHEMA_PATH_FOR_STAMP = (
+    Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+)
+
+
+def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool:
+    """Inject `deliverable_id: <id>` into a whole-document sizing YAML (C5b).
+
+    A sizing record carries NO `---` frontmatter fence (see
+    `read_yaml_document`'s docstring), so `_stamp_file`'s fence-anchored
+    injection point does not exist on this shape. Inserted after any leading
+    comment/blank lines via plain text-line surgery — never a full
+    `yaml.safe_load` + re-dump round-trip, which would silently drop every
+    comment in the file (this corpus's `estimate.tshirt`/`route`/`detents`
+    inline comments are load-bearing documentation, not decoration). Drops
+    any pre-existing `deliverable_id:` top-level line first (idempotency
+    guard, same rationale as `_stamp_file`'s fence-block guard — should be
+    unreachable given the caller's already-threaded exclusion, kept for
+    parity/defense).
+
+    Review: staff-eng — Finding 5(a-c) and the sibling insertion-point
+    finding, all closed together:
+
+    (a) Reads and writes now route through `locked_write.locked_rmw` rather
+        than two independent `open()` calls — this closes hazard (c), the
+        missing cross-process lock, on the same primitive
+        `deliverable_cascade._advance_one_sizing` and
+        `coordinator-doc-new::_write_sizing_reverse_edge` both take on the
+        SAME corpus. `locked_rmw` itself reads via `Path.read_text(encoding=
+        "utf-8")` (Python's universal-newline text mode) and writes the
+        mutated text's own literal bytes with no `os.linesep` re-encoding —
+        so a CRLF-authored sizing is homogenised to LF on any stamp (rather
+        than the pre-existing hazard's OS-dependent CRLF<->LF flip-flop).
+        Full CRLF ROUND-TRIP fidelity is bounded by `locked_rmw`'s own
+        read/write primitive, which is outside this module's write surface;
+        this stamp no longer introduces a WORSE, platform-dependent
+        corruption on top of that shared bound.
+    (b) `errors="replace"` on the read leg is gone — a decode failure now
+        propagates as a genuine exception, which the caller wraps into a
+        named skip (see `_stamp_deliverable_id`) instead of silently
+        persisting U+FFFD replacement characters into a write-back path.
+    (c) locked_rmw, above.
+    (d) The stamp no longer assumes line index 1 is safe: it now inserts
+        after every leading blank/`#`-comment line instead, and the
+        post-mutation document is `yaml.safe_load`'d and schema-validated
+        before the write is allowed to land — a record that would corrupt
+        (block-scalar continuation caught mid-scope, or a shape the vendored
+        `sizing-object.schema.json` rejects) aborts the stamp via
+        `MutateAbort` rather than silently persisting a broken document.
+    """
+    import yaml  # noqa: PLC0415 — function-local, mirrors this module's other deferred imports
+    from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
+        format_validation_errors,
+        validate_frontmatter,
+    )
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw  # noqa: PLC0415
+
+    def _mutate(old_text: str) -> str:
+        lines = old_text.splitlines(keepends=True)
+        out_lines: List[str] = [
+            line for line in lines if not line.startswith("deliverable_id:")
+        ]
+        insert_at = 0
+        for line in out_lines:
+            stripped = line.strip()
+            if stripped == "" or stripped.startswith("#"):
+                insert_at += 1
+                continue
+            break
+        # Always LF: `old_text` arrives via `locked_rmw`'s `Path.read_text(
+        # encoding="utf-8")` read leg, which is Python universal-newline text
+        # mode — any `\r\n` in the on-disk file is already normalized to `\n`
+        # before this function ever sees it, so a CRLF-preserving branch here
+        # is structurally unreachable. Full CRLF round-trip fidelity would
+        # have to be fixed at `locked_write.py`'s read primitive, well
+        # outside this module's write surface (see this function's own
+        # docstring, point (a)).
+        # Review: coordinator:code-reviewer — collapsed the dead
+        # CRLF-detection conditional that used to read as if it preserved
+        # CRLF while being unable to.
+        eol = "\n"
+        out_lines.insert(insert_at, f"deliverable_id: {deliverable_id}{eol}")
+        new_text = "".join(out_lines)
+
+        try:
+            parsed = yaml.safe_load(new_text)
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(
+                f"stamp: post-mutation YAML parse failed for {path}: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise MutateAbort(
+                f"stamp: post-mutation document at {path} did not parse to a YAML mapping"
+            )
+        errors = validate_frontmatter(parsed, _SIZING_SCHEMA_PATH_FOR_STAMP)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(
+                f"stamp: post-mutation schema validation failed for {path}: {details}"
+            )
+        return new_text
+
+    try:
+        locked_rmw(Path(path), _mutate, repo_root=Path(repo_root))
+    except FileNotFoundError:
+        print(f"skip: _stamp_yaml_document: file not found: {path}", file=sys.stderr)
+        return False
+    except LockTimeout as exc:
+        print(
+            f"skip: _stamp_yaml_document: timed out waiting for file lock on {path}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    except MutateAbort as exc:
+        print(
+            f"skip: _stamp_yaml_document: {exc.args[0] if exc.args else 'mutation aborted'}",
+            file=sys.stderr,
+        )
+        return False
+    except UnicodeDecodeError as exc:
+        print(f"skip: _stamp_yaml_document: undecodable file {path}: {exc}", file=sys.stderr)
+        return False
+
+    # DR-276: declared AFTER the write lands, never before — same rule as
+    # `_stamp_file`'s own call site.
+    declare_write(path)
+    return True
+
+
+def _stamp_deliverable_id(path: str, artifact_class: str, deliverable_id: str, repo_root: str) -> bool:
+    """Dispatch to the correct stamping mechanism for `artifact_class` (C5b).
+
+    Returns True when the write actually landed (and `declare_write` fired),
+    False when a named skip fired instead (`LockTimeout`/`MutateAbort`/
+    `FileNotFoundError`/`UnicodeDecodeError`) — the caller must not report a
+    refused write as a stamp (see module docstring's write-failure-reporting
+    fix).
+    """
+    if artifact_class == "sizing":
+        return _stamp_yaml_document(path, deliverable_id, repo_root)
+    return _stamp_file(path, deliverable_id)
 
 
 def _emit_report(
@@ -532,7 +935,9 @@ def _emit_report(
     ambiguous_keys: List[str],
     metrics: _Metrics,
     out: IO[str],
+    ambiguous_sizing_refs: Optional[Dict[str, List[str]]] = None,
 ) -> None:
+    ambiguous_sizing_refs = ambiguous_sizing_refs or {}
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print("=" * 60, file=out)
     print("GROUPING REPORT — backfill-deliverable-spine", file=out)
@@ -547,7 +952,10 @@ def _emit_report(
     print(f"  Already-threaded (skip):      {len(result.already_threaded)}", file=out)
     print(f"  Known workstream groups:      {metrics.known_group_count}", file=out)
     print(f"  Unknown (no workstream):      {metrics.unknown_count}", file=out)
+    print(f"  Unkeyed sizings (no plan):    {metrics.unkeyed_sizing_count}", file=out)
     print(f"  Ambiguous groups:             {len(ambiguous_keys)}", file=out)
+    if ambiguous_sizing_refs:
+        print(f"  Ambiguous sizing citations:   {len(ambiguous_sizing_refs)}", file=out)
     print(f"  Mutable to stamp (named):     {metrics.mutable_to_thread}", file=out)
     print(f"  Mutable (unknown, skip):      {metrics.mutable_unknown}", file=out)
     print(f"  Immutable (derive-at-emit):   {metrics.immutable_derive}", file=out)
@@ -559,7 +967,10 @@ def _emit_report(
             print(f"  [{eid}]  {_rel(epath, coordinator_root)}", file=out)
         print("", file=out)
 
-    named_keys = sorted(k for k in result.group_files if k != _UNKNOWN_GROUP_KEY)
+    named_keys = sorted(
+        k for k in result.group_files
+        if k not in (_UNKNOWN_GROUP_KEY, _UNKEYED_SIZING_GROUP_KEY)
+    )
     if named_keys:
         print("-" * 60, file=out)
         print("NAMED GROUPS", file=out)
@@ -608,6 +1019,22 @@ def _emit_report(
                 print(f"    [{uf_class}] {uf_rel}  (mutable — no workstream, skip)", file=out)
         print("", file=out)
 
+    if _UNKEYED_SIZING_GROUP_KEY in result.group_files:
+        print("-" * 60, file=out)
+        print("UNKEYED SIZINGS (no citing plan)", file=out)
+        print("  A sizing with no plan citing it via `sizing_object:` — or", file=out)
+        print("  whose citing plan has no `deliverable_id` of its own yet —", file=out)
+        print("  has nothing to inherit and therefore no grouping key.", file=out)
+        print("  Distinct from UNKNOWN and from `ambiguous` — this is not a", file=out)
+        print("  defect, and no synthetic key is invented for it. Report-only", file=out)
+        print("  in this run.", file=out)
+        print("  Artifacts:", file=out)
+        for sf in result.group_files[_UNKEYED_SIZING_GROUP_KEY]:
+            sf_class = classify_artifact(sf)
+            sf_rel = _rel(sf, coordinator_root)
+            print(f"    [{sf_class}] {sf_rel}  (unkeyed — no citing plan, skip)", file=out)
+        print("", file=out)
+
     if ambiguous_keys:
         print("=" * 60, file=out)
         print("AMBIGUOUS GROUPS — HUMAN REVIEW REQUIRED", file=out)
@@ -621,9 +1048,23 @@ def _emit_report(
             print(f"  - '{ak}' (plan slugs: {slugs})", file=out)
         print("", file=out)
 
+    if ambiguous_sizing_refs:
+        print("=" * 60, file=out)
+        print("AMBIGUOUS SIZING CITATIONS — HUMAN REVIEW REQUIRED", file=out)
+        print("=" * 60, file=out)
+        print("  The following sizings are cited via `sizing_object:` by 2+", file=out)
+        print("  plans carrying DIFFERENT deliverable_ids. Neither plan's id", file=out)
+        print("  is assigned — the sizing is UNKEYED until this is resolved.", file=out)
+        print("", file=out)
+        for sk in sorted(ambiguous_sizing_refs):
+            slugs = " ".join(ambiguous_sizing_refs[sk]) or "<none>"
+            print(f"  - '{sk}' (citing plan slugs: {slugs})", file=out)
+        print("", file=out)
+
     print("=" * 60, file=out)
-    if ambiguous_keys:
-        print(f"STATUS: REVIEW REQUIRED ({len(ambiguous_keys)} ambiguous group(s))", file=out)
+    total_ambiguous = len(ambiguous_keys) + len(ambiguous_sizing_refs)
+    if total_ambiguous:
+        print(f"STATUS: REVIEW REQUIRED ({total_ambiguous} ambiguous group(s))", file=out)
         print("  Fix ambiguities before running --write.", file=out)
     else:
         print("STATUS: CLEAN — no ambiguities detected", file=out)
@@ -641,23 +1082,32 @@ Purpose: Group the board-relevant artifact corpus by workstream, emit a human-
          at-emit) but NEVER written. Already-threaded artifacts (carrying
          deliverable_id) are never re-minted.
 
-Corpus: handoff / plan / spinoff / roadmap / completion entities ONLY.
+Corpus: handoff / plan / spinoff / roadmap / completion / sizing entities.
   In scope:  state/handoffs/*.md   (active + spinoffs)
              archive/handoffs/**   (archived handoffs — immutable)
              docs/plans/*.md       (non-sidecar plans)
              archive/completed/**  (completion entries — immutable)
              state/roadmap/**/OVERVIEW.md  (roadmaps)
              docs/ROADMAP.md
+             state/sizings/*.yaml  (whole-document YAML, no frontmatter fence)
   Out of scope: lessons, backlogs, memos, decisions, wiki, tasks/, templates/
 
 Usage:
   backfill-deliverable-spine [--dry-run] [--root <coordinator-root>]
   backfill-deliverable-spine --write [--root <coordinator-root>]
+  backfill-deliverable-spine --write [--only-kind <class>]...  [--root <coordinator-root>]
+                              --only-kind restricts the WRITE PASS to the named
+                              artifact class(es) (repeatable) — does not filter
+                              enumeration, grouping, or the report. Accepted:
+                              plan, handoff, handoff-archived, completion,
+                              roadmap, sizing.
 
 Exit codes:
   0 — clean (no ambiguities; write applied or dry-run report emitted)
   1 — fatal error (bad arguments, corpus root unreadable)
   2 — ambiguous groups detected (human review required before --write)
+  4 — a --write pass refused one or more writes (see Write failures in the
+      WRITE COMPLETE block); codes 0-3 keep their prior meanings
 
 Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C5, AC7\
 """
@@ -672,6 +1122,8 @@ def main(
     """CLI entry point. See module docstring for the exit-code contract."""
     mode = "dry-run"
     root_override: Optional[str] = None
+    only_kind: List[str] = []
+    _VALID_KINDS = ("plan", "handoff", "handoff-archived", "completion", "roadmap", "sizing")
 
     i = 0
     while i < len(argv):
@@ -687,6 +1139,21 @@ def main(
                 print("ERROR: --root requires a value", file=err)
                 return 1
             root_override = argv[i + 1]
+            i += 2
+        elif arg == "--only-kind":
+            if i + 1 >= len(argv):
+                print("ERROR: --only-kind requires a value", file=err)
+                return 1
+            kind = argv[i + 1]
+            if kind not in _VALID_KINDS:
+                print(
+                    f"ERROR: --only-kind: unknown class {kind!r} — accepted: "
+                    + ", ".join(_VALID_KINDS),
+                    file=err,
+                )
+                return 1
+            if kind not in only_kind:
+                only_kind.append(kind)
             i += 2
         elif arg in ("-h", "--help"):
             print(_HELP_TEXT, file=out)
@@ -723,17 +1190,24 @@ def main(
         return 1
 
     corpus = enumerate_corpus(coordinator_root)
-    result = group_corpus(corpus)
+    plan_sizing_index, ambiguous_sizing_refs = build_plan_sizing_index(coordinator_root)
+    result = group_corpus(corpus, coordinator_root, plan_sizing_index)
     ambiguous_keys = sorted(detect_ambiguous_groups(result))
     metrics = compute_metrics(result)
 
-    _emit_report(coordinator_root, mode, result, ambiguous_keys, metrics, out)
+    mode_label = mode
+    if only_kind:
+        mode_label = f"{mode} (scope: {', '.join(only_kind)})"
+
+    _emit_report(coordinator_root, mode_label, result, ambiguous_keys, metrics, out, ambiguous_sizing_refs)
+
+    total_ambiguous = len(ambiguous_keys) + len(ambiguous_sizing_refs)
 
     if mode == "write":
-        if ambiguous_keys:
+        if total_ambiguous:
             print("", file=err)
             print("ERROR: Cannot --write while ambiguous groups exist.", file=err)
-            print(f"       Resolve the {len(ambiguous_keys)} ambiguous group(s) above first.", file=err)
+            print(f"       Resolve the {total_ambiguous} ambiguous group(s) above first.", file=err)
             return 2
 
         print("", file=out)
@@ -744,10 +1218,59 @@ def main(
         stamped = 0
         skipped_immutable = 0
         skipped_unknown = 0
+        skipped_out_of_scope = 0
+        write_failed = 0
 
-        for ws_key in sorted(k for k in result.group_files if k != _UNKNOWN_GROUP_KEY):
+        for ws_key in sorted(
+            k for k in result.group_files
+            if k not in (_UNKNOWN_GROUP_KEY, _UNKEYED_SIZING_GROUP_KEY)
+        ):
             gfiles = result.group_files[ws_key]
-            group_id = _find_group_id(gfiles, ws_key, out, err)
+
+            # Review: coordinator:code-reviewer — a wholly-out-of-scope group
+            # (every file either immutable or not in --only-kind) used to
+            # `continue` here, skipping the per-file loop below entirely —
+            # so its files got NO report line at all, not even
+            # [skip-immutable]/[skip-out-of-scope], and the printed
+            # Stamped + Skipped(*) total silently undercounted the full
+            # corpus for a scoped run. Fixed by letting the group fall
+            # through into the per-file loop unconditionally: every file
+            # still gets its normal report line and counter increment, but
+            # `group_id` derivation (and therefore minting) is skipped for a
+            # pre-skipped group — safe because `pre_skipped` is exactly the
+            # predicate for "no file in this group can reach the stamp
+            # branch below", so `group_id` is never dereferenced.
+            pre_skipped = only_kind and not any(
+                not is_immutable_path(gf) and classify_artifact(gf) in only_kind
+                for gf in gfiles
+            )
+
+            if pre_skipped:
+                group_id = None
+            elif gfiles and all(classify_artifact(gf) == "sizing" for gf in gfiles):
+                # AC6: `ws_key` here already IS the citing plan's
+                # deliverable_id (get_workstream_key's sizing arm) — never
+                # re-derive it via _find_group_id's mint-or-carry search,
+                # which is written to derive an id FROM group-file content
+                # and would mint a BRAND NEW id off `ws_key` as if it were a
+                # workstream slug.
+                group_id = ws_key
+            else:
+                # Negative spec: a group mixing a sizing with a non-sizing
+                # artifact (both sharing `ws_key`) falls through to
+                # `_find_group_id` unconditionally — the `all(...)` bypass
+                # above only fires when EVERY file in the group is a
+                # sizing. This is only safe because `get_workstream_key`'s
+                # sizing arm returns a real `deliverable_id` string
+                # (`dlv-...`-shaped) while every other class's `ws_key`
+                # comes from a hand-authored `workstream:`/`chain:` field —
+                # the two key spaces would have to collide (a `workstream:`
+                # literally equal to some plan's `deliverable_id`) for a
+                # mixed group to exist at all. That collision is not
+                # currently guarded against; if it is ever observed, this
+                # bypass must be widened to key on `ws_key`'s SHAPE (e.g. a
+                # `dlv-` prefix check), not just group-file homogeneity.
+                group_id = _find_group_id(gfiles, ws_key, out, err)
 
             for gf in gfiles:
                 if is_immutable_path(gf):
@@ -755,7 +1278,8 @@ def main(
                     skipped_immutable += 1
                     continue
 
-                existing_id = extract_fm_field(gf, "deliverable_id")
+                gf_class = classify_artifact(gf)
+                existing_id = extract_deliverable_id(gf, gf_class)
                 if existing_id:
                     print(
                         f"  [skip-threaded] {_rel(gf, coordinator_root)}  (already has id: {existing_id})",
@@ -763,9 +1287,37 @@ def main(
                     )
                     continue
 
-                _stamp_file(gf, group_id)
-                print(f"  [stamp] {_rel(gf, coordinator_root)}  -> {group_id}", file=out)
-                stamped += 1
+                if only_kind and gf_class not in only_kind:
+                    print(
+                        f"  [skip-out-of-scope] {_rel(gf, coordinator_root)}  (class: {gf_class}, not in --only-kind scope)",
+                        file=out,
+                    )
+                    skipped_out_of_scope += 1
+                    continue
+
+                if group_id is None:
+                    # Structurally unreachable: `pre_skipped` is true only when
+                    # NO file in the group is both mutable and in `only_kind`,
+                    # and the three `continue`s above admit only such a file
+                    # here. Asserted rather than assumed because the invariant
+                    # spans two loops and is not visible to a type checker — a
+                    # future reorder of the per-file skips would otherwise
+                    # stamp a literal `None` onto a live record silently, which
+                    # is the failure class this whole module exists to avoid.
+                    raise RuntimeError(
+                        f"invariant violated: no group_id derived for in-scope file {gf} "
+                        f"(group {ws_key!r}, class {gf_class}) — refusing to stamp"
+                    )
+                landed = _stamp_deliverable_id(gf, gf_class, group_id, coordinator_root)
+                if landed:
+                    print(f"  [stamp] {_rel(gf, coordinator_root)}  -> {group_id}", file=out)
+                    stamped += 1
+                else:
+                    print(
+                        f"  [skip-write-failed] {_rel(gf, coordinator_root)}  (write refused — see stderr)",
+                        file=out,
+                    )
+                    write_failed += 1
 
         if _UNKNOWN_GROUP_KEY in result.group_files:
             for uf in result.group_files[_UNKNOWN_GROUP_KEY]:
@@ -776,13 +1328,28 @@ def main(
                     )
                     skipped_unknown += 1
 
+        if _UNKEYED_SIZING_GROUP_KEY in result.group_files:
+            for sf in result.group_files[_UNKEYED_SIZING_GROUP_KEY]:
+                print(
+                    f"  [skip-unkeyed-sizing] {_rel(sf, coordinator_root)}  (no citing plan — cannot assign id)",
+                    file=out,
+                )
+                skipped_unknown += 1
+
         print("", file=out)
         print("WRITE COMPLETE:", file=out)
         print(f"  Stamped:            {stamped}", file=out)
         print(f"  Skipped (immutable): {skipped_immutable}", file=out)
         print(f"  Skipped (unknown):   {skipped_unknown}", file=out)
+        if only_kind:
+            print(f"  Skipped (out-of-scope): {skipped_out_of_scope}", file=out)
+        if write_failed:
+            print(f"  Write failures:     {write_failed}", file=out)
 
-    if ambiguous_keys:
+        if write_failed:
+            return 4
+
+    if total_ambiguous:
         return 2
     return 0
 

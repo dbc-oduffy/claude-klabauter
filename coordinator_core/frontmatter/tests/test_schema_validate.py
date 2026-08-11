@@ -54,6 +54,7 @@ from coordinator_core.frontmatter.schema_validate import (
     SchemaDriftError,
     SchemaVersionError,
     check_plan_tasks_ordering,
+    check_schema_ahead_of_doe,
     check_schema_drift,
     describe,
     is_unowned,
@@ -68,6 +69,7 @@ from coordinator_core.frontmatter.schema_validate import (
     DIRECTION_WE_BEHIND,
     _infer_drift_direction,
     check_schema_drift_advisory,
+    _parse_semver_tuple,
     _read_bump_class,
     _read_bump_note,
 )
@@ -91,6 +93,7 @@ _SCHEMAS_DIR = Path(__file__).parent.parent / 'schemas'
 _HANDOFF_SCHEMA = _SCHEMAS_DIR / 'handoff.schema.json'
 _HANDOFF_ARCHIVED_SCHEMA = _SCHEMAS_DIR / 'handoff-archived.schema.json'
 _PLAN_SCHEMA = _SCHEMAS_DIR / 'plan.schema.json'
+_SIZING_OBJECT_SCHEMA = _SCHEMAS_DIR / 'sizing-object.schema.json'
 _RESEARCH_SYNTHESIS_SCHEMA = _SCHEMAS_DIR / 'research-synthesis.schema.json'
 # Resolved via the canonical coordinator_core.testing.doe_root pointer-file
 # resolver — NOT a relative-sibling-checkout guess. A hardcoded
@@ -1903,6 +1906,112 @@ class TestSizingObjectField:
 # docs/plans/2026-08-06-plan-sizing-citation-gate.md § C1.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# sizing-object — deliverable_id/plan/status:shipped (1.7.0 -> 1.8.0 vendor
+# bump, commit 90bd3cbf0). Regression for
+# state/bug-backlog/2026-08-10-frontmatter-schema-guard-rejects-deliver-7a9d9e004454.yaml:
+# the commit message claimed the vendor added `deliverable_id`, but the
+# byte content it actually committed still carried the pre-bump 1.7.0 shape
+# with no `deliverable_id`/`plan`/`shipped` — the fix existed only in an
+# uncommitted working-tree edit. This asserts the ON-DISK schema (whatever
+# is about to be committed) accepts the fields its own bump note claims.
+# ---------------------------------------------------------------------------
+
+class TestSizingObjectDeliverableSpineFields:
+    """A minimal sizing-object built from required-fields-only, with
+    deliverable_id/plan/status:shipped layered on. Fails against the
+    pre-bump (1.7.0) schema shape and must pass against the current one.
+
+    Landed parked under `pending_fix` because commit `90bd3cbf0` committed
+    1.7.0 bytes under a 1.8.0-vendor message and the schema file was then
+    held by a live peer path-touch claim (see
+    `state/bug-backlog/2026-08-10-frontmatter-schema-guard-rejects-deliver-7a9d9e004454.yaml`).
+    The real 1.8.0 bytes landed in `6d79c48cf`, so the park's own removal
+    condition is discharged and this class is a live gate again."""
+
+    @staticmethod
+    def _minimal_sizing_object(**overrides):
+        fm = {
+            'schema': 'sizing-object',
+            'intent': 'Example PM ask, verbatim.',
+            'estimate': {'tshirt': 'M', 'provisional': True},
+            'route': 'plan',
+            'detents': [],
+            'fork': None,
+            'xl_exit': None,
+            'status': 'routed',
+            'premise': {'provenance': 'unrecorded'},
+        }
+        fm.update(overrides)
+        return fm
+
+    def test_deliverable_id_valid_pattern_ok(self):
+        fm = self._minimal_sizing_object(deliverable_id='dlv-example-abc123')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'deliverable_id' for e in errors), errors
+
+    def test_deliverable_id_null_ok(self):
+        fm = self._minimal_sizing_object(deliverable_id=None)
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'deliverable_id' for e in errors), errors
+
+    def test_deliverable_id_absent_ok(self):
+        fm = self._minimal_sizing_object()
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'deliverable_id' for e in errors), errors
+
+    def test_plan_fk_valid_path_ok(self):
+        fm = self._minimal_sizing_object(plan='docs/plans/2026-08-10-example.md')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'plan' for e in errors), errors
+
+    def test_status_shipped_ok(self):
+        fm = self._minimal_sizing_object(status='shipped')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'status' for e in errors), errors
+
+    def test_status_declined_ok(self):
+        """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
+        § C1): `declined` — routed, then the spend was refused — is a valid
+        terminal status value alongside `shipped`/`superseded`."""
+        fm = self._minimal_sizing_object(status='declined')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'status' for e in errors), errors
+
+    def test_status_invalid_value_rejected(self):
+        """Regression guard for the AC1 addition: the enum must still reject
+        an arbitrary string — declined is a member, not a widening to any string."""
+        fm = self._minimal_sizing_object(status='declined-forever')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert any(e['field'] == 'status' for e in errors), errors
+
+    def test_reported_file_validates_clean(self):
+        """The exact repro from the bug entry: a real on-disk sizing-object
+        carrying deliverable_id must validate with zero errors."""
+        repo_root = Path(__file__).resolve().parents[3]
+        target = repo_root / 'state' / 'sizings' / '2026-08-10-are-two-thirds-of-healthy-repo-sessions.yaml'
+        if not target.exists():
+            pytest.skip(f'{target} not present on this checkout')
+        content = target.read_text(encoding='utf-8')
+        fm = yaml.safe_load(content)
+        assert fm is not None
+        assert fm.get('deliverable_id')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not errors, errors
+
+    def test_x_schema_version_at_least_1_8_0(self):
+        # Review: coordinator:code-reviewer c841277a — example-doctrine-repo's cross-repo
+        # parity gate compares shapes ONLY when both sides' x-schema-version
+        # are equal; an unequal-version divergence compares nothing and is
+        # silent, which is how the deliverable-spine defect went unnoticed.
+        # Pin this repo's own floor here since no dedicated version-parity
+        # test exists in this repo (test_offerable_schema_vendoring_parity.py
+        # checks vendoring presence, not this schema's version floor).
+        schema = json.loads(_SIZING_OBJECT_SCHEMA.read_text(encoding='utf-8'))
+        version = tuple(int(p) for p in schema['x-schema-version'].split('.'))
+        assert version >= (1, 8, 0), schema['x-schema-version']
+
+
 class TestPlanCorpusValidatesAgainstBumpedSchema:
     """No-regression differential over the ENTIRE docs/plans/*.md corpus
     (plans and review sidecars alike -- sidecar-detection heuristics are
@@ -3212,7 +3321,12 @@ _QUEUE_SCHEMA_PINS = {
     # response to this repo's canonical-first ask. Re-vendored from that commit;
     # this pin is a byte-identity pin on example-doctrine-repo's file, distinct from example-doctrine-repo's own
     # canonical-shape content hash in schema-version-pins.json.
-    'review-trail': "89c24b12d1c1017a9a84705a6d4df972568d268f",
+    # Pin moved 2026-08-10 to 840491558109540f7416e6f09c78148f336873ec (example-doctrine-repo
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   example-doctrine-repo vendored claude-klabauter's 1.2.0 scope_kind enum at 6baac04a3; the ahead-
+    #   pin's own remedy path says remove it and restore an ordinary byte-pin
+    #   at the new shared SHA
+    'review-trail': "840491558109540f7416e6f09c78148f336873ec",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the
@@ -3233,6 +3347,61 @@ _QUEUE_SCHEMA_PINS = {
     # docs/plans/2026-08-06-vendor-priority-ledger-and-priority-inte.md § C1
     'priority-intent': "577a710c7c07cbeb0b061ebcc131dc09d2975654",
 }
+
+# Ahead-pin registry: entries here declare "claude-klabauter's vendored copy is
+# intentionally ahead of example-doctrine-repo's, awaiting example-doctrine-repo's own upward vendor" — the
+# check_schema_ahead_of_doe counterpart to _QUEUE_SCHEMA_PINS's byte-identity
+# tamper-pin (check_schema_drift). A name present here is checked via
+# check_schema_ahead_of_doe instead of check_schema_drift, even though its
+# entry also still exists in _QUEUE_SCHEMA_PINS above (kept as the historical
+# byte-pin value to restore once example-doctrine-repo catches up — see doe_ref below).
+#
+# Each entry's VALUE is a dict of check_schema_ahead_of_doe's keyword args:
+#   doe_ref (str, required)     — the example-doctrine-repo SHA this ahead-pin was derived against.
+#   reason (str, required)      — why claude-klabauter is allowed to lead example-doctrine-repo here.
+#   provenance (str, required)  — commit/memo/plan that authorized it.
+#   exempt_paths (frozenset, optional) — per-schema leaf-retention exemptions
+#     (consumer-specific paths — see _AHEAD_RETENTION_EXEMPT_PATHS's docstring
+#     comment in schema_validate.py for why these live per-entry, not module-wide).
+#   local_shape_hash (str, optional) — the ahead-state's own local tamper-pin
+#     (schema_validate._local_shape_hash(current vendored text)); recompute
+#     and update it whenever the vendored copy is legitimately revised while
+#     ahead.
+#
+# WIRED: TestAheadPinRegistryRouting below iterates every key in this dict and
+# routes it through check_schema_ahead_of_doe — trivially green while this is
+# empty, but it fails the moment an entry is added without the corresponding
+# schema file existing / without the check passing, which is exactly the "the
+# registry does nothing" rot P1-3 identified. Review: eng-director P1-3.
+#
+# review-trail: claude-klabauter bumped to 1.2.0 (closing scope_kind from an
+# unconstrained string to the enum ["diff","plan","integration"]) to fix a
+# live crash — an out-of-set scope_kind value was taking down the whole
+# coverage gate with an AssertionError. Example-doctrine-repo is still at 1.1.0 and has not
+# moved "coordinator/schemas/review-trail.schema.json" since the pinned SHA
+# below (git diff <doe_ref> -- that path in example-doctrine-repo is empty). Claude-klabauter's
+# 1.2.0 is a structural superset of example-doctrine-repo's 1.1.0 except for scope_kind's
+# description, deliberately rewritten because the 1.1.0 prose named "chunk"
+# as a valid example, which the 1.2.0 enum excludes.
+#
+# Once example-doctrine-repo vendors 1.2.0 (or later): delete this entry, and move
+# _QUEUE_SCHEMA_PINS['review-trail'] to the new shared SHA so
+# test_review_trail_matches_pinned_sha goes back to a plain check_schema_drift
+# byte-pin call below — that is the designed exit path, not a place to leave
+# this parked indefinitely.
+# Schemas where claude-klabauter deliberately leads example-doctrine-repo, awaiting their upward vendor.
+# EMPTY IS THE HEALTHY STATE — an entry here is a temporary divergence with a
+# named reason, not a resting place, and `check_schema_ahead_of_doe` fails the
+# moment example-doctrine-repo moves so the entry cannot quietly outlive its justification.
+#
+# review-trail occupied this for a few hours on 2026-08-10 and is the worked
+# example: claude-klabauter closed `scope_kind` to an enum ahead of example-doctrine-repo to fix a live
+# coverage-gate crash (55cbf4ede), the ahead-pin held the gate honest rather
+# than muting it, example-doctrine-repo vendored the same change themselves at their 6baac04a3,
+# the stale-ahead branch caught that unprompted, and the pair converged back to
+# an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
+# intended lifecycle: declare, gate, converge, remove.
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
 
 _QUEUE_SCHEMA_NAMES = (
     'bug-backlog',
@@ -3916,6 +4085,15 @@ class TestPinnedQueueSchemaDrift:
         )
 
     def test_review_trail_matches_pinned_sha(self):
+        # Was an ahead-pin for a few hours on 2026-08-10 while claude-klabauter led example-doctrine-repo
+        # on the scope_kind enum close. Example-doctrine-repo vendored it themselves at their
+        # 6baac04a3 ("review-trail: adopt the scope_kind enum from the
+        # vendored side"), which is exactly the condition
+        # check_schema_ahead_of_doe's stale-ahead branch exists to detect --
+        # and it did detect it, unprompted, within hours of landing. The
+        # convergence was then taken through bin/claude-klabauter-revendor-schema.py,
+        # so this is an ordinary byte-pin again and the ahead-pin entry is
+        # gone. Nothing about that is a special case worth preserving here.
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'example-doctrine-repo repo not found at {_DOE_REPO}')
         check_schema_drift(
@@ -3941,6 +4119,320 @@ class TestPinnedQueueSchemaDrift:
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['priority-intent'],
         )
+
+
+class TestAheadPinRegistryRouting:
+    """The real consumer of `_QUEUE_SCHEMA_AHEAD_PINS` — routes every entry
+    through `check_schema_ahead_of_doe` against the live example-doctrine-repo clone. Trivially
+    green while the registry is empty (the healthy resting state), but the
+    moment an entry is added it is ACTUALLY exercised, closing the gap
+    P1-3 identified: the registry used to be read by nothing, so an added
+    entry would silently fail to gate.
+
+    Review: eng-director P1-3.
+    """
+
+    def test_every_ahead_pin_entry_is_routed_and_passes(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'example-doctrine-repo repo not found at {_DOE_REPO}')
+        if not _QUEUE_SCHEMA_AHEAD_PINS:
+            pytest.skip('ahead-pin registry is empty — the healthy resting state')
+        for name, entry in _QUEUE_SCHEMA_AHEAD_PINS.items():
+            check_schema_ahead_of_doe(
+                _SCHEMAS_DIR / f'{name}.schema.json',
+                _DOE_REPO,
+                doe_ref=entry['doe_ref'],
+                reason=entry['reason'],
+                provenance=entry['provenance'],
+                exempt_paths=entry.get('exempt_paths', frozenset()),
+                local_shape_hash=entry.get('local_shape_hash'),
+            )
+
+
+def _ahead_git(repo: Path, *args: str, env: dict | None = None) -> None:
+    run_env = None
+    if env:
+        run_env = dict(os.environ)
+        run_env.update(env)
+    subprocess.run(
+        ['git', '-C', str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+        env=run_env,
+    )
+
+
+class TestCheckSchemaAheadOfDoe:
+    """Direct unit coverage for check_schema_ahead_of_doe's four checks, over a
+    throwaway tmp_path git repo — same fixture discipline as
+    TestAdvisoryLocalDoeVersions above. Closes the "~199 lines with zero
+    tests" gap: one test per failure branch plus the green path.
+
+    Review: eng-director P1-3.
+    """
+
+    @pytest.fixture()
+    def fake_doe(self, tmp_path: Path):
+        if not _which_git():
+            pytest.skip("git not available")
+
+        def _make(version: str = "1.0.0", extra: dict | None = None) -> Path:
+            repo = tmp_path / f"example-doctrine-repo-fake-{version.replace('.', '_')}"
+            schemas = repo / "coordinator" / "schemas"
+            schemas.mkdir(parents=True)
+            body = {"x-schema-version": version, "title": "widget"}
+            if extra:
+                body.update(extra)
+            (schemas / "widget.schema.json").write_text(
+                json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            _ahead_git(repo, "init", "-q")
+            _ahead_git(repo, "config", "user.email", "test@example.invalid")
+            _ahead_git(repo, "config", "user.name", "ahead-pin test")
+            _ahead_git(repo, "add", "-A")
+            _ahead_git(repo, "commit", "-q", "-m", f"seed widget schema {version}")
+            return repo
+
+        return _make
+
+    def _local(self, tmp_path: Path, version: str = "1.1.0", extra: dict | None = None) -> Path:
+        body = {"x-schema-version": version, "title": "widget"}
+        if extra:
+            body.update(extra)
+        local = tmp_path / "widget.schema.json"
+        local.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return local
+
+    def test_green_path_ahead_version_passes(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0")
+        local = self._local(tmp_path, "1.1.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        check_schema_ahead_of_doe(
+            local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+        )
+
+    def test_stale_ahead_raises_when_doe_moved(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0")
+        stale_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # example-doctrine-repo moves after the pin was recorded.
+        schemas = repo / "coordinator" / "schemas"
+        (schemas / "widget.schema.json").write_text(
+            json.dumps({"x-schema-version": "1.1.0", "title": "widget"}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _ahead_git(repo, "add", "-A")
+        _ahead_git(repo, "commit", "-q", "-m", "example-doctrine-repo moved")
+        local = self._local(tmp_path, "1.1.0")
+        with pytest.raises(SchemaDriftError, match="STALE"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=stale_ref, reason="test", provenance="test",
+            )
+
+    def test_stale_ahead_raises_when_doe_moved_on_a_different_branch(self, fake_doe, tmp_path: Path) -> None:
+        """Review: code-reviewer P3 -- prior coverage only moved example-doctrine-repo on the
+        SAME branch. Check 1 explicitly resolves against `git log --all`
+        (any local ref), not `HEAD`; this exercises that a second branch
+        moving the schema is caught too, not just more commits on the
+        checked-out one."""
+        repo = fake_doe("1.0.0")
+        stale_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        _ahead_git(repo, "checkout", "-q", "-b", "other-branch")
+        schemas = repo / "coordinator" / "schemas"
+        (schemas / "widget.schema.json").write_text(
+            json.dumps({"x-schema-version": "1.1.0", "title": "widget"}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _ahead_git(repo, "add", "--", "coordinator/schemas/widget.schema.json")
+        # Pinned committer date strictly after the seed commit -- `git log
+        # --all` orders by commit date, and two commits landing in the same
+        # wall-clock second (routine under fast test execution) makes the
+        # "most recent" result ref-declaration-order-dependent rather than
+        # deterministic, which would make this assertion flaky.
+        _ahead_git(
+            repo, "commit", "-q", "-m", "example-doctrine-repo moved on another branch",
+            env={"GIT_AUTHOR_DATE": "2030-01-02T00:00:00", "GIT_COMMITTER_DATE": "2030-01-02T00:00:00"},
+        )
+        # Back on the original branch, which never saw this commit.
+        _ahead_git(repo, "checkout", "-q", "-")
+        local = self._local(tmp_path, "1.1.0")
+        with pytest.raises(SchemaDriftError, match="STALE"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=stale_ref, reason="test", provenance="test",
+            )
+
+    def test_leaf_not_retained_raises(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0", extra={"applies_to": "state/review-trail/*.json"})
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # Real divergence, not extension: the leaf value CHANGES, not merely
+        # gains a trailing char in a description field — must not pass.
+        local = self._local(tmp_path, "1.1.0", extra={"applies_to": "state/review-trail/*.jsonl"})
+        with pytest.raises(SchemaDriftError, match="leaf-retention"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+
+    def test_description_append_is_retained(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0", extra={"description": "short"})
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0", extra={"description": "short, extended"})
+        check_schema_ahead_of_doe(
+            local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+        )
+
+    def test_bump_note_append_is_retained(self, fake_doe, tmp_path: Path) -> None:
+        """Review: code-reviewer P1 -- x-bump-note is prose-append, same shape
+        as `description`. Pins the regression: the predicate used to check
+        only `path[-1] == 'description'`, so an ahead-bump's own bump-note
+        append (the exact case the module comment calls out) failed the
+        gate on the normal case, not an edge case."""
+        repo = fake_doe("1.0.0", extra={"x-bump-note": "added an optional field"})
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(
+            tmp_path, "1.1.0",
+            extra={"x-bump-note": "added an optional field; also widened an enum"},
+        )
+        check_schema_ahead_of_doe(
+            local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+        )
+
+    def test_bump_note_narrowing_still_raises(self, fake_doe, tmp_path: Path) -> None:
+        """The prose carve-out is append-only, not free-form rewrite tolerance:
+        a bump-note whose text is NOT a superstring of example-doctrine-repo's must still fail."""
+        repo = fake_doe("1.0.0", extra={"x-bump-note": "added an optional field"})
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0", extra={"x-bump-note": "renamed a field"})
+        with pytest.raises(SchemaDriftError, match="leaf-retention"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+
+    def test_exempt_paths_kwarg_honors_caller_supplied_exemption(self, fake_doe, tmp_path: Path) -> None:
+        """Review: code-reviewer P2 -- `exempt_paths` had no direct-call
+        coverage; the registry-routing test never exercises a non-default
+        value. Proves a caller-supplied path is actually excluded from the
+        retention check, not merely unioned by inspection."""
+        repo = fake_doe("1.0.0", extra={"applies_to": "state/review-trail/*.json"})
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0", extra={"applies_to": "state/review-trail/*.jsonl"})
+        with pytest.raises(SchemaDriftError, match="leaf-retention"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+        # Same divergent leaf, now exempted per-call -- must pass.
+        check_schema_ahead_of_doe(
+            local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            exempt_paths=frozenset({("applies_to",)}),
+        )
+
+    def test_version_not_strictly_greater_raises(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.1.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0")
+        with pytest.raises(SchemaDriftError, match="strictly greater"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+
+    def test_dirty_doe_worktree_refuses_rather_than_passes(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # Uncommitted edit on the example-doctrine-repo side — must be refused, not read as "unmoved".
+        (repo / "coordinator" / "schemas" / "widget.schema.json").write_text(
+            json.dumps({"x-schema-version": "1.0.0", "title": "widget (dirty)"}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        local = self._local(tmp_path, "1.1.0")
+        with pytest.raises(SchemaDriftError, match="uncommitted"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+
+    def test_local_shape_hash_mismatch_raises(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0")
+        with pytest.raises(SchemaDriftError, match="tamper-pin"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+                local_shape_hash="0" * 64,
+            )
+
+    def test_local_shape_hash_match_passes(self, fake_doe, tmp_path: Path) -> None:
+        from coordinator_core.frontmatter.schema_validate import _local_shape_hash
+
+        repo = fake_doe("1.0.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "1.1.0")
+        expected = _local_shape_hash(local.read_text(encoding="utf-8"))
+        check_schema_ahead_of_doe(
+            local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            local_shape_hash=expected,
+        )
+
+    def test_unparseable_semver_fails_closed(self, fake_doe, tmp_path: Path) -> None:
+        repo = fake_doe("1.0.0")
+        doe_ref = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        local = self._local(tmp_path, "not-a-version")
+        with pytest.raises(SchemaDriftError, match="could not compare"):
+            check_schema_ahead_of_doe(
+                local, repo, doe_ref=doe_ref, reason="test", provenance="test",
+            )
+
+
+class TestParseSemverTuple:
+    """Direct unit coverage for _parse_semver_tuple, the ahead-pin's version
+    comparator. Review: eng-director P1-3 (was untested)."""
+
+    def test_well_formed_triple(self) -> None:
+        assert _parse_semver_tuple("1.2.3") == (1, 2, 3)
+
+    def test_garbage_returns_none(self) -> None:
+        assert _parse_semver_tuple("not-a-version") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _parse_semver_tuple("") is None
 
 
 # ---------------------------------------------------------------------------

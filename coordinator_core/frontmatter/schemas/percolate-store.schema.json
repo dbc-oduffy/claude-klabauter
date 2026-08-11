@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/percolate-store.schema.json",
   "x-schema-name": "percolate-store",
-  "x-schema-version": "1.1.0",
-  "x-bump-class": "nested-field-additive",
-  "x-bump-note": "1.0.0 -> 1.1.0 widened the hooks transform-kind enum with `sentinel-strip` and declared its section shape (landed at 7bc1500d2 without the accompanying version bump).",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "enum-value-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 widened the hooks transform-kind enum with `sentinel-strip` and declared its section shape (landed at 7bc1500d2 without the accompanying version bump). 1.1.0 -> 1.2.0 widened the guardEntry.kind enum with `extensionless-shebang-absent` and `python-syntax-valid` -- both already implemented in claude-klabauter's engine `_CHECK_DISPATCH` and already exercised by store data, but never added to this enum, so the first target row using either failed closed fleet-wide (landed at da69b8727 without the accompanying version bump).",
   "title": "percolate-store",
   "description": "Vendored + drift-gated schema for a consumer-owned percolation store (a declarative YAML config describing what a single publish target wants scrubbed/transformed by claude-klabauter's generic percolation engine). The store is data, never engine code — see coordinator_core/percolate/store.py for the loader/validator and coordinator_core/percolate/tests/test_store.py for the drift-gate test. A store has a `base` section (shared across all targets) plus a `targets` map (per-target overrides/composition). Cross-field invariants this schema cannot express structurally (single-placeholder-per-codename, full-name-sibling-fires-first, idempotency self-check) are enforced in store.py at load time, not by this JSON Schema shape alone.\n\nSpec backlink: docs/plans/2026-07-10-percolation-engine-claude-klabauter.md § Store schema (C1).",
   "type": "object",
@@ -112,7 +112,7 @@
               "items": {
                 "type": "string",
                 "pattern": "^[^/\\\\]+$",
-                "description": "Basename only — must not contain a path separator (`/` or `\\`). Documents the no-separator constraint enforced by claude-klabauter's `validate_store_dict` (claude-klabauter-em memo 2026-07-21, parity confirmed 2026-07-21)."
+                "description": "Basename only — must not contain a path separator (`/` or `\\`). Documents the no-separator constraint enforced by claude-klabauter's `validate_store_dict` (claude-klabauter-em memo, parity confirmed)."
               }
             },
             "exclude_globs": {
@@ -131,7 +131,7 @@
               "items": {
                 "type": "string",
                 "pattern": "^[^/\\\\]+$",
-                "description": "Basename only — must not contain a path separator (`/` or `\\`). Documents the no-separator constraint enforced by claude-klabauter's `validate_store_dict` (claude-klabauter-em memo 2026-07-21, parity confirmed 2026-07-21)."
+                "description": "Basename only — must not contain a path separator (`/` or `\\`). Documents the no-separator constraint enforced by claude-klabauter's `validate_store_dict` (claude-klabauter-em memo, parity confirmed)."
               }
             },
             "sentinel_home_override": {

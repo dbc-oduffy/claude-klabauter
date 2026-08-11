@@ -118,24 +118,86 @@ assemble.md): `premise_provenance` is one of `executed` | `read` |
 `not-applicable` | `unrecorded` | None, validated unconditionally by
 `_validate_premise_provenance` (same unconditional-validation property as
 `_validate_probe_signal` — Finding 5, code-reviewer 2026-07-24). When
-provenance is `read` AND the RESIZED t-shirt is in `_LARGE_TSHIRTS`
-(L/XL/XXL), the `premise_unproven` detent fires; when provenance is
+provenance is `read` AND the RESIZED t-shirt is in `_PREMISE_DETENT_TSHIRTS`
+(M/L/XL/XXL), the `premise_unproven` detent fires; when provenance is
 `not-applicable` under the same size gate, `premise_not_applicable` fires
 instead. Both land in the same `DETENT_ENUM` widen (never staggered — the
 Example-doctrine-repo-side schema parity test asserts symmetric set equality against this
 tuple). The gate keys on resized SIZE, not resolved ROUTE, so it fires
-identically on `shape`-, `pm-decision`-, and `goal-setting`-routed L/XL/XXL,
-not only `plan`-routed — routing away from `plan` does not reduce the
-premise-truth-value multiplier the detent exists to name. Like
+identically on `plan`-, `shape`-, `pm-decision`-, and `goal-setting`-routed
+M/L/XL/XXL — routing away from `plan` does not reduce the premise-truth-
+value multiplier the detent exists to name. `_PREMISE_DETENT_TSHIRTS` is a
+constant DISTINCT from `_LARGE_TSHIRTS`, which also gates the shape-route
+condition `(resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear)`; widening
+`_LARGE_TSHIRTS` to include "M" instead of introducing this sibling
+constant would silently reroute an M-sized `jtbd_unclear` sizing from
+`plan` to `shape`. Do not merge the two constants. Like
 `appetite_exceeded` and `pm_decision_pending`,
 this detent NEVER alters `route` and NEVER populates `xl_exit` — it is
 advisory only, discharged by citing executed evidence inline, never by
 producing a spike-result artifact (a structural-in-mechanism,
 never-in-ceremony design per the memo's PM ruling 2).
 
+Boundary-in-notch (advisory detent, warn-never-block — same shape as premise
+provenance above; cross-repo memo 2026-08-10-example-doctrine-repo-em-sizing-guard-
+flags.md): `boundary_in_notch` is one of `yes` | `no` | None, validated
+unconditionally by `_validate_boundary_in_notch`. A `yes` answers "a
+cross-repo boundary, memo, relay, or assent gate contributed to this notch"
+and fires `boundary_counted_in_notch`. The rule it makes checkable is
+already written — example-doctrine-repo `coordinator/skills/sizing/SKILL.md` § *A cross-team
+dependency is a gate, not a size*: a MEMO (one ask, the sibling implements
+on their own surface) does not move the notch; NEGOTIATED CO-DESIGN, where
+the shared contract itself is the unknown, does. The engine cannot tell
+those apart — the flag has two values, not three — so the detent names the
+tell and hands the discriminator back to the EM: collapse the notch, or
+record the co-design justification. That is the whole point of the ask.
+Prose guards are read at flow Step 1, before the EM has evidence to check
+them against, and nothing re-presents them at Step 3 when the notch is
+actually committed to a flag; a required answer reaching this validator is
+what closes that gap (the memo's own framing of why `--premise-provenance`
+works and its prose siblings do not).
+
+DELIBERATELY NOT size-gated, unlike `_PREMISE_DETENT_TSHIRTS`. A boundary
+counted into the notch is doctrine-wrong at XS exactly as at XXL — the size
+is the thing the answer is suspected of having inflated, so gating the check
+on it would exempt the very reads the guard exists to catch, and would have
+exempted nothing in the motivating incident (an S sized XL). The detent is
+advisory and cheap; there is no noise argument that survives that.
+
+Scout-evidence kind (advisory detent, warn-never-block): `scout_evidence_kind`
+is one of `mention-count` | `change-set` | `site-count` | None, validated
+unconditionally by `_validate_scout_evidence_kind`. `mention-count` fires
+`scout_evidence_mention_count` — a grep count is not a change-set until
+someone has asked what a compatibility layer absorbs. Motivating incident
+(same memo): a scout returned ~108 files that MENTION a literal, and that
+count was passed as though it described a change-set; under a back-compat
+shim every one of those files resolves unchanged.
+
+This is a TYPED FIELD BESIDE the free text, and is emphatically NOT a licence
+to start reading `scout_evidence` strings (see the negative-spec below, which
+is unchanged and still binds). The discriminator has to be a typed flag
+PRECISELY BECAUSE that rule holds: the kind of a piece of evidence is not
+recoverable from its prose by this module or by anyone. `scout_evidence_kind`
+describes the evidence; it never reaches into it.
+
 Negative-spec:
     - Do NOT add a mutating code path here. This module returns data; it
       never writes state/sizings/*.yaml itself.
+    - Do NOT let `boundary_counted_in_notch` or `scout_evidence_mention_count`
+      alter `route` or populate `xl_exit`, and do NOT add either to the
+      `express_lane` short-circuit — identical advisory contract to the
+      premise detents (D3: that path returns before any detent computation).
+    - Do NOT infer `scout_evidence_kind` from the CONTENTS or the LENGTH of
+      the `scout_evidence` list. A 108-element list is not a mention-count and
+      a 1-element list is not a change-set; inferring either would be the
+      free-text parsing the negative-spec below forbids, wearing a counting
+      costume. The kind is supplied by the caller who ran the scout, or it is
+      absent.
+    - Do NOT make `boundary_in_notch="yes"` collapse the notch automatically.
+      `yes` is collapsible ONLY when no co-design is involved, and this module
+      cannot see which — auto-collapsing would resize on an unread
+      discriminator, which is the § Hard gate violation (route corrected by
+      changing the size WITHOUT evidence) rather than a shortcut around it.
     - Do NOT parse free-text `scout_evidence` strings for sizing signal. The
       schema types `scout_evidence` as a plain list of provenance strings
       (paths/citations) with no embedded semantics — inventing NLP heuristics
@@ -191,9 +253,29 @@ DETENT_ENUM = (
     "post_size_prompt_pending",
     "xxl_unprobed",
     "goal_setting_pm_gated",
+    # APPENDED AT THE END, in this order, never re-sorted — enum ORDER is
+    # load-bearing against example-doctrine-repo's EQUAL_VERSION_SHAPE_DRIFT gate, and the
+    # vendored schema's `detents.items.enum` must carry these two values in
+    # exactly this position (cross-repo memo 2026-08-10-example-doctrine-repo-em-sizing-
+    # guard-flags.md; same append discipline as the XXL notch's widen).
+    "boundary_counted_in_notch",
+    "scout_evidence_mention_count",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
+
+# "Did a cross-repo boundary, memo, relay, or assent gate contribute to this
+# notch?" Two values, not three: the memo/co-design discriminator that decides
+# whether a `yes` is collapsible is the EM's to apply, not this module's (see
+# the module docstring's Boundary-in-notch note).
+BOUNDARY_IN_NOTCH_ENUM = ("yes", "no")
+
+# What KIND of thing the accompanying `scout_evidence` counts. A mention-count
+# (grep hits for a literal) and a change-set (files that actually change) are
+# routinely conflated, and the conflation reads HIGH — which is the direction
+# with no downstream net (see the sizing skill's § Tentativeness is not the
+# safe direction).
+SCOUT_EVIDENCE_KIND_ENUM = ("mention-count", "change-set", "site-count")
 
 # Appetite budget ceiling, expressed as the heaviest tshirt weight the
 # budget comfortably absorbs without the estimate being flagged as
@@ -274,6 +356,17 @@ _LARGE_TSHIRTS = ("L", "XL", "XXL")
 # plan's Anti-scope).
 _POST_SIZE_PROMPT_TSHIRTS = ("M", "L", "XL", "XXL")
 
+# "M and above" — gates the premise-provenance advisory detent ONLY
+# (premise_unproven / premise_not_applicable). Distinct from `_LARGE_TSHIRTS`
+# above: that tuple ALSO gates the shape-route condition
+# `(resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear)`, so widening
+# `_LARGE_TSHIRTS` itself to include "M" would silently reroute an M-sized
+# jtbd_unclear sizing from `plan` to `shape` — a routing regression nobody
+# asked for. Do not merge these two constants back together; the detent
+# needs M, the route gate must not have it (cross-repo memo
+# 2026-08-08-example-doctrine-repo-em-premise-detent-m-sized-plans.md).
+_PREMISE_DETENT_TSHIRTS = ("M", "L", "XL", "XXL")
+
 
 class SizingAssembleError(ValueError):
     """Raised for a malformed input to route() — a usage error, not a
@@ -338,6 +431,32 @@ def _validate_premise_provenance(premise_provenance: Optional[str]) -> None:
         )
 
 
+def _validate_boundary_in_notch(boundary_in_notch: Optional[str]) -> None:
+    """Fails loud on a malformed `boundary_in_notch` regardless of whether the
+    caller's branch (e.g. express_lane) will end up consuming it — same
+    unconditional-validation property as `_validate_probe_signal` /
+    `_validate_premise_provenance` (Finding 5, code-reviewer 2026-07-24)."""
+    if boundary_in_notch is not None and boundary_in_notch not in BOUNDARY_IN_NOTCH_ENUM:
+        raise SizingAssembleError(
+            f"boundary_in_notch must be one of (None, {BOUNDARY_IN_NOTCH_ENUM}), "
+            f"got {boundary_in_notch!r}"
+        )
+
+
+def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
+    """Fails loud on a malformed `scout_evidence_kind` regardless of whether
+    the caller's branch (e.g. express_lane) will end up consuming it — same
+    unconditional-validation property as `_validate_boundary_in_notch` above.
+
+    Validates the KIND discriminator only. It never inspects `scout_evidence`
+    itself — see the module docstring's negative-spec on free-text parsing."""
+    if scout_evidence_kind is not None and scout_evidence_kind not in SCOUT_EVIDENCE_KIND_ENUM:
+        raise SizingAssembleError(
+            f"scout_evidence_kind must be one of (None, {SCOUT_EVIDENCE_KIND_ENUM}), "
+            f"got {scout_evidence_kind!r}"
+        )
+
+
 def _apply_symmetric_resize(tshirt: str, probe_signal: Optional[str]) -> tuple[str, bool]:
     """Applies the Finding-2-mandated symmetric resize. Returns (resized_tshirt,
     changed). `probe_signal` is None (no probe ran / gut-read stands),
@@ -363,6 +482,8 @@ def route(
     jtbd_unclear: bool = False,
     well_trodden_step_change: bool = False,
     premise_provenance: Optional[str] = None,
+    boundary_in_notch: Optional[str] = None,
+    scout_evidence_kind: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -387,10 +508,20 @@ def route(
         premise_provenance: None | "executed" | "read" | "not-applicable" |
             "unrecorded" — where the sizing's underlying mechanism claim
             came from. Advisory only (warn, never block): `read` at a
-            resized L/XL/XXL sets `premise_unproven`; `not-applicable` at a
-            resized L/XL/XXL sets `premise_not_applicable`. Never alters
+            resized M/L/XL/XXL sets `premise_unproven`; `not-applicable` at a
+            resized M/L/XL/XXL sets `premise_not_applicable`. Never alters
             `route` or `xl_exit` (see module docstring's "Premise
             provenance" note).
+        boundary_in_notch: None | "yes" | "no" — did a cross-repo boundary,
+            memo, relay, or assent gate contribute to this notch? `yes` sets
+            the advisory `boundary_counted_in_notch` detent at EVERY size (not
+            size-gated, unlike the premise detents — see module docstring).
+            Never alters `route` or `xl_exit`.
+        scout_evidence_kind: None | "mention-count" | "change-set" |
+            "site-count" — what the accompanying `scout_evidence` counts.
+            `mention-count` sets the advisory `scout_evidence_mention_count`
+            detent. A typed field BESIDE the free text; `scout_evidence`
+            itself is still never parsed. Never alters `route` or `xl_exit`.
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate,
@@ -401,6 +532,8 @@ def route(
     _validate_tshirt(tshirt)
     _validate_probe_signal(probe_signal)
     _validate_premise_provenance(premise_provenance)
+    _validate_boundary_in_notch(boundary_in_notch)
+    _validate_scout_evidence_kind(scout_evidence_kind)
     scout_evidence = list(scout_evidence or [])
 
     if express_lane:
@@ -484,11 +617,28 @@ def route(
     # precedent): keyed on RESIZED size, never resolved route, so it fires
     # identically on shape/pm-decision/goal-setting/plan L/XL/XXL (see
     # module docstring).
-    if resized_tshirt in _LARGE_TSHIRTS:
+    if resized_tshirt in _PREMISE_DETENT_TSHIRTS:
         if premise_provenance == "read":
             detents.append("premise_unproven")
         elif premise_provenance == "not-applicable":
             detents.append("premise_not_applicable")
+
+    # Boundary-in-notch detent (advisory, warn-never-block). DELIBERATELY not
+    # gated on `resized_tshirt` — unlike the premise detents directly above.
+    # The size is the thing a counted boundary is suspected of having
+    # inflated, so gating the check on that size would exempt exactly the
+    # reads this exists to catch: the motivating incident was an S sized XL,
+    # which any high-side gate would have caught only by accident and any
+    # M-and-above gate would have exempted once the collapse landed.
+    if boundary_in_notch == "yes":
+        detents.append("boundary_counted_in_notch")
+
+    # Scout-evidence-kind detent (advisory, warn-never-block). Tests the TYPED
+    # KIND only — never the contents or the length of `scout_evidence` (module
+    # docstring's negative-spec). `change-set` and `site-count` fire nothing:
+    # they are the answers that describe evidence already qualified.
+    if scout_evidence_kind == "mention-count":
+        detents.append("scout_evidence_mention_count")
 
     if resolved_route not in ROUTE_ENUM:  # pragma: no cover - defensive, table-driven
         raise SizingAssembleError(f"internal: resolved route {resolved_route!r} not in {ROUTE_ENUM}")
@@ -579,18 +729,43 @@ def route(
 
     # Open appetite prompt — appended to whichever branch above was selected
     # (never a new precedence branch), matching the advisory appends below.
-    # Suppressed at `resolved_route == "pm-decision"`: that branch already
-    # asks the PM to pick among the XL exits (which include an open-ended
-    # "split it" resolution), so the open appetite question is already
-    # being asked there (precedence rule #1 — ONE combined PM ask, not two).
+    #
+    # NOT suppressed at `resolved_route == "pm-decision"`. The appetite plan
+    # (2026-08-07-appetite-leaves-the-front-of-sizing, C1 item 6) specced a
+    # suppression there, resting on the premise that the pm-decision branch
+    # "already asks the PM to pick among split/shape/roadmap/
+    # accept_multi_session, and `split` is one of those four exits". The XXL
+    # plan (2026-08-07-sizing-ladder-xxl-notch-and-goal-setting-route, C2
+    # item 4) landed second and DROPPED `split` from that branch's enumerated
+    # exits — invalidating the premise the suppression stood on. Net effect
+    # at XL: the detent fired but next_move carried no open question at all,
+    # so an EM reading only next_move never asked it. XL is the size where
+    # "want to split it?" is the likeliest PM answer, so that was the worst
+    # cell to lose it in.
+    #
+    # The fix keeps BOTH rulings: `split` stays out of the enumerated exits
+    # (XXL plan's call — it is a vocabulary value in XL_EXIT_ENUM, not a
+    # menu item), and the open question returns as ONE bundled ask rather
+    # than a second independent one — the same combined-ask shape precedence
+    # rule #1 uses for appetite_exceeded + pm-decision. AC6a still holds:
+    # the pm-decision branch text is imperative and asks nothing, so the
+    # appended question is the only PM-facing question in next_move.
+    #
     # Ordered BEFORE the xxl_unprobed/premise advisories: those are
     # explicitly non-actionable ("does not alter the route above"), so a
     # live PM question after them would read as qualified by them.
-    if "post_size_prompt_pending" in detents and resolved_route != "pm-decision":
-        next_move += (
-            f" Looks like a {resized_tshirt}, shall we go with that or want to split it, "
-            "cut it, what's up?"
-        )
+    if "post_size_prompt_pending" in detents:
+        if resolved_route == "pm-decision":
+            next_move += (
+                f" Put that to the PM as ONE open ask, not two: looks like a "
+                f"{resized_tshirt}, shall we go with that or want to split it, cut it, "
+                "what's up?"
+            )
+        else:
+            next_move += (
+                f" Looks like a {resized_tshirt}, shall we go with that or want to split it, "
+                "cut it, what's up?"
+            )
 
     # `xxl_unprobed` advisory statement — appended to whichever branch above
     # was selected, BEFORE the premise-provenance advisory (2026-08-07
@@ -628,6 +803,35 @@ def route(
             "spike-result artifact."
         )
 
+    # Boundary-in-notch advisory statement — appended after the premise
+    # advisory, same append-not-reorder discipline as every advisory above.
+    # States the DISCRIMINATOR the engine cannot apply (memo vs co-design)
+    # rather than a verdict, because the flag's two values do not carry it.
+    if "boundary_counted_in_notch" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "a cross-repo boundary, memo, relay, or assent gate contributed "
+            "to this notch. A memo — one ask, the sibling implements it on "
+            "their own surface — is a GATE, not a size, and does not move the "
+            "notch: record it in blocked_by/awaiting_gate and collapse the "
+            "estimate. Only negotiated co-design, where the shared contract "
+            "itself is the unknown, earns the notch — and owes a recorded "
+            "justification naming the unconverged contract."
+        )
+
+    # Scout-evidence-kind advisory statement — appended last. Names the
+    # specific arithmetic error (a mention-count read as a change-set), not a
+    # generic "check your evidence".
+    if "scout_evidence_mention_count" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "the scout evidence behind this size is a MENTION-COUNT, not a "
+            "change-set. A grep count is not a change-set until someone has "
+            "asked what a compatibility layer absorbs — under a back-compat "
+            "shim, mentioning sites resolve unchanged and count zero. "
+            "Discharge by citing the change-set, or collapse the estimate."
+        )
+
     return {
         "route": resolved_route,
         "detents": detents,
@@ -653,6 +857,8 @@ def _usage(prog: str) -> int:
         "[--express-lane] [--probe-signal collapse|raise] [--jtbd-unclear] "
         "[--well-trodden-step-change] "
         "[--premise-provenance executed|read|not-applicable|unrecorded] "
+        "[--boundary-in-notch yes|no] "
+        "[--scout-evidence-kind mention-count|change-set|site-count] "
         "[--scout-evidence <str> ...]",
         file=__import__("sys").stderr,
     )
@@ -671,6 +877,8 @@ def main(argv: list[str]) -> int:
     jtbd_unclear = False
     well_trodden_step_change = False
     premise_provenance = None
+    boundary_in_notch = None
+    scout_evidence_kind = None
     scout_evidence: list[str] = []
 
     i = 0
@@ -697,6 +905,12 @@ def main(argv: list[str]) -> int:
         elif tok == "--premise-provenance" and i + 1 < len(argv):
             premise_provenance = argv[i + 1]
             i += 2
+        elif tok == "--boundary-in-notch" and i + 1 < len(argv):
+            boundary_in_notch = argv[i + 1]
+            i += 2
+        elif tok == "--scout-evidence-kind" and i + 1 < len(argv):
+            scout_evidence_kind = argv[i + 1]
+            i += 2
         elif tok == "--scout-evidence" and i + 1 < len(argv):
             scout_evidence.append(argv[i + 1])
             i += 2
@@ -719,6 +933,8 @@ def main(argv: list[str]) -> int:
             jtbd_unclear=jtbd_unclear,
             well_trodden_step_change=well_trodden_step_change,
             premise_provenance=premise_provenance,
+            boundary_in_notch=boundary_in_notch,
+            scout_evidence_kind=scout_evidence_kind,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)

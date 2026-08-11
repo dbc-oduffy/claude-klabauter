@@ -43,10 +43,8 @@ from coordinator_core.install.substrate import (
     _write_ps1_policy_status,
     _fnm_step,
     _percolation_and_path_steps,
-    _prepare_rendered_python3_cmd,
     _prune_orphaned_static_bin_names,
     _refuse_machine_mutation,
-    _render_python3_cmd,
     _resolve_agent_cmd_dest_collisions,
     _resolve_baked_python_bin,
     _static_bin_family_names,
@@ -58,7 +56,7 @@ from coordinator_core.install.substrate import (
 )
 
 
-# --- _resolve_baked_python_bin / _render_python3_cmd ------------------------
+# --- _resolve_baked_python_bin -----------------------------------------------
 #
 # Regression coverage for a swallowed-error report against install-substrate's
 # python3.cmd baked-interpreter step: resolve_python_bin() raising (e.g. a
@@ -283,208 +281,6 @@ def test_resolve_baked_python_bin_windowless_with_no_console_sibling_warns_and_f
     assert "windowless" in err
 
 
-def test_render_python3_cmd_substitutes_resolved_bin():
-    rendered = _render_python3_cmd('set "_bin=__PYTHON_BIN__"\n', "/usr/bin/python3")
-    assert rendered == 'set "_bin=/usr/bin/python3"\n\n'
-
-
-def test_render_python3_cmd_empty_bin_is_a_valid_substitution():
-    # "" is the template's own documented "nothing baked, use `py -3` at
-    # runtime" contract -- not a defect, so it must render cleanly rather
-    # than raise.
-    rendered = _render_python3_cmd('set "_bin=__PYTHON_BIN__"\n', "")
-    assert rendered == 'set "_bin="\n\n'
-
-
-def test_render_python3_cmd_none_bin_raises_instead_of_writing_corrupt_wrapper():
-    # A None resolved_bin is a caller-contract violation, not a valid "nothing
-    # to bake" state -- must fail loudly rather than stringify to the literal
-    # "None" inside the emitted .cmd wrapper.
-    with pytest.raises(SubstrateFatalError, match="resolved_bin=None"):
-        _render_python3_cmd('set "_bin=__PYTHON_BIN__"\n', None)
-
-
-# --- _prepare_rendered_python3_cmd -- check-only staleness comparison (2026-08-05
-# bug-blitz Defect A) and CRLF-on-write (Defect B) -----------------------------
-#
-# Regression coverage for install-maximalist.py --check-only reporting
-# python3.cmd permanently stale on a correctly-installed machine. Root cause:
-# `run()` used to build the rendered temp file only `if not check_only`, so
-# the check-only comparison ran `filecmp.cmp` against the RAW template (still
-# carrying the literal `__PYTHON_BIN__` token and LF line endings from
-# `read_text()`'s universal-newlines normalization) instead of the rendered,
-# token-substituted, CRLF-restored content a real install writes. That
-# comparison could never pass, on any machine, regardless of actual drift.
-
-
-def test_prepare_rendered_python3_cmd_substitutes_token(tmp_path):
-    ml_bin = tmp_path
-    (ml_bin / "python3.cmd").write_text(
-        'set "_coordinator_python3_bin=__PYTHON_BIN__"\r\n', encoding="utf-8"
-    )
-    rendered_path = _prepare_rendered_python3_cmd(ml_bin, "/usr/bin/python3")
-    try:
-        content = rendered_path.read_bytes()
-        assert b"__PYTHON_BIN__" not in content
-        assert b"/usr/bin/python3" in content
-    finally:
-        rendered_path.unlink()
-
-
-def test_prepare_rendered_python3_cmd_writes_crlf_regardless_of_host_linesep(tmp_path):
-    # Template on disk uses CRLF (its native, tracked form); read_text()'s
-    # universal-newlines mode normalizes that down to bare "\n" on ANY host,
-    # POSIX included. A naive write_text() re-emits only os.linesep, which is
-    # "\n" on macOS/Linux -- corrupting a Windows batch file's line endings
-    # even when the eventual consumer is a Windows machine reading a synced
-    # settings-home. This must hold on every host this suite runs on, not
-    # just Windows -- that is precisely the bug.
-    ml_bin = tmp_path
-    (ml_bin / "python3.cmd").write_text(
-        'set "_coordinator_python3_bin=__PYTHON_BIN__"\r\npy -3 %*\r\n', encoding="utf-8"
-    )
-    rendered_path = _prepare_rendered_python3_cmd(ml_bin, "")
-    try:
-        raw = rendered_path.read_bytes()
-        assert b"\r\n" in raw
-        # No bare LF unaccompanied by a preceding CR anywhere in the output.
-        assert b"\n" not in raw.replace(b"\r\n", b"")
-    finally:
-        rendered_path.unlink()
-
-
-def test_check_only_compares_rendered_content_not_raw_template(tmp_path, monkeypatch):
-    # Direct regression for Defect A: a destination that already holds
-    # exactly what a real (check_only=False) install would write must be
-    # reported up to date under check_only=True -- not "stale forever"
-    # because the comparison secretly ran against the unrendered template.
-    monkeypatch.setattr(substrate, "_resolve_baked_python_bin", lambda: "")
-    ml_bin = tmp_path / "ml_bin"
-    ml_bin.mkdir()
-    (ml_bin / "python3.cmd").write_text(
-        'set "_coordinator_python3_bin=__PYTHON_BIN__"\r\npy -3 %*\r\n', encoding="utf-8"
-    )
-    dst = tmp_path / "installed" / "python3.cmd"
-    dst.parent.mkdir()
-
-    resolved_bin = substrate._resolve_baked_python_bin()
-    rendered_path = _prepare_rendered_python3_cmd(ml_bin, resolved_bin)
-    try:
-        dst.write_bytes(rendered_path.read_bytes())
-
-        # Re-render (mirrors what `run()` does on the next invocation, cold)
-        # and compare via the SAME check-only path `_install_one` uses.
-        recheck_path = _prepare_rendered_python3_cmd(ml_bin, resolved_bin)
-        try:
-            substrate._install_one(
-                recheck_path, dst, False, "machine-local", check_only=True
-            )
-        finally:
-            recheck_path.unlink()
-    finally:
-        rendered_path.unlink()
-
-
-def test_check_only_still_catches_genuine_drift(tmp_path, monkeypatch):
-    # The fix must not degrade into a comparison that stops noticing real
-    # drift -- an installed file that does NOT match the rendered content
-    # (e.g. the pre-existing LF-only corruption from Defect B) must still be
-    # reported stale.
-    monkeypatch.setattr(substrate, "_resolve_baked_python_bin", lambda: "")
-    ml_bin = tmp_path / "ml_bin"
-    ml_bin.mkdir()
-    (ml_bin / "python3.cmd").write_text(
-        'set "_coordinator_python3_bin=__PYTHON_BIN__"\r\npy -3 %*\r\n', encoding="utf-8"
-    )
-    dst = tmp_path / "installed" / "python3.cmd"
-    dst.parent.mkdir()
-    # Simulate an LF-only corrupted prior install (Defect B's symptom).
-    dst.write_text('set "_coordinator_python3_bin="\npy -3 %*\n', encoding="utf-8")
-
-    rendered_path = _prepare_rendered_python3_cmd(ml_bin, "")
-    try:
-        with pytest.raises(SubstrateFatalError, match="is stale at"):
-            substrate._install_one(
-                rendered_path, dst, False, "machine-local", check_only=True
-            )
-    finally:
-        rendered_path.unlink()
-
-
-# --- python3.cmd runtime shim -- baked-path-missing deadlock (F7) -----------
-#
-# The exist-check the shim's own `if not "..."=="" if exist "..." (` guard
-# adds lives in example-doctrine-repo's templates/bin/python3.cmd batch body, not in any
-# Python here — `_render_python3_cmd` only substitutes the token, it never
-# executes the result. These two tests invoke the REAL rendered .cmd via
-# cmd.exe to exercise that batch-level branch directly, on the real example-doctrine-repo
-# template (not a hand-copied fixture, so a future template edit that drops
-# the exist-check trips this test rather than silently reverting the fix).
-#
-# Regression: before the exist-check, a baked path that named the coordinator
-# venv's own now-deleted interpreter deadlocked ensure-coordinator-venv --
-# this shim is used to CREATE that venv, so once the venv was gone every
-# invocation through it failed and the venv could never be rebuilt.
-
-
-def _real_python3_cmd_template() -> str:
-    try:
-        coordinator_root = _shared.resolve_coordinator_root()
-    except RuntimeError as exc:
-        pytest.skip(f"example-doctrine-repo coordinator root unresolvable on this machine: {exc}")
-    template_path = Path(coordinator_root) / "templates" / "bin" / "python3.cmd"
-    if not template_path.is_file():
-        pytest.skip(f"no templates/bin/python3.cmd under resolved coordinator root: {template_path}")
-    return template_path.read_text(encoding="utf-8")
-
-
-def _run_rendered_shim(tmp_path: Path, resolved_bin: str) -> subprocess.CompletedProcess:
-    template_content = _real_python3_cmd_template()
-    rendered = _render_python3_cmd(template_content, resolved_bin)
-    shim_path = tmp_path / "python3.cmd"
-    shim_path.write_text(rendered, encoding="utf-8")
-    return subprocess.run(
-        [str(shim_path), "--version"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        **no_console_creationflags(),
-    )
-
-
-@pytest.mark.real_home
-@pytest.mark.skipif(sys.platform != "win32", reason="python3.cmd is a Windows-only shim")
-def test_python3_cmd_shim_falls_back_to_py_launcher_when_baked_path_missing(tmp_path):
-    missing_bin = str(tmp_path / "coordinator-venv-gone" / "Scripts" / "python.exe")
-    assert not Path(missing_bin).exists()
-
-    proc = _run_rendered_shim(tmp_path, missing_bin)
-
-    assert proc.returncode == 0, proc.stderr
-    assert "Python" in proc.stdout
-
-
-@pytest.mark.real_home
-@pytest.mark.skipif(sys.platform != "win32", reason="python3.cmd is a Windows-only shim")
-def test_python3_cmd_shim_prefers_baked_path_when_present(tmp_path):
-    # sys.executable is guaranteed to exist and answer --version -- stands in
-    # for "the interpreter resolved and baked in at install time" without
-    # depending on any particular install layout.
-    baked_bin = sys.executable
-
-    proc = _run_rendered_shim(tmp_path, baked_bin)
-
-    expected = subprocess.run(
-        [baked_bin, "--version"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        **no_console_creationflags(),
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == expected.stdout.strip()
-
-
 # --- agent-helper .cmd forwarder -- self-healing baked interpreter ----------
 #
 # `_write_agent_cmd_forwarder` bakes the install-time interpreter path into
@@ -520,7 +316,7 @@ def _render_forwarder_pair(tmp_path: Path, baked_bin: str) -> Path:
     )
     cmd_half = tmp_path / f"{name}.cmd"
     _write_agent_cmd_forwarder(
-        name, cmd_half, False, python3_cmd_resolved_bin=baked_bin
+        name, cmd_half, False, python3_cmd_resolved_bin=baked_bin, target=f"{name}.py"
     )
     return cmd_half
 
@@ -829,7 +625,9 @@ def test_sweep_orphaned_agent_helpers_retires_both_legs_cmd_and_ps1(monkeypatch,
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     name = "retired-cli"
     cmd_orphan = tmp_path / f"{name}.cmd"
-    _write_agent_cmd_forwarder(name, cmd_orphan, False, python3_cmd_resolved_bin="")
+    _write_agent_cmd_forwarder(
+        name, cmd_orphan, False, python3_cmd_resolved_bin="", target=f"{name}.py"
+    )
     ps1_orphan = tmp_path / f"{name}.ps1"
     ps1_orphan.write_text(
         f"# {_AGENT_PS1_FORWARDER_MARKER}\n& python3 '{name}.py' @args\n",

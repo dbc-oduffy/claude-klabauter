@@ -79,10 +79,12 @@ after the pipeline's rollback) is never laundered into a success.
 Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
 § DEC-3, Wave 1 C1d.
 
-Sink-side ownership enforcement: REMOVED (PM ruling, 2026-08-08).
+Sink-side ownership enforcement: REMOVED then REPLACED (PM ruling,
+2026-08-08; replacement landed same day, C2 of
+docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md).
 
-The C4c/AC17/AC18 ownership-scope gate that used to run here is gone. It
-composed `scope_report.assert_paths_in_session_scope`, which walks
+The C4c/AC17/AC18 ownership-scope gate that used to run here composed
+`scope_report.assert_paths_in_session_scope`, which walks
 `compute_scope`/`compute_offer` -- both O(dirty tree x live claims), not
 O(pathspec). Measured on this repo at 594 dirty paths and 918 live claims,
 against a ONE-FILE pathspec: 13.9s for the gate, plus a second ~7.9s
@@ -92,19 +94,42 @@ Cost scaled with how busy the tree was, not with what was being committed,
 so on a busy shared tree the op became structurally unable to commit
 anything -- and the caller-side timeout surfaced it as
 "Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation" on a healthy engine.
+It was excised outright (`de27716`, `b56f3f3`), leaving the sink-side
+backstop against a caller that bypasses the PreToolUse guard GONE for a
+short window -- `block_subagent_commit` (C4b, the guard-side check) stayed
+upstream and live, composing the same `assert_paths_in_session_scope`
+predicate (still not deleted -- C4b still composes it).
 
-What this means for the threat model, stated plainly rather than left to be
-inferred: the sink-side backstop against a caller that bypasses the
-PreToolUse guard is GONE. `block_subagent_commit` (C4b, the guard-side
-check) is upstream, still live, and still composes the same
-`assert_paths_in_session_scope` predicate -- which is why that predicate was
-deliberately NOT deleted along with this gate. The obfuscated-Bash-payload
-path AC18 existed to close is open again.
+The replacement, now in place: `_check_claim_conflicts()` composes
+`coordinator_core.session.claim_index.lookup()` (C1's O(len(paths)) reverse
+index, never `compute_scope`/`compute_offer`/`assert_paths_in_session_
+scope`) plus `coordinator_core.session.liveness.session_live()` (C3, already
+O(1) per matched claimant -- no new entrypoint was needed). For each path in
+the caller's own pathspec: a claimant other than the calling session, who is
+live, refuses THAT path, named individually (AC4) -- never a whole-pathspec
+refusal. Cost is a function of `len(paths)` plus 0-2 liveness checks, not of
+how busy the tree is -- the negative spec below is what this gate now
+satisfies, not what it still owes.
 
-The replacement is to be designed (PM: "then size trying to make it not
-suck on Windows"). NEGATIVE SPEC for whatever lands: it must not be
-O(dirty tree) or O(claims) on the commit hot path. A gate whose cost is a
-function of how busy the tree is will re-create this outage exactly.
+Caller-identity requirement (AC10a): `session_core.session_dir()` never
+verifies a `session_id` ever named a real session. A caller whose resolved
+identity does not correspond to an on-disk session directory gains no
+advantage over an honest one when a peer claim conflicts with it -- that
+case degrades to the same fail-closed policy as an unanswerable index path,
+never to an allow. AC10b is NOT closed by this or anything else: a forged
+`session_id` naming the ACTUAL live holder of the target path gets the
+identical verdict the real holder would, because there is no in-op secret
+to check -- any check this gate could perform reads the same repo-readable
+directory names an attacker already reads. This raises the bar from
+"invoke the op" to "enumerate peer session dirs and impersonate the
+specific holder," which is real, but is not tested as pass/fail and is not
+closed here (see `claim_index.py`'s own docstring for the same residual).
+
+NEGATIVE SPEC (still binding): this gate must not be O(dirty tree) or
+O(claims) on the commit hot path. A gate whose cost is a function of how
+busy the tree is re-creates the outage above exactly -- see
+`coordinator_core/ops/ceremony/tests/test_commit_gate_budget.py` (C4) for
+the executable form of this rule.
 
 Sweeping-pathspec rejection SURVIVES, and is independent of ownership:
 `.`, `./`, `:/`, `:(top)`, a glob (`*`/`?`/`[`), an empty pathspec element,
@@ -126,24 +151,28 @@ from typing import Any, Dict, List, Optional
 from coordinator_core._settings_home import normalize_native_path
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
-from coordinator_core.ops.ceremony.commit_pipeline import PipelineResult, run_commit_pipeline
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_STATUS_DECLINED,
+    PUSH_STATUS_NO_REMOTE,
+    PUSH_STATUS_NOT_ATTEMPTED,
+    PUSH_STATUS_PUSHED,
+    PipelineResult,
+    run_commit_pipeline,
+)
+from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
+from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# C4c (2026-08-03-narrow-subagent-commit-confinement-two-classes.md):
-# imported wrapped so an ImportError degrades to `None` rather than
-# propagating and taking this whole op's registration down with it --
-# `_handler` below hard-denies whenever this is `None`, never treats a
-# missing import as "no ownership constraint applies". Mirrors the same
-# wrapped-import pattern the C4b guard-side check
-# (`coordinator_core.bash_guards.block_subagent_commit`) uses, for the same
-# landing-order-safety reason -- composes the SAME strict allow-list the
-# guard uses (see this module's own docstring, "REVERTED 2026-08-03", for
-# why a separate sink-polarity predicate was tried and reverted). Never
-# shell this out as the `session.scope_report` op -- see that module's own
-# docstring for why an in-process import is required on this commit-sink's
-# fail-closed seam.
+# C2 (2026-08-08-claim-index-the-commit-gate-never-had.md): the sink-side
+# ownership gate composes `claim_index.lookup()` + `liveness.session_live()`
+# directly (imported plainly below, not wrapped) -- neither module has the
+# C4c-era ImportError-degrades-to-None hazard, since both are small,
+# dependency-free modules already required elsewhere on this same hot path
+# (`session_core` is already imported above). `_check_claim_conflicts()` is
+# the gate; see the module docstring's "Sink-side ownership enforcement"
+# section for what it does and does not close.
 _LOG = logging.getLogger(__name__)
 
 #: Literal pathspec tokens rejected outright, regardless of what they
@@ -265,6 +294,137 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
     return params.get("session_id") or session_core.resolve_session_id(worktree_root)
 
 
+#: Bounded, EM-available remedy named in every claim-conflict refusal
+#: (repo north star: ergonomics-over-enforcement -- a deny with no named
+#: escape is the shape that gets bypassed).
+#:
+#: The claim this gate refuses on is a PATH-TOUCH record (a session
+#: recorded touching this file in its touched.txt -- see claim_index.py's
+#: module docstring), NOT an artifact claim -- `session-claim-cli
+#: list-claims-by-session` reads a DIFFERENT plane (the artifact-claim
+#: record store) and will legitimately print nothing for a holder refused
+#: here. `session-claim-cli who-claims-path <path>` is the instrument that
+#: reads the SAME plane this gate does, and is named explicitly so a
+#: reader of the refusal has a way to inspect it rather than being told
+#: only that a refusal happened.
+_CLAIM_CONFLICT_REMEDY = (
+    "this is a path-touch claim (a session recorded touching this file), not "
+    "an artifact claim -- inspect it with `session-claim-cli who-claims-path "
+    "<path>` (list-claims-by-session reads a different store and will not "
+    "show it); re-run this commit once the conflicting claim clears, or ask "
+    "an EM to re-issue it for the affected path(s)"
+)
+_UNANSWERABLE_CLAIM_REMEDY = (
+    "re-run once the claim index rebuild is unblocked, or ask an EM to "
+    "re-issue the commit for the affected path(s) once claims are readable"
+)
+
+
+def _caller_identity_verified(caller_sid: str, worktree_root: str) -> bool:
+    """True iff *caller_sid* resolves to a session directory that actually
+    exists on disk (AC10a).
+
+    `session_core.session_dir()` is a bare string join over repo-readable
+    directory names -- it never verifies the named session ever existed
+    (see this module's docstring, "Caller-identity requirement"). This is
+    the one verification this gate CAN perform: does a directory by that
+    name exist. It cannot verify the id was not FORGED to match a real
+    peer's own id -- that is AC10b, a documented residual, not closable
+    in-op (see `claim_index.py`'s own docstring for the same limitation).
+    """
+    if not caller_sid:
+        return False
+    try:
+        sdir = session_core.session_dir(caller_sid, worktree_root)
+    except ValueError:
+        return False
+    return bool(sdir) and Path(sdir).is_dir()
+
+
+def _check_claim_conflicts(
+    worktree_root: str, paths: List[str], caller_sid: str
+) -> Optional[Dict[str, Any]]:
+    """The O(pathspec) ownership gate (C2, replaces the excised C4c gate).
+
+    Composes C1's `claim_index.lookup()` -- NEVER `compute_scope`/
+    `compute_offer`/`assert_paths_in_session_scope` (see this module's own
+    docstring, "Sink-side ownership enforcement", for why that predicate is
+    structurally different and was not reused). For each path: a claimant
+    other than *caller_sid* who is live (via `liveness.session_live()`,
+    called only for claimants `lookup()` actually returned -- typically
+    0-2 calls, never enumerated for all sessions) refuses THAT path, named
+    individually (AC4) -- never a whole-pathspec refusal.
+
+    UNANSWERABLE-PATH POLICY -- fail closed PER PATH, never per pathspec. A
+    path `claim_index.lookup()` could not resolve (aborted/unresolvable
+    rebuild) is refused with a message naming the remedy; a sibling path it
+    COULD resolve proceeds normally. Whole-pathspec fail-closed would make
+    commit success a function of the WHOLE tree's index health rather than
+    the caller's own pathspec -- exactly the O(dirty tree) coupling this
+    plan's binding negative spec forbids.
+
+    AC10a: a path with a conflicting OTHER claimant, evaluated while the
+    caller's own identity does NOT verify (`_caller_identity_verified` is
+    False), degrades to this same unanswerable-path fail-closed policy
+    rather than falling through to a liveness-gated allow -- an unverified
+    caller identity must never gain "no conflict, proceed" as its answer.
+
+    Returns a rejection response dict (the same shape as a validation
+    error), or `None` when every path clears.
+    """
+    claimants_by_path = claim_index.lookup(paths, cwd=worktree_root)
+    identity_verified = _caller_identity_verified(caller_sid, worktree_root)
+
+    unanswerable: List[str] = []
+    conflicted: List[tuple] = []
+
+    for path in paths:
+        claimants = claimants_by_path.get(path, [])
+        if claim_index.UNANSWERABLE in claimants:
+            unanswerable.append(path)
+            continue
+        others = [c for c in claimants if c != caller_sid]
+        if not others:
+            continue
+        if not identity_verified:
+            unanswerable.append(path)
+            continue
+        live_others = [c for c in others if session_liveness.session_live(c, worktree_root)]
+        if live_others:
+            conflicted.append((path, live_others))
+
+    if not unanswerable and not conflicted:
+        return None
+
+    # Observability: a silently-degraded index should be visible before it
+    # becomes an incident (C2 spec) -- one log line per unanswerable path.
+    for path in unanswerable:
+        _LOG.warning(
+            "ceremony.scoped_git_commit: claim ownership for %r could not be "
+            "verified (claim index unanswerable, or caller identity "
+            "unverified -- AC10a); failing closed for this path only",
+            path,
+        )
+
+    reasons: List[str] = []
+    for path in unanswerable:
+        reasons.append(
+            "%r: claim ownership could not be verified -- %s"
+            % (path, _UNANSWERABLE_CLAIM_REMEDY)
+        )
+    for path, holders in conflicted:
+        reasons.append(
+            "%r: claimed by live session(s) %s -- %s"
+            % (path, ", ".join(sorted(holders)), _CLAIM_CONFLICT_REMEDY)
+        )
+
+    return {
+        "committed": False,
+        "sha": None,
+        "pushed": None,
+        "error": "ceremony.scoped_git_commit: rejected -- " + "; ".join(reasons),
+    }
+
 
 def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:
     """Return the dirty TRACKED files `git status --porcelain` currently
@@ -380,6 +540,11 @@ PUSH_STATE_PUSHED = "pushed"
 PUSH_STATE_FAILED = "push-failed"
 PUSH_STATE_UNCONFIRMED = "unconfirmed"
 PUSH_STATE_NO_REMOTE = "no-remote"
+#: A branch-policy decline (or an unresolvable branch) reported by the
+#: pipeline's own `push_status` (C2's canonical vocabulary,
+#: `commit_pipeline.PUSH_STATUS_DECLINED`) -- known and deliberate, never
+#: routed through the remote probe (see `_resolve_push_report`, C5).
+PUSH_STATE_DECLINED = "declined"
 
 #: `_remote_sha_state()` verdicts.
 _REMOTE_PRESENT = "present"
@@ -442,6 +607,27 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                          explanatory context in the body
                                          rather than crowd it into the
                                          subject line.
+        deliverable_id (str, optional) — C7a (docs/plans/2026-08-10-a-commit-
+                                         trailer-that-names-the-session.md):
+                                         a caller who already knows which
+                                         deliverable this commit belongs to.
+                                         VALIDATED here (must be a string
+                                         when given — a non-string value is a
+                                         validation error, same shape as a
+                                         missing required param), then
+                                         forwarded through
+                                         `run_commit_pipeline()`
+                                         (`commit_pipeline.py`, C7b) to
+                                         `git_native.commit_scoped()`, which
+                                         owns the shape/existence guard and
+                                         the message-trailer precedence
+                                         ruling — see its own
+                                         `deliverable_id` param. This op does
+                                         not itself decide precedence and
+                                         does not resolve the value: an id
+                                         that does not resolve to a real
+                                         artifact is rejected downstream, not
+                                         here.
 
     Returns:
         {
@@ -507,16 +693,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `error` rather than given its own key, since this is still "the call
     was invalid", just discovered one step later.
 
-    `include_orphans` (bool, optional): ACCEPTED AND IGNORED since the
-    2026-08-08 ownership-gate excision. It opted a caller into orphan
-    adoption past a gate that no longer exists, so there is nothing left for
-    it to relax. Still accepted rather than rejected so existing callers that
-    pass it keep working; it has no effect on any outcome.
+    `include_orphans` (bool, optional): RETIRED (C2, AC9) -- accepted for
+    backward compatibility, but has no effect on any outcome. Under this
+    gate an "orphan" is a claim whose claimant is not live, and the
+    liveness check (`session_liveness.session_live`) already lets a
+    not-live claimant's path through without needing an opt-in -- there is
+    no remaining semantics for this flag to relax. Wiring it to also relax
+    the UNANSWERABLE-path branch was considered and rejected: that would
+    fail OPEN on exactly the case the positive/negative asymmetry rule (see
+    `claim_index.py`'s docstring) forbids -- an index that could not answer
+    is not the same thing as a claim that resolved to "orphaned".
     """
     worktree_root_raw = params.get("worktree_root")
     paths_raw = params.get("paths")
     message = params.get("message")
     prose_raw = params.get("prose", "")
+    deliverable_id_raw = params.get("deliverable_id")
 
     if not worktree_root_raw:
         return {
@@ -524,6 +716,31 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "sha": None,
             "pushed": None,
             "error": "ceremony.scoped_git_commit: 'worktree_root' param is required",
+        }
+    if deliverable_id_raw is not None and not isinstance(deliverable_id_raw, str):
+        return {
+            "committed": False,
+            "sha": None,
+            "pushed": None,
+            "error": "ceremony.scoped_git_commit: 'deliverable_id' param must be a string when given",
+        }
+    # Review: code-reviewer -- Finding [P2], 2026-08-10. `commit_scoped`'s
+    # downstream guards (`if deliverable_id:`) are truthy checks, so an
+    # empty/whitespace-only string forwarded past this point is silently
+    # DROPPED -- AC19's shape/existence guard never runs, no trailer is
+    # applied, and no error is surfaced. Reject here instead, at the
+    # validation boundary, same posture as the AC19 rejections downstream.
+    # `None` (not supplied) is unaffected -- this only fires on a non-None
+    # string that is empty/whitespace-only.
+    if deliverable_id_raw is not None and not deliverable_id_raw.strip():
+        return {
+            "committed": False,
+            "sha": None,
+            "pushed": None,
+            "error": (
+                "ceremony.scoped_git_commit: 'deliverable_id' param must not be "
+                "empty/whitespace-only when given"
+            ),
         }
     if not paths_raw:
         return {
@@ -551,7 +768,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = normalize_native_path(worktree_root_raw)
     paths: List[str] = [str(p) for p in paths_raw]
-    include_orphans = bool(params.get("include_orphans", False))
+    # Review: code-reviewer -- Finding [P3], 2026-08-08. `include_orphans` is
+    # RETIRED (AC9, see this function's own docstring) and read nowhere in
+    # this file -- `_check_claim_conflicts` takes no such parameter. The
+    # param itself stays accepted (backward compatibility), it is simply
+    # never bound to a local now that there is nothing left for it to gate.
 
     # Directory-pathspec expansion (2026-08-06 fix, live incident -- see
     # `_expand_directory_pathspecs`'s own docstring): a directory element
@@ -576,6 +797,24 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (sweep_reason,),
         }
 
+    # Resolved ONCE, here, and reused for both the ownership gate below and
+    # the post-commit `release_committed_claims` call further down -- the
+    # CALLING session's own identity, never the private per-invocation
+    # `scoped-git-commit-<uuid4>` nonce minted just below for
+    # `run_commit_pipeline` (see that mint's own comment).
+    owner_session_id = _resolve_committing_session_id(params, worktree_root)
+
+    # C2 (2026-08-08-claim-index-the-commit-gate-never-had.md): the O(pathspec)
+    # ownership gate, back in the commit sink -- see this module's docstring,
+    # "Sink-side ownership enforcement", and `_check_claim_conflicts`'s own
+    # docstring for what this does and does not close. Evaluated AFTER
+    # directory expansion (so it sees individual files, not a directory
+    # string) and AFTER the sweeping-pathspec rejection (cheaper, and
+    # correct regardless of ownership) -- both orderings are load-bearing.
+    conflict_rejection = _check_claim_conflicts(worktree_root, paths, owner_session_id)
+    if conflict_rejection is not None:
+        return conflict_rejection
+
     # W3 dead-wire finding (docs/plans/2026-08-08-a-landed-commit-reported-
     # as-failed.md, item 4 -- verified on disk 2026-08-08): `session_id` is
     # UNREAD across the entirety of `run_commit_pipeline`'s body (grepped;
@@ -596,6 +835,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prose=str(prose_raw or ""),
         stage_paths=paths,
         caller_paths=set(paths),
+        deliverable_id=deliverable_id_raw,
     )
 
     response: Dict[str, Any] = {
@@ -640,8 +880,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # semantics. Withheld on the success path so the green response stays the
     # thin three-key shape callers already parse.
     if response["committed"]:
+        # `push_status` (C2's canonical vocabulary) is preferred over the
+        # bare `pushed` tri-state -- it is what lets a policy decline
+        # short-circuit before the remote probe (C5). Every `PipelineResult`
+        # construction site sets `push_status` (C2), so a plain attribute
+        # read is correct here -- a `getattr(..., PUSH_STATUS_NOT_ATTEMPTED)`
+        # fallback would silently degrade a future missing-field bug into
+        # "not attempted", which on THIS call site means a policy decline
+        # would quietly fall through to the remote probe AC5 exists to
+        # prevent (C7b, docs/plans/2026-08-08-the-push-leg-that-never-asked-
+        # which-branch.md). Test doubles in this package's own test file
+        # carry `push_status` explicitly now.
+        push_status = result.push_status
         pushed, push_state = _resolve_push_report(
-            worktree_root, result.committed_sha, result.pushed
+            worktree_root, result.committed_sha, push_status
         )
         response["pushed"] = pushed
         response["push_state"] = push_state
@@ -662,7 +914,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # retained stale claim is the safe residue, so this is wrapped and
         # never allowed to propagate into the response.
         try:
-            owner_session_id = _resolve_committing_session_id(params, worktree_root)
             session_scope.release_committed_claims(
                 owner_session_id, paths, cwd=worktree_root
             )
@@ -744,6 +995,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     declined = _declined_paths(result)
     if declined:
         response["declined_paths"] = declined
+
+    # Never silent (state/bug-backlog/2026-08-10-scoped-git-commit-reports-
+    # success-while-334e90d707f9.yaml): `commit_scoped()`'s private-index
+    # branch commits the STAGED content of a diverged path, not its
+    # worktree content -- a legitimate success, but one the operator must
+    # be told about by name. Surfaced unconditionally (both on a committed
+    # and an uncommitted response -- mirrors `declined_paths` above), and
+    # omitted entirely when nothing was excluded so the clean-path response
+    # stays byte-identical to today's.
+    commit_outcome = getattr(result, "commit", None)
+    worktree_excluded = list(getattr(commit_outcome, "worktree_excluded", ()) or ())
+    if worktree_excluded:
+        response["worktree_excluded"] = worktree_excluded
+        response["worktree_excluded_warning"] = getattr(commit_outcome, "stderr", "") or (
+            "worktree edits to %s were NOT included -- the staged (index) "
+            "version was committed instead" % (", ".join(worktree_excluded),)
+        )
 
     return response
 
@@ -890,24 +1158,37 @@ def _commit_paths_are_clean(worktree_root: str, paths: List[str]) -> bool:
 def _resolve_push_report(
     worktree_root: str,
     sha: Optional[str],
-    pipeline_pushed: Optional[bool],
+    push_status: str,
 ) -> tuple[Optional[bool], str]:
-    """Map the pipeline's two-valued push outcome onto the tri-state report.
+    """Map the pipeline's canonical `push_status` onto this module's tri-state
+    report.
 
-    `pipeline_pushed` (`commit_pipeline.derive_pushed_tristate`) answers "did
-    THIS op's push step sync", which is the wrong question whenever another
-    publisher exists: `coordinator-auto-push`'s post-commit hook detaches
-    (os.fork()/detached Popen) rather than blocking `git commit` to completion,
-    so it races this op's own push. When it wins, this op's `git push` collides
-    with it, fails for a reason that is not a fast-forward reject, and
-    `derive_pushed_tristate` reports False on a commit that is on the remote.
+    A policy decline (`push_status == PUSH_STATUS_DECLINED`) short-circuits
+    HERE, before any remote probe: it is known and deliberate, not unknown --
+    `commit_pipeline` already decided the branch policy, and re-deriving it
+    from remote state would be exactly the second copy this plan exists to
+    eliminate. `PUSH_STATUS_NO_REMOTE` maps directly to `PUSH_STATE_NO_REMOTE`
+    for the same reason -- nothing to probe.
 
-    So a False from the pipeline is treated as UNKNOWN, not as failure, and the
-    remote itself decides. Only `_REMOTE_ABSENT` renders as a failed push.
+    Everything else (`PUSH_STATUS_PUSHED` aside) falls through to the remote
+    probe below, unchanged from before this signature took `push_status`:
+    `push_status` answers "did THIS op's push step sync", which is the wrong
+    question whenever another publisher exists -- `coordinator-auto-push`'s
+    post-commit hook detaches (os.fork()/detached Popen) rather than blocking
+    `git commit` to completion, so it races this op's own push. When it wins,
+    this op's `git push` collides with it, fails for a reason that is not a
+    fast-forward reject, and the pipeline reports a status other than
+    `PUSH_STATUS_PUSHED` on a commit that is on the remote.
+
+    So anything other than a confirmed decline/no-remote/pushed status is
+    treated as UNKNOWN, not as failure, and the remote itself decides. Only
+    `_REMOTE_ABSENT` renders as a failed push.
     """
-    if pipeline_pushed is True:
+    if push_status == PUSH_STATUS_DECLINED:
+        return None, PUSH_STATE_DECLINED
+    if push_status == PUSH_STATUS_PUSHED:
         return True, PUSH_STATE_PUSHED
-    if pipeline_pushed is None:
+    if push_status == PUSH_STATUS_NO_REMOTE:
         return None, PUSH_STATE_NO_REMOTE
 
     state = _remote_sha_state(worktree_root, sha)

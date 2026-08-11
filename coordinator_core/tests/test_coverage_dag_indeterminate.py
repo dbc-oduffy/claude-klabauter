@@ -21,11 +21,27 @@ plus the graceful-degradation carve-out for untrailered ANCESTOR nodes:
                                        untrailered. This is the preserved
                                        safety guard — only inherited ancestors
                                        degrade, never the responsible node.
-    2. already-merged-null-attribution — a coverable ancestor has NO discoverable
-                                       add-commit at all (git log --follow
-                                       --diff-filter=A finds nothing — e.g. the
-                                       file was never committed under that path,
-                                       the "attribution gap" case).
+    2. already-merged-null-attribution-ancestor — an inherited ANCESTOR has NO
+                                       discoverable add-commit at all (git log
+                                       --follow --diff-filter=A finds nothing —
+                                       e.g. the file was never committed under
+                                       that path, or `--follow` lost the trail
+                                       across an archival move/rename, the
+                                       "attribution gap" case). As of the
+                                       2026-08-10 fix (state/bug-backlog/
+                                       2026-08-10-handoff-dag-attribution-gap-
+                                       degrades-the-6b45422f7425.yaml), this
+                                       mirrors Case 1's ancestor carve-out:
+                                       degrade to skip-with-note rather than
+                                       poisoning the whole chain walk, since an
+                                       unresolvable ANCESTOR is a data-integrity
+                                       artifact about that one ancestor, not
+                                       proof the closing session's own work
+                                       went unreviewed.
+    2b. already-merged-null-attribution-closing — the preserved safety guard:
+                                       the CLOSING/current session's own node
+                                       still hard-fails INDETERMINATE when ITS
+                                       OWN add-commit is unresolvable.
     3. vacuous-match                — a valid, UUID-shaped Session-Id matches
                                        ZERO commits under `git log --all
                                        --no-merges --grep=...` (dead/rewritten
@@ -58,6 +74,7 @@ stay real.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import List
@@ -191,13 +208,19 @@ def test_derive_dag_chain_set_closing_node_no_trailer_still_indeterminate(
     ), f"expected a 'no Session-Id trailer' note; got {result.notes!r}"
 
 
-def test_derive_dag_chain_set_already_merged_null_attribution(tmp_path: Path) -> None:
-    """Case 2: ancestor has NO discoverable add-commit at all (attribution gap).
+def test_derive_dag_chain_set_already_merged_null_attribution_ancestor(
+    tmp_path: Path,
+) -> None:
+    """Case 2: an inherited ANCESTOR has NO discoverable add-commit at all
+    (attribution gap) — must degrade to skip-with-note, NOT poison the whole
+    chain, mirroring Case 1's ancestor carve-out (2026-08-10 fix).
 
     Real git repo. The ancestor handoff file exists on disk but was never
     committed under that path (git log --follow --diff-filter=A finds
-    nothing) — the "already merged" / squashed-history shape where the file's
-    creation is not attributable to any commit reachable via --follow.
+    nothing) — the "already merged" / squashed-history / provenance-losing-
+    move shape where the file's creation is not attributable to any commit
+    reachable via --follow. The closing node's own trailered segment is still
+    attributable, so the chain must resolve non-indeterminate.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -228,12 +251,136 @@ def test_derive_dag_chain_set_already_merged_null_attribution(tmp_path: Path) ->
         str(closing.resolve()), str(repo), closing_session_id=""
     )
 
-    assert result.indeterminate is True, (
-        f"an ancestor with no discoverable add-commit must classify "
-        f"INDETERMINATE, not collapse to COVERED/UNCOVERED; notes={result.notes!r}"
+    assert result.indeterminate is False, (
+        f"an ANCESTOR with no discoverable add-commit must degrade to "
+        f"skip-with-note, not poison the whole chain to INDETERMINATE, when "
+        f"the rest of the chain (the closing node) is attributable; "
+        f"notes={result.notes!r}"
     )
-    assert any("no add-commit found" in note for note in result.notes), (
-        f"expected a 'no add-commit found (attribution gap)' note; got {result.notes!r}"
+    assert any(
+        "no add-commit found" in note and "ancestor segment skipped" in note
+        for note in result.notes
+    ), (
+        f"expected a 'no add-commit found (attribution gap) — ancestor "
+        f"segment skipped' note; got {result.notes!r}"
+    )
+    assert result.shas, (
+        "the closing node's own trailered segment must still be attributed "
+        f"(never falsely empty/COVERED); shas={result.shas!r}"
+    )
+
+
+def test_derive_dag_chain_set_already_merged_null_attribution_closing_node(
+    tmp_path: Path,
+) -> None:
+    """Case 2b (preserved safety guard): the CLOSING/current session's OWN
+    node must still hard-fail INDETERMINATE when ITS OWN add-commit has no
+    discoverable add-commit at all. Only inherited ancestors get the
+    skip-with-note degradation; the responsible node never does.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    handoffs = repo / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+
+    # Closing handoff exists on disk but is never git-added/committed —
+    # git log --follow --diff-filter=A finds nothing for it.
+    closing = handoffs / "closing.md"
+    closing.write_text("---\nsession_id: s1\n---\nClosing body.\n")
+
+    result = cov._derive_dag_chain_set(
+        str(closing.resolve()), str(repo), closing_session_id=""
+    )
+
+    assert result.indeterminate is True, (
+        f"the closing/current session's own node must still classify "
+        f"INDETERMINATE when it has no discoverable add-commit — this guard "
+        f"must NOT be weakened by the ancestor skip-with-note degradation; "
+        f"notes={result.notes!r}"
+    )
+    assert any(
+        "no add-commit found (attribution gap)" in note
+        and "ancestor segment skipped" not in note
+        for note in result.notes
+    ), f"expected a 'no add-commit found (attribution gap)' note; got {result.notes!r}"
+
+
+def test_run_coverage_gate_covered_path_surfaces_ancestor_skip_note(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Review: code-reviewer P1 — dag_result.notes (e.g. the ancestor-skip
+    note) must survive to the operator on EVERY run_coverage_gate return
+    path, not only the indeterminate short-circuit. Prior to the fix, a
+    non-indeterminate DAG-mode result (closing node clean, ratio at/above
+    threshold -> COVERED) dropped the note entirely -- an operator would see
+    a plain COVERED verdict with no trace that a DAG ancestor segment was
+    never walked, which is worse than the INDETERMINATE it silently replaced.
+
+    `_derive_dag_chain_set` is monkeypatched (mirrors
+    test_coverage_dag_scope_paths.py's `_patch_dag_chain_set` shape) to
+    return the exact non-indeterminate, note-carrying shape the real
+    attribution-gap ancestor case produces, over a real one-commit repo. A
+    trail record fully reviews that one commit so the verdict resolves
+    COVERED (uncovered_shas empty) -- the exact path the finding names.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    (repo / "base.py").write_text("print(0)\n")
+    _git(["add", "base.py"], repo)
+    _git(["commit", "-m", "base commit"], repo)
+
+    (repo / "src.py").write_text("print(1)\n")
+    _git(["add", "src.py"], repo)
+    _git(["commit", "-m", "closing node commit"], repo)
+    closing_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    ancestor_skip_note = (
+        "ancestor.md: no add-commit found (attribution gap) — ancestor "
+        "segment skipped"
+    )
+
+    def _fake_derive(from_handoff, repo_root, closing_session_id=""):
+        return cov._DagChainResult(
+            shas=[closing_sha],
+            indeterminate=False,
+            notes=[ancestor_skip_note],
+        )
+
+    monkeypatch.setattr(cov, "_derive_dag_chain_set", _fake_derive)
+
+    trail_dir = repo / "state" / "review-trail"
+    trail_dir.mkdir(parents=True)
+    (trail_dir / f"record_{closing_sha[:8]}.json").write_text(
+        json.dumps(
+            {
+                "sha_range": f"{closing_sha}^..{closing_sha}",
+                "reviewer": "code-reviewer",
+                "scope": "session",
+                "scope_kind": "diff",
+                "verdict": "ok",
+                "diff_loc": 1,
+                "session_id": "00000000-0000-0000-0000-000000000001",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fake_handoff = str((repo / "state" / "handoffs" / "closing.md"))
+    result = cov.run_coverage_gate(from_handoff=fake_handoff, repo_root=str(repo))
+
+    assert result.verdict == "COVERED", (
+        f"expected COVERED (fully reviewed closing node); "
+        f"verdict_line={result.verdict_line!r} notes={result.notes!r}"
+    )
+    assert not result.uncovered_shas, result.uncovered_shas
+    assert ancestor_skip_note in result.notes, (
+        f"the ancestor-skip note must survive to the operator on the "
+        f"COVERED path, not only the INDETERMINATE short-circuit; "
+        f"notes={result.notes!r}"
     )
 
 

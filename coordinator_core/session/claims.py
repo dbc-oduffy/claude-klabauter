@@ -58,11 +58,17 @@ Negative-spec:
       subprocess — the recorded pid is the CALLER's ``os.getpid()``, which
       MUST be a long-lived process (skill/interactive shell); a hook subshell
       exits within seconds and its claim reads immediately dead to the reaper.
+    - The ``brief``-stage lease (``claim_stage``/``brief_lease_expired``) is
+      the ONLY path on which a LIVE holder's claim is takeable. Do NOT extend
+      that override to ``apply``-stage claims: an apply-stage claim is backed
+      by a landed frontmatter stamp and real mutation, and its only takeover
+      route stays the holder-is-dead one.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -239,13 +245,101 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _write_claim_meta(claim_dir: Path, sid: str) -> None:
-    """Write the ``pid`` / ``session_id`` / ``claimed_at`` metadata files into a
-    freshly-mkdir'd claim dir. ``pid`` is ``os.getpid()`` — the CALLER's pid,
-    which MUST be long-lived (see module negative-spec)."""
+#: The two stages a claim dir can be in. ``apply`` is the historical (and
+#: only) shape: a claim backed by a landed frontmatter stamp, takeable only
+#: when its holder reads dead. ``brief`` is the pre-work reservation
+#: ``pickup_assemble.brief`` takes so the read-verify-draft window between
+#: `brief` and `apply` is no longer unguarded — it carries a wall-clock
+#: lease (below) precisely because nothing durable backs it yet.
+CLAIM_STAGE_BRIEF = "brief"
+CLAIM_STAGE_APPLY = "apply"
+
+#: How long a `brief`-stage claim survives, measured from the LAST brief of
+#: that artifact by its holder (``touch_brief_claim`` refreshes it), before
+#: any session may take it regardless of holder liveness. Env override:
+#: COORDINATOR_BRIEF_CLAIM_LEASE_MINUTES.
+#:
+#: WHY A LEASE AT ALL. The dead-holder takeover path cannot bound this case:
+#: ``liveness.session_live``'s Layer 1 is PPID-authoritative and does NOT
+#: consult recency once ``stable_pid`` plus a birth witness are present, so a
+#: session that briefs an artifact and walks away — without exiting — holds
+#: the lock for its entire lifetime.
+#:
+#: WHY FOUR HOURS, AND NOT THE 30 THAT ``CLAIM_STALE_AFTER_MINUTES`` USES.
+#: The two constants answer different questions and must not be aliased. The
+#: cost of this one being too SHORT is severe and is the exact bug the
+#: brief-stage claim exists to fix: a lease that elapses while its holder is
+#: still verifying hands the artifact to a second session, and both then do
+#: the work and both ship the external side effect. The cost of it being too
+#: LONG is mild — a reservation nobody is advancing blocks a pickup, which
+#: ``drop`` clears in one command, and which the DEAD-holder path reclaims
+#: immediately anyway, lease or no lease. The lease is therefore load-bearing
+#: only for a LIVE holder, where erring long is close to free.
+#:
+#: Sized against this box's load norm (docs/wiki/machine-load-norm.md: 50-70
+#: concurrent LLMs, two dozen EMs as the floor): the brief-to-apply window
+#: legitimately contains reading the artifact, verifying its claims against
+#: HEAD, a dispatched subagent or two, and a test run — each of which is a
+#: slow op here, not a hung one. Measured dispatches on this surface run past
+#: 30 minutes routinely, so a 30-minute lease would expire mid-verification
+#: as the NORMAL case. Four hours clears that with margin while still
+#: bounding an abandoned reservation inside a working day.
+BRIEF_CLAIM_LEASE_MINUTES = int(
+    os.environ.get("COORDINATOR_BRIEF_CLAIM_LEASE_MINUTES", "240")
+)
+
+
+def _write_claim_meta(claim_dir: Path, sid: str, stage: str = CLAIM_STAGE_APPLY) -> None:
+    """Write the ``pid`` / ``session_id`` / ``claimed_at`` / ``stage`` metadata
+    files into a freshly-mkdir'd claim dir. ``pid`` is ``os.getpid()`` — the
+    CALLER's pid, which MUST be long-lived (see module negative-spec)."""
     (claim_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
     (claim_dir / "session_id").write_text(f"{sid}\n", encoding="utf-8")
     (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+    (claim_dir / "stage").write_text(f"{stage}\n", encoding="utf-8")
+
+
+def claim_stage(claim_dir: Union[str, Path]) -> str:
+    """The stage of an existing claim dir — ``brief`` or ``apply``.
+
+    A dir with NO ``stage`` file reads ``apply``: every claim written before
+    the two-stage split, and every claim written by a caller that never asked
+    for a brief-stage reservation, keeps exactly its historical semantics. An
+    unrecognized value reads ``apply`` for the same reason — an unreadable
+    stage must never be the thing that makes a live holder's claim takeable.
+    """
+    raw = _read_claim_field(Path(claim_dir), "stage")
+    return CLAIM_STAGE_BRIEF if raw == CLAIM_STAGE_BRIEF else CLAIM_STAGE_APPLY
+
+
+def claim_age_minutes(claim_dir: Union[str, Path]) -> Optional[int]:
+    """Minutes since the claim dir's ``claimed_at``, or ``None`` when that file
+    is missing or unparseable. An unreadable timestamp is an evidence gap —
+    never fabricated as fresh or as expired."""
+    raw = _read_claim_field(Path(claim_dir), "claimed_at")
+    if not raw:
+        return None
+    claimed_epoch = core.iso_to_epoch(raw)
+    if claimed_epoch <= 0:
+        return None
+    elapsed = core.now_epoch() - claimed_epoch
+    return (elapsed if elapsed > 0 else 0) // 60
+
+
+def brief_lease_expired(claim_dir: Union[str, Path]) -> bool:
+    """True iff ``claim_dir`` holds a ``brief``-stage claim whose lease has
+    elapsed — the one condition under which a LIVE holder's claim is takeable.
+
+    False for every ``apply``-stage claim (those follow the dead-holder rule
+    alone), and False when ``claimed_at`` is unreadable: an evidence gap is
+    not evidence of expiry, so the conservative answer is "still held".
+    """
+    if claim_stage(claim_dir) != CLAIM_STAGE_BRIEF:
+        return False
+    age = claim_age_minutes(claim_dir)
+    if age is None:
+        return False
+    return age > BRIEF_CLAIM_LEASE_MINUTES
 
 
 def _claim_base(class_: str, baton_repo_root: str, cwd: Optional[str]) -> Optional[str]:
@@ -275,6 +369,7 @@ def claim_artifact(
     basename: str,
     baton_repo_root: str = "",
     cwd: Optional[str] = None,
+    stage: str = CLAIM_STAGE_APPLY,
 ) -> bool:
     """Port of ``cs_claim_artifact <class> <basename> [baton_repo_root]`` (864-962).
 
@@ -311,12 +406,24 @@ def claim_artifact(
         SCOPED to plan deliberately: handoff/memo are claimed once per session
         and their contract is "same-session re-claim REJECTED" (T16a/T18c). Do
         NOT broaden (module negative-spec).
-      - Live holder -> failure (concurrent /pickup detected).
+      - Live holder -> failure (concurrent /pickup detected), UNLESS the
+        existing claim is an EXPIRED ``brief``-stage lease (``brief_lease_
+        expired``) — a reservation whose holder never came back to apply it.
+        That one case falls through to the takeover branch below.
       - Dead / >30-min-idle holder -> ``rm -rf`` + re-mkdir takeover (the
         atomic rm+mkdir is itself the race guard: a peer that re-claims between
         them makes our mkdir fail).
       - Legacy pid-only claim dir (no session_id file) -> ``liveness.
         claim_holder_live`` falls back to the ephemeral-pid test.
+
+    ``stage`` selects what is being taken. ``apply`` (the default, and what
+    every pre-existing caller gets) is the durable claim backed by a landed
+    frontmatter stamp. ``brief`` is ``pickup_assemble.brief``'s pre-work
+    reservation, which self-expires after ``BRIEF_CLAIM_LEASE_MINUTES`` — see
+    that constant's docstring for why liveness alone cannot bound it.
+    Promotion ``brief`` -> ``apply`` is ``promote_claim_stage``, never a
+    second ``claim_artifact`` call (handoff/memo reject a same-session
+    re-claim by design).
 
     ``class_`` / ``basename`` are REQUIRED (bash ``${1:?}`` / ``${2:?}``) —
     empty raises ValueError.
@@ -359,7 +466,7 @@ def claim_artifact(
     except OSError:
         created = False
     if created:
-        _write_claim_meta(claim_dir, sid)
+        _write_claim_meta(claim_dir, sid, stage)
         return True
 
     # ---- EEXIST — inspect the existing claim (holder's OWN metadata) ----
@@ -370,7 +477,9 @@ def claim_artifact(
     if class_ == "plan" and liveness.claim_held_by_me(str(claim_dir), sid, cwd):
         return True
 
-    if liveness.claim_holder_live(str(claim_dir), cwd):
+    lease_expired = brief_lease_expired(claim_dir)
+
+    if liveness.claim_holder_live(str(claim_dir), cwd) and not lease_expired:
         live_pid = ""
         if held_sid:
             holder_sdir = core.session_dir(held_sid, cwd)
@@ -399,12 +508,21 @@ def claim_artifact(
         )
         return False
 
-    # Holder is dead or >30-min idle — stale claim; take over.
-    print(
-        f"cs_claim_{class_}: stale claim on {basename} (session {held_sid or '?'}, "
-        f"PID {held_pid or '?'} not live) — taking over",
-        file=sys.stderr,
-    )
+    # Holder is dead / >30-min idle, or holds an expired brief-stage lease —
+    # either way the claim is stale; take over.
+    if lease_expired:
+        print(
+            f"cs_claim_{class_}: expired brief-stage claim on {basename} (session "
+            f"{held_sid or '?'} reserved it {claim_age_minutes(claim_dir)}m ago and "
+            f"never applied, lease is {BRIEF_CLAIM_LEASE_MINUTES}m) — taking over",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"cs_claim_{class_}: stale claim on {basename} (session {held_sid or '?'}, "
+            f"PID {held_pid or '?'} not live) — taking over",
+            file=sys.stderr,
+        )
     shutil.rmtree(claim_dir, ignore_errors=True)
     try:
         os.mkdir(claim_dir)
@@ -415,8 +533,244 @@ def claim_artifact(
             file=sys.stderr,
         )
         return False
-    _write_claim_meta(claim_dir, sid)
+    _write_claim_meta(claim_dir, sid, stage)
     return True
+
+
+def touch_brief_claim(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """Refresh the lease on a ``brief``-stage claim THIS session holds, by
+    rewriting ``claimed_at`` to now. Returns True when the lease was
+    refreshed, False on every other path.
+
+    This is what makes the lease measure "time since the holder last looked at
+    this artifact" rather than "time since the holder first briefed it". A
+    re-brief is evidence of active work, so a session still circling an
+    artifact never loses it to the lease no matter how long the whole
+    brief-to-apply window runs.
+
+    Scoped to ``brief`` stage and to a self-held claim: an ``apply``-stage
+    claim has no lease to refresh, and refreshing a peer's ``claimed_at``
+    would extend a reservation this session has no business extending.
+    """
+    if not class_:
+        raise ValueError("artifact class required")
+    if not basename:
+        raise ValueError("basename required")
+
+    sid = core.resolve_session_id(cwd)
+    if not sid:
+        return False
+    base = _claim_base(class_, baton_repo_root, cwd)
+    if base is None:
+        return False
+
+    claim_dir = Path(base) / f"{class_}-claims" / basename
+    if not claim_dir.is_dir():
+        return False
+    if not liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+        return False
+    if claim_stage(claim_dir) != CLAIM_STAGE_BRIEF:
+        return False
+    try:
+        (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def promote_claim_stage(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """Promote a claim THIS session holds from ``brief`` stage to ``apply``
+    stage — the moment the pre-work reservation becomes a durable claim.
+
+    Returns True when the stage file now reads ``apply`` for a claim this
+    session holds, False on every other path (no claim dir, held by someone
+    else, unresolvable session id or base, write failure). A no-op success for
+    a claim already at ``apply`` stage, so ``apply`` may call it
+    unconditionally.
+
+    Deliberately NOT a second ``claim_artifact`` call: handoff and memo REJECT
+    a same-session re-claim by design (module negative-spec), so the only
+    correct way to change the stage of a claim already held is to rewrite the
+    one file. ``claimed_at`` is left alone — it records when this session took
+    the lock, which is still true, and the dead-holder settling window that
+    reads it is safe to have measure from the earlier instant.
+
+    Never touches a claim held by a DIFFERENT session, live or dead: promoting
+    someone else's reservation would hand them a lease-free claim they never
+    asked for.
+    """
+    if not class_:
+        raise ValueError("artifact class required")
+    if not basename:
+        raise ValueError("basename required")
+
+    sid = core.resolve_session_id(cwd)
+    if not sid:
+        return False
+    base = _claim_base(class_, baton_repo_root, cwd)
+    if base is None:
+        return False
+
+    claim_dir = Path(base) / f"{class_}-claims" / basename
+    if not claim_dir.is_dir():
+        return False
+    if not liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+        return False
+    if claim_stage(claim_dir) == CLAIM_STAGE_APPLY:
+        return True
+    try:
+        (claim_dir / "stage").write_text(f"{CLAIM_STAGE_APPLY}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def relocate_artifact_claim(
+    class_: str,
+    old_basename: str,
+    new_basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """THE sanctioned entrypoint for renaming a claimed artifact (handoff /
+    memo / plan) on disk while it may be claimed — relocates the claim dir
+    alongside the basename change, so the shared-path mkdir lock (module
+    negative-spec, "BASENAME-ONLY, NEVER sid-namespaced") keeps tracking the
+    SAME logical claim across a rename instead of orphaning under the
+    vanished old name.
+
+    THE DEFECT THIS CLOSES (state/bug-backlog/2026-08-10-two-sessions-held-
+    one-baton-the-claim-di-1d9d62d1d8af.yaml): claim identity is basename-
+    only and nothing relocated a claim dir when a handoff was renamed via a
+    bare ``git mv`` — a peer then claimed the NEW basename cleanly (no claim
+    dir sat there) while the original holder's claim sat live, invisible,
+    under the OLD basename. Two sessions worked the same baton concurrently,
+    and the fleet archival sweep's Check 4
+    (``coordinator_core.ops.fleet.archive_handoffs._is_terminal``) also
+    derives its liveness check from the artifact's CURRENT basename via
+    ``coordinator_core.claim_state.handoff_claim_dir`` — so a claim orphaned
+    by rename is invisible to it too, and archival proceeds unopposed against
+    a live holder.
+
+    Modeled on the two existing rename-plus-claim precedents named in the
+    backlog's proposed_action — ``percolate/rewrite_basename.py``'s
+    ``_do_rename`` (claim-aware rename, never silently drops a claim) and
+    ``session/scope.py``'s ``relocate_touched_path`` (only act when
+    something is actually claimed) — but structurally simpler than both:
+    those two operate on a TOUCH-CLAIM append-only event log, where
+    "relocating" means appending a new event. A claim dir here is a physical
+    ``mkdir`` lock — one directory, holding pid/session_id/claimed_at/stage
+    files — so relocating it is a physical directory move (``os.replace``,
+    atomic on both POSIX and Windows NTFS when source and destination share
+    a filesystem, which they always do here: both live under the SAME
+    ``<base>/<class>-claims/`` parent), never an appended record.
+
+    THIS FUNCTION DOES NOT RENAME THE ARTIFACT FILE ITSELF — callers (a
+    ``git mv``, or any future rename tool built on top of this) perform the
+    file move themselves and call this alongside it. Claim-dir identity and
+    file identity are two independent filesystem objects with no cross-object
+    atomicity available between them regardless of ordering, so callers may
+    invoke this before or after the file rename; there is no unsafe ordering
+    to warn about, only "call it, or the claim orphans."
+
+    Returns:
+      - True, no-op, when NO claim dir exists at ``old_basename`` — the
+        common case (most renamed artifacts are unclaimed at rename time);
+        nothing to relocate.
+      - True on a successful relocation.
+      - False when a DIFFERENT claim dir already exists at ``new_basename``
+        — refuses to silently clobber or merge two claims; a destination
+        collision is a genuine two-holder conflict the caller must resolve
+        (e.g. via ``clear_claim_if_dead``) before renaming, not something
+        this function may paper over.
+      - False on an unresolvable claim base (bad baton root, not a git repo).
+      - True (no-op) when ``old_basename == new_basename`` — nothing to do.
+
+    NEGATIVE-SPEC — the already-orphaned case (see backlog item's "already-
+    orphaned case" discussion). This function does NOT scan for, detect, or
+    adopt a PRE-EXISTING orphan left by a rename that happened before this
+    entrypoint existed (e.g. the real incident's own orphaned
+    ``handoff-claims/2026-08-10-untitled.md`` claim dir, still on disk at the
+    time this was written). It only relocates a claim at the moment of ITS
+    OWN invocation, for the rename ITS OWN caller is performing. Adopting a
+    stale orphan would require matching an old basename to a current one by
+    something other than an exact rename operation just performed (predecessor
+    chain inspection, timing heuristics, or an operator's own judgment) — a
+    materially different, riskier operation belonging to a separate
+    reconciliation sweep, not this narrow rename-time relocator. Do NOT widen
+    this function to do that matching.
+
+    ``class_`` / ``old_basename`` / ``new_basename`` REQUIRED — empty raises
+    ValueError, mirroring every other claim-dir primitive in this module.
+
+    Spec backlink: state/bug-backlog/2026-08-10-two-sessions-held-one-baton-
+    the-claim-di-1d9d62d1d8af.yaml proposed_action.
+    """
+    if not class_:
+        raise ValueError("artifact class required")
+    if not old_basename:
+        raise ValueError("old_basename required")
+    if not new_basename:
+        raise ValueError("new_basename required")
+
+    if old_basename == new_basename:
+        return True  # nothing to relocate
+
+    base = _claim_base(class_, baton_repo_root, cwd)
+    if base is None:
+        return False
+
+    claims_dir = Path(base) / f"{class_}-claims"
+    old_claim_dir = claims_dir / old_basename
+    new_claim_dir = claims_dir / new_basename
+
+    if not old_claim_dir.is_dir():
+        return True  # nothing claimed at the old name — nothing to relocate
+
+    if new_claim_dir.exists():
+        print(
+            f"cs_relocate_claim: refusing to relocate {old_basename!r} -> "
+            f"{new_basename!r} — a claim already exists at the destination; "
+            "resolve the collision (e.g. clear_claim_if_dead) before renaming",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        os.replace(old_claim_dir, new_claim_dir)
+    except OSError as exc:
+        print(
+            f"cs_relocate_claim: failed to relocate claim {old_basename!r} -> "
+            f"{new_basename!r}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def relocate_handoff_claim(
+    old_basename: str,
+    new_basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """Thin class-bound wrapper over ``relocate_artifact_claim("handoff",
+    ...)`` — the parity addition matching ``claim_handoff``/``claim_memo``'s
+    existing class-bound-wrapper convention. The one intended caller shape
+    for the incident this closes: whatever performs a handoff rename (a
+    ``git mv``, or a future dedicated rename tool) alongside the file move."""
+    return relocate_artifact_claim("handoff", old_basename, new_basename, baton_repo_root, cwd=cwd)
 
 
 def _read_claim_field(claim_dir: Path, field: str) -> str:
@@ -625,7 +979,63 @@ def release_artifact(
         return True  # takeover slipped in — skip; never delete a live peer's claim
 
     shutil.rmtree(claim_dir, ignore_errors=True)
+    if class_ == "plan":
+        _clear_shape_plan_pointer(basename, my_sid, cwd)
     return True
+
+
+def _clear_shape_plan_pointer(
+    slug: str,
+    sid: Optional[str],
+    cwd: Optional[str] = None,
+) -> None:
+    """Drop ``session-shape.json``'s ``plan`` block when it still names ``slug``.
+
+    The mirror-side half of ``claim_plan``'s C3 instrumentation: that function
+    writes ``plan.path`` into the shape file at claim time, and until this
+    existed nothing unwrote it. A released plan therefore stayed resolvable
+    through ``claimed_plan.resolve_claimed_plan_path``'s tier (a), which reads
+    the shape pointer BEFORE the durable ``plan-claims/`` store and returns on
+    a hit — so ``/handoff`` after a shipped plan resolved the shipped plan and
+    surfaced a ``DivergentDeliverableIdError`` against the handoff chain's own
+    ``deliverable_id`` (example-doctrine-repo-em memo, 2026-08-10; the two ids differing
+    is the EXPECTED steady state for a chain spanning several plans, so the
+    stale pointer made a routine seam fail loud).
+
+    Writes ``{"plan": {}}``, never ``{"plan": None}``: ``ceremony.
+    session_instructions``'s ``setdefault("plan", {})`` returns the existing
+    None on an explicit null and then subscripts it, so a null clear trades
+    this bug for a TypeError on the scope-override path.
+
+    Best-effort and silent by design — the mirror of ``claim_plan``'s
+    non-fatal shape write. The claim removal has already succeeded and is the
+    durable fact; a shape-write failure must not turn a successful release
+    into a reported failure. ``resolve_claimed_plan_path``'s tier-(a)
+    validation against the claim store is the read-side backstop that also
+    covers a shape file left by a session that died mid-plan.
+    """
+    if not sid:
+        return
+    try:
+        raw = shape.session_shape_read(sid, cwd)
+        parsed = json.loads(raw) if raw.strip() else None
+    except (ValueError, OSError):
+        return
+    if not isinstance(parsed, dict):
+        return
+    plan_block = parsed.get("plan")
+    if not isinstance(plan_block, dict):
+        return
+    if plan_block.get("path") != f"docs/plans/{slug}.md":
+        return
+    try:
+        shape.session_shape_set(sid, {"plan": {}}, cwd)
+    except Exception as exc:
+        print(
+            f"cs_release_artifact: session-shape plan-pointer clear failed for "
+            f"{slug} (non-fatal): {exc}",
+            file=sys.stderr,
+        )
 
 
 def clear_claim_if_dead(
@@ -1036,7 +1446,11 @@ def backfill_reaped_from_session(worktree: Path) -> dict:
     a list of repo-relative path strings (``written``/``skipped``) or
     ``(path, message)`` tuples (``errors``, reserved for a locked_rmw failure
     — a parse/shape skip is NOT an error, it is an expected, named, fail-
-    closed outcome and goes in ``skipped``).
+    closed outcome and goes in ``skipped``). Paths are POSIX-normalized
+    (``as_posix()``) regardless of platform, matching this engine's
+    convention elsewhere (``_write_bump_message``'s ``clear_line``,
+    ``scoped_git_commit``'s pathspec normalization) for any value that may
+    later be logged, diffed, or compared across machines.
     """
     from coordinator_core.frontmatter.primitives import (
         insert_fm_field,
@@ -1058,7 +1472,7 @@ def backfill_reaped_from_session(worktree: Path) -> dict:
     for path_str in sorted(paths):
         path = Path(path_str)
         try:
-            rel = str(path.relative_to(worktree))
+            rel = path.relative_to(worktree).as_posix()
         except ValueError:
             rel = path_str
 

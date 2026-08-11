@@ -664,9 +664,14 @@ def test_seed_registry_happy_path_registers_discovered_repos(monkeypatch, tmp_pa
     out = capsys.readouterr().out
     assert "Registering repos.claude_klabauter = /x/claude-klabauter" in out
     assert "Registering repos.example_doctrine_repo = /x/example-doctrine-repo" in out
-    set_calls = [c for c in calls if len(c) > 1 and c[1] == "set"]
-    assert [c[2] for c in set_calls] == ["repos.claude_klabauter", "repos.example_doctrine_repo"]
-    assert [c[3] for c in set_calls] == ["/x/claude-klabauter", "/x/example-doctrine-repo"]
+    set_calls = [c for c in calls if "set" in c]
+    keys_and_values = [
+        (c[c.index("set") + 1], c[c.index("set") + 2]) for c in set_calls
+    ]
+    assert keys_and_values == [
+        ("repos.claude_klabauter", "/x/claude-klabauter"),
+        ("repos.example_doctrine_repo", "/x/example-doctrine-repo"),
+    ]
 
 
 def test_seed_registry_no_repos_discovered_prints_manual_hint(monkeypatch, tmp_path, capsys):
@@ -796,7 +801,8 @@ def test_journal_omits_failed_registration_from_written_entries(monkeypatch, tmp
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
 
     def _fake_run(cmd, *a, **k):
-        rc = 1 if "broken_repo" in cmd[2] else 0
+        registry_key = cmd[cmd.index("set") + 1] if "set" in cmd else ""
+        rc = 1 if "broken_repo" in registry_key else 0
         return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="")
 
     monkeypatch.setattr(fr, "_run", _fake_run)
