@@ -178,3 +178,119 @@ def test_missing_session_id_is_loud_not_silent(git_repo: Path, policy_path: Path
     assert rc != 0, "a missing session id must exit non-zero"
     assert out == "", f"stdout must be empty on failure, got: {out!r}"
     assert "session id" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Template-type resolution (report_type_map)
+#
+# Regression anchor: before this leg, the CLI sent no `type` key at all, so a
+# code-reviewer provisioned through it fell through to the frozen legacy
+# run-report shape and got `## Observations` — the exact heading
+# `ops.append_integrator_dispositions` must refuse. That made the sanctioned
+# remedy for the Workflow-agent() hook bypass reproduce the very defect it
+# exists to route around.
+# ---------------------------------------------------------------------------
+
+REVIEWER_TYPE = "coordinator:code-reviewer"
+
+
+@pytest.fixture
+def typed_policy_path(tmp_path: Path) -> Path:
+    """A policy carrying report_type_map, as the real example-doctrine-repo-side file does."""
+    policy = {
+        "report_sidecar": [ELIGIBLE_TYPE, REVIEWER_TYPE],
+        "report_type_map": {
+            ELIGIBLE_TYPE: "run-report",
+            REVIEWER_TYPE: "review-findings",
+        },
+    }
+    path = tmp_path / "typed-policy.yaml"
+    path.write_text(yaml.safe_dump(policy), encoding="utf-8")
+    return path
+
+
+def _provisioned_text(git_repo: Path, stdout: str) -> str:
+    return (git_repo / stdout.strip()).read_text(encoding="utf-8")
+
+
+def test_reviewer_resolves_to_findings_template_without_an_explicit_type(
+    git_repo: Path, typed_policy_path: Path
+) -> None:
+    """The whole point: the caller passes no --type and still gets Findings."""
+    rc, out, err = run_cli(
+        git_repo,
+        typed_policy_path,
+        extra_args=["--agent-type", REVIEWER_TYPE, "--session-id", "sess-typed"],
+    )
+    assert rc == 0, err
+    text = _provisioned_text(git_repo, out)
+    assert "## Findings" in text
+    assert "## Observations" not in text
+
+
+def test_explicit_type_overrides_the_resolved_one(
+    git_repo: Path, typed_policy_path: Path
+) -> None:
+    rc, out, err = run_cli(
+        git_repo,
+        typed_policy_path,
+        extra_args=[
+            "--agent-type", REVIEWER_TYPE,
+            "--session-id", "sess-override",
+            "--type", "assessment",
+        ],
+    )
+    assert rc == 0, err
+    text = _provisioned_text(git_repo, out)
+    assert "## Questions" in text
+    assert "## Findings" not in text
+
+
+def test_unknown_explicit_type_is_loud_not_silent(
+    git_repo: Path, typed_policy_path: Path
+) -> None:
+    rc, out, err = run_cli(
+        git_repo,
+        typed_policy_path,
+        extra_args=["--agent-type", REVIEWER_TYPE, "--session-id", "s", "--type", "bogus"],
+    )
+    assert rc == 2
+    assert "unknown --type" in err
+    assert "review-findings" in err
+
+
+def test_lookup_miss_still_provisions_with_the_legacy_shape(
+    git_repo: Path, policy_path: Path
+) -> None:
+    """A policy with NO report_type_map at all must behave exactly as before.
+
+    This is the fail-open arm, and it is deliberately not loud: whether a given
+    agent_type has a report_type_map row is a fact about a policy file
+    claude-klabauter does not own, so its absence is not a precondition failure.
+    """
+    rc, out, err = run_cli(
+        git_repo,
+        policy_path,
+        extra_args=["--agent-type", ELIGIBLE_TYPE, "--session-id", "sess-miss"],
+    )
+    assert rc == 0, err
+    text = _provisioned_text(git_repo, out)
+    assert "## Observations" in text
+    assert "## Findings" not in text
+
+
+def test_malformed_report_type_map_does_not_break_provisioning(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """Loader fail-open, end to end: a non-dict map must not brick a spawn."""
+    policy = {"report_sidecar": [ELIGIBLE_TYPE], "report_type_map": ["not", "a", "dict"]}
+    path = tmp_path / "malformed-policy.yaml"
+    path.write_text(yaml.safe_dump(policy), encoding="utf-8")
+
+    rc, out, err = run_cli(
+        git_repo,
+        path,
+        extra_args=["--agent-type", ELIGIBLE_TYPE, "--session-id", "sess-malformed"],
+    )
+    assert rc == 0, err
+    assert "## Observations" in _provisioned_text(git_repo, out)

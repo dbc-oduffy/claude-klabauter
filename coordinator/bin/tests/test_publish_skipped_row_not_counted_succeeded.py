@@ -114,6 +114,17 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
             # zero-file sweep result is a no-op for this test's purposes.
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
+        def enumerate_gate_entrypoints(self, repo_root):
+            # `dispatch_end_of_run_entrypoint_gate` calls this unconditionally
+            # too (§ chunk C3, sibling gap to `run_parse_sweep` above). This
+            # fixture's dest dirs ship no entrypoints at all, so the honest
+            # answer is an empty tuple — matches what the real
+            # `enumerate_gate_entrypoints` would return for a repo containing
+            # only `.gitkeep`, and short-circuits the gate loop (`if not
+            # entrypoints: continue`) without needing to fake
+            # `run_entrypoint_gate`/`derive_worker_cap`/`mktcache_gate_env`.
+            return ()
+
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
     monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda engine_claude_klabauter, path: {})
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: tmp_path / "store.yaml")
@@ -127,7 +138,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
     )
     monkeypatch.setattr(publish, "_resolve_publish_sync_module_path", lambda setup_dir: tmp_path / "publish_sync.py")
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
-    monkeypatch.setattr(publish, "check_publish_sync_contract", lambda module, path, rung: None)
+    monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
@@ -172,6 +183,26 @@ def test_gate_declined_row_exits_non_zero(monkeypatch, tmp_path):
     rc = publish.main([",".join(_ROW_NAMES)])
 
     assert rc != 0
+
+
+def test_gate_declined_row_exits_non_zero_under_dry_run_too(monkeypatch, tmp_path, capsys):
+    """Regression test for state/bug-backlog/2026-08-10-coordinator-publish-
+    s-exit-code-is-not-a-542c9750e55a.yaml's originally-reported direction:
+    `main()` used to unconditionally `return 0` under `--dry-run` even when
+    the row loop had just printed "Rows FAILED" — a caller reading only the
+    exit code saw a failed row as a success. A previewed row can fail its
+    own preconditions (e.g. an allowlist-build failure, exactly what this
+    fixture's `_SKIPPED_ROW` models) independently of `--dry-run`, so the
+    exit code must agree with the row summary in preview mode too."""
+    rows_reached: list = []
+    _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
+
+    rc = publish.main([",".join(_ROW_NAMES), "--dry-run"])
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    assert "Rows FAILED" in combined and _SKIPPED_ROW in combined.split("Rows FAILED")[1]
+    assert rc == 1
 
 
 def test_all_rows_actually_publish_still_succeed_and_exit_zero(monkeypatch, tmp_path):

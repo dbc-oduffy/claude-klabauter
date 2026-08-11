@@ -190,6 +190,30 @@ from coordinator_core.session.declared_writes import declare_write  # noqa: E402
 
 SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backlinks.toml"
 
+# RAW-CMDLINE-PRESERVATION ENTRYPOINTS (2026-08-08, caret-eating .cmd shim defect)
+#
+# state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
+# (example-doctrine-repo): populating a .cmd launcher's %1..%9/%* batch parameters
+# silently strips any literal `^` from each argument BEFORE the launcher
+# body ever runs — this happens during cmd.exe's OWN command-line parse,
+# ahead of anything the generated launcher body could do about it (measured:
+# even a bare `echo %*` batch file loses the caret, and it is lost whether
+# the caller is PowerShell, python subprocess list-form, or cmd.exe itself —
+# not a caller-side quoting bug). `%CMDCMDLINE%`, by contrast, still carries
+# the ORIGINAL, unmangled invocation text (measured) — a launcher whose
+# entrypoint is named here gets ONE extra line exporting that raw text into
+# `_LAUNCHER_RAW_CMDLINE` before invoking Python, and the entrypoint itself
+# (not this generator) is responsible for re-deriving un-mangled argv from
+# it. This is a SECOND named, narrow, opt-in exception in the same spirit as
+# the WHOAMI-BOOTSTRAP EXCEPTION above — do NOT generalize it to every
+# launcher; every entrypoint not named here renders byte-identical to before
+# this mechanism existed (see `_cmd_raw_cmdline_block`).
+_RAW_CMDLINE_ENTRYPOINTS = frozenset(
+    {
+        "coordinator/bin/coordinator-write-review-trail.py",
+    }
+)
+
 # Suffixes stripped from the entrypoint name to form the launcher basename.
 # A launcher for "install-health-run.py" is "install-health-run.cmd"; the .cmd
 # invokes the FULL original name ("install-health-run.py") as the entrypoint.
@@ -274,10 +298,36 @@ def _ps1_backlink_block(spec_backlink: str | None) -> str:
     return f"# Spec backlink: {spec_backlink}\n" if spec_backlink else ""
 
 
+def _cmd_raw_cmdline_block(preserve_raw_cmdline: bool) -> str:
+    """The `_LAUNCHER_RAW_CMDLINE` export line, or the empty string when unset.
+
+    Empty-by-default for the same reason as `_cmd_backlink_block`: the ~410
+    launchers not named in `_RAW_CMDLINE_ENTRYPOINTS` render byte-identical
+    to before this mechanism existed. `%CMDCMDLINE%` is a cmd.exe-only
+    builtin — this block has no PowerShell counterpart; `render_ps1` never
+    loses the caret in the first place (measured), so only the .cmd dialect
+    needs this recovery hook.
+    """
+    if not preserve_raw_cmdline:
+        return ""
+    # NOT `set "_X=%CMDCMDLINE%"` -- measured: cmd.exe's `set` re-strips any
+    # literal `^` from its own right-hand-side expansion, same as `%*`
+    # population (a SECOND, independent instance of the caret-eating defect
+    # this mechanism exists to work around). `echo %CMDCMDLINE%` redirected
+    # to a file is the one capture form measured to preserve the caret; the
+    # env var therefore names a FILE PATH (itself caret-free, so an ordinary
+    # `set` is safe here), not the raw text directly.
+    return (
+        'set "_LAUNCHER_RAW_CMDLINE_FILE=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%.tmp"\n'
+        'echo %CMDCMDLINE%>"%_LAUNCHER_RAW_CMDLINE_FILE%"\n'
+    )
+
+
 def render_cmd(
     name: str,
     python_bin_token: str = PYTHON_BIN_TOKEN,
     spec_backlink: str | None = None,
+    preserve_raw_cmdline: bool = False,
 ) -> str:
     """Render the python-direct .cmd launcher body for entrypoint `name`.
 
@@ -295,6 +345,7 @@ def render_cmd(
     entry = os.path.basename(name)
     tag = launcher_basename(name)
     backlink_block = _cmd_backlink_block(spec_backlink)
+    raw_cmdline_block = _cmd_raw_cmdline_block(preserve_raw_cmdline)
     return f"""@echo off
 setlocal
 REM Windows launcher for {entry} — python-direct (NO bash re-exec).
@@ -331,7 +382,7 @@ REM `!` (commit messages, JSON payloads, ...). Each interpreter rung below is
 REM isolated behind its own `goto` label instead, so `%ERRORLEVEL%` is read
 REM outside any parenthesized block (fresh at that point, not frozen at
 REM block-parse-time) with no delayed expansion needed.
-set "_py={python_bin_token}"
+{raw_cmdline_block}set "_py={python_bin_token}"
 if "%_py%"=="{python_bin_token}" set "_py="
 if not "%_py%"=="" if exist "%_py%" goto :run_baked
 set "_py="
@@ -641,6 +692,7 @@ def generate(
 
     rel = entry_rel_path(name, out)
     spec_backlink = spec_backlink_for_entry_path(rel) if rel else None
+    preserve_raw_cmdline = rel in _RAW_CMDLINE_ENTRYPOINTS if rel else False
 
     if whoami_bootstrap:
         bootstrap_path = out / base
@@ -651,7 +703,9 @@ def generate(
 
     cmd_path = out / f"{base}.cmd"
     cmd_path.write_text(
-        render_cmd(name, spec_backlink=spec_backlink), encoding="utf-8", newline="\r\n"
+        render_cmd(name, spec_backlink=spec_backlink, preserve_raw_cmdline=preserve_raw_cmdline),
+        encoding="utf-8",
+        newline="\r\n",
     )
     written.append(cmd_path)
     declare_write(cmd_path)
@@ -710,10 +764,13 @@ def main(argv: list[str] | None = None) -> int:
         # second, backlink-less rendering path.
         rel = entry_rel_path(args.name, args.dir)
         spec_backlink = spec_backlink_for_entry_path(rel) if rel else None
+        preserve_raw_cmdline = rel in _RAW_CMDLINE_ENTRYPOINTS if rel else False
         if args.whoami_bootstrap:
             sys.stdout.write(render_whoami_bootstrap(args.name))
             sys.stdout.write("\f")
-        sys.stdout.write(render_cmd(args.name, spec_backlink=spec_backlink))
+        sys.stdout.write(
+            render_cmd(args.name, spec_backlink=spec_backlink, preserve_raw_cmdline=preserve_raw_cmdline)
+        )
         if args.ps1:
             sys.stdout.write("\f")
             sys.stdout.write(render_ps1(args.name, spec_backlink=spec_backlink))

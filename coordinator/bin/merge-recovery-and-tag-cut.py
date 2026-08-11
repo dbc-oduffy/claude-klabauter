@@ -86,7 +86,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 
 def _run(
@@ -150,7 +150,7 @@ def cmd_recovery_branch(args: argparse.Namespace) -> int:
     sync = subprocess.run(
         [sys.executable, str(sync_main)],
         cwd=str(repo_root),
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
     if sync.returncode != 0:
         _die(

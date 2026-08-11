@@ -16,6 +16,7 @@
 # coordinator_core.sizing_assemble.main(argv). See that module's `main()`
 # for the flag surface (--appetite, --tshirt, --express-lane,
 # --probe-signal, --jtbd-unclear, --well-trodden-step-change,
+# --premise-provenance, --boundary-in-notch, --scout-evidence-kind,
 # --scout-evidence).
 #
 # READ-ONLY — mutates nothing. sizing_assemble.route() never writes a

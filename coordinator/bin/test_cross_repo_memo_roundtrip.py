@@ -1186,3 +1186,244 @@ def test_ac9_op_refusal_regression() -> None:
             raise AssertionError(f"{name}: " + (f"receiver commit count changed after the refused second send ({commits_before} -> {commits_after}) — phantom commit (AC9)"))
 
 
+# ---------------------------------------------------------------------------
+# C4b — archive-leg CLI roundtrip: _archive_sent_outbox_draft /
+# _commit_archived_outbox_draft (coordinator/bin/cross-repo-memo, C3).
+#
+# Spec backlink: docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md,
+# chunks C3 (implementation, committed 1a5a482e7eaa) and C4 (this coverage,
+# AC3/AC10). These cases exercise the archive leg directly — via the loaded
+# dispatcher module's `_archive_sent_outbox_draft` — against isolated fixture
+# repos, never the live tree (per this chunk's anti-scope).
+# ---------------------------------------------------------------------------
+
+def _commit_changed_paths(repo_root: str, sha: str) -> set[str]:
+    """Return the set of repo-relative paths changed by `sha`, via
+    `git diff-tree --no-commit-id --name-only -r` — the ground truth for
+    asserting a commit's changed-path set without depending on
+    `commit_scoped`'s own return value.
+    # Review: code-reviewer — docstring drifted from the diff-tree call below (git show
+    # never appears in the implementation); diff-tree is the deliberate, correct choice."""
+    result = subprocess.run(
+        ["git", "-C", repo_root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"git show failed for {sha!r} in {repo_root!r}: {result.stderr!r}")
+    return {line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}
+
+
+def _last_commit_sha_for_path(repo_root: str, rel_path: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", repo_root, "log", "-1", "--format=%H", "--", rel_path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise AssertionError(f"could not resolve a commit touching {rel_path!r} in {repo_root!r}: {result.stderr!r}")
+    return result.stdout.strip()
+
+
+def _seed_archive_fixture(*, tracked_source: bool) -> tuple[str, str, str, str]:
+    """Build an isolated fixture repo for the archive-leg tests. Returns
+    (sender_root, outbox_path, unrelated_dirty_path, sibling_dirty_path).
+
+    Seeds:
+      - the outbox draft itself (state/memo-outbox/<topic>.md), tracked in
+        HEAD iff `tracked_source` — then left dirty-on-disk (uncommitted
+        content) either way, matching a real post-stamp draft;
+      - an unrelated dirty file OUTSIDE state/memo-outbox/ entirely;
+      - a second, sibling dirty file UNDER state/memo-outbox/ (not the
+        draft being archived) — AC10's incident-shape seed.
+    """
+    tmpdir = tempfile.mkdtemp()
+    _git_init(tmpdir, initial_commit=True)
+    outbox_dir = os.path.join(tmpdir, "state", "memo-outbox")
+    os.makedirs(outbox_dir, exist_ok=True)
+    outbox_path = os.path.join(outbox_dir, "archive-fixture-topic.md")
+    draft_content = (
+        "---\n"
+        'title: "Archive fixture"\n'
+        "from: roundtrip-fixture-sender-em\n"
+        "to: roundtrip-fixture-receiver-em\n"
+        "status: sent\n"
+        "---\n\nBody.\n"
+    )
+    with open(outbox_path, "w", encoding="utf-8") as f:
+        f.write(draft_content)
+
+    if tracked_source:
+        subprocess.run(["git", "-C", tmpdir, "add", "--", os.path.relpath(outbox_path, tmpdir)],
+                        capture_output=True, check=False)
+        subprocess.run(["git", "-C", tmpdir, "commit", "-m", "seed tracked draft"],
+                        capture_output=True, check=False)
+        # Dirty it again post-commit so the fixture also exercises a
+        # worktree-modified-but-tracked source, same as a real stamp rewrite.
+        with open(outbox_path, "a", encoding="utf-8") as f:
+            f.write("stamped.\n")
+
+    unrelated_dirty_path = os.path.join(tmpdir, "unrelated-dirty.txt")
+    with open(unrelated_dirty_path, "w", encoding="utf-8") as f:
+        f.write("unrelated dirty content, must never be swept into the archive commit.\n")
+
+    sibling_dirty_path = os.path.join(outbox_dir, "sibling-untouched-draft.md")
+    with open(sibling_dirty_path, "w", encoding="utf-8") as f:
+        f.write("---\ntitle: \"Sibling\"\nstatus: draft\n---\n\nSibling body — must never be swept.\n")
+
+    return tmpdir, outbox_path, unrelated_dirty_path, sibling_dirty_path
+
+
+def test_c3_ac10_archive_commit_excludes_unrelated_and_sibling_dirty_files() -> None:
+    name = "AC10 — archive-leg regression: unrelated dirty file and sibling state/memo-outbox/ file are NOT swept into the archive commit (untracked-source dominant case)"
+    mod = _load_dispatcher_module()
+    sender_root, outbox_path, unrelated_dirty_path, sibling_dirty_path = _seed_archive_fixture(tracked_source=False)
+    dest = mod._sent_outbox_archive_path(outbox_path)
+
+    mod._archive_sent_outbox_draft(outbox_path, sender_root)
+
+    if not os.path.isfile(dest):
+        raise AssertionError(f"{name}: archived file not found at {dest!r} — move did not land")
+    if os.path.isfile(outbox_path):
+        raise AssertionError(f"{name}: source outbox path {outbox_path!r} still present after archive move")
+
+    dst_rel = os.path.relpath(dest, sender_root).replace(os.sep, "/")
+    sha = _last_commit_sha_for_path(sender_root, dst_rel)
+    changed = _commit_changed_paths(sender_root, sha)
+
+    if changed != {dst_rel}:
+        raise AssertionError(f"{name}: expected changed-path set {{{dst_rel!r}}} (untracked source), got {changed!r} (unrelated/sibling dirty files present in tree)")
+
+    unrelated_rel = os.path.relpath(unrelated_dirty_path, sender_root).replace(os.sep, "/")
+    sibling_rel = os.path.relpath(sibling_dirty_path, sender_root).replace(os.sep, "/")
+    if unrelated_rel in changed:
+        raise AssertionError(f"{name}: unrelated dirty file {unrelated_rel!r} was swept into the archive commit — the source incident")
+    if sibling_rel in changed:
+        raise AssertionError(f"{name}: sibling state/memo-outbox/ file {sibling_rel!r} was swept into the archive commit — the source incident")
+
+    # Both dirty seeds must still be present on disk, untouched, uncommitted.
+    if not os.path.isfile(unrelated_dirty_path):
+        raise AssertionError(f"{name}: unrelated dirty file disappeared")
+    if not os.path.isfile(sibling_dirty_path):
+        raise AssertionError(f"{name}: sibling dirty file disappeared")
+    status = subprocess.run(["git", "-C", sender_root, "status", "--porcelain"], capture_output=True, text=True)
+    if os.path.relpath(unrelated_dirty_path, sender_root).replace(os.sep, "/") not in status.stdout.replace(os.sep, "/"):
+        raise AssertionError(f"{name}: unrelated dirty file no longer shows dirty in git status — expected untouched: {status.stdout!r}")
+
+
+def test_c3_untracked_source_commits_dest_only() -> None:
+    name = "C3 untracked-source branch: archive commit's changed-path set is {dst} only — the silent-no-op regression the brief predicted"
+    mod = _load_dispatcher_module()
+    sender_root, outbox_path, _, _ = _seed_archive_fixture(tracked_source=False)
+    dest = mod._sent_outbox_archive_path(outbox_path)
+
+    mod._archive_sent_outbox_draft(outbox_path, sender_root)
+
+    if not os.path.isfile(dest):
+        raise AssertionError(f"{name}: archived file not found at {dest!r}")
+    dst_rel = os.path.relpath(dest, sender_root).replace(os.sep, "/")
+    sha = _last_commit_sha_for_path(sender_root, dst_rel)
+    changed = _commit_changed_paths(sender_root, sha)
+    if changed != {dst_rel}:
+        raise AssertionError(f"{name}: expected {{{dst_rel!r}}}, got {changed!r} — an untracked source landing in the pathspec would fail the WHOLE commit_scoped call (silent no-op), so a mismatch here is the exact regression named in the brief")
+
+
+def test_c3_tracked_source_commits_both_src_and_dest() -> None:
+    name = "C3 tracked-source branch: archive commit's changed-path set is {src, dst} — the rename represented correctly"
+    mod = _load_dispatcher_module()
+    sender_root, outbox_path, _, _ = _seed_archive_fixture(tracked_source=True)
+    dest = mod._sent_outbox_archive_path(outbox_path)
+    src_rel = os.path.relpath(outbox_path, sender_root).replace(os.sep, "/")
+
+    mod._archive_sent_outbox_draft(outbox_path, sender_root)
+
+    if not os.path.isfile(dest):
+        raise AssertionError(f"{name}: archived file not found at {dest!r}")
+    dst_rel = os.path.relpath(dest, sender_root).replace(os.sep, "/")
+    sha = _last_commit_sha_for_path(sender_root, dst_rel)
+    changed = _commit_changed_paths(sender_root, sha)
+    if changed != {src_rel, dst_rel}:
+        raise AssertionError(f"{name}: expected {{{src_rel!r}, {dst_rel!r}}}, got {changed!r}")
+
+
+def test_c3_ac3_sha_printed_and_resolves_to_dest_commit() -> None:
+    name = "AC3 — the archive commit's SHA is printed to stdout and resolves to the commit that actually contains dst"
+    mod = _load_dispatcher_module()
+    sender_root, outbox_path, _, _ = _seed_archive_fixture(tracked_source=False)
+    dest = mod._sent_outbox_archive_path(outbox_path)
+    dst_rel = os.path.relpath(dest, sender_root).replace(os.sep, "/")
+
+    import io
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        mod._archive_sent_outbox_draft(outbox_path, sender_root)
+    stdout_text = captured.getvalue()
+
+    match = re.search(r"Archive committed: .* committed as ([0-9a-f]{7,40})\.", stdout_text)
+    if not match:
+        raise AssertionError(f"{name}: no 'Archive committed: ... committed as <sha>.' line found in stdout: {stdout_text!r}")
+    printed_sha = match.group(1)
+
+    actual_sha = _last_commit_sha_for_path(sender_root, dst_rel)
+    if not actual_sha.startswith(printed_sha):
+        raise AssertionError(f"{name}: printed sha {printed_sha!r} does not match the commit that actually contains {dst_rel!r} ({actual_sha!r})")
+
+    changed = _commit_changed_paths(sender_root, printed_sha)
+    if dst_rel not in changed:
+        raise AssertionError(f"{name}: printed sha {printed_sha!r} does not contain {dst_rel!r} in its changed-path set ({changed!r}) — SHA does not name the archive commit")
+
+
+def test_c3_never_raises_when_dest_repo_is_non_repo_tree() -> None:
+    name = "Never-raise preservation: archive still happens (file moved) when sender_root has no .git — commit cannot run, must not raise"
+    mod = _load_dispatcher_module()
+    tmpdir = tempfile.mkdtemp()  # deliberately NOT git-inited — non-repo tree
+    outbox_dir = os.path.join(tmpdir, "state", "memo-outbox")
+    os.makedirs(outbox_dir, exist_ok=True)
+    outbox_path = os.path.join(outbox_dir, "non-repo-fixture-topic.md")
+    with open(outbox_path, "w", encoding="utf-8") as f:
+        f.write("---\ntitle: \"x\"\nstatus: sent\n---\n\nBody.\n")
+    dest = mod._sent_outbox_archive_path(outbox_path)
+
+    try:
+        mod._archive_sent_outbox_draft(outbox_path, tmpdir)
+    except Exception as exc:
+        raise AssertionError(f"{name}: _archive_sent_outbox_draft raised on a non-repo tree: {exc!r}")
+
+    if not os.path.isfile(dest):
+        raise AssertionError(f"{name}: archive did not happen (file not found at {dest!r}) despite the never-raise, always-archive contract")
+    if os.path.isfile(outbox_path):
+        raise AssertionError(f"{name}: source path {outbox_path!r} still present after archive — move did not land")
+
+
+def test_c3_never_raises_when_git_native_unimportable() -> None:
+    name = "Never-raise preservation: archive still happens when coordinator_core.ops.ceremony.git_native cannot be imported"
+    mod = _load_dispatcher_module()
+    sender_root, outbox_path, _, _ = _seed_archive_fixture(tracked_source=False)
+    dest = mod._sent_outbox_archive_path(outbox_path)
+
+    import coordinator_core.ops.ceremony.git_native as _real_git_native
+    sentinel_module = sys.modules.pop("coordinator_core.ops.ceremony.git_native", None)
+    import importlib
+
+    class _RaisingFinder:
+        def find_spec(self, fullname, path, target=None):
+            if fullname == "coordinator_core.ops.ceremony.git_native":
+                raise ImportError("simulated unimportable git_native (C4b never-raise fixture)")
+            return None
+
+    finder = _RaisingFinder()
+    sys.meta_path.insert(0, finder)
+    try:
+        try:
+            mod._archive_sent_outbox_draft(outbox_path, sender_root)
+        except Exception as exc:
+            raise AssertionError(f"{name}: _archive_sent_outbox_draft raised when git_native was unimportable: {exc!r}")
+    finally:
+        sys.meta_path.remove(finder)
+        if sentinel_module is not None:
+            sys.modules["coordinator_core.ops.ceremony.git_native"] = sentinel_module
+        importlib.invalidate_caches()
+
+    if not os.path.isfile(dest):
+        raise AssertionError(f"{name}: archive did not happen (file not found at {dest!r}) despite git_native being unimportable")
+    if os.path.isfile(outbox_path):
+        raise AssertionError(f"{name}: source path {outbox_path!r} still present after archive — move did not land")
+

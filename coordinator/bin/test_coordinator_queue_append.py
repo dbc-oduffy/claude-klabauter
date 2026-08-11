@@ -326,6 +326,72 @@ def test_invalid_enum_value_exits_nonzero() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 4b — No args: a single run names the FULL required set (not one field
+# per run) — cross-repo memo
+# 2026-08-11-example-retrieval-repo-em-queue-append-required-fields-undiscoverable.md item 1.
+# ---------------------------------------------------------------------------
+
+def test_no_args_names_full_required_set_in_one_run() -> None:
+    name = "Test 4b — --schema debt-backlog with no other args names ALL required flags in one run"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            ["--schema", "debt-backlog"],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+    if result.returncode == 0:
+        raise AssertionError(f"{name}: " + ("expected non-zero exit for missing required fields; got 0"))
+    combined = result.stdout + result.stderr
+    # All of debt-backlog's required-beyond-auto-filled flags must be named in
+    # this single invocation's output — not disclosed one at a time.
+    expected_flags = ("--title", "--body", "--status", "--source", "--risk", "--proposed-action")
+    missing_from_output = [flag for flag in expected_flags if flag not in combined]
+    if missing_from_output:
+        raise AssertionError(
+            f"{name}: " + (
+                f"one run did not name all required flags — missing from output: "
+                f"{missing_from_output}. stderr: {result.stderr!r}"
+            )
+        )
+    # item 2: --status is not merely optional-looking — it must also be named
+    # as required here (previously argparse never declared it required=True).
+    if "--status" not in combined:
+        raise AssertionError(f"{name}: " + ("--status not named as required. stderr: " + repr(result.stderr)))
+
+
+# ---------------------------------------------------------------------------
+# Test 4c — `--schema debt-backlog --help` prints the --severity enum
+# (P0-P3), not a bare LEVEL placeholder — memo item 3.
+# ---------------------------------------------------------------------------
+
+def test_schema_help_prints_severity_enum() -> None:
+    name = "Test 4c — --schema debt-backlog --help names the --severity enum (P0-P3)"
+    result = _run_cli(["--schema", "debt-backlog", "--help"])
+    if result.returncode != 0:
+        raise AssertionError(f"{name}: " + (f"--schema debt-backlog --help exited {result.returncode}, expected 0"))
+    combined = result.stdout + result.stderr
+    for value in ("P0", "P1", "P2", "P3"):
+        if value not in combined:
+            raise AssertionError(f"{name}: " + (f"severity enum value {value!r} missing from --help output: {combined!r}"))
+
+
+def test_invalid_severity_value_names_valid_set() -> None:
+    name = "Test 4d — --severity medium is rejected and the valid P0-P3 set is named"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            _debt_backlog_required_args() + ["--severity", "medium"],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+    if result.returncode == 0:
+        raise AssertionError(f"{name}: " + ("expected non-zero exit for --severity medium; got 0"))
+    combined = result.stdout + result.stderr
+    for value in ("P0", "P1", "P2", "P3"):
+        if value not in combined:
+            raise AssertionError(f"{name}: " + (f"valid severity value {value!r} missing from rejection output: {combined!r}"))
+
+
+# ---------------------------------------------------------------------------
 # Test 5 — Valid write: exits 0, file exists at expected path, YAML has required fields
 # ---------------------------------------------------------------------------
 

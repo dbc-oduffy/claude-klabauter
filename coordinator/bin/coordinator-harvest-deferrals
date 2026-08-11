@@ -155,6 +155,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 try:
     import yaml  # type: ignore
@@ -825,6 +826,41 @@ def _candidate_search_dirs(row: dict) -> list[str]:
 # Row routing + dispatch
 # ---------------------------------------------------------------------------
 
+# A sentence terminator must be preceded by a non-space char (so a lone "."
+# doesn't match) and followed by whitespace-or-end (so a dotted filename or
+# version like "boot_sweep.py" or "v1.2" is never split mid-token).
+_SENTENCE_TERMINATOR_RE = re.compile(r"(?<=\S)[.!?](?=\s|$)")
+
+_PROPOSED_ACTION_MAX_LEN = 200
+
+
+def _derive_proposed_action(body: str, title: str, surface: str) -> str:
+    """Derive a queue row's proposed_action from its intent-carrying text.
+
+    coordinator-queue-append previously received `str(row["surface"])` for
+    both --surface and --proposed-action, so every harvested row landed with
+    proposed_action byte-identical to a bare file path (example-doctrine-repo cross-repo memo,
+    measured 15/32 example-cockpit-repo, 11/493 example-doctrine-repo, 12/605 here).
+    proposed_action is the field that makes a queue entry actionable to a
+    session that did not author it — a duplicated path reads as populated, so
+    nothing ever prompts anyone to fill it in. This derives an actual action
+    sentence from the row's body (first sentence) or title instead, falling
+    back to surface only as a last resort, since proposed_action is a
+    required improvement-queue field and must never come back empty.
+    """
+    for candidate in (body, title):
+        text = " ".join((candidate or "").split())
+        if not text:
+            continue
+        match = _SENTENCE_TERMINATOR_RE.search(text)
+        action = text[: match.end()] if match else text
+        if len(action) > _PROPOSED_ACTION_MAX_LEN:
+            truncated = action[:_PROPOSED_ACTION_MAX_LEN]
+            action = (truncated.rsplit(" ", 1)[0] or truncated).rstrip() + "…"
+        assert action, "_derive_proposed_action: non-empty candidate produced an empty action"
+        return action
+    return str(surface)
+
 
 def _run_queue_append(row: dict, key: str, dry_run: bool) -> bool:
     """Route one row to coordinator-queue-append --schema improvement-queue.
@@ -870,7 +906,7 @@ def _run_queue_append(row: dict, key: str, dry_run: bool) -> bool:
         "--surface",
         str(row["surface"]),
         "--proposed-action",
-        str(row["surface"]),
+        _derive_proposed_action(body, row.get("title") or "", row["surface"]),
         "--change-kind",
         str(row["change_kind"]),
         "--queue-scope",
@@ -1008,6 +1044,50 @@ def _harvest(
     return queued_ids, deduped, failed, skipped_unroutable
 
 
+def _refuse_if_live_foreign_plan_holder(plan_path: Path) -> str | None:
+    """Sole write-site guard closing the deferral-harvest half of the
+    session-shape misdetection incident (cross-repo memo `2026-08-10-
+    example-retrieval-repo-em-wsc-misdetection-wrote-to-a-live-peers-plan.md`): a
+    misresolved governing plan would have this script mint improvement-
+    queue / lessons-outbox entries from a LIVE PEER session's deferred
+    rows, keyed `harvest-key: <plan_id>:<row id>` — idempotent, so the
+    peer's later legitimate close of that SAME plan sees the rows as
+    already harvested and silently loses them. Placed here (the CLI
+    itself), not in `directives_lessons_plan.build_deferral_harvest_
+    directives`, per the plan-claim-stamp precedent (that guard also sits
+    at the sole write site): a directive-builder-only guard is bypassable
+    by any other caller that shells out to this CLI directly (hand-run,
+    a future directive builder, `--dry-run` aside), while this CLI is the
+    only thing that ever performs the write.
+
+    Reuses `plan_status_transition._refuse_if_live_foreign_holder`
+    verbatim rather than re-deriving its live-foreign-holder discriminator
+    (same reverse governing-handoff join, same liveness check, same
+    terminal-deployment-state carve-out) — see that function's own
+    docstring for why LIVENESS, not provenance equality, is the only
+    condition that survives the misdetection this guards against, and for
+    its full terminal-safe enumeration (zero/ambiguous handoffs, dead
+    holder, self-held, terminal `deployment_state` all proceed). This
+    wrapper only resolves the worktree root this script otherwise has no
+    occasion to compute (`_repo_root()`, already used for the dedup scan
+    above) and lets the reused function resolve the closing session id
+    itself — this script, unlike `plan-status-transition`, has no `--by`
+    flag of its own to thread through.
+
+    Absence of a resolvable git worktree (best-effort `_repo_root()`
+    returning `None`) proceeds rather than refuses — matching the
+    reused function's own "ambiguity proceeds" discipline; this harvest
+    sweep is best-effort, never a hard gate on plan closure.
+    """
+    root = _repo_root()
+    if root is None:
+        return None
+
+    from coordinator_core.ops.plan_status_transition import _refuse_if_live_foreign_holder
+
+    return _refuse_if_live_foreign_holder(plan_path, Path(root), None)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1049,6 +1129,11 @@ def main(argv: list[str] | None = None) -> int:
             plan_text = fh.read()
     except OSError as exc:
         print(f"error: coordinator-harvest-deferrals: could not read plan '{args.plan}': {exc}", file=sys.stderr)
+        return 1
+
+    live_foreign_refusal = _refuse_if_live_foreign_plan_holder(Path(args.plan))
+    if live_foreign_refusal:
+        print(f"error: coordinator-harvest-deferrals: {live_foreign_refusal}", file=sys.stderr)
         return 1
 
     tasks_block = _locate_tasks_block(plan_text)

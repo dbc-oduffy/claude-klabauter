@@ -109,6 +109,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time as _time
 from pathlib import Path
@@ -3024,6 +3025,16 @@ def _archive_sent_outbox_draft(outbox_path: str, sender_root: str | None = None)
     comes back empty, or the helper itself raises for any reason: a
     successfully delivered memo must never be reported as a failure just
     because the CLAIM re-statement (a bookkeeping nicety) could not happen.
+
+    Once the move has landed — via EITHER branch above — and re-declared the
+    touch claim (when that branch ran), best-effort `commit_scoped`s the
+    archived path into the sending repo (docs/plans/2026-08-06-memo-send-
+    sender-side-commit-leg.md, C3). Sequencing is load-bearing: the commit
+    only ever follows the move/claim-relocation, never substitutes for it —
+    see `_commit_archived_outbox_draft` for the commit mechanism itself. Like
+    every other branch here, a commit failure is best-effort and never turns
+    a successfully delivered, successfully archived memo into a reported
+    failure.
     """
     if not os.path.isfile(outbox_path):
         return  # nothing to archive — e.g. _stamp_sender_outbox_sent no-op'd
@@ -3033,6 +3044,7 @@ def _archive_sent_outbox_draft(outbox_path: str, sender_root: str | None = None)
     except OSError:
         return  # Best-effort — the memo was delivered; archival is secondary.
 
+    moved_via_relocate = False
     if sender_root:
         try:
             cc_invoke.ensure_engine_on_path(__file__)
@@ -3046,14 +3058,122 @@ def _archive_sent_outbox_draft(outbox_path: str, sender_root: str | None = None)
                 _session_scope.relocate_touched_path(
                     session_id, src_rel, dst_rel, cwd=sender_root
                 )
-                return
+                moved_via_relocate = True
         except Exception:
             pass  # Best-effort — fall through to the plain move below.
 
+    if not moved_via_relocate:
+        try:
+            shutil.move(outbox_path, dest)
+        except OSError:
+            return  # Best-effort — the memo was delivered; archival is secondary.
+
+    if sender_root:
+        _commit_archived_outbox_draft(outbox_path, dest, sender_root)
+
+
+def _commit_archived_outbox_draft(outbox_path: str, dest: str, sender_root: str) -> None:
+    """Best-effort: `commit_scoped` the just-archived `dest`
+    (`state/memo-outbox/sent/<topic>.md`) into the sending repo, after
+    `_archive_sent_outbox_draft`'s move (whichever branch performed it) has
+    already landed on disk.
+
+    Mechanism: `coordinator_core.ops.ceremony.git_native.commit_scoped` with
+    explicit single FILE paths only — never a directory pathspec.
+    `commit_scoped` fails loud on a directory entry by design; this leg's
+    own source memo was a directory pathspec sweeping sibling `sent/`
+    records into one commit, which is exactly the incident `commit_scoped`
+    (and this single-file-only call site) closes.
+
+    The archival move is a rename: `outbox_path` is deleted, `dest` is
+    created. Whether `outbox_path` belongs in `commit_scoped`'s `paths` is
+    NOT optional — it depends on whether `outbox_path` was tracked in
+    `HEAD`, determined immediately below via `git ls-files --error-unmatch`:
+      - UNTRACKED (the dominant case — `memo.draft`/`memo.compose` don't
+        commit, so the outbox draft is normally untracked at send time):
+        pass `dest` ONLY. `outbox_path` was never in the index or `HEAD`;
+        passing it anyway lands it in `commit_scoped`'s trailing pathspec
+        despite never having been staged (the AGREE branch's own `existing`
+        filter skips a path no longer present on disk post-move), and a
+        pathspec component matching nothing fails the WHOLE `git commit`
+        call (measured: exit 128, stages NOTHING) — silently no-op'ing this
+        leg on every ordinary send.
+      - TRACKED in `HEAD` (rare — only if the draft was itself committed
+        before send): pass BOTH `outbox_path` and `dest` — the rename's
+        deletion half needs representing in the same commit.
+
+    Never raises — mirrors `_archive_sent_outbox_draft`'s own best-effort,
+    never-fail contract: the memo is already delivered and archived on disk
+    by the time this runs, so a commit failure (coordinator_core
+    unimportable, a non-repo cwd, `commit_scoped` itself failing) must never
+    turn a successful send into a reported failure. Prints a WARNING to
+    stderr on failure, and the archive commit's SHA to stdout (alongside
+    `_verify_delivery_landed`'s "Delivery verified: ... committed as <sha>"
+    line, cross-repo-memo:2017) on success.
+    """
     try:
-        shutil.move(outbox_path, dest)
-    except OSError:
-        pass  # Best-effort — the memo was delivered; archival is secondary.
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.ops.ceremony import git_native
+
+        src_rel = os.path.relpath(outbox_path, sender_root)
+        dst_rel = os.path.relpath(dest, sender_root)
+
+        tracked = subprocess.run(
+            ["git", "-C", sender_root, "ls-files", "--error-unmatch", "--", src_rel],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        paths = [dst_rel] if tracked.returncode != 0 else [src_rel, dst_rel]
+
+        message = f"cross-repo-memo: archive sent outbox draft {dst_rel}\n"
+        msg_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as fh:
+                # Review: code-reviewer (P2) — assign before write so `finally`
+                # can always unlink even if `fh.write` itself raises.
+                msg_path = fh.name
+                fh.write(message)
+            result = git_native.commit_scoped(paths, msg_path, sender_root)
+        finally:
+            if msg_path:
+                try:
+                    os.unlink(msg_path)
+                except OSError:
+                    pass
+
+        if not result.ok:
+            print(
+                f"cross-repo-memo: WARNING — archive commit failed: {result.stderr}",
+                file=sys.stderr,
+            )
+            return
+
+        # Resolve the sha by the path this leg just committed, NOT by reading
+        # HEAD: `commit_scoped` surfaces no sha of its own (its AGREE branch
+        # returns `commit_with_message_file`'s summary text, its private-index
+        # branch lands via CAS `update-ref`), and on this machine a peer commit
+        # routinely lands between the commit and any HEAD read — which would
+        # print a sha naming someone else's commit. `dst_rel` is unique to this
+        # memo, so the last commit touching it is unambiguously this one.
+        sha_result = subprocess.run(
+            ["git", "-C", sender_root, "log", "-1", "--format=%H", "--", dst_rel],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        sha = sha_result.stdout.strip() if sha_result.returncode == 0 else ""
+        if sha:
+            print(f"Archive committed: {dst_rel} committed as {sha}.")
+        else:
+            print(f"Archive committed: {dst_rel} (sha unresolved).")
+    except Exception as exc:
+        print(
+            f"cross-repo-memo: WARNING — archive commit failed: {exc}",
+            file=sys.stderr,
+        )
 
 
 # Review: code-reviewer (Finding 2) — extracted from what were two ~100-line

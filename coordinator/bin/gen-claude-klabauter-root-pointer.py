@@ -75,7 +75,12 @@ def _settings_home() -> str:
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return override
-    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
     return os.path.join(home, ".coordinator-claude-settings")
 
 

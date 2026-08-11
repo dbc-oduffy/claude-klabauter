@@ -53,6 +53,7 @@ class _RealEngineClaudeKlabauter:
     run_function_gate = staticmethod(pct_engine.run_function_gate)
     run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
     oss_shaped_subprocess_env = staticmethod(pct_engine.oss_shaped_subprocess_env)
+    hermetic_gate_env = staticmethod(pct_engine.hermetic_gate_env)
 
 
 class _EngineCtxStub:
@@ -126,6 +127,51 @@ class TestRunParseSweep:
         assert result.ok is True
         assert result.scanned == 1
 
+    def test_a_file_merely_named_with_staging_substring_is_not_dropped(self, tmp_path):
+        """§ MINOR-5: the staging exclusion is directory-scoped -- a plain
+        FILE whose own basename contains "publish-staging-" is shipped
+        payload and must still be scanned, unlike the OLD unanchored regex
+        (`^\\.?.*publish-staging-.*$`, tested against every path segment
+        including the filename) which silently dropped it."""
+        (tmp_path / "my-publish-staging-helper.py").write_text(
+            "claude-klabauter = 1\n", encoding="utf-8"
+        )
+
+        result = pct_engine.run_parse_sweep(tmp_path)
+        assert result.scanned == 1
+        assert result.ok is False
+        assert result.failures[0].path == "my-publish-staging-helper.py"
+
+    def test_extensionless_shebang_cli_is_scanned(self, tmp_path):
+        """§ BLOCKER-1: `coordinator/bin/` ships extensionless Python CLIs
+        deliberately (the publish surface admits them via `surface.
+        sniff_shebang`) -- this is the exact fixture from the finding
+        (`coordinator/bin/cross-repo-memo` containing a hyphenated,
+        scrub-broken identifier). Against the OLD `rglob("*.py")` admission
+        this reported `ok=True, scanned=0` -- the fixture must fail loudly
+        instead."""
+        bin_dir = tmp_path / "coordinator" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "cross-repo-memo").write_text(
+            "#!/usr/bin/env python3\nclaude-klabauter = 1\n", encoding="utf-8"
+        )
+        (bin_dir / "ok.py").write_text("x = 1\n", encoding="utf-8")
+
+        result = pct_engine.run_parse_sweep(tmp_path)
+        assert result.scanned == 2
+        assert result.ok is False
+        assert {f.path for f in result.failures} == {"coordinator/bin/cross-repo-memo"}
+
+    def test_extensionless_file_without_a_python_shebang_is_not_scanned(self, tmp_path):
+        """A non-Python extensionless file (e.g. a bash script) must not be
+        admitted just because it lacks a suffix."""
+        (tmp_path / "run-something").write_text("#!/bin/bash\necho hi\n", encoding="utf-8")
+        (tmp_path / "clean.py").write_text("x = 1\n", encoding="utf-8")
+
+        result = pct_engine.run_parse_sweep(tmp_path)
+        assert result.ok is True
+        assert result.scanned == 1
+
 
 # ---------------------------------------------------------------------------
 # dispatch_end_of_run_function_gate -- proves the sweep is wired into the
@@ -193,3 +239,273 @@ class TestDispatchWiresParseSweep:
             _EngineCtxStub(), [repo_root], target_filtered=False
         )
         assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# ENTRYPOINT gate (§ chunk C2, "the FUNCTION gate runs what it ships, instead
+# of importing three module names") -- run_entrypoint_gate EXECUTES each
+# shipped bare entrypoint under a stripped environment, instead of import-
+# reachability alone. Every test below NAMES its home shape (§ chunk C2
+# brief item (a)/(b): "an unnamed home shape makes the result
+# unattributable") by running through `mktcache_gate_env` explicitly.
+# ---------------------------------------------------------------------------
+
+_HELLO_SHEBANG = "#!/usr/bin/env python3\n"
+
+
+def _write_bare_cli(path, body: str) -> None:
+    path.write_text(_HELLO_SHEBANG + body, encoding="utf-8")
+
+
+class TestEnumerateGateEntrypoints:
+    def test_bare_top_level_files_are_admitted_by_construction_root(self, tmp_path):
+        bin_dir = tmp_path / "coordinator" / "bin"
+        bin_dir.mkdir(parents=True)
+        _write_bare_cli(bin_dir / "some-cli", "pass\n")
+        (bin_dir / "helper.py").write_text("x = 1\n", encoding="utf-8")
+        (bin_dir / ".hidden").write_text("data\n", encoding="utf-8")
+        nested = bin_dir / "lib"
+        nested.mkdir()
+        _write_bare_cli(nested / "nested-cli", "pass\n")
+
+        names = pct_engine.enumerate_gate_entrypoints(tmp_path)
+        assert "coordinator/bin/some-cli" in names
+        assert not any(n.endswith("helper.py") for n in names)
+        assert not any(".hidden" in n for n in names)
+        assert not any("nested-cli" in n for n in names)
+
+    def test_mixed_root_requires_main_guard(self, tmp_path):
+        lib_dir = tmp_path / "coordinator" / "lib"
+        lib_dir.mkdir(parents=True)
+        _write_bare_cli(lib_dir / "real-entrypoint", "if __name__ == '__main__':\n    pass\n")
+        _write_bare_cli(lib_dir / "library-helper", "X = 1\n")
+
+        names = pct_engine.enumerate_gate_entrypoints(tmp_path)
+        assert "coordinator/lib/real-entrypoint" in names
+        assert "coordinator/lib/library-helper" not in names
+
+    def test_missing_scan_root_contributes_nothing(self, tmp_path):
+        # No coordinator/bin, coordinator/lib, etc under tmp_path at all --
+        # a --target-scoped publish row that never wrote any of them.
+        assert pct_engine.enumerate_gate_entrypoints(tmp_path) == ()
+
+
+class TestMktcacheGateEnv:
+    def test_yields_the_mktcache_shape_under_home(self, tmp_path):
+        with pct_engine.mktcache_gate_env(version="1.2.3") as env:
+            home = Path(env["HOME"])
+            assert env["USERPROFILE"] == str(home)
+            assert env["CLAUDE_HOME"] == str(home)
+            cache_dir = home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "1.2.3"
+            assert cache_dir.is_dir()
+            captured_home = home
+        # Cleaned up on exit, mirroring hermetic_gate_env's own guarantee.
+        assert not captured_home.exists()
+
+    def test_seed_dir_is_copied_into_the_resolved_version_directory(self, tmp_path):
+        seed = tmp_path / "seed"
+        (seed / "state").mkdir(parents=True)
+        (seed / "state" / "marker.txt").write_text("x", encoding="utf-8")
+
+        with pct_engine.mktcache_gate_env(seed_dir=seed, version="9.9.9") as env:
+            cache_dir = (
+                Path(env["HOME"]) / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "9.9.9"
+            )
+            assert (cache_dir / "state" / "marker.txt").read_text(encoding="utf-8") == "x"
+
+
+class TestRunEntrypointGate:
+    def _payload(self, tmp_path):
+        bin_dir = tmp_path / "coordinator" / "bin"
+        bin_dir.mkdir(parents=True)
+        return bin_dir
+
+    def test_clean_payload_passes_under_mktcache(self, tmp_path):
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "clean-cli", "import sys\nsys.exit(0)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+        assert entrypoints == ("coordinator/bin/clean-cli",)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(tmp_path, entrypoints, env=env)
+
+        assert result.ok is True
+        assert result.home_shape == pct_engine.GATE_HOME_SHAPE_MKTCACHE
+        assert result.started == ("coordinator/bin/clean-cli",)
+        assert result.failures == ()
+
+    def test_broken_entrypoint_turns_the_gate_red_under_mktcache(self, tmp_path):
+        """§ chunk C2 brief item (b): "IT MUST BE ABLE TO GO RED" -- a
+        deliberately broken entrypoint in a scratch payload built under the
+        SAME mktcache shape (a996) must fail this gate, not merely a bare
+        empty-HOME advisory run."""
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "broken-cli", "import sys\nsys.stderr.write('boom')\nsys.exit(1)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(tmp_path, entrypoints, env=env)
+
+        assert result.ok is False
+        assert result.home_shape == pct_engine.GATE_HOME_SHAPE_MKTCACHE
+        assert len(result.failures) == 1
+        assert result.failures[0].entrypoint == "coordinator/bin/broken-cli"
+        assert result.failures[0].returncode == 1
+
+    def test_usage_nonzero_entry_is_not_a_failure(self, tmp_path):
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "picky-cli", "import sys\nsys.exit(2)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(
+                tmp_path,
+                entrypoints,
+                env=env,
+                usage_nonzero=frozenset({"coordinator/bin/picky-cli"}),
+                waivers={},
+            )
+
+        assert result.ok is True
+        assert result.usage_nonzero == ("coordinator/bin/picky-cli",)
+        assert result.failures == ()
+
+    def test_usage_nonzero_entry_that_starts_clean_is_a_failure(self, tmp_path):
+        """Self-draining (§ chunk C2 brief): a listed entry that now exits 0
+        must be reported as a failure, forcing its removal from the list --
+        never silently folded into `started`."""
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "fixed-cli", "import sys\nsys.exit(0)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(
+                tmp_path,
+                entrypoints,
+                env=env,
+                usage_nonzero=frozenset({"coordinator/bin/fixed-cli"}),
+                waivers={},
+            )
+
+        assert result.ok is False
+        assert len(result.failures) == 1
+        assert "exited 0" in result.failures[0].message
+        assert "_USAGE_NONZERO_ENTRYPOINTS" in result.failures[0].message
+
+    def test_waived_entry_is_not_a_failure_but_clean_waiver_is(self, tmp_path):
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "waived-cli", "import sys\nsys.exit(1)\n")
+        _write_bare_cli(bin_dir / "resolved-cli", "import sys\nsys.exit(0)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+        waivers = {
+            "coordinator/bin/waived-cli": "synthetic waiver, still broken",
+            "coordinator/bin/resolved-cli": "synthetic waiver, already fixed -- must self-drain",
+        }
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(
+                tmp_path, entrypoints, env=env, usage_nonzero=frozenset(), waivers=waivers
+            )
+
+        assert result.ok is False
+        assert result.waived == ("coordinator/bin/waived-cli",)
+        assert len(result.failures) == 1
+        assert result.failures[0].entrypoint == "coordinator/bin/resolved-cli"
+        assert "waiver" in result.failures[0].message
+
+    def test_aggregate_budget_fails_entrypoints_not_yet_dispatched(self, tmp_path):
+        bin_dir = self._payload(tmp_path)
+        _write_bare_cli(bin_dir / "slow-cli", "import time\ntime.sleep(5)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(
+                tmp_path, entrypoints, env=env, aggregate_budget=0.0
+            )
+
+        assert result.ok is False
+        assert result.failures[0].entrypoint == "coordinator/bin/slow-cli"
+        assert "budget" in result.failures[0].message
+
+    def test_max_workers_still_scans_every_entrypoint(self, tmp_path):
+        bin_dir = self._payload(tmp_path)
+        for i in range(4):
+            _write_bare_cli(bin_dir / f"cli-{i}", "import sys\nsys.exit(0)\n")
+        entrypoints = pct_engine.enumerate_gate_entrypoints(tmp_path)
+
+        with pct_engine.mktcache_gate_env() as env:
+            result = pct_engine.run_entrypoint_gate(tmp_path, entrypoints, env=env, max_workers=4)
+
+        assert result.ok is True
+        assert result.scanned == 4
+        assert sorted(result.started) == sorted(entrypoints)
+
+
+class TestEntrypointGateDataLists:
+    def test_usage_nonzero_membership_is_pinned(self):
+        """Mechanical bar (§ chunk C2 brief): the constant cannot grow
+        without this test being edited in the same review."""
+        assert pct_engine._USAGE_NONZERO_ENTRYPOINTS == frozenset(
+            {
+                "coordinator/bin/backlog-grind-assemble",
+                "coordinator/bin/consolidate-assemble",
+                "coordinator/bin/coordinator-fold-execution-record",
+                "coordinator/bin/coordinator-safe-name",
+                "coordinator/bin/handoff-carry-gate",
+                "coordinator/bin/learn-lessons-reconcile-candidates",
+                "coordinator/bin/merge-assemble",
+                "coordinator/bin/review-assemble",
+                "coordinator/bin/review-exec-auth-stamp",
+                "coordinator/bin/roadmap-number-stubs",
+                "coordinator/bin/schema-drift-gate",
+                "coordinator/bin/sizing-assemble",
+                "coordinator/bin/staff-session-assemble",
+                "coordinator/bin/workstream-complete-assemble",
+                # C6 sweep, 2026-08-10 — observed starting then rejecting
+                # --help in their own parsers.
+                "coordinator/bin/coordinator-safe-commit",
+                "coordinator/bin/handoff-gate-aging",
+                "coordinator/bin/pickup-assemble",
+                "coordinator/bin/scoped-git-commit",
+                "coordinator/scripts/first-run",
+                "coordinator/scripts/normalize-env",
+                # klabauter-mirror gate closure, 2026-08-10 (11/12 -> 12/12):
+                # unmasked once the entrypoint gate's synthetic manifest
+                # fixture made its "snippets" data dir resolvable.
+                "coordinator/bin/snippet-registry",
+                # klabauter-mirror gate closure, 2026-08-10 (12/12 -> next):
+                # own-parser usage rejection, no plugin-root dependency at
+                # all -- see `_USAGE_NONZERO_ENTRYPOINTS`'s own comment.
+                "coordinator/bin/orient-assemble",
+            }
+        )
+
+    def test_waiver_list_membership_is_pinned(self):
+        # Split by PROVENANCE, not merged into one flat set: the first four are
+        # sourced from hermetic-ac-reverify.md Finding F3; the last two were
+        # measured in this tree on 2026-08-10 (rc-127, same "resolver not
+        # installed" cause the machine-local entry already accepts as waivable).
+        # Left unwaived they turn the first publish red for an already-accepted
+        # cause. Keeping the two groups distinct here means a later reader can
+        # tell which entries carry an external source and which carry a
+        # measurement, without reading the constant's comment.
+        # detect-initiative-candidates was here and was REMOVED by the C6
+        # sweep (2026-08-10) after it started clean -- the self-draining rule
+        # firing, not a regression. coordinator-lesson-promote was ALSO here
+        # and was REMOVED by the klabauter-mirror gate closure (2026-08-10)
+        # for the same reason: the entrypoint gate's synthetic manifest
+        # fixture made the native seam resolvable, it started clean, and the
+        # self-draining rule demanded its removal. Two sourced entries remain.
+        sourced_f3 = {
+            "coordinator/bin/claude-doe",
+            "coordinator/bin/machine-local",
+        }
+        measured_2026_08_10 = {
+            "coordinator/bin/claude-home",
+            "coordinator/bin/coordinator-settings-home",
+        }
+        assert set(pct_engine._ENTRYPOINT_GATE_WAIVERS) == sourced_f3 | measured_2026_08_10
+        for name, reason in pct_engine._ENTRYPOINT_GATE_WAIVERS.items():
+            assert isinstance(reason, str) and len(reason.split()) >= 5, (
+                f"_ENTRYPOINT_GATE_WAIVERS[{name!r}] needs a real reason, got {reason!r}"
+            )

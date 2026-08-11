@@ -70,7 +70,7 @@ def _git_root():
     Mirrors coordinator-queue-append._current_repo_root resolution.
     """
     try:
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -106,7 +106,7 @@ def _machine_local_get(key: str):
     """
     impl = _mlir_machine_local_impl_path(_MACHINE_LOCAL_IMPL_ENV)
     try:
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
         result = subprocess.run(
             [sys.executable, impl, "get", key],
@@ -147,7 +147,7 @@ def _same_path(a: str, b: str) -> bool:
     consolidates-onto-one-prim.yaml). Mirrors coordinator_registry._same_path()
     (same alias).
     """
-    from coordinator_core.win_portability import same_path
+    from coordinator_core.win_portability import no_console_passthrough_kwargs, same_path
 
     return same_path(a, b)
 
@@ -361,11 +361,11 @@ def main():
     if args.how_to_apply:
         cmd += ["--how-to-apply", args.how_to_apply]
 
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
     result = subprocess.run(
         cmd,
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
     sys.exit(result.returncode)
 

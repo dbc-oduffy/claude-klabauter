@@ -33,6 +33,18 @@ Usage (unchanged surface -- zero caller repoints):
     already ignored on the prior cc_invoke path -- the op always resolves the
     repo root from $PWD via git, never from argv).
 
+Options:
+    -h, --help    Print this usage text and exit 0. Does NOT run the backfill
+        (fix for cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-changelog-
+        cli-three-defects.md item 1: prior to this fix, --help had no
+        interception here, so it was swallowed as an ignored positional and
+        the backfill ran -- writing files with no output naming them as
+        writes).
+    --dry-run     Report which day(s) would be backfilled and the paths that
+        would be written, without writing anything. Forwarded to
+        coordinator_core.ops.changelog_ops.main(), which resolves it into
+        backfill_gaps(dry_run=True).
+
 Exit codes:
     0 -- success or advisory-error. changelog_ops.main() never propagates an
         exception for expected failure modes (missing HEADER.md, unparseable
@@ -82,6 +94,14 @@ def _import_runner():
 
 
 def main() -> None:
+    argv = sys.argv[1:]
+    if "-h" in argv or "--help" in argv:
+        # Intercept BEFORE run_op_main -- see item 1 in the spec-backlinked
+        # memo. Without this, --help was forwarded straight through as an
+        # ignored positional and the backfill ran for real.
+        print(__doc__)
+        sys.exit(0)
+
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:

@@ -74,7 +74,14 @@ Subcommands (argv[1] selects):
       review-coverage-gate.py with `--mint-chain-waivers` — on a DAG-mode
       UNCOVERED verdict, the underlying `coverage.gate` op mints a per-SHA
       chain-ancestry waiver for each uncovered chain commit, from the
-      ancestry it already derived.
+      ancestry it already derived. 2026-08-10 (state/audits/2026-08-10
+      session-shape-misclassification fallout): the mint site itself
+      (`coordinator_core/chain_ancestry_waivers.py::record_chain_ancestry_
+      waiver`) now refuses to mint for any sha whose chain is positively
+      established as owned by a LIVE foreign session — see that function's
+      own docstring. Default-on minting is restored; the fix for the
+      misclassification incident is that refusal, not an opt-in flag (a
+      prior dispatch had inverted the default instead — reverted).
 
       2026-08-07 update (state/audits/2026-08-07-review-gate-scoping-
       predecessor-and-planning-artifacts.md): this subcommand is no longer
@@ -311,7 +318,17 @@ def _run_review_coverage_gate(from_handoff: str, mint_chain_waivers: bool = True
     (the `--no-mint` passthrough) omits the flag for wall-clock/dry
     measurement callers that must not mutate state; this call is always
     DAG-mode (`--from-handoff` is required by this subcommand's own argparse
-    definition below)."""
+    definition below).
+
+    2026-08-10 (state/audits/2026-08-10 session-shape-misclassification
+    fallout): the default-on-mint posture is unchanged by that incident —
+    the fix is a refusal at the mint site itself
+    (`chain_ancestry_waivers.record_chain_ancestry_waiver`), which blocks
+    minting for a sha whose chain is positively established as owned by a
+    LIVE foreign session, terminal-safe otherwise (see that function's own
+    docstring). A prior dispatch flipped this default to opt-in instead;
+    that regressed the ordinary halt→disposition→re-run path (a re-run
+    would halt again on the same uncovered set) and has been reverted."""
     cmd = [
         sys.executable,
         os.path.join(_SCRIPT_DIR, "review-coverage-gate.py"),
@@ -1236,9 +1253,9 @@ def cmd_coverage_gate(args: argparse.Namespace) -> int:
         if stderr:
             print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
         print(
-            "WARN: coverage gate below threshold — dispatch coordinator:review-code "
-            "on the listed commits, then re-run the gate. This is an offer, not a "
-            "halt — the gate does not block on it.",
+            "WARN: coverage gate below threshold. The gate does not block on "
+            "this — but the listed commits are still owed: dispatch "
+            "coordinator:review-code over them, then re-run the gate.",
             file=sys.stderr,
         )
         if override:
@@ -1294,6 +1311,8 @@ def cmd_write_trail(args: argparse.Namespace) -> int:
         argv += ["--scope-kind", args.scope_kind]
     if args.workstream:
         argv += ["--workstream", args.workstream]
+    if args.reviewer_evidence:
+        argv += ["--reviewer-evidence", args.reviewer_evidence]
 
     returncode, stdout, stderr = _run_write_review_trail(argv)
     if stdout:
@@ -1652,7 +1671,44 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         # line/parsing (the BRIGHTLINE line already printed above); the
         # underlying coverage-gate verdict is not this subcommand's output
         # contract, only its minting side effect is wanted at this call site.
-        _run_review_coverage_gate(args.from_handoff, mint_chain_waivers=not args.no_mint)
+        #
+        # 2026-08-10: the RETURNCODE is not part of that deliberate discard.
+        # A child that dies outright (cc_invoke RuntimeError, engine timeout
+        # on this box's load norm, engine-won't-start) mints nothing, prints
+        # nothing, and the uncovered-set narration below then proceeds as if
+        # the mint had fired — describing shas as unwaived when no mint was
+        # ever attempted, which makes that narration self-fulfilling for any
+        # caller who only ever runs this wrapper. Surfaced, never fatal: the
+        # mint is best-effort by contract (see `_run_review_coverage_gate`),
+        # so a failure here degrades the narration's precision, not the
+        # gate's verdict. Observed-but-unasserted in cross-repo/inbox/
+        # 2026-08-10-example-doctrine-repo-em-brightline-unrecordable-narration-is-
+        # false.md § "A mint we could not confirm fired".
+        # The returncode alone cannot carry this: review-coverage-gate.py
+        # returns 1 both for an ordinary HALT verdict (engine ran, mint
+        # fired) and for its own failure paths (cc_invoke RuntimeError,
+        # malformed result, empty verdict_line). The honest discriminator is
+        # the frozen stdout contract — a `VERDICT=` line is printed on every
+        # path where the engine actually ran, and on none of the failure
+        # paths (review-coverage-gate.py's `main`, all three `return 1`
+        # sites print to stderr only). Both conditions are required: rc==0 is
+        # reachable only after that verdict line is printed, so a zero exit
+        # is itself proof the engine ran.
+        mint_rc, mint_out, mint_err = _run_review_coverage_gate(
+            args.from_handoff, mint_chain_waivers=not args.no_mint,
+        )
+        if mint_rc != 0 and "VERDICT=" not in (mint_out or ""):
+            print(
+                "NOTE: the chain-ancestry waiver mint could not be confirmed "
+                f"— review-coverage-gate.py exited {mint_rc} without a "
+                "VERDICT line, so it failed before minting. Any "
+                '"unrecordable" line below may name a sha that WOULD be '
+                "recordable had the mint run; re-run "
+                "`review-coverage-gate.py --from-handoff <baton> "
+                "--mint-chain-waivers` directly before trusting it. Child "
+                f"stderr: {(mint_err or '').strip()[:500]}",
+                file=sys.stderr,
+            )
         dag_resolved = _derive_dag_shas(args.from_handoff)
         trail_records = _load_trail_records()
         chain_code_shas = _resolve_chain_code_shas(args.from_handoff)
@@ -1749,19 +1805,88 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     if len(planning_shas) > cap:
                         print(f"    +{len(planning_shas) - cap} more", file=sys.stderr)
                 if foreign_shas:
-                    print(
-                        f"  {len(foreign_shas)} of these {len(uncovered)} "
-                        "commit(s) are unrecordable by an ordinary review-"
-                        "trail write: authored by a predecessor session, "
-                        "and the foreign-session guard refuses any range "
-                        "naming them, so no record this session writes can "
-                        "discharge them. FINDING: a record whose range ends "
-                        "in a literal `..HEAD` is rejected by the "
-                        "stored-HEAD defense before any waiver is ever "
-                        "consulted (coverage._record_range_has_stored_head) "
-                        "— this is why these commits read uncovered.",
-                        file=sys.stderr,
-                    )
+                    # 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-
+                    # example-doctrine-repo-em-brightline-unrecordable-narration-is-
+                    # false.md): this block used to call EVERY foreign sha
+                    # unrecordable. All three premise clauses were true and
+                    # the conclusion was false — `review_trail_write.
+                    # _guard_foreign_session_range` Case 1 refuses a
+                    # foreign-trailer sha UNLESS it carries a chain-ancestry
+                    # waiver minted for this chain, and this same runner
+                    # mints exactly those waivers by default at the
+                    # `_run_review_coverage_gate` call site above. A
+                    # predecessor session in example-doctrine-repo read the old string,
+                    # concluded its chain could not be recorded, and handed
+                    # the workstream on; the write the narration called
+                    # impossible is the write that closed their gate.
+                    # Partition on the SAME evidence source the write guard
+                    # consults (`_resolve_vouched_shas`, exact-sha set
+                    # membership as in `coverage._narrow_foreign_session_
+                    # scope`), never a second oracle. Rendering-only:
+                    # `uncovered`, `chain_code_shas`, `own_shas`, the HALT
+                    # branch, the verdict and the return code are untouched.
+                    #
+                    # Fail-safe polarity here is INVERTED from this file's
+                    # usual "degrade toward narrowing": an empty or failed
+                    # waiver lookup must never produce a false RECORDABLE
+                    # claim, so it degrades to the pre-existing unrecordable
+                    # wording (the status quo) rather than inventing
+                    # recordability. `_resolve_vouched_shas` already returns
+                    # an empty frozenset on any failure, so that degradation
+                    # is automatic: empty set ⇒ zero waived ⇒ every foreign
+                    # sha renders exactly as it did before this change.
+                    vouched = _resolve_vouched_shas(closing_session_id)
+                    waived_foreign = [s for s in foreign_shas if s in vouched]
+                    unwaived_foreign = [s for s in foreign_shas if s not in vouched]
+                    if waived_foreign:
+                        print(
+                            f"  {len(waived_foreign)} of these "
+                            f"{len(uncovered)} commit(s) are foreign-session "
+                            "(authored by a predecessor session) but ARE "
+                            "RECORDABLE by this session: each carries a "
+                            "gate-minted chain-ancestry waiver for this "
+                            "chain, which the foreign-session write guard "
+                            "honours. Write one record per commit: "
+                            "coordinator-write-review-trail --sha-range "
+                            '"<sha>^..<sha>" --scope chain. Range SHAPE '
+                            "constraint: use concrete endpoints like that — "
+                            "a stored range ending in a literal `..HEAD` is "
+                            "dropped by the stored-HEAD defense before any "
+                            "waiver is consulted "
+                            "(coverage._record_range_has_stored_head), so a "
+                            "`..HEAD` record would not discharge these even "
+                            "though a per-commit record does.",
+                            file=sys.stderr,
+                        )
+                        for line in _describe_uncovered_shas(
+                            waived_foreign[:cap], repo_root,
+                        ):
+                            print(f"    {line}", file=sys.stderr)
+                        if len(waived_foreign) > cap:
+                            print(
+                                f"    +{len(waived_foreign) - cap} more",
+                                file=sys.stderr,
+                            )
+                    if unwaived_foreign:
+                        print(
+                            f"  {len(unwaived_foreign)} of these "
+                            f"{len(uncovered)} commit(s) are unrecordable by "
+                            "an ordinary review-trail write: authored by a "
+                            "predecessor session, carrying no chain-ancestry "
+                            "waiver for this chain, and the foreign-session "
+                            "guard refuses any range naming them, so no "
+                            "record this session writes can discharge them.",
+                            file=sys.stderr,
+                        )
+                        for line in _describe_uncovered_shas(
+                            unwaived_foreign[:cap], repo_root,
+                        ):
+                            print(f"    {line}", file=sys.stderr)
+                        if len(unwaived_foreign) > cap:
+                            print(
+                                f"    +{len(unwaived_foreign) - cap} more",
+                                file=sys.stderr,
+                            )
                 if own_shas:
                     print(
                         f"REMEDY: record a per-commit review-trail verdict "
@@ -1872,7 +1997,10 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="no_mint",
         help="Omit --mint-chain-waivers when invoking review-coverage-gate.py "
         "(read-only; for wall-clock/dry measurement callers that must not "
-        "mutate state). Default: mint on (unchanged behaviour).",
+        "mutate state). Default: mint on (unchanged behaviour). The mint "
+        "site itself refuses to mint for a sha whose chain is owned by a "
+        "LIVE foreign session — see chain_ancestry_waivers.record_chain_"
+        "ancestry_waiver.",
     )
     p_gate.set_defaults(func=cmd_coverage_gate)
 
@@ -1884,6 +2012,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_trail.add_argument("--diff-loc", required=True, dest="diff_loc")
     p_trail.add_argument("--scope-kind", default=None, dest="scope_kind")
     p_trail.add_argument("--workstream", default=None, dest="workstream")
+    p_trail.add_argument(
+        "--reviewer-evidence", default=None, dest="reviewer_evidence",
+        help="Evidence correlating --reviewer with an artifact showing a review "
+        "occurred (optional; forwarded verbatim when supplied). See "
+        "coordinator_core/ops/review_trail_write.py's reviewer_evidence design.",
+    )
     p_trail.set_defaults(func=cmd_write_trail)
 
     p_brightline = sub.add_parser("brightline-gate")
@@ -1895,7 +2029,10 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="no_mint",
         help="Omit --mint-chain-waivers when invoking review-coverage-gate.py "
         "(read-only; for wall-clock/dry measurement callers that must not "
-        "mutate state). Default: mint on (unchanged behaviour).",
+        "mutate state). Default: mint on (unchanged behaviour). The mint "
+        "site itself refuses to mint for a sha whose chain is owned by a "
+        "LIVE foreign session — see chain_ancestry_waivers.record_chain_"
+        "ancestry_waiver.",
     )
     p_brightline.set_defaults(func=cmd_brightline_gate)
 

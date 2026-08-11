@@ -81,7 +81,7 @@ _CLAUDE_KLABAUTER_ROOT = _BIN_DIR.parent.parent  # coordinator/bin/.. .. == clau
 if str(_CLAUDE_KLABAUTER_ROOT) not in sys.path:
     sys.path.insert(0, str(_CLAUDE_KLABAUTER_ROOT))
 
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ def cmd_resolve_exec_summary_generator(args: argparse.Namespace) -> int:
         python_bin = args.python or "python"
         proc = subprocess.run(
             [python_bin, resolved],
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
         return proc.returncode
 

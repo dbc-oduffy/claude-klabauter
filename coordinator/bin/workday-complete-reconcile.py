@@ -81,6 +81,17 @@ def _no_console_kw() -> dict:
     return cc_invoke._no_console_kw(_resolve_claude_klabauter_root())
 
 
+def _no_console_passthrough_kw() -> dict:
+    """`_no_console_kw` for a child whose output must reach the operator.
+
+    Console suppression alone makes the child bind its standard handles to the
+    window-less console CREATE_NO_WINDOW allocates instead of inheriting this
+    process's, so its output is lost. See
+    `cc_invoke._no_console_passthrough_kw` for the mechanism.
+    """
+    return cc_invoke._no_console_passthrough_kw(_resolve_claude_klabauter_root())
+
+
 _APPENDED_RE = re.compile(r"appended=(\d+)")
 
 
@@ -187,7 +198,7 @@ def run_cruft_sweep(
     try:
         result = subprocess.run(
             [*_cruft_sweep_argv(cruft_sweep_bin), "--class", "all", "--apply", "--quiet"],
-            **_no_console_kw(),
+            **_no_console_passthrough_kw(),
         )
         rc = result.returncode
     except OSError as exc:

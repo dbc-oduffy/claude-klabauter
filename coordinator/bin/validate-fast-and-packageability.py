@@ -147,7 +147,7 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
 from coordinator_core.diff_scoped_tests import diag as diff_diag  # noqa: E402
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
 from coordinator_core.testing import suite_mutex  # noqa: E402
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from coordinator_core.win_portability import no_console_passthrough_kwargs  # noqa: E402
 from coordinator_core.testing.suite_mutex import MUTEX_WAIT_SECS, mutex_owner  # noqa: E402
 
 # coordinator-resolve-validation-cmd.py is co-located in this same bin/ dir.
@@ -237,7 +237,7 @@ def _run_resolved_command(cmd: str) -> int:
         proc = subprocess.run(
             argv,
             env=child_env(),
-            **no_console_creationflags(),
+            **no_console_passthrough_kwargs(),
         )
         return proc.returncode
     except OSError as exc:
@@ -410,7 +410,7 @@ def run_packageability(passthrough: list[str]) -> tuple[int, str | None]:
     proc = subprocess.run(
         [python_bin, _VALIDATE_INSTALL_CONTRACT, *passthrough],
         env=child_env(),
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
     return proc.returncode, None
 

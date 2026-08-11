@@ -225,6 +225,27 @@ def _no_console_creationflags() -> dict:
         return {}
     return no_console_creationflags()
 
+
+def _no_console_passthrough_kwargs() -> dict:
+    """``_no_console_creationflags`` for a child whose output must reach the
+    operator.
+
+    Console suppression alone makes the child bind its standard handles to the
+    window-less console ``CREATE_NO_WINDOW`` allocates rather than inheriting
+    this process's, so the delegate's output is lost. Same degrade-to-empty
+    posture as its sibling above; canonical implementation is
+    ``coordinator_core.win_portability.no_console_passthrough_kwargs``.
+    """
+    kwargs = dict(_no_console_creationflags())
+    for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        if fd >= 0:
+            kwargs[key] = fd
+    return kwargs
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -975,6 +996,46 @@ def _mint_deliverable_id_from_title(title: str, doc_type: str) -> str | None:
     return _mint_deliverable_id(slug=_slug_from_title(title))
 
 
+def _resolve_cited_sizing_deliverable_id(
+    sizing_object_relpath: str, repo_root: str,
+) -> str | None:
+    """Read a cited sizing-object's `deliverable_id` for the `plan` arm's
+    carry tier, degrading to ``None`` (mint-from-slug) on any read failure.
+
+    Reuses `deliverable_cascade._read_sizing_meta` — the same whole-document
+    YAML reader `deliverable_cascade.py` uses for `state/sizings/*.yaml`
+    records, since a sizing-object has no `---` frontmatter fence and a
+    fenced-frontmatter reader would silently return `{}` on it rather than
+    the record's real fields. Never raises: a malformed/unreadable sizing
+    must not block plan scaffolding (2026-08-10 deliverable-id-fork-
+    remediation follow-up) — it only means this plan cannot carry an id and
+    falls back to minting its own, exactly as it did before this fix.
+
+    Spec backlink: sizing-object.schema.json's `deliverable_id` description
+    ("minted once at the earliest artifact ... carried verbatim by every
+    downstream artifact").
+    Negative-spec: does NOT write to disk — pure read.
+    """
+    try:
+        _ensure_engine_on_path()
+        from coordinator_core.ops.deliverable_cascade import (  # noqa: PLC0415
+            _read_sizing_meta,
+        )
+
+        _sizing_abs_path = os.path.join(repo_root, sizing_object_relpath)
+        _sizing_meta = _read_sizing_meta(_sizing_abs_path)
+        return _sizing_meta.get("deliverable_id") or None
+    except Exception as _sizing_read_exc:  # noqa: BLE001 -- malformed/unreadable sizing degrades to mint, never blocks scaffolding
+        print(
+            "coordinator-doc-new: cited sizing-object at "
+            f"{sizing_object_relpath!r} could not be read for a "
+            f"deliverable_id carry ({type(_sizing_read_exc).__name__}: "
+            f"{_sizing_read_exc}) — degrading to mint-from-slug.",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _mint_artifact_id_from_title(prefix: str, title: str, doc_type: str, field: str) -> str | None:
     """Title-derived artifact-id mint (hnd-/cmp-), refusing on a placeholder title.
 
@@ -1098,13 +1159,40 @@ def _delegate_to_queue_append(doc_type: str) -> None:
     All sys.argv args (minus --type) are forwarded to the delegate. The --schema
     flag is prepended so the delegate receives: --schema <doc_type> <remaining args>.
 
+    Explicit capture-then-forward, not bare stdio inheritance: mirrors
+    _delegate_to_workflow_scaffold's fix for the same defect (see that
+    function's docstring) — CREATE_NO_WINDOW from _no_console_creationflags()
+    combined with a parent whose own stdout/stderr is already redirected
+    (any caller that itself captures this CLI's output, e.g. subprocess.run
+    with capture_output=True) was observed losing the delegate's stdout/stderr
+    entirely on Windows. A common failure shape this fixes: coordinator-doc-new
+    --type bug-backlog without --status delegates to coordinator-queue-append,
+    which parser.error()s "the following arguments are required: --status" and
+    exits 2 — but that diagnostic never reached the caller, producing a
+    silent exit 2 with empty stdout AND stderr.
+
     Spec backlink: docs/plans/2026-06-25-example-initiative-tc-4-fleet-machinery-contract-emit.md § A4
+    Spec backlink: state/bug-backlog/2026-08-10-coordinator-doc-new-type-bug-backlog-exi-f711f2bcf677.yaml
     Negative-spec: does NOT re-implement queue YAML shape — delegation is MANDATORY per spec.
+    Negative-spec: does NOT default --status (or any other missing required queue
+    field) — the delegate's own parser.error is the source of truth for what's
+    required per schema, and now reaches the caller intact; inventing a default
+    here would be a product decision (e.g. "open" is not universally correct)
+    this scaffold has no authority to make.
     """
     delegate = _find_sibling_binary("coordinator-queue-append")
     passthrough = _argv_without_type()
     cmd = [sys.executable, delegate, "--schema", doc_type] + passthrough
-    result = subprocess.run(cmd, **_no_console_creationflags())
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        **_no_console_creationflags(),
+    )
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
     sys.exit(result.returncode)
 
 
@@ -1123,7 +1211,7 @@ def _delegate_to_lesson_promote() -> None:
     delegate = _find_sibling_binary("coordinator-lesson-promote")
     passthrough = _argv_without_type()
     cmd = [sys.executable, delegate] + passthrough
-    result = subprocess.run(cmd, **_no_console_creationflags())
+    result = subprocess.run(cmd, **_no_console_passthrough_kwargs())
     sys.exit(result.returncode)
 
 
@@ -2161,6 +2249,218 @@ def _scaffold_plan(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Reverse write-back — plan -> sizing (C4, plan
+# 2026-08-10-sizing-objects-join-the-deliverable-spine.md § C4)
+# ---------------------------------------------------------------------------
+
+_SIZING_REVERSE_STATUS = "routed"
+"""The live-set status value C4 writes at plan-CREATION time.
+
+Deliberately NOT the cascade's terminal value (`shipped`, written by
+`deliverable.cascade_terminal` / C3 at plan-IMPLEMENTED time) — this chunk is
+a SECOND writer to the same field, and reusing the terminal value here would
+exclude every freshly-plan-linked sizing from the cascade's live-candidate
+scan the moment its plan is created (silent `candidates_matched: 0`, the
+exact failure mode this plan exists to remove). `routed` is already a member
+of `sizing-object.schema.json`'s `status` enum (`route chosen and handed
+off`), already in the kind's live set (the terminal set is `{shipped}`
+alone), and describes exactly this moment: a plan now exists for the route
+this sizing chose.
+"""
+
+# Review: staff-eng — Finding 6: the terminal-status guard's own vocabulary.
+# Kept as this file's local mirror of
+# `coordinator_core.ops.deliverable_cascade._SIZING_TERMINAL_STATUS` — not
+# imported directly because that module self-registers
+# "deliverable.cascade_terminal" against the JSON-RPC op registry as an
+# import-time side effect (`register_op` at module scope), which this
+# lightweight CLI must not trigger just to read one frozenset. The coupling
+# is made mechanical instead of conventional by
+# `coordinator_core/ops/tests/test_sizing_terminal_status_mirror_sync.py`,
+# which asserts this set equals the engine's — the next divergence fails a
+# test rather than opening a silent guard hole (see Review: coordinator:
+# code-reviewer — Finding 5, which found the two sets exactly out of sync
+# for `declined`).
+_SIZING_TERMINAL_STATUSES = frozenset({"shipped", "declined"})
+
+
+def _mutate_sizing_reverse_edge(old_text: str, plan_repo_rel_path: str) -> str:
+    """Return sizing-object YAML text with `plan:` and `status:` set.
+
+    Whole-document-YAML (no frontmatter fence) — same shape `_scaffold_sizing`
+    emits. Line-level regex substitution (replace an existing `status:`/
+    `plan:` line in place, else append a new one) rather than a full
+    load+dump: this file is hand-authored prose-adjacent YAML (comments,
+    the sizing skill's own formatting), and a parse/re-dump round-trip would
+    silently drop both, exactly the failure class this repo's `sizing-
+    object.schema.json` vendoring note calls out for schema files (STRUCTURAL
+    MERGE, NOT A BYTE COPY) — the same discipline applies to instance data.
+
+    `status:` is forced to `_SIZING_REVERSE_STATUS`, UNLESS the sizing's
+    existing `status:` is already terminal (`shipped`) — see the guard below
+    (Review: staff-eng — Finding 6: a scaffold against an already-shipped
+    sizing must not silently re-route/un-ship it). Otherwise this is the
+    plan-creation writer's own value, independent of whatever non-terminal
+    value the sizing already carried (draft/sized/routed), matching a plan
+    now existing for the route this sizing chose. `plan:` is set/overwritten
+    to `plan_repo_rel_path` (repo-root-relative, POSIX-normalized, matching
+    the schema's `^docs/plans/.+\\.md$` pattern) — UNLESS the sizing already
+    carries a different, non-null `plan:` value, in which case this is a
+    re-route rather than a first routing and raises ``MutateAbort`` (caller
+    translates to a clean CLI error) rather than silently overwriting the
+    existing FK. A `plan:` value byte-identical to `plan_repo_rel_path` is
+    treated as idempotent, not a clobber (re-running the same scaffold).
+
+    Review: staff-eng — Findings 2/3: this used to hand-roll its own
+    `re.search`/`re.sub` line surgery instead of composing
+    `coordinator_core.frontmatter.primitives` — the exact defect class that
+    module's own docstring names ("three hand-copies ... each independently
+    reproduced the corruption"). Two concrete corruptions this closes: (a)
+    the old `\\s*`-based `plan:` read walked past a present-but-empty
+    `plan:` line's own newline and captured the FOLLOWING line's text as the
+    "existing FK" — `read_fm_field_unquoted` uses the primitives' own
+    negative-spec'd `[ \\t]`-only padding, never `\\s`; (b) the old
+    `re.MULTILINE` `re.sub(r"(?m)^status:.*$", ...)` consumed a CRLF
+    document's trailing `\\r` on the rewritten line without re-emitting it,
+    leaving the file with MIXED line endings —
+    `replace_fm_field_raw`/`insert_fm_field_raw` re-emit/adopt the document's
+    own EOL, so this can no longer happen. `plan:`'s own quoting stays this
+    file's `_yaml_quote` convention (always double-quoted) rather than
+    `serialize_yaml_scalar`'s bare-unless-structural rule, matching this
+    reverse edge's own pre-existing on-disk shape and this suite's fixtures —
+    both the replace branch (`replace_fm_field_raw`) and the insert branch
+    (`insert_fm_field_raw`) take the pre-quoted `_plan_raw` value, so neither
+    branch can diverge from the other's quoting.
+
+    Review: coordinator:code-reviewer — the insert branch used to call
+    `insert_fm_field` with the raw unquoted path, which serializes via
+    `serialize_yaml_scalar`'s bare-unless-structural rule and left a
+    first-time scaffold's `plan:` unquoted while a re-run (replace branch)
+    was double-quoted — the docstring's always-double-quoted claim was false
+    on that branch. `insert_fm_field_raw` (added to the primitives module,
+    mirroring `replace_fm_field_raw`) closes the gap.
+    """
+    from coordinator_core.frontmatter.primitives import (  # noqa: PLC0415
+        insert_fm_field_raw,
+        read_fm_field_unquoted,
+        replace_fm_field_raw,
+    )
+    from coordinator_core.locked_write import MutateAbort as _MutateAbort  # noqa: PLC0415
+
+    _existing_plan_value = read_fm_field_unquoted(old_text, "plan")
+    if _existing_plan_value and _existing_plan_value != "null" and _existing_plan_value != plan_repo_rel_path:
+        raise _MutateAbort(
+            f"sizing object already cites plan '{_existing_plan_value}' — "
+            f"refusing to overwrite with '{plan_repo_rel_path}'. This is a "
+            "re-route, not a first routing; resolve the conflict by hand "
+            "before re-running with --sizing-object."
+        )
+
+    # Review: staff-eng — Finding 6: refuse (rather than silently un-ship)
+    # when the sizing's own status is already terminal.
+    _existing_status_value = read_fm_field_unquoted(old_text, "status")
+    if _existing_status_value in _SIZING_TERMINAL_STATUSES:
+        raise _MutateAbort(
+            f"sizing object status is already '{_existing_status_value}' "
+            "(terminal) — refusing to re-route a shipped sizing back to "
+            f"'{_SIZING_REVERSE_STATUS}'. Resolve by hand before re-running "
+            "with --sizing-object."
+        )
+
+    new_text = replace_fm_field_raw(old_text, "status", _SIZING_REVERSE_STATUS)
+    if read_fm_field_unquoted(new_text, "status") is None:
+        new_text = insert_fm_field_raw(new_text, "status", _SIZING_REVERSE_STATUS)
+
+    _plan_raw = _yaml_quote(plan_repo_rel_path)
+    if read_fm_field_unquoted(new_text, "plan") is not None:
+        new_text = replace_fm_field_raw(new_text, "plan", _plan_raw)
+    else:
+        new_text = insert_fm_field_raw(new_text, "plan", _plan_raw, "status")
+
+    # Review: staff-eng — Finding 10: validate the mutated document against
+    # the vendored sizing schema before returning, rather than trusting the
+    # text surgery blind — a `plan:` value the schema's
+    # `^docs/plans/.+\.md$` pattern rejects must abort here, not land on
+    # disk and be discovered by a later reader.
+    import yaml as _yaml  # noqa: PLC0415
+    from pathlib import Path as _ValidatePath  # noqa: PLC0415
+    from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
+        format_validation_errors as _format_validation_errors,
+        validate_frontmatter as _validate_frontmatter,
+    )
+
+    try:
+        _parsed = _yaml.safe_load(new_text) or {}
+    except Exception as _exc:  # noqa: BLE001
+        raise _MutateAbort(f"sizing reverse edge: post-mutation YAML parse failed: {_exc}") from _exc
+    _schema_path = (
+        _ValidatePath(__file__).resolve().parent.parent.parent
+        / "coordinator_core" / "frontmatter" / "schemas" / "sizing-object.schema.json"
+    )
+    _errors = _validate_frontmatter(_parsed, _schema_path)
+    if _errors:
+        raise _MutateAbort(
+            "sizing reverse edge: post-mutation schema validation failed: "
+            f"{_format_validation_errors(_errors)}"
+        )
+    return new_text
+
+
+def _write_sizing_reverse_edge(
+    sizing_abs_path: str, plan_repo_rel_path: str, repo_root: str,
+) -> str:
+    """Write the plan->sizing reverse edge under a cross-process file lock.
+
+    Uses ``coordinator_core.locked_write.locked_rmw`` (the same primitive
+    ``deliverable_cascade``'s write side uses) so a concurrent sizing-side
+    writer cannot interleave with this write. Returns the PRE-MUTATION text
+    (not the new text) so the caller can revert via
+    ``_revert_sizing_reverse_edge`` if the subsequent plan-file write fails —
+    this is the write-order + revert-on-failure mechanism AC7 requires to be
+    named explicitly (see main()'s call site for the ordering and the revert
+    call). Raises whatever ``locked_rmw`` raises (LockTimeout, OSError) —
+    this write is NOT best-effort/degrade-to-skip like this file's other
+    engine-touching helpers, because a silently-skipped reverse edge is
+    exactly the hand-maintained-link status quo this chunk exists to close.
+    """
+    _ensure_engine_on_path()
+    from pathlib import Path as _Path  # noqa: PLC0415
+    from coordinator_core.locked_write import locked_rmw as _locked_rmw  # noqa: PLC0415
+
+    _captured: dict[str, str] = {}
+
+    def _mutate(old_text: str) -> str:
+        _captured["old_text"] = old_text
+        return _mutate_sizing_reverse_edge(old_text, plan_repo_rel_path)
+
+    _locked_rmw(_Path(sizing_abs_path), _mutate, repo_root=_Path(repo_root))
+    return _captured.get("old_text", "")
+
+
+def _revert_sizing_reverse_edge(
+    sizing_abs_path: str, old_text: str, repo_root: str,
+) -> None:
+    """Restore ``sizing_abs_path`` to ``old_text``, best-effort.
+
+    Called only from the plan-write failure path (see main()): the sizing
+    reverse edge already landed on disk, the plan file did not, and this
+    restores the sizing to its pre-mutation content so a half-written pair
+    never survives a failed scaffold. Best-effort (swallows its own
+    exceptions) — a revert failure must surface the ORIGINAL plan-write
+    error, not mask it with a new one; the caller's own error message names
+    the sizing path so an operator can restore it by hand if this also fails.
+    """
+    try:
+        _ensure_engine_on_path()
+        from pathlib import Path as _Path  # noqa: PLC0415
+        from coordinator_core.locked_write import locked_rmw as _locked_rmw  # noqa: PLC0415
+
+        _locked_rmw(_Path(sizing_abs_path), lambda _old: old_text, repo_root=_Path(repo_root))
+    except Exception:  # noqa: BLE001 -- best-effort revert; original error takes priority
+        pass
+
+
 def _scaffold_decision(title: str, dr_id: str) -> str:
     """Generate validator-clean decision frontmatter + canonical section skeleton.
 
@@ -2522,7 +2822,7 @@ def _scaffold_goal(title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _scaffold_sizing(title: str) -> str:
+def _scaffold_sizing(title: str, deliverable_id: str | None = None) -> str:
     """Generate validator-clean whole-document-YAML sizing-object record.
 
     Produces a conformant record against schemas/sizing-object.schema.json
@@ -2539,9 +2839,18 @@ def _scaffold_sizing(title: str) -> str:
     string) so the emitted skeleton validates as-is; the EM edits the
     values, not the shape, before commit.
 
+    `deliverable_id` is minted HERE, at scaffold time, via the caller's
+    resolved `_mint_deliverable_id` value (carry/stub/slug — the same
+    seam `--type plan` uses; this function never re-derives it) — a
+    sizing-object is the earliest artifact in the deliverable chain, so
+    this is where the spine join key is first minted. See
+    schemas/sizing-object.schema.json's `deliverable_id` description and
+    docs/plans/2026-08-08-sizing-objects-join-the-deliverable-spine.md § C2.
+
     Output path: state/sizings/YYYY-MM-DD-<slug>.yaml.
 
     Spec backlink: docs/plans/2026-07-24-sizing-lobby-core.md § C1/C3
+    Spec backlink: docs/plans/2026-08-10-a-sizing-mints-the-join-key-that-closes-it.md § C1
     Negative-spec: does NOT emit prose body content or `---` frontmatter
     fences — whole-document-yaml match_mode, matching _scaffold_goal.
     Does NOT resolve the sizing halt — `fork` scaffolds `null`;
@@ -2558,16 +2867,17 @@ def _scaffold_sizing(title: str) -> str:
         "schema: sizing-object",
         f"intent: {_yaml_quote(intent_placeholder)}",
         "estimate:",
-        "  tshirt: XS  # XS | S | M | L | XL — reuses loe.tshirt; coarse ROUTING estimate only",
+        "  tshirt: XS  # XS | S | M | L | XL | XXL — reuses loe.tshirt; coarse ROUTING estimate only",
         "  provisional: true  # always true — never the committed plan-body LoE",
-        "route: dispatch  # dispatch | spec-dispatch | shape | plan | roadmap | pm-decision",
+        "route: dispatch  # dispatch | spec-dispatch | shape | plan | roadmap | pm-decision | goal-setting",
         "detents: []  # boundary detents crossed while sizing (e.g. appetite_exceeded); [] if none",
         "fork: null  # cut_to_fit | raise_appetite | null — set ONLY on genuine appetite/estimate divergence; never auto-resolved",
         "xl_exit: null  # split | shape | roadmap | accept_multi_session | null — the PM's pick at a pm-decision route; null means NOT YET CHOSEN, never 'accepted'",
-        "status: draft  # draft | sized | routed | superseded",
+        "status: draft  # draft | sized | routed | shipped | declined | superseded",
         "premise:",
         "  provenance: unrecorded  # executed | read | not-applicable | unrecorded — how the premise was verified; ADVISORY, never blocks a route",
         "  evidence: PLACEHOLDER — cite the file:line, test, or command output you actually looked at; answered in place, never spun into its own record",
+        f"deliverable_id: {_yaml_quote(deliverable_id) if deliverable_id else 'null'}  # durable spine join key, minted at scaffold time — do not hand-edit",
     ]
     return "\n".join(lines) + "\n"
 
@@ -4165,7 +4475,7 @@ def main() -> None:
     # Session context inheritance: DELIVERABLE_ID env var is the mechanism by which the
     # skill layer (e.g. /handoff, /plan) propagates the parent deliverable_id so downstream
     # artifacts carry the same id without requiring author memory (D1, AC12).
-    _spine_types = {"handoff", "spinoff", "roadmap-baton", "roadmap-seed", "plan", "recovery"}
+    _spine_types = {"handoff", "spinoff", "roadmap-baton", "roadmap-seed", "plan", "recovery", "sizing-object"}
     _resolved_deliverable_id: str | None = None
     _resolved_plan_id: str | None = None
     _resolved_initiative: str | None = None
@@ -4245,7 +4555,30 @@ def main() -> None:
                     carry_source="session-state parent (roadmap stub)",
                 )
             else:
-                _resolved_deliverable_id = _mint_deliverable_id_from_title(title, doc_type)
+                # Cited-sizing carry tier (2026-08-10 deliverable-id-fork-
+                # remediation follow-up) — ordered after explicit/env and the
+                # session-state-parent tier above, and before mint-from-slug.
+                # A sizing-object is the earliest artifact in the deliverable
+                # chain (sizing-object.schema.json's own `deliverable_id`
+                # description) — a plan citing one must carry its id verbatim
+                # rather than minting a second, forked id that
+                # `deliverable.cascade_terminal`'s exact-string join can never
+                # match. Reached only when nothing more explicit (flag/env/
+                # session-parent) already resolved an id, so a deliberate
+                # caller-supplied id is never overridden by the cited sizing.
+                _sizing_carry_dlv = None
+                if getattr(args, "sizing_object", None):
+                    _sizing_repo_root_for_carry = _current_repo_root() or "."
+                    _sizing_carry_dlv = _resolve_cited_sizing_deliverable_id(
+                        args.sizing_object, _sizing_repo_root_for_carry
+                    )
+                if _sizing_carry_dlv:
+                    _resolved_deliverable_id = _mint_deliverable_id(
+                        deliverable_id=_sizing_carry_dlv,
+                        carry_source="cited sizing-object",
+                    )
+                else:
+                    _resolved_deliverable_id = _mint_deliverable_id_from_title(title, doc_type)
         elif doc_type == "handoff":
             # Session-plan/predecessor carry tier (2026-08-03 deliverable-id-
             # carry-plan-handoff-agree C1/AC1/AC2/AC6/AC19) — reachable for
@@ -4516,7 +4849,7 @@ def main() -> None:
     elif doc_type == "goal":
         content = _scaffold_goal(title=title)
     elif doc_type == "sizing-object":
-        content = _scaffold_sizing(title=title)
+        content = _scaffold_sizing(title=title, deliverable_id=_resolved_deliverable_id)
     elif doc_type == "health-status":
         content = _scaffold_health_status(title=title)
     elif doc_type == "strategic-self-description":
@@ -4697,16 +5030,45 @@ def main() -> None:
         _anchored_repo_root or _current_repo_root(),
     )
 
+    # cwd is the repo the write actually landed in (may differ from the
+    # caller's process cwd when the placement-law state/ seam re-anchors to
+    # a different repo, e.g. Claude-klabauter). Resolved here (rather than just before
+    # the plan-file write below) because the C4 reverse write-back also
+    # needs it, ahead of the plan-file write it precedes.
+    _write_repo_root = _anchored_repo_root or _current_repo_root() or os.getcwd()
+
+    # Reverse write-back: plan -> sizing, one transaction (C4, plan
+    # 2026-08-10-sizing-objects-join-the-deliverable-spine.md § C4). Mechanism
+    # named explicitly for AC7: the sizing edge is written FIRST, under a
+    # cross-process lock (locked_rmw); the plan file is written SECOND. If the
+    # plan-file write raises, the sizing edit is reverted to its captured
+    # pre-mutation text before the exception propagates. This is write-order +
+    # revert-on-failure, not a single cross-file atomic transaction — this
+    # codebase has no shared-journal primitive spanning two independent files,
+    # so a failure between the two writes (process kill between the sizing
+    # write and the plan write) is a residual this mechanism does not close;
+    # named honestly rather than claimed as full atomicity.
+    _sizing_reverse_old_text: str | None = None
+    if doc_type == "plan" and args.sizing_object:
+        _ensure_engine_on_path()
+        from coordinator_core.locked_write import MutateAbort as _MutateAbort  # noqa: PLC0415
+
+        _plan_repo_rel_path = os.path.relpath(out_path, _write_repo_root).replace(os.sep, "/")
+        try:
+            _sizing_reverse_old_text = _write_sizing_reverse_edge(
+                _sizing_abs_path, _plan_repo_rel_path, _write_repo_root,
+            )
+        except _MutateAbort as _abort_exc:
+            print(f"error: {_abort_exc}", file=sys.stderr)
+            sys.exit(1)
+
     # Write the scaffolded file.
     #
     # DR-276: this CLI owns its own main() (no single op module's main(argv) to
     # route through via coordinator_core.cli_entry.run_op_main), so the write is
     # wrapped in recording_declared_writes() directly, with declare_write() called
     # AFTER the write lands — mirrors coordinator_core.ops.append_integrator_dispositions'
-    # own "declared after the write, never before" discipline. cwd is the repo the
-    # write actually landed in (may differ from the caller's process cwd when the
-    # placement-law state/ seam re-anchors to a different repo, e.g. Claude-klabauter).
-    _write_repo_root = _anchored_repo_root or _current_repo_root() or os.getcwd()
+    # own "declared after the write, never before" discipline.
     try:
         _ensure_engine_on_path()
         from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415
@@ -4715,18 +5077,29 @@ def main() -> None:
         recording_declared_writes = None
         declare_write = None
 
-    if recording_declared_writes is not None:
-        with recording_declared_writes(cwd=_write_repo_root):
+    try:
+        if recording_declared_writes is not None:
+            with recording_declared_writes(cwd=_write_repo_root):
+                with open(out_path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                    if not content.endswith("\n"):
+                        fh.write("\n")
+                declare_write(out_path)
+        else:
             with open(out_path, "w", encoding="utf-8") as fh:
                 fh.write(content)
                 if not content.endswith("\n"):
                     fh.write("\n")
-            declare_write(out_path)
-    else:
-        with open(out_path, "w", encoding="utf-8") as fh:
-            fh.write(content)
-            if not content.endswith("\n"):
-                fh.write("\n")
+    except Exception:
+        # The plan-file write failed after the sizing reverse edge already
+        # landed — revert it so a half-written pair (sizing flipped to
+        # `routed` with a `plan:` FK pointing at a file that does not exist)
+        # never survives (AC7: "a half-written pair is worse than the
+        # hand-maintained status quo it replaces, because it looks
+        # maintained"). Re-raises the ORIGINAL exception either way.
+        if _sizing_reverse_old_text is not None:
+            _revert_sizing_reverse_edge(_sizing_abs_path, _sizing_reverse_old_text, _write_repo_root)
+        raise
 
     # Success-path-only liveness stamp (completion_scaffold): reached only after the
     # write above completed without raising, and only for --type completion -- every

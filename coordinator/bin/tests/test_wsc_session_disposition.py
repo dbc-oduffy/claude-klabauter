@@ -955,6 +955,94 @@ class TestResolveDispositionIntegration(unittest.TestCase):
                 diagnostics,
             )
 
+    def test_touching_an_ownerless_looking_record_is_not_consuming_it(self):
+        """2026-08-10 archive-leg touch-vs-consume incident (example-retrieval-repo memo
+        `2026-08-10-example-retrieval-repo-em-wsc-archive-leg-infers-consumption-from-a-
+        touch.md`), reproduced at the exact observed shape: a peer had staged
+        the deletion of its own archived baton in the shared index, this
+        session's `git commit --amend` swept that deletion in, and this
+        session committed a RESTORE to re-track the peer's file.
+
+        The record is a live peer's baton — but it presents as ownerless to
+        both negative-evidence reads: its ledger claim is liveness-gated away
+        by `resolve_claim_state`, its frontmatter mirror carries `status:
+        claimed` with no `claimed_by:`, and it records `authoring_session:`
+        (deliberately not consulted — path-shaped in this corpus) rather than
+        `origin_session:`. The commit subject is ordinary prose, so the
+        sweep-prefix filter never sees it.
+
+        Before the fix both reads came back empty and the guard fell through
+        to acceptance, resolving `predecessor-consumed` against a peer's
+        baton. Ownership must be POSITIVELY named — absence of evidence is
+        not evidence of ownership."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            archive_dir = repo / "archive" / "handoffs"
+            archive_dir.mkdir(parents=True)
+            handoff = archive_dir / "2026-08-10_144028_peer-baton.md"
+            handoff.write_text(
+                "---\nstatus: claimed\npredecessor: state/handoffs/2026-08-10-peer.md\n"
+                "deployment_state: continued\n"
+                "authoring_session: 9c0c419d-def6-4b98-90ba-42d2580e870a\n---\nbody\n"
+            )
+            _git(repo, "add", "archive/handoffs/2026-08-10_144028_peer-baton.md")
+            _commit_with_session_trailer(
+                repo,
+                "sid-restorer3",
+                "restore: re-track a peer's archived handoff my amend swept out",
+            )
+
+            disposition, consumed, diagnostics, consumed_paths = wsc.resolve_disposition(
+                repo, "sid-restorer3"
+            )
+            self.assertEqual(disposition, "single-session")
+            self.assertEqual(consumed, "")
+            self.assertEqual(consumed_paths, [])
+            self.assertTrue(
+                any("is not evidence of consuming it" in d for d in diagnostics),
+                diagnostics,
+            )
+
+    def test_ownerless_rejection_does_not_subsume_the_sweep_subject_filter(self):
+        """Negative-spec guard for the 2026-08-10 fix: the memo proposing it
+        also proposed RETIRING the sweep-subject allowlist as redundant. It is
+        not. Fixture is the reachable non-redundant case: a record this
+        session ORIGINATED but never claimed (so Detector A, which keys on the
+        claim stamp, misses it and Detector B runs), swept by a bulk `fleet:
+        archive` commit. `origin_session` positively names this session, so
+        the tightened ownership guard accepts — only the subject filter
+        rejects, and a bulk sweep is still not a consume."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            archive_dir = repo / "archive" / "handoffs"
+            archive_dir.mkdir(parents=True)
+            handoff = archive_dir / "2026-07-10_swept-but-mine.md"
+            handoff.write_text(
+                "---\npredecessor: none\norigin_session: sid-sweeper3\n---\nbody\n"
+            )
+            _git(repo, "add", "archive/handoffs/2026-07-10_swept-but-mine.md")
+            _commit_with_session_trailer(
+                repo, "sid-sweeper3", "fleet: archive 1 completed handoff(s)"
+            )
+
+            disposition, consumed, diagnostics, consumed_paths = wsc.resolve_disposition(
+                repo, "sid-sweeper3"
+            )
+            self.assertEqual(disposition, "single-session")
+            self.assertEqual(consumed, "")
+            self.assertEqual(consumed_paths, [])
+            self.assertTrue(
+                any(
+                    "automated bulk/housekeeping archival prefix" in d
+                    for d in diagnostics
+                ),
+                diagnostics,
+            )
+
     def test_legitimate_own_claim_and_origin_still_resolves_chain_terminal(self):
         """Regression guard: the legitimate own-ship-and-archive path (a
         session's OWN claim stamp AND its own origin_session, via a

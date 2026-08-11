@@ -192,6 +192,27 @@ def _no_console_kw() -> dict:
         return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
+def _no_console_passthrough_kw() -> dict:
+    """`_no_console_kw` for a child whose output must reach the operator.
+
+    Console suppression alone makes the child bind its standard handles to the
+    fresh window-less console CREATE_NO_WINDOW allocates instead of inheriting
+    this process's, so its output (here: git's own add/commit/push reporting)
+    is written where nobody can read it. Canonical implementation, kept in sync
+    by hand because this file fails open without coordinator_core:
+    `coordinator_core.win_portability.no_console_passthrough_kwargs`.
+    """
+    kwargs = dict(_no_console_kw())
+    for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        if fd >= 0:
+            kwargs[key] = fd
+    return kwargs
+
+
 _DELTA_RE = re.compile(r"delta=(\d+)")
 _WEEK_STARTING_RE = re.compile(r"\*\*Week starting:\*\*[ \t]*(.*)")
 _DAILY_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}.*\.md$")
@@ -592,7 +613,7 @@ def git_commit_and_push(
     canonical (case-correct) branch name rather than `git branch
     --show-current` — see that script's own docstring for why."""
     subprocess.run(
-        ["git", "add", "--", *paths], cwd=repo_root, check=True, **_no_console_kw()
+        ["git", "add", "--", *paths], cwd=repo_root, check=True, **_no_console_passthrough_kw()
     )
     # A3 fix: pathspec-scoped commit, not a bare `git commit -m`. This runs
     # on a shared branch (other executors/EMs may have their own staged
@@ -602,7 +623,7 @@ def git_commit_and_push(
         ["git", "commit", "-m", message, "--", *paths],
         cwd=repo_root,
         check=True,
-        **_no_console_kw(),
+        **_no_console_passthrough_kw(),
     )
     if push:
         branch = _resolve_branch(repo_root, branch_script)
@@ -610,7 +631,7 @@ def git_commit_and_push(
             print("archive: could not resolve current branch — skipping push", file=sys.stderr)
             return 1
         subprocess.run(
-            ["git", "push", "origin", branch], cwd=repo_root, check=True, **_no_console_kw()
+            ["git", "push", "origin", branch], cwd=repo_root, check=True, **_no_console_passthrough_kw()
         )
     return 0
 

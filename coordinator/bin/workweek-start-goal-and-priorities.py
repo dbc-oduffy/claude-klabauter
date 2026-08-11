@@ -60,6 +60,30 @@ _HERE = Path(__file__).resolve().parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _no_console_passthrough_kw() -> dict:
+    """Local twin of `coordinator_core.win_portability.no_console_passthrough_kwargs`.
+
+    DELIBERATE DUPLICATION, same reason as `_resolve_claude_klabauter._is_executable`:
+    this script imports stdlib + yaml only and must keep running without
+    coordinator_core importable. Keep the two in sync by hand.
+
+    Why the fds are needed at all: `creationflags=CREATE_NO_WINDOW` with no
+    stdout=/stderr= makes CPython omit STARTF_USESTDHANDLES, so the child
+    binds its handles to the fresh window-less console the flag allocates
+    instead of inheriting this process's -- and its output is lost. Gate:
+    coordinator_core/tests/test_no_output_swallowing_no_console_spawn.py.
+    """
+    kwargs: dict = {"creationflags": _NO_WINDOW}
+    for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        if fd >= 0:
+            kwargs[key] = fd
+    return kwargs
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -327,7 +351,7 @@ def cmd_emit_goal_event(args: argparse.Namespace) -> int:
         ],
         text=True,
         check=False,
-        creationflags=_NO_WINDOW,
+        **_no_console_passthrough_kw(),
     )
     return proc.returncode
 

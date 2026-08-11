@@ -189,6 +189,35 @@ class _StubClaudeKlabauter:
     def run_identity_check(self, dest):
         return {"ran": True, "skipped": False, "exit_code": 0, "findings": "clean"}
 
+    def run_parse_sweep(self, repo_root):
+        # `dispatch_end_of_run_function_gate` (chunk C4B, added after this
+        # fixture was authored) calls this unconditionally for every reached
+        # repo root once a run has zero failed rows — see the sibling gap
+        # noted in `test_publish_row_isolation.py`'s `_FakeClaudeKlabauter` docstring.
+        # A parse-clean, zero-file sweep result is a no-op for this file's
+        # own install-doc-payload-check assertions.
+        return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
+
+    def enumerate_gate_entrypoints(self, repo_root):
+        # `dispatch_end_of_run_entrypoint_gate` (chunk C3, same sibling gap)
+        # calls this unconditionally too. This fixture's repo roots ship no
+        # entrypoints at all, so an empty tuple short-circuits that gate's
+        # loop without needing to fake `run_entrypoint_gate`/`mktcache_gate_
+        # env` as well.
+        return ()
+
+
+def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
+    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
+    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
+    # `totals.processed` did not advance" as a FAILED row — a `None`-
+    # returning no-op fake (this fixture's original shape) therefore marks
+    # every row FAILED before any end-of-run gate (the thing this file
+    # actually tests) is ever reached. Advance `totals.processed` to model
+    # the row genuinely landing, matching every other `main()`-driving
+    # publish test fixture in this package.
+    totals.processed += 1
+
 
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     percolate_root = setup_dir.parent
@@ -210,7 +239,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "process_target", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
 
 
 def _single_row(name: str, repo_root: Path) -> list:
@@ -227,7 +256,13 @@ class TestInstallDocPayloadMainWiring:
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
 
         rc = publish.main([])
-        assert rc != 0
+        # Exit 2, not 1 (§ main()'s exit-code-contract docstring,
+        # state/bug-backlog/2026-08-10-coordinator-publish-s-exit-code-is-
+        # not-a-542c9750e55a.yaml): this row's bytes DID land (`process_
+        # target` advanced `totals.processed`) — only the POST-publish
+        # install-doc-payload check failed, which must be distinguishable
+        # from a row that never landed at all.
+        assert rc == 2
         captured = capsys.readouterr()
         assert "install-doc payload check FAILED" in captured.err
 

@@ -14,8 +14,8 @@ downstream is misparsed into a spray of "'x' is not recognized as an
 internal or external command" / "was unexpected at this time" errors.
 
 This is not hypothetical -- on 2026-07-28 this exact class of defect broke
-`<settings-home>/bin/machine-local.cmd` (a `>=3.11` version comparison in a
-REM line) -- the canonical registry CLI every coordinator install depends
+`<settings-home>/bin/machine-local.cmd` (a `>=` version comparison against
+3.11 in a REM line) -- the canonical registry CLI every coordinator install depends
 on -- corrupting it into spraying garbage instead of returning a value,
 which in turn made every caller read empty output as "registry key unset"
 and blocked percolation entirely on that machine. That launcher's template

@@ -19,8 +19,11 @@ Run: python -m pytest coordinator/bin/tests/test_identity_file_populated_gate.py
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -53,6 +56,18 @@ class _StubClaudeKlabauter:
         return {"ran": False, "skipped": True, "exit_code": None, "findings": ""}
 
 
+def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
+    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
+    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
+    # `totals.processed` did not advance" as a FAILED row — a `None`-
+    # returning no-op fake (this fixture's original shape) therefore marks
+    # every row FAILED (and `main()` returns before even reaching the
+    # gate under test's "proceeds" branch). Advance `totals.processed` to
+    # model the row genuinely landing, matching every other `main()`-
+    # driving publish test fixture in this package.
+    totals.processed += 1
+
+
 def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     """Same shape as `_wire_main_preconditions` in
     `test_percolate_identity_check_gate.py`, deliberately WITHOUT stubbing
@@ -70,8 +85,20 @@ def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, ro
     monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda claude_klabauter_root, store_path: {"targets": {}})
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "process_target", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
+    # This file's gate under test is the PRE-loop populated-patterns check —
+    # the four POST-loop end-of-run legs are out of scope here (each has its
+    # own dedicated test file) and, unlike `_StubClaudeKlabauter` in those sibling
+    # files, this fixture's stub carries no `run_parse_sweep`/
+    # `enumerate_gate_entrypoints`, so leaving the function/entrypoint gates
+    # un-stubbed would fail them on an AttributeError rather than exercising
+    # anything this file cares about. Stub all four inert so a "proceeds"
+    # test's rc depends only on the identity-populated gate + row success.
     monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "dispatch_end_of_run_function_gate", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "dispatch_end_of_run_entrypoint_gate", lambda *a, **k: True)
 
 
 def _row(name: str, repo_root: Path) -> str:
@@ -315,6 +342,15 @@ class TestMachineLocalIdentityFallback:
         assert "FATAL" in captured.err
         assert "PERSONAL_REVIEW_PATTERNS" in captured.err
 
+    @pytest.mark.skipif(
+        os.name != "posix",
+        reason=(
+            "group/world-writable is a POSIX mode bit; publish.py's own "
+            "ownership/mode security check is a deliberate no-op on Windows "
+            "(it prints a WARNING and proceeds unverified — see "
+            "check_identity_file_safe) rather than a gap in this test."
+        ),
+    )
     def test_machine_local_present_but_group_world_writable_aborts(self, tmp_path, monkeypatch, capsys):
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)

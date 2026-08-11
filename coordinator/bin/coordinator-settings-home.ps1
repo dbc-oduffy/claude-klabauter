@@ -21,10 +21,18 @@
 # $env:CLAUDE_HOME, else $env:HOME (explicit, not the automatic $HOME — on Windows pwsh's
 # automatic $HOME mirrors $env:USERPROFILE and does NOT read $env:HOME, so reading it
 # explicitly here is what catches an operator who deliberately sets HOME, e.g. git-bash),
-# else the automatic $HOME as terminal (peer shape: example-doctrine-repo's resolver terminates the same
-# way — on Windows pwsh derives it from $env:USERPROFILE, which is what makes this the
-# USERPROFILE rung in practice; on POSIX it is $env:HOME, already matched above) — no
-# bash `${VAR:-default}` parameter expansion.
+# else $env:USERPROFILE (explicit, for the same reason the HOME rung is explicit: pwsh's
+# automatic $HOME is derived ONCE at session start and never re-reads the environment, so
+# it cannot serve as the USERPROFILE rung — a process that sets $env:USERPROFILE after
+# the session began gets the stale machine home back, silently and with no error), else
+# the automatic $HOME as terminal — no bash `${VAR:-default}` parameter expansion.
+#
+# Negative spec: do NOT collapse the USERPROFILE rung back into the automatic $HOME on
+# the reasoning that "$HOME mirrors $env:USERPROFILE on Windows". It mirrors its value at
+# session start, not the variable; that reasoning is what AC10b's permuted-env probe
+# falsified. The peer template (example-doctrine-repo@coordinator/templates/bin/coordinator-settings-home.ps1)
+# already carries the explicit USERPROFILE rung — this file had drifted BEHIND it while
+# citing it as the peer shape, so there is nothing to relay upstream.
 #
 # Resolve-ClaudeHomeBase — named export mirroring this same ladder, additive alongside
 # the inline resolution above (no restructuring). Peer:
@@ -36,6 +44,8 @@ function Resolve-ClaudeHomeBase {
         $env:CLAUDE_HOME
     } elseif ($env:HOME) {
         $env:HOME
+    } elseif ($env:USERPROFILE) {
+        $env:USERPROFILE
     } else {
         $HOME
     }

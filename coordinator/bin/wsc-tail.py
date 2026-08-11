@@ -326,6 +326,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="review_trail: workstream label (optional passthrough).",
     )
+    parser.add_argument(
+        "--review-reviewer-evidence",
+        dest="review_reviewer_evidence",
+        default=None,
+        help="review_trail: evidence correlating --review-reviewer with an actual review "
+        "(optional passthrough, but REQUIRED op-side for every reviewer except "
+        "wsc-auto-adjudication -- see coordinator_core/ops/review_trail_write.py's "
+        "reviewer_evidence design; state/bug-backlog/2026-08-10-coordinator-write-"
+        "review-trail-accepts-a-295d3cd80d13.yaml).",
+    )
     return parser
 
 
@@ -354,6 +364,7 @@ _VALID_REVIEWERS = frozenset(
         "waived",
         "ubt-compile",
         "wsc-auto-adjudication",
+        "em-verified",
     }
 )
 _VALID_SCOPES = frozenset({"chain", "session", "workstream-close-auto"})
@@ -371,6 +382,7 @@ def _review_trail_fields(args: argparse.Namespace) -> dict:
         "diff_loc": args.review_diff_loc,
         "scope_kind": args.review_scope_kind,
         "workstream": args.review_workstream,
+        "reviewer_evidence": args.review_reviewer_evidence,
     }
 
 
@@ -690,6 +702,26 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-example-doctrine-repo-em-wsc-tail-
+    # silent-noop-and-gate-rewalk.md finding 1): this branch used to `return 0`
+    # with NOTHING printed, on every genuinely-clean pass AND on a pass that
+    # landed a commit without a terminal flip alike -- exit 0 with empty
+    # stdout/stderr is indistinguishable from "verified nothing was due" (see
+    # module docstring negative-spec: "Does NOT swallow exit 2 ... never
+    # silently absorbed into a bare 0 exit" -- that guarantee never covered
+    # exit 0 itself). The op now always names its disposition explicitly in
+    # `diagnostics` (wsc_tail.py's own chain_terminal=False branch), so print
+    # it here when present -- still exit 0, never escalated; this is
+    # observability, not a new failure class.
+    diagnostics = result.get("diagnostics") or []
+    if diagnostics:
+        print(
+            "wsc-tail.py: ceremony.wsc_tail exit_code=0 -- diagnostics:",
+            file=sys.stderr,
+        )
+        for line in diagnostics:
+            print(f"  - {line}", file=sys.stderr)
 
     return 0
 

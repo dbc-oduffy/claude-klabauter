@@ -295,6 +295,119 @@ def test_bootstrap_import_fails_loud_with_pointer_unreachable():
 
 
 # ---------------------------------------------------------------------------
+# Review: staff-eng MINOR-6 — the two tests above assert the ladder's
+# PRESENCE (case a passes via whatever ambient rung this dev box happens to
+# carry; case b asserts a negative and can't witness a working rung). Four
+# prior reviews shipped BLOCKER-1 (a present-but-INERT ladder on a real OSS
+# box) through exactly that gap. This test closes it: a payload-shaped
+# fixture tree (coordinator/bin/lib/ not flattened + lib/ flattened, per
+# setup/publish-targets.portable) imported under a genuinely OSS-shaped
+# environment (empty HOME/USERPROFILE/COORDINATOR_SETTINGS_HOME, no
+# CLAUDE_PLUGIN_ROOT, no .doe-root pointer reachable), with the manifest
+# reachable ONLY via the new marketplace-cache rung
+# (_mp_marketplace_cache_rung(), BLOCKER-1a) under a synthetic CLAUDE_HOME —
+# asserting import SUCCEEDS and _MANIFEST_PATH resolves inside that rung's
+# fixture, not merely that some path got printed.
+# ---------------------------------------------------------------------------
+import shutil  # noqa: E402
+
+_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
+_REAL_COORDINATOR_LIB_DIR = os.path.join(_COORDINATOR_DIR, "lib")
+
+
+def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
+    """Returns (payload_lib_dir, claude_home_dir).
+
+    payload_lib_dir: <root>/engine-payload/coordinator/bin/lib/ — holds a
+    real copy of coordinator_registry.py + machine_local_impl_resolve.py,
+    exactly where the payload ships them (coordinator/bin -> coordinator/bin,
+    NOT flattened, per setup/publish-targets.portable). Also plants the
+    flattened helper at <root>/engine-payload/lib/read_doe_root_pointer.py
+    (coordinator/lib -> lib, flattened) so the pointer rung has its
+    published-shape dependency present, even though the pointer file itself
+    is deliberately absent (no ambient .doe-root on an OSS box).
+
+    claude_home_dir: <root>/claude-home/ — holds ONLY the marketplace-cache
+    manifest, at the exact layout resolve_coordinator_clone._newest_cache_dir()
+    /_mp_marketplace_cache_rung() probe: plugins/cache/coordinator-claude/
+    coordinator/<version>/schemas/coordinator-registry.manifest.json. The
+    engine-payload tree ships NO manifest anywhere under it (per the
+    findings' "two mirrors" ground truth) — reachability depends entirely on
+    this rung.
+    """
+    payload_lib_dir = os.path.join(root, "engine-payload", "coordinator", "bin", "lib")
+    os.makedirs(payload_lib_dir)
+    for _name in ("coordinator_registry.py", "machine_local_impl_resolve.py"):
+        shutil.copyfile(os.path.join(_LIB_DIR, _name), os.path.join(payload_lib_dir, _name))
+
+    flat_helper_dir = os.path.join(root, "engine-payload", "lib")
+    os.makedirs(flat_helper_dir)
+    shutil.copyfile(
+        os.path.join(_REAL_COORDINATOR_LIB_DIR, "read_doe_root_pointer.py"),
+        os.path.join(flat_helper_dir, "read_doe_root_pointer.py"),
+    )
+
+    claude_home_dir = os.path.join(root, "claude-home")
+    cache_manifest_dir = os.path.join(
+        claude_home_dir, "plugins", "cache", "coordinator-claude", "coordinator", "1.2.3", "schemas"
+    )
+    os.makedirs(cache_manifest_dir)
+    with open(
+        os.path.join(cache_manifest_dir, "coordinator-registry.manifest.json"), "w", encoding="utf-8"
+    ) as _fh:
+        _fh.write(
+            '{"docTypes": [], "queueTypes": [], '
+            '"identity": {"repoAliases": [], "centralReceiverIds": ["example-doctrine-repo-em"]}}'
+        )
+
+    return payload_lib_dir, claude_home_dir
+
+
+def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment():
+    """Review: staff-eng MINOR-6 / BLOCKER-1(b) — the acceptance test the
+    findings said was missing. Fails pre-fix (no marketplace-cache rung to
+    reach the manifest); passes post-fix."""
+    with tempfile.TemporaryDirectory() as _tmp:
+        _payload_lib_dir, _claude_home_dir = _build_payload_shaped_fixture(_tmp)
+        _empty_home = os.path.join(_tmp, "empty-home")
+        os.makedirs(_empty_home)
+
+        _snippet = (
+            "import sys; "
+            f"sys.path.insert(0, {_payload_lib_dir!r}); "
+            "import coordinator_registry; "
+            "print(coordinator_registry._MANIFEST_PATH)"
+        )
+        env = {
+            "HOME": _empty_home,
+            "USERPROFILE": _empty_home,
+            "CLAUDE_HOME": _claude_home_dir,
+            "COORDINATOR_SETTINGS_HOME": os.path.join(_empty_home, ".coordinator-claude-settings"),
+            "PATH": os.environ.get("PATH", ""),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+        }
+        result = subprocess.run(
+            [_sys.executable, "-c", _snippet],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert result.returncode == 0, (
+            "expected import to succeed via the marketplace-cache rung on a "
+            f"payload-shaped tree under an OSS-shaped environment; "
+            f"stderr:\n{result.stderr}"
+        )
+        _manifest_path = result.stdout.strip()
+        assert _manifest_path, "expected _MANIFEST_PATH to print a non-empty path"
+        assert _manifest_path.startswith(_claude_home_dir), (
+            f"expected _MANIFEST_PATH ({_manifest_path!r}) to resolve inside the "
+            f"marketplace-cache fixture ({_claude_home_dir!r}), not some other rung"
+        )
+
+
+# ---------------------------------------------------------------------------
 # C1D: doe_root() gets the same codename-free rung ladder, in-process via
 # monkeypatch (not a subprocess — doe_root() runs at CALL time, not import
 # time, so isolating just its own rungs from the ambient machine's real
@@ -309,46 +422,85 @@ import pytest  # noqa: E402
 
 
 def _clear_doe_root_env(monkeypatch):
-    """Strip every env var doe_root()'s legacy chain (rungs 6-7) reads, and
-    stub the codename rungs' pointer/registry helpers to '' / None, so a test
-    can install exactly the one rung under test."""
+    """Strip every env var doe_root()'s legacy chain reads, and stub the
+    codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
+    so a test can install exactly the one rung under test.
+
+    Review: staff-eng MAJOR-4 — DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO now run FIRST in
+    doe_root(), ahead of the codename-free rungs, so they must be cleared
+    here too (this function already did) for the codename-rung tests below
+    to observe their own rung rather than short-circuiting on the reordered
+    override.
+    Review: staff-eng BLOCKER-1 — _mp_marketplace_cache_rung() is a new real
+    filesystem probe (~/.claude/plugins/cache/coordinator-claude/coordinator)
+    that could accidentally resolve on a dev box with a real marketplace
+    install; stub it like every other rung so isolation holds.
+    """
     monkeypatch.delenv("DOE_ROOT", raising=False)
     monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: "")
+    monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: "")
     monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: "")
     monkeypatch.setattr(reg, "_registry_machine_local_get", lambda key: None)
 
 
 def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
-    """Rungs 1-2: coordinator_read_doe_root_pointer() already returns the example-doctrine-repo
-    REPO root directly — used as-is, no conversion."""
+    """Pointer rung: coordinator_read_doe_root_pointer() already returns the
+    example-doctrine-repo REPO root directly — used as-is, no conversion, no state/ gate (the
+    pointer file's own contract already promises a repo root)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _fake_root)
         assert reg.doe_root() == _fake_root
 
 
-def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
-    """Rung 3: the flat marketplace-clone layout is the clone root directly
-    (resolve_coordinator_clone.py::resolve_clone_root() treats it the same
-    way) — used as-is, no conversion."""
+def test_doe_root_resolves_via_marketplace_cache_rung(monkeypatch):
+    """Review: staff-eng BLOCKER-1(a) — the real marketplace-cache install
+    location resolves like the flat-layout rung: as-is, gated on
+    `<cand>/state` being a directory (BLOCKER-2)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
+        os.makedirs(os.path.join(_fake_root, "state"))
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: _fake_root)
+        assert reg.doe_root() == _fake_root
+
+
+def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
+    """The flat marketplace-clone layout is the clone root directly
+    (resolve_coordinator_clone.py::resolve_clone_root() treats it the same
+    way) — used as-is, no conversion. Gated (Review: staff-eng BLOCKER-2) on
+    `<cand>/state` being a directory."""
+    with _tempfile.TemporaryDirectory() as _fake_root:
+        os.makedirs(os.path.join(_fake_root, "state"))
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
         assert reg.doe_root() == _fake_root
 
 
+def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
+    """Review: staff-eng BLOCKER-2 regression guard — a resolved-but-
+    unrelated directory (isdir() true, no state/ under it) must NOT win;
+    the ladder must fall through to fail loud rather than accept it."""
+    with _tempfile.TemporaryDirectory() as _fake_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
+        with pytest.raises(reg._DoeUnresolvable):
+            reg.doe_root()
+
+
 def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
-    """Rung 4, private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
+    """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
     (`<repo_root>/coordinator`), one level below the repo root doe_root()
     must return — the plugin-root-vs-example-doctrine-repo-root distinction this chunk exists
     to close. The marker lives beside the repo root, not beside the content
-    root, so the normalizer must climb one level."""
+    root, so the normalizer must climb one level. Gated (Review: staff-eng
+    BLOCKER-2) on `<repo_root>/state` being a directory."""
     with _tempfile.TemporaryDirectory() as _repo_root:
         os.makedirs(os.path.join(_repo_root, ".claude-plugin"))
         with open(os.path.join(_repo_root, ".claude-plugin", "plugin.json"), "w") as _f:
             _f.write("{}")
+        os.makedirs(os.path.join(_repo_root, "state"))
         _content_root = os.path.join(_repo_root, "coordinator")
         os.makedirs(_content_root)
         _clear_doe_root_env(monkeypatch)
@@ -357,23 +509,44 @@ def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkey
 
 
 def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch):
-    """Rung 4, OSS flat layout: CLAUDE_PLUGIN_ROOT already IS the repo root
+    """OSS flat layout: CLAUDE_PLUGIN_ROOT already IS the repo root
     (manifest ships flat at plugin root, marker directly beside it) — no
-    parent-climb, used as-is."""
+    parent-climb, used as-is. Gated (Review: staff-eng BLOCKER-2) on
+    `<flat_root>/state` being a directory."""
     with _tempfile.TemporaryDirectory() as _flat_root:
         os.makedirs(os.path.join(_flat_root, ".claude-plugin"))
         with open(os.path.join(_flat_root, ".claude-plugin", "plugin.json"), "w") as _f:
             _f.write("{}")
+        os.makedirs(os.path.join(_flat_root, "state"))
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _flat_root)
         assert reg.doe_root() == _flat_root
 
 
+def test_doe_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch):
+    """Review: staff-eng BLOCKER-2, executed shape from the findings —
+    CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
+    .claude-plugin/plugin.json under it, since it belongs to a foreign
+    plugin's content, not the plugin root itself) must NOT be accepted, and
+    an explicit correct DOE_ROOT override must win instead."""
+    with _tempfile.TemporaryDirectory() as _foreign_root, _tempfile.TemporaryDirectory() as _correct_root:
+        os.makedirs(os.path.join(_correct_root, "state"), exist_ok=True)
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _foreign_root)
+        monkeypatch.setenv("DOE_ROOT", _correct_root)
+        assert reg.doe_root() == _correct_root
+
+
 def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
-    """Rung 5: machine-local plugin.mirrors.coordinator-claude.live_path is
-    used directly as the repo root (resolve_coordinator_clone.py's
-    resolve_clone_root() rung 2 treats it the same way) — no conversion."""
+    """Review: staff-eng MAJOR-3 — machine-local
+    plugin.mirrors.coordinator-claude.live_path is now routed through the
+    same CLAUDE_PLUGIN_ROOT-shaped normalizer (not trusted as a repo root
+    unconverted) and gated on `<cand>/state` being a directory (BLOCKER-2)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
+        os.makedirs(os.path.join(_fake_root, ".claude-plugin"))
+        with open(os.path.join(_fake_root, ".claude-plugin", "plugin.json"), "w") as _f:
+            _f.write("{}")
+        os.makedirs(os.path.join(_fake_root, "state"))
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(
             reg,
@@ -383,19 +556,147 @@ def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
         assert reg.doe_root() == _fake_root
 
 
+def test_doe_root_rejects_live_path_content_root_without_git(monkeypatch):
+    """Review: staff-eng MAJOR-3, executed shape from the findings —
+    live_path pointing at a CONTENT root (`<repo>/coordinator`, no
+    `.claude-plugin/plugin.json` beside it in this fixture, i.e.
+    unrecognizable to the normalizer) must NOT be accepted as the repo root
+    unconverted; it must fall through to fail loud rather than the caller
+    double-nesting `coordinator/coordinator/...` beneath it."""
+    with _tempfile.TemporaryDirectory() as _content_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(
+            reg,
+            "_registry_machine_local_get",
+            lambda key: _content_root if key == "plugin.mirrors.coordinator-claude.live_path" else None,
+        )
+        with pytest.raises(reg._DoeUnresolvable):
+            reg.doe_root()
+
+
 def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
-    """The private-tree chain (rungs 6-7) survives untouched when none of the
-    new codename-free rungs 1-5 resolve."""
+    """The private-tree chain survives untouched when none of the
+    codename-free rungs resolve."""
     _clear_doe_root_env(monkeypatch)
     monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/fake/example-doctrine-repo")
     assert reg.doe_root() == "/fake/example-doctrine-repo"
 
 
+def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
+    """Review: staff-eng MAJOR-4, executed shape from the findings — with a
+    live `.doe-root` pointer AND an explicit DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO
+    override both present, the explicit override must win (it is an
+    operator's stated intent and cannot be present by accident); ambient
+    pointer-file state must not outrank it."""
+    with _tempfile.TemporaryDirectory() as _pointer_root, _tempfile.TemporaryDirectory() as _override_root:
+        _clear_doe_root_env(monkeypatch)
+        monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _pointer_root)
+        monkeypatch.setenv("DOE_ROOT", _override_root)
+        monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", _override_root)
+        assert reg.doe_root() == _override_root
+
+
 def test_doe_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
-    """With rungs 1-5 (codename-free) AND rungs 6-7 (legacy env/registry) all
+    """With every codename-free rung AND the legacy env/registry chain
     unreachable, doe_root() still fails loud with _DoeUnresolvable — the
     existing failure semantics callers rely on (WARN + skip, exit 0) are
     preserved, not silently swallowed by the new rungs."""
     _clear_doe_root_env(monkeypatch)
     with pytest.raises(reg._DoeUnresolvable):
         reg.doe_root()
+
+
+# ---------------------------------------------------------------------------
+# Characterisation tests for _mp_repo_root_from_plugin_root_candidate(),
+# pinning this call site's historical behaviour ahead of single-sourcing onto
+# coordinator_core.ops.coordinator_doe_root.repo_root_from_plugin_root_candidate()
+# (state/debt-backlog/2026-08-08-three-divergent-copies-of-the-plugin-roo-
+# 8d584d3b90d3.yaml). Do not "fix" any of these under cover of a future edit
+# without a separate, deliberate decision.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path):
+    """OSS-flat-vs-private disambiguation still works after delegation."""
+    repo_root = tmp_path / "doe-repo"
+    content_root = repo_root / "coordinator"
+    content_root.mkdir(parents=True)
+    (repo_root / ".claude-plugin").mkdir()
+    (repo_root / ".claude-plugin" / "plugin.json").write_text("{}")
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(str(content_root))
+
+    assert result == str(repo_root)
+
+
+def test_plugin_root_candidate_bare_drive_root_falls_through_unchanged(tmp_path, monkeypatch):
+    """KNOWN LATENT DIVERGENCE from coordinator_core's copy (B7): this call
+    site uses drive_root_guard="normpath", which -- unlike the engine
+    copy's drive_root_guard="preserve" -- truncates a bare Windows
+    drive-root-syntax candidate's internal working value from "C:\\" to
+    "C:" before probing it. That truncation is normally MASKED because the
+    unmatched-fallback branch returns the original `candidate` unchanged
+    (not the truncated working value) -- so for the common case (no
+    marketplace marker at the drive root) both guard shapes return the
+    same thing, pinned here. The divergence becomes externally visible only
+    if the truncated "C:" value itself matches something the "C:\\" value
+    would not have (e.g. a marketplace marker one path-join away from "C:"
+    vs "C:\\") -- reported to the EM/PM per the "KNOWN CROSS-COPY
+    DIVERGENCE" docstring note, not reproduced as a live failing case here
+    (constructing one needs a real marker at a drive root, not creatable
+    from a test fixture).
+    abs-path-ok: drive-root syntax fixture, not a hardcoded host path."""
+    drive_root = "C:" + "\\"
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(drive_root)
+
+    assert result == drive_root
+
+
+def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platform(tmp_path):
+    """KNOWN DIVERGENCE from coordinator_core's copy: this call site uses
+    basename_compare="casefold", which is case-insensitive on every
+    platform (not just Windows, unlike the engine copy's normcase-based
+    compare). Pins current behaviour."""
+    repo_root = tmp_path / "doe-repo"
+    content_root = repo_root / "COORDINATOR"
+    content_root.mkdir(parents=True)
+    (repo_root / ".claude-plugin").mkdir()
+    (repo_root / ".claude-plugin" / "plugin.json").write_text("{}")
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(str(content_root))
+
+    assert result == str(repo_root)
+
+
+def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
+    """This call site does NOT carry the engine copy's B5 manifest-relpath
+    fallback: a private example-doctrine-repo repo root with no marketplace marker anywhere
+    must fall through unnormalized, unlike
+    coordinator_core.ops.coordinator_doe_root's B5-fixed copy."""
+    repo_root = tmp_path / "doe-repo"
+    content_root = repo_root / "coordinator"
+    (content_root / "schemas").mkdir(parents=True)
+    (content_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(str(content_root))
+
+    assert result == str(content_root)
+
+
+def test_plugin_root_candidate_allow_unchanged_fallback_true_returns_candidate(tmp_path):
+    candidate = str(tmp_path / "unrecognized")
+    os.makedirs(candidate)
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(candidate, allow_unchanged_fallback=True)
+
+    assert result == candidate
+
+
+def test_plugin_root_candidate_allow_unchanged_fallback_false_returns_empty(tmp_path):
+    candidate = str(tmp_path / "unrecognized")
+    os.makedirs(candidate)
+
+    result = reg._mp_repo_root_from_plugin_root_candidate(candidate, allow_unchanged_fallback=False)
+
+    assert result == ""

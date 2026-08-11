@@ -19,9 +19,11 @@ Deliberately does NOT reuse coordinator/bin/lib/cc_invoke.py's own `cc_invoke()`
 function: that sibling spawns coordinator_core.invoke WITHOUT `--bare` and
 unwraps a full JSON-RPC envelope (`envelope["result"]`), a different wire shape
 than the bash oracle's `--bare`/`--params-file` transport this script's own
-parity test (append-goal-event-facade.test.sh) exercises. Only
-`_resolve_claude_klabauter_root()` is reused from that module; the spawn+fail-closed
-ladder below is a local, `--bare`-shaped mirror of coordinator-core-invoke.sh's
+parity test (append-goal-event-facade.test.sh) exercises. `_resolve_claude_klabauter_root()`,
+`_op_timeout_ceiling()`, and `_timeout_exceeded_message()` are reused from that
+module (the timeout ceiling and its remedy text, not the wire transport, per
+coordinator:code-reviewer P3, 2026-08-08); the spawn+fail-closed ladder below is
+otherwise a local, `--bare`-shaped mirror of coordinator-core-invoke.sh's
 cc_invoke(), scoped to this one call site.
 
 Usage (extended from the pre-port bash body — zero caller repoints for the
@@ -86,7 +88,11 @@ import tempfile
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import (  # noqa: E402
+    _op_timeout_ceiling,
+    _resolve_claude_klabauter_root,
+    _timeout_exceeded_message,
+)
 
 
 def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[str, object]:
@@ -99,14 +105,11 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
     IS the result object directly -- no jsonrpc/id/result envelope to unwrap.
 
     Raises RuntimeError on any transport/op failure (never returns on failure).
-    """
-    try:
-        timeout = int(os.environ.get("CC_INVOKE_TIMEOUT_SECS", "10") or "10")
-        if timeout <= 0:
-            raise ValueError
-    except ValueError:
-        timeout = 10
 
+    Timeout ceiling and the TimeoutExpired remedy text are computed via cc_invoke.py's
+    own `_op_timeout_ceiling`/`_timeout_exceeded_message` (not re-derived here) — see
+    Review note on the except-branch below.
+    """
     claude_klabauter_root = _resolve_claude_klabauter_root()
 
     env = dict(os.environ)
@@ -115,6 +118,8 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
     existing_pp = env.get("PYTHONPATH", "")
     if f"{sep}{claude_klabauter_root}{sep}" not in f"{sep}{existing_pp}{sep}":
         env["PYTHONPATH"] = f"{claude_klabauter_root}{sep}{existing_pp}" if existing_pp else claude_klabauter_root
+
+    timeout = _op_timeout_ceiling(op, claude_klabauter_root, env)
 
     params_fh = tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="cc-invoke-params-", delete=False, encoding="utf-8"
@@ -145,10 +150,12 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
                 **no_console_creationflags(),
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"cc_invoke: engine timeout after {timeout}s (op={op}) — "
-                "coordinator_core.invoke did not respond"
-            ) from exc
+            # Review: coordinator:code-reviewer P3 (2026-08-08) — was a third, divergent
+            # hand-built "engine timeout after Ns" message with no ceiling derivation
+            # (same defect class AC7 targets, minus the install-blame text). Routed
+            # through cc_invoke.py's shared _timeout_exceeded_message instead of
+            # duplicating it a third time.
+            raise RuntimeError(_timeout_exceeded_message(op, timeout)) from exc
     finally:
         try:
             os.unlink(params_fh.name)

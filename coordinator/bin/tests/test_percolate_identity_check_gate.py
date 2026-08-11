@@ -389,6 +389,33 @@ class _StubClaudeKlabauter:
     def run_identity_check(self, dest):
         return run_identity_check(dest)
 
+    def run_parse_sweep(self, repo_root):
+        # `dispatch_end_of_run_function_gate` (chunk C4B, added after this
+        # fixture was authored) calls this unconditionally for every reached
+        # repo root once a run has zero failed rows — sibling gap noted in
+        # `test_publish_row_isolation.py`'s `_FakeClaudeKlabauter` docstring. A
+        # parse-clean, zero-file sweep result is a no-op for this file's own
+        # identity-check assertions.
+        return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
+
+    def enumerate_gate_entrypoints(self, repo_root):
+        # `dispatch_end_of_run_entrypoint_gate` (chunk C3, same sibling gap)
+        # calls this unconditionally too. This fixture's repo roots ship no
+        # entrypoints, so an empty tuple short-circuits that gate's loop.
+        return ()
+
+
+def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
+    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
+    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
+    # `totals.processed` did not advance" as a FAILED row — a `None`-
+    # returning no-op fake (this fixture's original shape) therefore marks
+    # every row FAILED before any end-of-run gate (the thing this file
+    # actually tests) is ever reached. Advance `totals.processed` to model
+    # the row genuinely landing, matching every other `main()`-driving
+    # publish test fixture in this package.
+    totals.processed += 1
+
 
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     """Monkeypatch every `main()` precondition OTHER than the end-of-run
@@ -417,7 +444,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "process_target", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
 
 
 class TestEndOfRunIdentityCheckMainWiring:

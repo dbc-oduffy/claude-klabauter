@@ -182,6 +182,24 @@ class TestNoUnscopedMode:
         result = _run_cli(scratch_repo, "--", "mine.txt")
         assert result.returncode == 2
 
+    def test_repeated_dash_m_is_a_usage_error_not_a_silent_overwrite(
+        self, scratch_repo
+    ):
+        """A second -m must never silently discard the first subject: this
+        tool takes exactly one subject and does not concatenate repeated -m
+        like `git commit` does."""
+        result = _run_cli(
+            scratch_repo, "-m", "subject one", "-m", "subject two", "--", "mine.txt"
+        )
+        assert result.returncode == 2
+        assert "second" in result.stderr
+        assert "-m" in result.stderr
+        assert "-F" in result.stderr or "--file" in result.stderr
+
+    def test_single_dash_m_still_parses_unchanged(self, scratch_repo):
+        result = _run_cli(scratch_repo, "-m", "subject", "--", "mine.txt")
+        assert result.returncode == 0
+
     def test_paths_are_not_mistaken_for_flags_after_the_separator(self, scratch_repo):
         """Everything after `--` is a pathspec in git's own sense; a path that
         looks like a flag must not be re-parsed as one."""
@@ -235,6 +253,25 @@ class TestMechanismSelection:
 
         assert _git(scratch_repo, "show", "HEAD:mine.txt") == "STAGED\n"
         assert target.read_text(encoding="utf-8") == "WORKTREE-ONLY\n"
+        # P1 fix (state/bug-backlog/2026-08-10-scoped-git-commit-reports-
+        # success-while-334e90d707f9.yaml): a staged-only commit is a
+        # legitimate success (exit 0, asserted above), but must not print a
+        # bare `committed <sha>` — the excluded worktree edit is named.
+        assert "committed" in result.stdout
+        assert "WARNING" in result.stdout
+        assert "mine.txt" in result.stdout
+
+    def test_clean_path_output_carries_no_exclusion_warning(self, scratch_repo):
+        """Silence on the clean path (agree branch): byte-identical to
+        today's output when nothing diverged."""
+        target = scratch_repo / "mine.txt"
+        target.write_text("content\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+
+        result = _run_cli(scratch_repo, "-m", "agree: commit worktree", "--", "mine.txt")
+        assert result.returncode == 0, result.stderr
+
+        assert "WARNING" not in result.stdout
 
 
 def _load_cli_module():
@@ -291,80 +328,40 @@ class TestPushReporting:
         assert "not pushed" not in line
 
 
-class TestOwnershipVerdictReporting:
-    """A consumer-side transcript must certify itself (example-cockpit-repo-em,
-    2026-08-04). The probe ran the op to completion and got exactly one line —
-    `committed 8c246dfadf98 (pushed)` — with no way to tell whether the
-    ownership gate had evaluated: only its DENY path emitted anything. An
-    ALLOW that leaves no trace is indistinguishable, in every transcript that
-    matters, from no gate at all.
+class TestWorktreeExcludedReporting:
+    """P1 fix (state/bug-backlog/2026-08-10-scoped-git-commit-reports-
+    success-while-334e90d707f9.yaml): the private-index branch's success
+    must be loud about which worktree edits it excluded, and silent
+    (byte-identical to today) when nothing was excluded.
     """
 
-    def test_allow_verdict_rides_the_success_line(self, render):
+    def test_worktree_excluded_renders_a_loud_warning(self, render):
         line = render(
             {
                 "committed": True,
                 "sha": "a" * 40,
-                "push_state": "pushed",
-                "ownership_gate": {
-                    "verdict": "allowed",
-                    "owner_session_id": "sess-abc",
-                    "include_orphans": False,
-                },
+                "push_state": "no-remote",
+                "worktree_excluded": ["mine.txt"],
             }
         )
-        assert line == (
-            "committed %s (pushed) [ownership=allowed owner=sess-abc "
-            "include_orphans=false]" % ("a" * 12)
-        )
+        assert "WARNING" in line
+        assert "mine.txt" in line
 
-    def test_include_orphans_in_effect_is_visible(self, render):
+    def test_no_exclusion_key_renders_exactly_as_before(self, render):
+        line = render({"committed": True, "sha": "b" * 40, "push_state": "no-remote"})
+        assert "WARNING" not in line
+        assert line == "committed %s (no remote)" % ("b" * 12)
+
+    def test_empty_exclusion_list_renders_no_warning(self, render):
         line = render(
             {
                 "committed": True,
-                "sha": "b" * 40,
-                "push_state": "pushed",
-                "ownership_gate": {
-                    "verdict": "allowed",
-                    "owner_session_id": "sess-abc",
-                    "include_orphans": True,
-                },
+                "sha": "c" * 40,
+                "push_state": "no-remote",
+                "worktree_excluded": [],
             }
         )
-        assert "include_orphans=true" in line
-
-    def test_unimportable_helper_does_not_read_as_an_allow(self, render):
-        line = render(
-            {
-                "committed": False,
-                "reason": "empty-commit-set",
-                "ownership_gate": {
-                    "verdict": "helper-unimportable",
-                    "owner_session_id": None,
-                    "include_orphans": False,
-                },
-            }
-        )
-        assert "NOT EVALUATED" in line
-        assert "ownership=allowed" not in line
-        assert "owner=unknown" in line
-
-    def test_pre_field_engine_renders_the_line_it_always_did(self, render):
-        """An engine older than this CLI sends no `ownership_gate`. The suffix
-        must vanish entirely rather than assert an unknown verdict — the same
-        seam-skew discipline `_PUSH_NOTES`' pre-tri-state fallback keeps.
-        """
-        line = render({"committed": True, "sha": "c" * 40, "push_state": "pushed"})
-        assert line == "committed %s (pushed)" % ("c" * 12)
-
-    def test_end_to_end_success_line_carries_the_verdict(self, scratch_repo):
-        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
-        _seed_session_scope(scratch_repo, ["mine.txt"])
-
-        result = _run_cli(scratch_repo, "-m", "scoped: mine only", "--", "mine.txt")
-        assert result.returncode == 0, result.stderr
-        assert "committed" in result.stdout
-        assert "[ownership=allowed owner=%s" % _TEST_SESSION_ID in result.stdout
+        assert "WARNING" not in line
 
 
 class TestRefusalReporting:
@@ -425,6 +422,38 @@ class TestRefusalReporting:
         assert "REFUSED" in line
         assert "escapes repo root" in line
 
+    def test_partial_decline_never_leads_with_bare_committed(self, render):
+        """P1 live incident (2026-08-10): a 55-path call that landed 1 path
+        and DECLINED 54 rendered `"committed <sha> (declined) — DECLINED 54
+        named path(s) ..."` -- a reader (or a caller grepping `^committed`)
+        sees the word `committed` first and the decline second, exactly
+        backwards for a run that mostly failed.
+        """
+        line = render(
+            {
+                "committed": True,
+                "sha": "a" * 40,
+                "push_state": "pushed",
+                "declined_paths": [
+                    {"path": "x.yaml", "reason": "not found in the worktree or index"}
+                ],
+            }
+        )
+        assert not line.startswith("committed")
+        assert line.startswith("PARTIAL")
+        assert "DECLINED 1 named path(s)" in line
+
+    def test_push_declined_note_never_collides_with_a_path_decline(self, render):
+        """`push_state == "declined"` (a branch-policy push decline) used to
+        render as the bare word "declined" -- visually identical to
+        `_declined_note`'s own "DECLINED N named path(s)" wording, on every
+        commit whose branch policy declines the push, including a fully
+        clean one with nothing else wrong.
+        """
+        line = render({"committed": True, "sha": "a" * 40, "push_state": "declined"})
+        assert "branch policy" in line
+        assert "DECLINED" not in line
+
 
 @pytest.fixture(scope="module")
 def exit_code_for_result():
@@ -476,14 +505,19 @@ class TestRefusalExitCode:
         result = {"committed": False, "commit_failed": True, "diagnostics": ["exit_code=1"]}
         assert exit_code_for_result(result) == 0
 
-    def test_ownership_denial_exits_nonzero_end_to_end(self, scratch_repo):
-        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
-        # Deliberately NOT seeding session scope for "mine.txt" -- the
-        # ownership gate denies, and `main()` returns an "error"-shaped dict
-        # with no "committed" key at all.
-        result = _run_cli(scratch_repo, "-m", "scoped: unowned", "--", "mine.txt")
-        assert result.returncode != 0, result.stdout
-        assert result.returncode != 2  # not a usage error -- the op ran and refused
+    def test_partial_decline_exits_nonzero_even_when_committed(self, exit_code_for_result):
+        """P1 live incident (2026-08-10): `committed: true` (1 of 55 landed)
+        previously exited 0 regardless of `declined_paths` -- a caller
+        checking only the return code saw success on a run that silently
+        dropped 54 named paths.
+        """
+        result = {
+            "committed": True,
+            "sha": "a" * 40,
+            "push_state": "pushed",
+            "declined_paths": [{"path": "x.yaml", "reason": "..."}],
+        }
+        assert exit_code_for_result(result) != 0
 
 
 class TestMessageFromFile:
@@ -589,3 +623,85 @@ class TestMoveSet:
         assert "archive/mine.txt" in name_status
         assert not (scratch_repo / "mine.txt").exists()
         assert (scratch_repo / "archive" / "mine.txt").exists()
+
+
+class TestMangledCarriageReturnPaths:
+    """P1 live incident (2026-08-10): a 55-path `scoped-git-commit` call
+    composed its pathspec from a CRLF-authored file via unquoted
+    `$(cat file | tr '\\n' ' ')` (a plausible, common Windows-side pattern --
+    Notepad, PowerShell `Out-File`, `git status --porcelain` piped through a
+    tool that re-adds CRLF). `tr` only ever sees `\\n`, so the `\\r` half of
+    each CRLF survives into the shell word, gluing a trailing carriage
+    return onto every path token but the last. `explicit_stage()`'s
+    `(root / p).exists()` check then, HONESTLY, finds nothing at
+    `<path>\\r` -- 54 of 55 paths declined with a reason that reads, in
+    isolation, exactly like a real absence. The fix belongs at this CLI's
+    own argument boundary (never in `explicit_stage`, which behaved
+    correctly against the input it was actually given): no real path can
+    legitimately end in `\\r`, so a trailing `\\r` on a `-- <paths>` token is
+    unambiguous transport damage, stripped here with a named warning.
+
+    Isolated-fixture bisection at N up to 60 (both a clean argv array and
+    the exact word-splitting shell form) never reproduced the incident
+    shape until the CRLF ingredient was added -- confirming the defect was
+    never a batch-size threshold in the engine.
+    """
+
+    def test_parse_args_strips_trailing_cr_and_reports_it(self):
+        module = _load_cli_module()
+        subject, repo, paths, as_json, include_orphans, deliverable_id, mangled = (
+            module._parse_args(
+                ["-m", "msg", "--", "a/one.txt\r", "a/two.txt\r", "a/three.txt"]
+            )
+        )
+        assert paths == ["a/one.txt", "a/two.txt", "a/three.txt"]
+        assert mangled == ["a/one.txt\r", "a/two.txt\r"]
+
+    def test_parse_args_reports_no_mangling_on_clean_paths(self):
+        module = _load_cli_module()
+        _, _, paths, _, _, _, mangled = module._parse_args(
+            ["-m", "msg", "--", "a/one.txt", "a/two.txt"]
+        )
+        assert paths == ["a/one.txt", "a/two.txt"]
+        assert mangled == []
+
+    def test_crlf_word_split_pathspec_commits_end_to_end(self, scratch_repo, tmp_path):
+        """The exact repro shape: N tracked files, all but the last named
+        with a trailing `\\r` (the shape `tr '\\n' ' '` over a CRLF file with
+        no final CRLF on the last line produces), passed through unquoted
+        `$(...)` word-splitting. Must commit all N, not decline N-1.
+        """
+        names = []
+        for i in range(12):
+            name = "state/sizings/2026-08-10-mangled-cr-fixture-%02d.yaml" % i
+            (scratch_repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+            (scratch_repo / name).write_text("initial\n", encoding="utf-8")
+            names.append(name)
+        _git(scratch_repo, "add", "-A")
+        _git(scratch_repo, "commit", "-qm", "seed sizings")
+        for name in names:
+            with open(scratch_repo / name, "a", encoding="utf-8") as fh:
+                fh.write("dirty\n")
+
+        _seed_session_scope(scratch_repo, names)
+
+        # Mirror the incident's own composition: every token but the last
+        # carries a trailing '\r' -- the shape `tr '\n' ' '` produces over a
+        # CRLF-authored, no-final-newline file.
+        mangled_argv = [name + "\r" for name in names[:-1]] + [names[-1]]
+
+        result = _run_cli(
+            scratch_repo, "-m", "commit all sizings", "--json", "--", *mangled_argv
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "stripped a trailing carriage return" in result.stderr
+        assert "declined_paths" not in result.stdout
+
+        import json
+
+        payload = json.loads(result.stdout)
+        assert payload.get("committed") is True
+        assert not payload.get("declined_paths")
+
+        status = _git(scratch_repo, "status", "--porcelain")
+        assert status.strip() == ""

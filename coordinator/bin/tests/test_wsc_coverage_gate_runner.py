@@ -205,6 +205,50 @@ def test_coverage_gate_indeterminate_malformed_empty_verdict_halts(monkeypatch, 
 
 
 # ---------------------------------------------------------------------------
+# coverage-gate — chain-ancestry waiver minting default-on, --no-mint opt-out
+#
+# 2026-08-10 (state/audits/2026-08-10 session-shape-misclassification
+# fallout): a prior dispatch inverted this default to opt-in, which
+# regressed the ordinary halt->disposition->re-run path (a re-run would
+# halt again on the same uncovered set). Reverted — the actual fix for the
+# misclassification incident is the LIVE-foreign-chain-owner refusal at the
+# mint site itself (coordinator_core.chain_ancestry_waivers.
+# record_chain_ancestry_waiver), not a narrower default. Pins the ACTUAL
+# behaviour through `_mod.main` (the real argv entrypoint +
+# `_run_review_coverage_gate` call site), not merely a default-parameter-
+# value assertion.
+# ---------------------------------------------------------------------------
+
+
+def _run_gate_capturing_mint(monkeypatch, argv_tail, handoff="state/handoffs/x.md"):
+    calls = []
+
+    def _fake(from_handoff, mint_chain_waivers=True):
+        calls.append(mint_chain_waivers)
+        return (0, "range=dag:x chain_commits=1 covered=1 uncovered=0 VERDICT=COVERED\n", "")
+
+    monkeypatch.setattr(_mod, "_run_review_coverage_gate", _fake)
+    rc = _mod.main(["coverage-gate", "--from-handoff", handoff, *argv_tail])
+    return rc, calls
+
+
+def test_coverage_gate_default_mints(monkeypatch, capsys):
+    """No `--no-mint` flag on the CLI -> the underlying gate is invoked with
+    mint_chain_waivers=True (default-on, restored)."""
+    rc, calls = _run_gate_capturing_mint(monkeypatch, [])
+    assert rc == 0
+    assert calls == [True]
+
+
+def test_coverage_gate_no_mint_flag_omits_mint(monkeypatch, capsys):
+    """`--no-mint` on the CLI -> mint_chain_waivers=False reaches the
+    underlying gate."""
+    rc, calls = _run_gate_capturing_mint(monkeypatch, ["--no-mint"])
+    assert rc == 0
+    assert calls == [False]
+
+
+# ---------------------------------------------------------------------------
 # coverage-gate — trail-range-termination disbelief predicate (SKILL.md:556)
 #
 # Regression coverage for the verified 2026-07-25 `work/machine-a/2026-07-21`
@@ -665,6 +709,49 @@ def test_write_trail_optional_scope_kind(monkeypatch):
     ])
     assert "--scope-kind" in captured_argv["argv"]
     assert "plan" in captured_argv["argv"]
+
+
+def test_write_trail_forwards_reviewer_evidence_when_given(monkeypatch):
+    """`--reviewer-evidence` is forwarded verbatim when supplied."""
+    captured_argv = {}
+
+    def _fake(argv):
+        captured_argv["argv"] = argv
+        return 0, "", ""
+
+    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
+    _mod.main([
+        "write-trail",
+        "--sha-range", "abc..def",
+        "--reviewer", "code-reviewer",
+        "--scope", "chain",
+        "--verdict", "ok",
+        "--diff-loc", "42",
+        "--reviewer-evidence", "state/subagent-share/sid/report.md",
+    ])
+    assert "--reviewer-evidence" in captured_argv["argv"]
+    assert "state/subagent-share/sid/report.md" in captured_argv["argv"]
+
+
+def test_write_trail_omits_reviewer_evidence_when_not_given(monkeypatch):
+    """`--reviewer-evidence` is omitted entirely from the forwarded argv
+    when not supplied — never forwarded as an empty string."""
+    captured_argv = {}
+
+    def _fake(argv):
+        captured_argv["argv"] = argv
+        return 0, "", ""
+
+    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
+    _mod.main([
+        "write-trail",
+        "--sha-range", "abc..def",
+        "--reviewer", "code-reviewer",
+        "--scope", "chain",
+        "--verdict", "ok",
+        "--diff-loc", "42",
+    ])
+    assert "--reviewer-evidence" not in captured_argv["argv"]
 
 
 def test_write_trail_propagates_failure(monkeypatch, capsys):
@@ -1246,6 +1333,178 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
     assert "1 planning-artifact commit(s) (owe a plan review, not a code review):" in err
     assert "1 of these 3 commit(s) are unrecordable by an ordinary review-trail write" in err
     assert "REMEDY: record a per-commit review-trail verdict for each of the remaining 2" in err
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-example-doctrine-repo-em-
+# brightline-unrecordable-narration-is-false.md): the foreign partition of the
+# uncovered-set diagnostic must consult the chain-ancestry waiver store before
+# asserting unrecordability. A waived foreign sha IS recordable — the write
+# guard honours the waiver this same runner mints — and the message must name
+# the per-commit `<sha>^..<sha>` form that works. Degradation direction is
+# inverted from this file's usual narrowing posture: an empty/failed waiver
+# lookup falls back to the old unrecordable wording, never to a false
+# recordable claim.
+# ---------------------------------------------------------------------------
+
+
+def _patch_foreign_narration_case(monkeypatch, tmp_path, chain_code_shas, foreign, vouched):
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(), None),
+    )
+    monkeypatch.setattr(
+        _mod, "_partition_foreign_uncovered_shas",
+        lambda shas, session_id: (
+            [s for s in shas if s in foreign],
+            [s for s in shas if s not in foreign],
+        ),
+    )
+    monkeypatch.setattr(_mod, "_resolve_vouched_shas", lambda session_id: frozenset(vouched))
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+
+
+def test_brightline_gate_all_foreign_waived_narrates_recordable_with_per_commit_range(
+    monkeypatch, tmp_path, capsys,
+):
+    """The refuted case from the memo: every uncovered commit is foreign but
+    every one carries a gate-minted chain-ancestry waiver for this chain, so
+    each IS recordable. The message must say so and must name the concrete-
+    endpoint per-commit form; the false unrecordable claim must be gone."""
+    chain_code_shas = ["foreign1", "foreign2"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(chain_code_shas),
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "2 of these 2 commit(s) are foreign-session" in err
+    assert "ARE RECORDABLE by this session" in err
+    assert 'coordinator-write-review-trail --sha-range "<sha>^..<sha>" --scope chain' in err
+    assert "unrecordable by an ordinary review-trail write" not in err
+
+
+def test_brightline_gate_all_foreign_unwaived_keeps_unrecordable_wording(
+    monkeypatch, tmp_path, capsys,
+):
+    """No waiver for any foreign sha — today's unrecordable wording is
+    correct and must survive verbatim, with no recordable claim."""
+    chain_code_shas = ["foreign1", "foreign2"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(),
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "ARE RECORDABLE by this session" not in err
+
+
+def test_brightline_gate_mixed_waiver_partitions_foreign_set_both_ways(
+    monkeypatch, tmp_path, capsys,
+):
+    """One waived foreign sha and one unwaived: both sub-partitions render,
+    each with its own count, and neither claim swallows the other."""
+    chain_code_shas = ["foreignwaived", "foreignbare"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched={"foreignwaived"},
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "1 of these 2 commit(s) are foreign-session" in err
+    assert "1 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
+
+
+def test_brightline_gate_waiver_lookup_failure_degrades_to_unrecordable(
+    monkeypatch, tmp_path, capsys,
+):
+    """Inverted fail-safe: an empty waiver-lookup result (the shape
+    `_resolve_vouched_shas` returns for an unreadable store, a missing repo
+    root, or any raising reader) must degrade to the pre-existing
+    unrecordable wording — never invent recordability."""
+    chain_code_shas = ["foreign1"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(),
+    )
+    monkeypatch.setattr(_mod, "_resolve_vouched_shas", lambda session_id: frozenset())
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "1 of these 1 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "RECORDABLE by this session" not in err
+
+
+def test_brightline_gate_warns_when_the_mint_subprocess_failed_before_minting(
+    monkeypatch, tmp_path, capsys,
+):
+    """The self-fulfilling-narration path (same memo, § "A mint we could not
+    confirm fired"): if the spawned review-coverage-gate.py dies before
+    minting, no waiver exists and every foreign sha reads unwaived — for a
+    reason that has nothing to do with the chain. rc alone cannot detect it
+    (an ordinary HALT verdict also exits 1); the absent `VERDICT=` stdout
+    line is what distinguishes a dead child from a halting gate."""
+    chain_code_shas = ["foreign1"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(),
+    )
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (1, "", "engine-won't-start"),
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "the chain-ancestry waiver mint could not be confirmed" in err
+    assert "engine-won't-start" in err
+
+
+def test_brightline_gate_halting_gate_is_not_mistaken_for_a_failed_mint(
+    monkeypatch, tmp_path, capsys,
+):
+    """The discriminator's other side: an ordinary HALT verdict exits 1 with a
+    VERDICT line on stdout — the engine ran and the mint fired, so the
+    could-not-confirm note must stay silent."""
+    chain_code_shas = ["foreign1"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(),
+    )
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (1, "VERDICT=WARN\n", ""),
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "could not be confirmed" not in err
+
+
+def test_brightline_gate_waiver_partition_does_not_move_denominator_or_verdict(
+    monkeypatch, tmp_path, capsys,
+):
+    """Rendering-only pin: crediting waivers in the narration must not change
+    `uncovered`/`chain_code_shas` counts, the HALT/NOTE branch, or the return
+    code relative to the unwaived rendering of the same set."""
+    chain_code_shas = ["foreign1", "foreign2"]
+    _patch_foreign_narration_case(
+        monkeypatch, tmp_path, chain_code_shas,
+        foreign=set(chain_code_shas), vouched=set(chain_code_shas),
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
+    assert "HALT:" not in err
+    assert "REMEDY: record a per-commit" not in err
 
 
 def test_brightline_gate_uncovered_denominator_and_verdict_unchanged_by_labeling(
@@ -2426,10 +2685,10 @@ def test_resolve_chain_code_shas_fails_safe_to_empty_when_dag_unresolvable(monke
 
 def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkeypatch, tmp_path):
     """`cmd_brightline_gate`'s PARTITION-MANDATORY branch must call the SAME
-    mint primitive `coverage-gate` uses (`_run_review_coverage_gate`, which
-    always passes `--mint-chain-waivers`) BEFORE it resolves discharge — so
-    a single `brightline-gate` invocation is self-sufficient regardless of
-    whether an EM ran `coverage-gate` first."""
+    mint primitive `coverage-gate` uses (`_run_review_coverage_gate`) BEFORE
+    it resolves discharge — so a single `brightline-gate` invocation is
+    self-sufficient regardless of whether an EM ran `coverage-gate` first.
+    This test only pins ordering."""
     calls = []
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
     monkeypatch.setattr(
@@ -2449,6 +2708,47 @@ def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkey
         "resolving discharge — a chain-terminal run starting from "
         "brightline-gate alone would reproduce the live deadlock"
     )
+
+
+def test_brightline_gate_default_mints(monkeypatch, tmp_path, capsys):
+    """No `--no-mint` on the CLI -> the PARTITION-MANDATORY branch's call to
+    `_run_review_coverage_gate` carries mint_chain_waivers=True (default-on,
+    restored)."""
+    calls = []
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (calls.append(mint_chain_waivers), (0, "", ""))[1],
+    )
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
+    _patch_chain_scoping(monkeypatch)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+
+    assert rc == 0
+    assert calls == [True]
+
+
+def test_brightline_gate_no_mint_flag_omits_mint(monkeypatch, tmp_path, capsys):
+    """`--no-mint` on the CLI -> mint_chain_waivers=False reaches the
+    underlying gate."""
+    calls = []
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(
+        _mod, "_run_review_coverage_gate",
+        lambda from_handoff, mint_chain_waivers=True: (calls.append(mint_chain_waivers), (0, "", ""))[1],
+    )
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
+    _patch_chain_scoping(monkeypatch)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md", "--no-mint"])
+
+    assert rc == 0
+    assert calls == [False]
 
 
 def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(

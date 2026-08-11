@@ -80,6 +80,24 @@ class _StubStaleClaims:
         self.list_stale_claim_handoffs = list_stale_claim_handoffs or (lambda *a, **k: [])
 
 
+class _StubClaimIndex:
+    """Stand-in for coordinator_core.session.claim_index, on its OWN seam
+    (_cli._import_claim_index_module) -- who-claims-path coverage."""
+
+    UNANSWERABLE = "__UNANSWERABLE__"
+
+    def __init__(self, *, lookup=None):
+        self.lookup = lookup or (lambda paths, cwd=None: {p: [] for p in paths})
+
+
+class _StubHolderEvidence:
+    """Stand-in for coordinator_core.pickup_assemble.holder_evidence, on its
+    OWN seam (_cli._import_holder_evidence_module) — AC7/AC8 coverage."""
+
+    def __init__(self, *, liveness_basis=None):
+        self.liveness_basis = liveness_basis or (lambda *a, **k: "stable-pid")
+
+
 @pytest.fixture()
 def stub_import_module():
     """Stub `_cli._import_module` (the claims seam) for the test body, then
@@ -113,6 +131,28 @@ def stub_import_stale_claims_module():
 
     yield _apply
     _cli._import_stale_claims_module = orig
+
+
+@pytest.fixture()
+def stub_import_claim_index_module():
+    orig = _cli._import_claim_index_module
+
+    def _apply(stub):
+        _cli._import_claim_index_module = lambda: stub
+
+    yield _apply
+    _cli._import_claim_index_module = orig
+
+
+@pytest.fixture()
+def stub_import_holder_evidence_module():
+    orig = _cli._import_holder_evidence_module
+
+    def _apply(stub):
+        _cli._import_holder_evidence_module = lambda: stub
+
+    yield _apply
+    _cli._import_holder_evidence_module = orig
 
 
 # ---------------------------------------------------------------------------
@@ -362,10 +402,52 @@ def test_path_traversal_sid_exits_malformed_code(stub_import_liveness_module):
     assert rc == _cli._MALFORMED_SID
 
 
+def test_colon_drive_letter_sid_exits_malformed_code(stub_import_liveness_module):
+    # Review: coordinator:code-reviewer — a blocklist of `/`, `\`, `..`, NUL
+    # did not reject a bare drive-letter/colon component, and on Windows
+    # `ntpath.join(base, "C:evil")` DISCARDS `base` entirely, a full
+    # containment escape out of the sessions corpus. liveness must never be
+    # consulted for such a sid.
+    def _fail_if_called(*a, **k):
+        raise AssertionError("liveness must not be consulted for a malformed sid")
+
+    stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
+    for bad_sid in ("C:evil", "C:\\evil", "C:/Windows/Temp/x"):  # abs-path-ok: attack-shaped sid literals, not a machine path citation
+        rc = _cli.main(["is-session-live", bad_sid])
+        assert rc == _cli._MALFORMED_SID
+        assert rc != _cli._NOT_LIVE
+
+
 def test_missing_sid_arg_exits_usage_error(stub_import_liveness_module):
     stub_import_liveness_module(_StubLiveness())
     rc = _cli.main(["is-session-live"])
     assert rc == 2
+
+
+def test_unexpected_exception_from_ungarded_callsite_exits_transport_fail_not_1(
+    monkeypatch,
+):
+    # Review: coordinator:code-reviewer — guard-per-callsite structural
+    # fragility. claim-artifact/release-artifact/clear-claim-if-dead route
+    # through `_call_claim_bool`, which only catches `ValueError` (the
+    # required-arg guard) — NOT a general engine failure. Before the
+    # top-level `main` safety net, an unexpected exception here (e.g. an
+    # `OSError` from the underlying claims.py call) propagated uncaught out
+    # of `main`, and an uncaught Python exception exits the interpreter with
+    # code 1 — indistinguishable from `_NOT_LIVE`'s "confirmed dead"
+    # verdict, exactly the claim-theft shape this file exists to close. The
+    # top-level backstop in `main` must catch it and exit `_TRANSPORT_FAIL`
+    # instead, regardless of which callsite forgot its own guard.
+    class _FakeClaimsModule:
+        @staticmethod
+        def claim_artifact(*a, **k):
+            raise OSError("simulated unexpected engine failure")
+
+    monkeypatch.setattr(_cli, "_import_module", lambda: _FakeClaimsModule())
+    rc = _cli.main(["claim-artifact", "handoff", "some-basename"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc != _cli._NOT_LIVE
+    assert rc != 1
 
 
 def test_cwd_arg_forwarded(stub_import_liveness_module):
@@ -388,6 +470,155 @@ def test_is_session_live_transport_failure_exits_3(stub_import_liveness_module):
     _cli._import_liveness_module = _raise_runtime_error
     rc = _cli.main(["is-session-live", "some-sid"])
     assert rc == _cli._TRANSPORT_FAIL
+
+
+def test_session_live_raise_exits_transport_fail_not_dead(
+    stub_import_liveness_module, capsys
+):
+    """Review: staff-eng-review A. session_live itself raising (e.g.
+    MissingPsutilError propagating past an unguarded Layer-1 arm) must NOT
+    exit _NOT_LIVE (1) -- this CLI's own header documents exit 1 as a
+    determinate "confirmed dead" verdict, which a bash arbitration caller
+    reads as permission to take a peer's claim. Reuse _TRANSPORT_FAIL (3),
+    never a new code."""
+
+    def _raise(*a, **k):
+        raise RuntimeError("simulated unexpected session_live failure")
+
+    stub_import_liveness_module(_StubLiveness(session_live=_raise))
+    rc = _cli.main(["is-session-live", "some-sid"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc == 3
+    assert rc != _cli._NOT_LIVE
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines == ["indeterminate"]
+
+
+def test_who_claims_path_session_live_raise_exits_transport_fail(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    """Same fail-open guard as is-session-live, for who-claims-path's own
+    liveness_mod.session_live call site."""
+
+    def _raise(*a, **k):
+        raise RuntimeError("simulated unexpected session_live failure")
+
+    stub_import_claim_index_module(
+        _StubClaimIndex(lookup=lambda paths, cwd=None: {p: ["some-sid"] for p in paths})
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=_raise))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc == 3
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines == ["indeterminate"]
+
+
+# ---------------------------------------------------------------------------
+# AC7/AC8/AC9: liveness_basis surfaced alongside the verdict, reusing
+# holder_evidence.liveness_basis (never a second derivation), with the
+# pre-existing live/dead token's position, spelling, and exit codes
+# unchanged from the baseline recorded above (line 1 == "live"/"dead"/
+# "indeterminate"; exit 0/1/2/3/4 unchanged).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "basis_value",
+    ["harness-registry", "stable-pid", "recency-window", "recency-window-mtime", "unknown"],
+)
+def test_live_sid_reports_liveness_basis_line(
+    stub_import_liveness_module, stub_import_holder_evidence_module, capsys, basis_value
+):
+    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
+    stub_import_holder_evidence_module(
+        _StubHolderEvidence(liveness_basis=lambda *a, **k: basis_value)
+    )
+    rc = _cli.main(["is-session-live", "some-sid"])
+    assert rc == 0
+    out_lines = capsys.readouterr().out.splitlines()
+    # Baseline token (AC9): line 1 is exactly "live", unchanged position/spelling.
+    assert out_lines[0] == "live"
+    assert out_lines[1] == f"liveness_basis:{basis_value}"
+
+
+def test_dead_sid_reports_liveness_basis_line(
+    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
+):
+    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
+    stub_import_holder_evidence_module(
+        _StubHolderEvidence(liveness_basis=lambda *a, **k: "recency-window")
+    )
+    rc = _cli.main(["is-session-live", "some-sid"])
+    assert rc == _cli._NOT_LIVE
+    assert rc == 1
+    out_lines = capsys.readouterr().out.splitlines()
+    # Baseline token (AC9): line 1 is exactly "dead", unchanged position/spelling.
+    assert out_lines[0] == "dead"
+    assert out_lines[1] == "liveness_basis:recency-window"
+
+
+def test_liveness_basis_call_reuses_holder_evidence_not_a_second_derivation(
+    stub_import_liveness_module, stub_import_holder_evidence_module
+):
+    """AC8: the CLI must call holder_evidence.liveness_basis(sid, cwd) — the
+    existing derivation — never compute a basis itself."""
+    seen = {}
+
+    def _liveness_basis(sid, cwd=None):
+        seen["args"] = (sid, cwd)
+        return "harness-registry"
+
+    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
+    stub_import_holder_evidence_module(_StubHolderEvidence(liveness_basis=_liveness_basis))
+    rc = _cli.main(["is-session-live", "some-sid", "/some/repo"])
+    assert rc == 0
+    assert seen["args"] == ("some-sid", "/some/repo")
+
+
+def test_liveness_basis_failure_degrades_to_unknown_without_changing_verdict(
+    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
+):
+    """Fail-soft additive output: a basis-derivation failure must not change
+    the live/dead token or exit code (AC9), and must not raise out of the
+    subcommand."""
+
+    def _raise(*a, **k):
+        raise RuntimeError("holder_evidence import failed in test")
+
+    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
+    _cli._import_holder_evidence_module = _raise
+    rc = _cli.main(["is-session-live", "some-sid"])
+    assert rc == 0
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines[0] == "live"
+    assert out_lines[1] == "liveness_basis:unknown"
+
+
+def test_malformed_sid_emits_no_liveness_basis_line(stub_import_liveness_module, capsys):
+    """Malformed/absent sid carries no decided verdict (exit 4) — no basis
+    line is appended; baseline single-line "indeterminate" output unchanged."""
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("liveness must not be consulted for a malformed sid")
+
+    stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
+    rc = _cli.main(["is-session-live", ""])
+    assert rc == _cli._MALFORMED_SID
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines == ["indeterminate"]
+
+
+def test_transport_failure_emits_no_liveness_basis_line(stub_import_liveness_module, capsys):
+    """Transport failure (exit 3) carries no decided verdict — no basis line,
+    no stdout at all, matching the pre-C3 baseline."""
+
+    def _raise_runtime_error():
+        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+
+    _cli._import_liveness_module = _raise_runtime_error
+    rc = _cli.main(["is-session-live", "some-sid"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert capsys.readouterr().out == ""
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +703,151 @@ def test_list_claims_by_session_transport_failure_exits_3():
         rc = _cli.main(["list-claims-by-session", "some-sid"])
     finally:
         _cli._import_module = orig
+    assert rc == _cli._TRANSPORT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# who-claims-path: reads the PATH-TOUCH plane (claim_index.lookup) + liveness
+# per claimant, TAB-delimited "<sid>\t<live|dead>" rows, exit 0. A separate
+# question from list-claims-by-session (artifact-claim store) above — see
+# the CLI's own comment block.
+# ---------------------------------------------------------------------------
+
+def test_who_claims_path_no_claimant_exits_0_no_output(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    stub_import_claim_index_module(
+        _StubClaimIndex(lookup=lambda paths, cwd=None: {p: [] for p in paths})
+    )
+    stub_import_liveness_module(_StubLiveness())
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_who_claims_path_with_claimants_reports_liveness_per_row(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: {p: ["sess-live", "sess-dead"] for p in paths}
+        )
+    )
+    stub_import_liveness_module(
+        _StubLiveness(session_live=lambda sid, cwd=None: sid == "sess-live")
+    )
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out == "sess-live\tlive\nsess-dead\tdead\n"
+
+
+def test_who_claims_path_unanswerable_exits_nonzero_not_unclaimed(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    def _fail_if_called(*a, **k):
+        raise AssertionError("liveness must not be consulted for an unanswerable path")
+
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: {p: [_StubClaimIndex.UNANSWERABLE] for p in paths}
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "could not be determined" in err
+    assert "NOT a verdict that the path is unclaimed" in err
+
+
+def test_who_claims_path_lookup_raise_exits_transport_fail(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    """Review: staff-eng slice-A P1 #1 — claim_index.lookup sits on the same
+    arm this commit hardened for session_live; an unguarded raise there must
+    not escape main() as a bare traceback (which exits 1, indistinguishable
+    from a determinate "confirmed dead"-shaped exit on this CLI)."""
+
+    def _raise(paths, cwd=None):
+        raise RuntimeError("simulated claim_index.lookup failure")
+
+    stub_import_claim_index_module(_StubClaimIndex(lookup=_raise))
+    stub_import_liveness_module(_StubLiveness())
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc == 3
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines == ["indeterminate"]
+
+
+def test_who_claims_path_multi_claimant_raise_mid_stream_emits_only_indeterminate(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    """Review: staff-eng slice-A P1 #2 — with N claimants, a raise on
+    claimant k must not have already printed k-1 well-formed "sid\tstate"
+    rows: that shape reads to a TAB-splitting consumer as a claimant
+    literally named "indeterminate" with an empty state, not an abort
+    marker. Buffering keeps the failure path's stdout exactly
+    ["indeterminate"], same as is-session-live's own contract."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: {
+                p: ["sess-live", "sess-raises", "sess-never-reached"] for p in paths
+            }
+        )
+    )
+
+    def _session_live(sid, cwd=None):
+        if sid == "sess-live":
+            return True
+        if sid == "sess-raises":
+            raise RuntimeError("simulated unexpected session_live failure")
+        raise AssertionError("claimant after the raise must not be consulted")
+
+    stub_import_liveness_module(_StubLiveness(session_live=_session_live))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc == 3
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines == ["indeterminate"]
+
+
+def test_who_claims_path_path_and_cwd_forwarded(
+    stub_import_claim_index_module, stub_import_liveness_module
+):
+    seen = {}
+
+    def _lookup(paths, cwd=None):
+        seen["lookup"] = (list(paths), cwd)
+        return {p: [] for p in paths}
+
+    stub_import_claim_index_module(_StubClaimIndex(lookup=_lookup))
+    stub_import_liveness_module(_StubLiveness())
+    rc = _cli.main(["who-claims-path", "some/path.txt", "/some/repo"])
+    assert rc == 0
+    assert seen["lookup"] == (["some/path.txt"], "/some/repo")
+
+
+def test_who_claims_path_missing_path_arg_exits_usage_error(
+    stub_import_claim_index_module, stub_import_liveness_module
+):
+    stub_import_claim_index_module(_StubClaimIndex())
+    stub_import_liveness_module(_StubLiveness())
+    rc = _cli.main(["who-claims-path"])
+    assert rc == 2
+
+
+def test_who_claims_path_transport_failure_exits_3(stub_import_liveness_module):
+    def _raise_import_error():
+        raise ImportError("coordinator_core.session.claim_index not importable in test")
+
+    orig = _cli._import_claim_index_module
+    _cli._import_claim_index_module = _raise_import_error
+    try:
+        rc = _cli.main(["who-claims-path", "some/path.txt"])
+    finally:
+        _cli._import_claim_index_module = orig
     assert rc == _cli._TRANSPORT_FAIL
 
 

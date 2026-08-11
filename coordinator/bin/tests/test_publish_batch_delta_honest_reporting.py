@@ -159,10 +159,10 @@ def test_git_is_clean_none_for_non_git_dir(tmp_path):
     assert publish._git_is_clean(d) is None
 
 
-def _make_target(name: str, dest_dir: Path, source_dir: Path):
+def _make_target(name: str, dest_dir: Path, source_dir: Path, *, mode: str = "mirror"):
     return publish.ResolvedTarget(
         name=name,
-        mode="mirror",
+        mode=mode,
         source_dir=source_dir,
         dest_dir=dest_dir,
     )
@@ -240,6 +240,9 @@ def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
 
 
 def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch):
+    """Repo-mode (non-mirror) destination: the clean-tree condition still
+    applies in full — a `--delta` publish must never let a skip paper over
+    a human's uncommitted edit sitting in a REPO-mode destination."""
     setup_dir = tmp_path / "setup"
     source_repo = tmp_path / "source"
     dest_repo = tmp_path / "dest"
@@ -250,7 +253,9 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
     (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
     _commit_all(dest_repo, "dest init")
 
-    target = _make_target("sample", dest_repo, source_repo)
+    # "manifest" is declared non-mirror-like (is_mirror_like=False) in
+    # percolate.publish_modes — a repo-mode destination for this check.
+    target = _make_target("sample", dest_repo, source_repo, mode="manifest")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
     source_sha = publish._delta_row_source_sha(target)
@@ -262,6 +267,112 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
     # Someone edited the published tree without committing — HEAD is
     # unchanged, but the working tree is now dirty. Must NOT skip.
     (dest_repo / "f.txt").write_text("edited by hand", encoding="utf-8")
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+
+
+# ---------------------------------------------------------------------------
+# Mirror-mode clean-tree exemption (bug-backlog
+# 2026-08-10-delta-is-unreachable-on-publish-mirrors-56a2531183a3.yaml) — a
+# publish mirror's working tree carries the drift of every prior publish
+# forever (C5/C6 of the swap plan never commit published bytes into it), so
+# the clean-tree condition can never hold there and must not gate a mirror
+# row's skip decision. The other four legs (dest-dir exists, store+
+# transform signature, source HEAD, destination HEAD) still do the real
+# work.
+# ---------------------------------------------------------------------------
+def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, monkeypatch):
+    """The genuinely-unchanged direction: a mirror row whose destination
+    carries the pipeline's own uncommitted prior-publish drift (dirty
+    working tree, HEAD unmoved) must still be provably unchanged and SKIP —
+    this is the exact case that was previously unreachable (measured: a
+    --delta run against an unchanged mirror row re-synced 189 files)."""
+    setup_dir = tmp_path / "setup"
+    source_repo = tmp_path / "source"
+    dest_repo = tmp_path / "dest"
+    _init_repo(source_repo)
+    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(source_repo, "source init")
+    _init_repo(dest_repo)
+    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(dest_repo, "dest init")
+
+    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
+    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
+
+    source_sha = publish._delta_row_source_sha(target)
+    dest_head = publish._git_head(dest_repo)
+    publish.write_delta_record(
+        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
+    )
+
+    # The mirror pipeline's own prior-publish output sitting uncommitted —
+    # exactly the permanent-drift state C5/C6 leave behind. HEAD is
+    # unmoved. Must skip.
+    (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is True
+
+
+def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path, monkeypatch):
+    """The genuinely-changed direction: even with the clean-tree leg
+    exempted, a mirror row whose SOURCE moved must NOT skip — a --delta
+    that skips a changed row would publish stale bytes to a public repo."""
+    setup_dir = tmp_path / "setup"
+    source_repo = tmp_path / "source"
+    dest_repo = tmp_path / "dest"
+    _init_repo(source_repo)
+    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(source_repo, "source init")
+    _init_repo(dest_repo)
+    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(dest_repo, "dest init")
+
+    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
+    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
+
+    source_sha = publish._delta_row_source_sha(target)
+    dest_head = publish._git_head(dest_repo)
+    publish.write_delta_record(
+        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
+    )
+
+    # Mirror's own uncommitted drift, same as the skip test above...
+    (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
+    # ...but the SOURCE also moved since the recorded publish. Must NOT
+    # skip regardless of the clean-tree exemption.
+    (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
+    _commit_all(source_repo, "source update")
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+
+
+def test_delta_row_unchanged_false_for_mirror_row_when_destination_head_advances(
+    tmp_path, monkeypatch
+):
+    """A mirror row whose DESTINATION repo advanced (a real commit landed —
+    e.g. a human or other automation committing into the mirror) since the
+    recorded publish must NOT skip, even with the clean-tree leg exempted:
+    conditions 3-5 (signature/source-HEAD/dest-HEAD) still do the real
+    correctness work for mirror rows."""
+    setup_dir = tmp_path / "setup"
+    source_repo = tmp_path / "source"
+    dest_repo = tmp_path / "dest"
+    _init_repo(source_repo)
+    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(source_repo, "source init")
+    _init_repo(dest_repo)
+    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
+    _commit_all(dest_repo, "dest init")
+
+    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
+    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
+
+    source_sha = publish._delta_row_source_sha(target)
+    dest_head = publish._git_head(dest_repo)
+    publish.write_delta_record(
+        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
+    )
+
+    (dest_repo / "g.txt").write_text("a real commit into the mirror", encoding="utf-8")
+    _commit_all(dest_repo, "dest advanced")
     assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
 
 

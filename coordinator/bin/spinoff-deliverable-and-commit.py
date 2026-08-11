@@ -61,7 +61,7 @@ import sys
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _no_console_kw, _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import _no_console_passthrough_kw, _resolve_claude_klabauter_root  # noqa: E402
 
 _TRANSPORT_FAIL = 3
 
@@ -220,7 +220,7 @@ def _cmd_commit_scope(args: argparse.Namespace, _read_frontmatter_field, _mint) 
     add_proc = subprocess.run(
         ["git", "add", "--"] + paths,
         cwd=args.cwd,
-        **_no_console_kw(_resolve_claude_klabauter_root()),
+        **_no_console_passthrough_kw(_resolve_claude_klabauter_root()),
     )
     if add_proc.returncode != 0:
         return add_proc.returncode
@@ -228,7 +228,7 @@ def _cmd_commit_scope(args: argparse.Namespace, _read_frontmatter_field, _mint) 
     commit_proc = subprocess.run(
         ["git", "commit", "-m", message, "--"] + paths,
         cwd=args.cwd,
-        **_no_console_kw(_resolve_claude_klabauter_root()),
+        **_no_console_passthrough_kw(_resolve_claude_klabauter_root()),
     )
     return commit_proc.returncode
 

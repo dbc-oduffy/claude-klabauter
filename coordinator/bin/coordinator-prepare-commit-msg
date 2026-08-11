@@ -89,6 +89,42 @@ Behaviour:
      Deliverable-Id stays omitted.
      Spec: cross-repo dispatch 2026-07-27 (`Deliverable-Id trailer never
      lands on cross-repo claude-klabauter commits` investigation).
+  3b. Scope-match tier + ambiguity gate (C4, importing C2's landed seam,
+     2026-08-10): between tier 0 (artifact-first) and step 4
+     (session-shape.json pickup) below, resolve this session's held plan
+     claims (``coordinator_core.session.claimed_plan.list_held_plan_claims``,
+     C1a's ``[(plan_path, claimed_at), ...]`` shape) and try
+     ``coordinator_core.git.commit_trailers.resolve_deliverable_id_from_scope_match``
+     — a code-only commit whose staged pathspec is strictly covered by
+     exactly ONE claimed plan's ``scope:`` frontmatter resolves to that
+     plan's ``deliverable_id``. Both this tier AND the ambiguity gate
+     (``session_holds_multiple_plan_claims`` — a session holding 2+ plan
+     claims with neither tier 0 nor this scope-match tier disambiguating
+     OMITS rather than guesses, since every tier below is session-keyed and
+     cannot tell which held claim a given commit is for) are IMPORTED, not
+     re-mirrored, from ``coordinator_core.git.commit_trailers`` — C2's
+     REQUIRED INTERFACE, its sole two new exports. Verified live at C4 time:
+     importing them triggers ZERO ``coordinator_core.ops`` module imports
+     (that package's own eager ~161-module sweep never fires), so this
+     import is as cheap on the hot commit-hook path as the pre-existing
+     claimed-plan import in step 4b below. Lazily imported the same way, via
+     ``_ensure_claude_klabauter_on_syspath()`` / ``cc_invoke.resolve_colocated_claude_klabauter_root``.
+     ORDERING DEPENDENCY (reviewer finding, 2026-08-10): the "zero
+     ``coordinator_core.ops`` imports" property holds only because
+     ``_ensure_claude_klabauter_on_syspath()`` imports ``cc_invoke`` first, and
+     ``cc_invoke``'s own module-import sets ``sys._coordinator_core_lazy_ops``
+     as a side effect before this tier's lazy ``commit_trailers`` import ever
+     runs. Reordering this ladder to reach step 3b before
+     ``_ensure_claude_klabauter_on_syspath()`` has run, or a future caller of
+     ``resolve_deliverable_id_from_scope_match`` that skips that bootstrap,
+     silently reintroduces the eager ~161-module sweep on the commit hot
+     path — nothing here catches that regression, so preserve the ordering.
+     Mirrored-pair maintenance note (module docstring, above): this tier is
+     the ONE exception to "hand-mirrored, changed in both by hand" — C2's
+     scope-match tier and ambiguity predicate are IMPORTED here verbatim, so
+     a change to either lives in exactly one place
+     (``coordinator_core/git/commit_trailers.py``) and this hook picks it up
+     automatically; do not hand-roll a second implementation of either.
   4b. Claimed-plan fallback (2026-08-01): steps 4/4a both key off
      ``pickup.deliverable_id``, populated ONLY by ``record_pickup`` on a
      ``/pickup`` of a HANDOFF. A session that claims a PLAN directly and
@@ -432,6 +468,78 @@ def _resolve_deliverable_id_from_paths(
     )
 
 
+def _list_held_plan_claims(cwd: str) -> list:
+    """Lazy wrapper over ``coordinator_core.session.claimed_plan
+    .list_held_plan_claims`` (C1a) -- the SAME bootstrap
+    (``_ensure_claude_klabauter_on_syspath``) step 4b's claimed-plan lookup already
+    performs, reused rather than re-derived. Feeds both the scope-match tier
+    and the ambiguity gate below (step 3b of the module docstring) with the
+    ONE enumeration both consume. Never raises -- an unresolvable claude-klabauter
+    root, an import failure, or any exception from the callee all degrade to
+    ``[]``, the same omit-rather-than-guess contract ``list_held_plan_claims``
+    itself documents."""
+    claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
+    if not claude_klabauter_root:
+        return []
+    try:
+        from coordinator_core.session.claimed_plan import list_held_plan_claims
+
+        return list_held_plan_claims(cwd)
+    except Exception:
+        return []
+
+
+def _resolve_deliverable_id_from_scope_match(cwd: str, paths: list, claims: list) -> str:
+    """Lazy import of C2's landed
+    ``coordinator_core.git.commit_trailers.resolve_deliverable_id_from_scope_match``
+    -- step 3b of the module docstring. IMPORTED, not re-mirrored: verified
+    live (C4) to trigger zero ``coordinator_core.ops`` module imports, so
+    this costs no more than the pre-existing claimed-plan import below. That
+    zero-import property depends on ``_ensure_claude_klabauter_on_syspath()`` (called
+    just below) having already imported ``cc_invoke`` -- see the module
+    docstring's ORDERING DEPENDENCY note under step 3b before reordering
+    this call relative to that bootstrap.
+    Never raises -- an unresolvable claude-klabauter root, an import failure, or any
+    exception from the callee all degrade to ``""`` (tier abstains, caller
+    falls through)."""
+    claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
+    if not claude_klabauter_root:
+        return ""
+    try:
+        from coordinator_core.git.commit_trailers import (
+            resolve_deliverable_id_from_scope_match,
+        )
+
+        return resolve_deliverable_id_from_scope_match(cwd, paths, claims)
+    except Exception:
+        return ""
+
+
+def _session_holds_multiple_plan_claims(claims: list) -> bool:
+    """Lazy import of C2's landed
+    ``coordinator_core.git.commit_trailers.session_holds_multiple_plan_claims``
+    -- the ambiguity-gate predicate, step 3b of the module docstring.
+    IMPORTED, not re-mirrored, for the same reason as
+    ``_resolve_deliverable_id_from_scope_match`` above. Any import/lookup
+    failure degrades to ``False`` -- the SAFE direction here is to NOT gate
+    (fall through to the session-keyed tiers, today's behaviour), never to
+    silently omit a resolvable trailer because the ambiguity check itself
+    errored."""
+    if not claims:
+        return False
+    claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
+    if not claude_klabauter_root:
+        return False
+    try:
+        from coordinator_core.git.commit_trailers import (
+            session_holds_multiple_plan_claims,
+        )
+
+        return session_holds_multiple_plan_claims(claims)
+    except Exception:
+        return False
+
+
 def _resolve_deliverable_id_from_claimed_plan() -> str:
     """Step 4b of the module docstring: the same-session plan-execute path
     (no handoff). Reached only when steps 4 and 4a both miss.
@@ -503,10 +611,17 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
 
 
 def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" = None) -> str:
-    """Step 3a (tier 0) + steps 4 + 4a + 4b of the module docstring: check
-    the committed artifact(s) named by ``paths`` first (tier 0 — the
-    multi-baton-session fix; see ``_resolve_deliverable_id_from_paths``),
-    then ``git_dir`` (the common single-baton case — a commit landed in the
+    """Step 3a (tier 0) + step 3b (scope-match tier + ambiguity gate,
+    imported from C2's landed seam) + steps 4 + 4a + 4b of the module
+    docstring: check the committed artifact(s) named by ``paths`` first
+    (tier 0 — the multi-baton-session fix; see
+    ``_resolve_deliverable_id_from_paths``), then a code-only commit's
+    pathspec against every plan this session holds a claim on (step 3b —
+    see ``_resolve_deliverable_id_from_scope_match``), gated by
+    ``_session_holds_multiple_plan_claims`` (a 2+-claim session that neither
+    tier above disambiguated OMITS the trailer rather than guessing among
+    the session-keyed tiers below), then ``git_dir`` (the common
+    single-baton case — a commit landed in the
     same repo ``/pickup`` ran in), then example-doctrine-repo's own git-dir (the
     cross-repo case — a commit landed directly into claude-klabauter under the
     standing example-doctrine-repo→claude-klabauter write grant), then the session's claimed PLAN (the
@@ -536,6 +651,18 @@ def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" 
             deliverable_id = ""
         if deliverable_id:
             return deliverable_id
+
+    # Step 3b: scope-match tier + ambiguity gate (C4, importing C2's landed
+    # seam). cwd is this process's own cwd -- the repo the commit is landing
+    # in, matching what the git hook always runs against.
+    cwd = os.getcwd()
+    claims = _list_held_plan_claims(cwd)
+    deliverable_id = _resolve_deliverable_id_from_scope_match(cwd, paths or [], claims)
+    if deliverable_id:
+        return deliverable_id
+    if _session_holds_multiple_plan_claims(claims):
+        return ""
+
     deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
     if deliverable_id:
         return deliverable_id

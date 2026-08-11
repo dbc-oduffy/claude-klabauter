@@ -29,6 +29,11 @@ from pathlib import Path
 
 import pytest
 
+# `_init_git_repo` shells out to real `git` subprocesses (init/config/add/
+# commit) to build a fixture repo for `held_lock`'s `git_common_dir()`
+# resolution — real process spawn at function scope, not a mock.
+pytestmark = [pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -106,6 +111,24 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
         def resolve_target(self, store, name):
             raise KeyError(name)
 
+        def run_parse_sweep(self, repo_root):
+            # `dispatch_end_of_run_function_gate` calls this unconditionally
+            # for every reached repo root (§ C4C brief) — this fixture's
+            # dest dirs contain nothing but `.gitkeep`, so a parse-clean,
+            # zero-file sweep result is the honest answer, not a stand-in.
+            return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
+
+        def enumerate_gate_entrypoints(self, repo_root):
+            # `dispatch_end_of_run_entrypoint_gate` calls this unconditionally
+            # too (§ chunk C3). This fixture's dest dirs ship no entrypoints
+            # at all, so the honest answer is an empty tuple — the real
+            # `enumerate_gate_entrypoints` would return the same for a repo
+            # containing only `.gitkeep`, and an empty result short-circuits
+            # the gate loop (`if not entrypoints: continue`) without needing
+            # to fake `run_entrypoint_gate`/`derive_worker_cap`/
+            # `mktcache_gate_env` as well.
+            return ()
+
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
     monkeypatch.setattr(publish, "assert_percolate_store_ready", lambda engine_claude_klabauter, path: {})
     monkeypatch.setattr(publish, "locate_percolate_store", lambda setup_dir: tmp_path / "store.yaml")
@@ -119,7 +142,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
     )
     monkeypatch.setattr(publish, "_resolve_publish_sync_module_path", lambda setup_dir: tmp_path / "publish_sync.py")
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
-    monkeypatch.setattr(publish, "check_publish_sync_contract", lambda module, path, rung: None)
+    monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)

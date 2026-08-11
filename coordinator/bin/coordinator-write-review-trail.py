@@ -23,8 +23,16 @@ Usage (unchanged from the bash facade — zero caller-contract drift):
         --scope chain|session|workstream-close-auto \\
         --verdict ok|warn|blocked|waived|pending \\
         --diff-loc <integer> \\
+        --reviewer-evidence <sidecar-path|dispatch-id|justification-text> \\
         [--scope-kind diff|plan|integration] \\
         [--workstream <slug>]
+
+    ``--reviewer-evidence`` (2026-08-10, state/bug-backlog/2026-08-10-coordinator-
+    write-review-trail-accepts-a-295d3cd80d13.yaml) is REQUIRED by the native op
+    for every ``--reviewer`` value except ``wsc-auto-adjudication`` -- an
+    existing sidecar path or resolvable dispatch id for a delegate reviewer, a
+    real free-text justification for ``waived``/``em-verified``. This facade
+    forwards it verbatim; enforcement is op-side.
 
     ``--workstream`` (2026-07-27, § C4) states the workstream explicitly, taking
     precedence over ``COORDINATOR_REVIEW_WORKSTREAM`` and the op's own
@@ -344,6 +352,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--reviewed-paths", dest="reviewed_paths", nargs="*", default=None,
     )
+    # Evidence correlating `--reviewer` with an artifact showing a review
+    # occurred -- a sidecar path that exists, a dispatch id resolvable in
+    # this session's own dispatched-agents.txt, or a free-text justification
+    # (waived/em-verified). Enum-conditional enforcement lives op-side
+    # (coordinator_core/ops/review_trail_write.py, `_verify_reviewer_evidence`)
+    # -- this facade only forwards it verbatim.
+    # Spec: state/bug-backlog/2026-08-10-coordinator-write-review-trail-accepts-a-295d3cd80d13.yaml
+    parser.add_argument(
+        "--reviewer-evidence", dest="reviewer_evidence", default=None,
+    )
     args, _unknown = parser.parse_known_args(argv)
 
     # Required-arg presence gate: exit 1 on any missing required arg (unchanged
@@ -407,6 +425,8 @@ def main(argv: list[str]) -> int:
     }
     if args.reviewed_paths is not None:
         params["reviewed_paths"] = args.reviewed_paths
+    if args.reviewer_evidence is not None:
+        params["reviewer_evidence"] = args.reviewer_evidence
 
     try:
         result = cc_invoke.route_mutation(

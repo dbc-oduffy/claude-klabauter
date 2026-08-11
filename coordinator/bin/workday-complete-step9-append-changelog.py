@@ -334,6 +334,13 @@ def _get_branch(coordinator_root):
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        # Intercepted before _parse_args, whose byte-parity loop would reject
+        # these as unknown options. Mirrors the sibling backfill-week-changelog-
+        # gaps.py, so both CLIs in this family answer --help the same way.
+        print(__doc__)
+        return 0
+
     try:
         args = _parse_args(argv)
     except _ArgError as exc:

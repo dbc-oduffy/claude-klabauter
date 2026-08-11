@@ -31,6 +31,12 @@ present: before the fix, `dest_file` bytes are unchanged (proving no
 write landed) while `out` still contains `UPDATE:` and `totals.synced`
 is 1 — a contradiction this test pins as `should never happen`.
 
+NOTE — what this test does NOT prove: its fixture destination is not a
+git repo, and it monkeypatches `_swap_publish_staging_into_dest` to a
+stub that raises before touching anything. It proves report honesty on
+swap failure, not destination-`.git`-safety — for that property see
+`coordinator/bin/tests/test_publish_swap_preserves_dest_git.py`.
+
 Run: python -m pytest coordinator/bin/tests/test_publish_swap_failure_report_honesty.py -q
 """
 
@@ -60,11 +66,22 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def test_swap_failure_leaves_destination_untouched_and_report_unclaimed(monkeypatch, tmp_path):
+def test_swap_failure_report_makes_no_unearned_write_claims(monkeypatch, tmp_path):
     src_dir = tmp_path / "source"
     dst_dir = tmp_path / "dest"
     src_dir.mkdir()
     dst_dir.mkdir()
+
+    # `dst_dir` needs a `.git` ANCESTOR (not a `.git` of its own) to be a
+    # realistic publish destination: `_ensure_dest_ready` refuses a dest that
+    # sits inside no repo at all, because `ResolvedTarget` carries only the
+    # resolved `dest_dir` and cannot tell that case apart from a repo-root row
+    # whose `.git` an earlier swap stranded (§ `_dest_prefix_for`, which
+    # documents the same conflation). Without this the row is skipped before
+    # the swap and this test passes vacuously — never reaching the failure it
+    # exists to inject. `dst_dir` itself stays repo-less, which is what keeps
+    # this test silent on `.git` safety.
+    (tmp_path / ".git").mkdir()
 
     original_dest_bytes = b"self.claude-klabauter = _RealEngineClaudeKlabauter()\n"
     dest_file = dst_dir / "test_function_gate_wiring.py"
@@ -126,7 +143,9 @@ def test_swap_failure_leaves_destination_untouched_and_report_unclaimed(monkeypa
         )
 
     # The real destination must be byte-for-byte unchanged — the swap never
-    # landed, so the run never actually wrote this file.
+    # landed, so the run never actually wrote this file. This is a content
+    # check only: the fixture destination has no `.git`, so it says nothing
+    # about `.git` safety (see test_publish_swap_preserves_dest_git.py).
     assert dest_file.read_bytes() == original_dest_bytes
 
     report = out.getvalue()

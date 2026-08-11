@@ -39,7 +39,25 @@ def test_claude_home_env_override_wins(monkeypatch, tmp_path):
 
 def test_claude_home_default_falls_back_to_home_dot_claude(monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     assert mlir.claude_home() == os.path.join(os.path.expanduser("~"), ".claude")
+
+
+def test_claude_home_claude_config_dir_wins_over_claude_home(monkeypatch, tmp_path):
+    """CLAUDE_CONFIG_DIR (the harness's own env var) takes precedence over
+    CLAUDE_HOME (this fleet's invention) — mirrors
+    coordinator_core._settings_home.claude_config_dir()'s precedence, the
+    split-brain this rung exists to close."""
+    config_dir = tmp_path / "harness-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "should-be-ignored"))
+    assert mlir.claude_home() == str(config_dir)
+
+
+def test_claude_home_claude_config_dir_absent_falls_back_to_claude_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    assert mlir.claude_home() == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------

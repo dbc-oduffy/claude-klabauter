@@ -492,6 +492,89 @@ def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod):
     assert routable == _vendored_enum("plan-tasks")
 
 
+# ---------------------------------------------------------------------------
+# _derive_proposed_action — proposed_action must never duplicate surface
+#
+# example-doctrine-repo cross-repo memo: `_run_queue_append` passed `str(row["surface"])` for
+# both --surface and --proposed-action, so proposed_action (a required
+# improvement-queue field meant to make a queue entry actionable to a
+# non-authoring session) landed byte-identical to a bare file path on every
+# harvested row. `_derive_proposed_action` fixes this by deriving the field
+# from the row's intent-carrying text (body's first sentence, else title,
+# else surface as a last resort) instead.
+# ---------------------------------------------------------------------------
+
+
+def test_derive_proposed_action_uses_first_sentence_of_body(harvest_mod):
+    body = "Fix the flaky retry loop. Also update the changelog."
+    action = harvest_mod._derive_proposed_action(body, "some title", "some/surface.py")
+    assert action == "Fix the flaky retry loop."
+    assert action != "some/surface.py"
+
+
+def test_derive_proposed_action_does_not_split_on_dotted_filename(harvest_mod):
+    body = "Update boot_sweep.py to skip the v1.2 fixture and rerun the suite."
+    action = harvest_mod._derive_proposed_action(body, "title", "some/surface.py")
+    assert action == "Update boot_sweep.py to skip the v1.2 fixture and rerun the suite."
+
+
+def test_derive_proposed_action_falls_back_to_title_when_body_empty(harvest_mod):
+    action = harvest_mod._derive_proposed_action("", "Fallback title text", "some/surface.py")
+    assert action == "Fallback title text"
+
+    action_none_body = harvest_mod._derive_proposed_action(None, "Fallback title text", "s.py")
+    assert action_none_body == "Fallback title text"
+
+
+def test_derive_proposed_action_falls_back_to_surface_as_last_resort(harvest_mod):
+    action = harvest_mod._derive_proposed_action("", "", "some/surface.py")
+    assert action == "some/surface.py"
+
+    action_none = harvest_mod._derive_proposed_action(None, None, "some/surface.py")
+    assert action_none == "some/surface.py"
+
+
+def test_derive_proposed_action_truncates_overlong_body(harvest_mod):
+    body = "word " * 60  # no sentence terminator, well over the 200-char cap
+    action = harvest_mod._derive_proposed_action(body, "title", "some/surface.py")
+    assert len(action) <= 201  # cap + ellipsis char
+    assert action.endswith("…")
+    assert " " not in action[-2:]  # truncated on a word boundary, not mid-word
+
+
+def test_run_queue_append_emits_proposed_action_distinct_from_surface(harvest_mod, monkeypatch):
+    captured_cmd = {}
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(harvest_mod, "_resolve_cli_cmd", lambda name: [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(harvest_mod.subprocess, "run", fake_run)
+
+    row = _row(
+        "PA1",
+        title="Proposed action row",
+        surface="some/surface.py",
+        body="Do the actual fix here. More detail follows.",
+        change_kind="code-edit",
+    )
+    ok = harvest_mod._run_queue_append(row, key="fixture-key", dry_run=False)
+    assert ok is True
+
+    cmd = captured_cmd["cmd"]
+    surface_val = cmd[cmd.index("--surface") + 1]
+    proposed_action_val = cmd[cmd.index("--proposed-action") + 1]
+    assert proposed_action_val != surface_val
+    assert proposed_action_val == "Do the actual fix here."
+
+
 def test_routing_sets_are_disjoint(harvest_mod):
     """No `change_kind` may route to both seams.
 

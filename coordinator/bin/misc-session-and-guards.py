@@ -149,7 +149,7 @@ def _cmd_rag_freshness_gate(argv: list[str]) -> int:
     check_rag_state = _BIN_DIR / "check-rag-state.py"
     try:
         from cc_invoke import child_env  # noqa: E402 (path injected at module top)
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
         proc = subprocess.run(
             [sys.executable, str(check_rag_state)],
@@ -185,9 +185,9 @@ def _cmd_rag_freshness_gate(argv: list[str]) -> int:
         cmd += ["--task", opts["task"]]
     if "focus-files" in opts:
         cmd += ["--focus-files", opts["focus-files"]]
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-    return subprocess.run(cmd, check=False, **no_console_creationflags()).returncode
+    return subprocess.run(cmd, check=False, **no_console_passthrough_kwargs()).returncode
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ def _cmd_rag_staleness_survey(argv: list[str]) -> int:
 
     try:
         from cc_invoke import child_env  # noqa: E402 (path injected at module top)
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
         proc = subprocess.run(
             [sys.executable, cli, "staleness-survey", "--project-root", root, "--json"],

@@ -48,6 +48,18 @@ layouts (OSS flat `schemas/...`, private `coordinator/schemas/...`). This is
 an ADDITIVE rung, not a reimplementation of `doe_root()`'s own env/registry
 chain (see negative-spec below) — `doe_root()` itself is untouched.
 
+CORRECTION (Review: staff-eng, twin-divergence finding C2): the premise above
+("`doe_root()` the FUNCTION still has no ladder") expired ~6 minutes after C2
+landed — `coordinator_registry.py`'s C1D chunk (`git show b9c68ca7d`) gave
+`doe_root()` exactly that ladder. This module's rung 1.5 is therefore now
+REDUNDANT with `doe_root()`'s own rungs in the common case (harmless — rung
+1.5 simply wins first when it also resolves) rather than covering a gap
+`doe_root()` structurally lacks. It remains additive and is not removed here
+(removing it is a separate, larger change than this review's remit), but a
+future reader should not treat "doe_root() has no codename-free rung" as
+still true — see `coordinator_registry.doe_root()`'s own docstring for its
+current (post-C1D, post-MAJOR-4-reorder) ladder.
+
 Negative-spec: this module does NOT reimplement the DOE_ROOT resolution chain
 (env DOE_ROOT -> machine-local repos.example_doctrine_repo -> raise). That chain lives in
 exactly one place, `coordinator_registry.doe_root()`, and this module calls it
@@ -108,6 +120,19 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
+
+# F6 fix (2026-08-08, hermetic-ac-reverify) — `claude_home()` is pure
+# (module docstring: only imports `os`, no subprocess), safe at module top
+# level like coordinator_registry.py's own `_mlir_claude_home` import.
+# Converges this module's home derivation onto the SAME semantics
+# `coordinator_registry.py::_mp_marketplace_cache_rung`/
+# `_mp_flat_layout_probe_rung` already use — `claude_home()` returns
+# `CLAUDE_HOME` AS-IS when set (not `<CLAUDE_HOME>/.claude`). This module's
+# own rungs previously inlined `CLAUDE_HOME or HOME or USERPROFILE` and then
+# unconditionally joined `.claude`, so with `CLAUDE_HOME` set the two
+# modules probed different directories — see F6 in
+# state/review-findings/2026-08-08-successor-partitioned/hermetic-ac-reverify.md.
+from machine_local_impl_resolve import claude_home as _mlir_claude_home
 
 # coordinator/lib — sibling of coordinator/bin/lib (this file's own dir),
 # hosting the shared coordinator_read_doe_root_pointer() substrate. Two
@@ -200,13 +225,24 @@ def _cdr_repo_root_from_plugin_root_candidate(candidate: str) -> str:
     root; if it sits one level up (candidate's basename is "coordinator"),
     the repo root is the parent. Otherwise return candidate unchanged as a
     best-effort fallback — callers still gate on os.path.isdir() /
-    manifest-presence before trusting the result.
+    manifest-presence before trusting the result (this ladder's candidates
+    all pass through `_cdr_manifest_present` afterward, unlike
+    `coordinator_registry.doe_root()`'s rungs, so the unchanged-fallback
+    here stays safe — see that module's BLOCKER-2 fix for why its call site
+    needed a stricter `allow_unchanged_fallback=False`).
+
+    Review: staff-eng MINOR-8 — normalizes via os.path.normpath before
+    stripping trailing separators (a bare rstrip turns a Windows drive root
+    "C:\\" into "C:", CWD-relative rather than the drive root under
+    Windows) and casefolds the "coordinator" basename compare (a
+    case-insensitive filesystem can hand back "...\\Coordinator", which a
+    case-sensitive == would miss).
     """
-    stripped = candidate.rstrip("/\\")
+    stripped = os.path.normpath(candidate).rstrip("/\\")
     if os.path.isfile(os.path.join(stripped, ".claude-plugin", "plugin.json")):
         return stripped
     parent = os.path.dirname(stripped)
-    if os.path.basename(stripped) == "coordinator" and os.path.isfile(
+    if os.path.basename(stripped).casefold() == "coordinator" and os.path.isfile(
         os.path.join(parent, ".claude-plugin", "plugin.json")
     ):
         return parent
@@ -219,24 +255,88 @@ def _cdr_flat_layout_probe_rung() -> str:
     marker — same marker `resolve_coordinator_clone._resolve_source_mode`
     gates its OSS-install check on. Duplicated inline (matching C1/C1B's
     shape) rather than importing a shared probe — no standalone marker check
-    exists to reuse."""
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
+    exists to reuse.
+
+    NOT where Claude Code actually installs a marketplace clone (Review:
+    staff-eng MINOR-7) — see _cdr_marketplace_cache_rung() below for the
+    real install location; retained because it is a real layout this
+    codebase's own install/uninstall/sandbox-check tooling produces.
+
+    Home resolution delegates to `_mlir_claude_home()` (F6 fix, 2026-08-08)
+    — see module import comment; previously inlined a divergent
+    `CLAUDE_HOME`-or-`HOME`-or-`USERPROFILE` ladder that, unlike
+    `claude_home()`, always appended `.claude` even when `CLAUDE_HOME` was
+    already set to the `.claude` directory itself.
+    """
+    home = _mlir_claude_home()
     if not home:
         return ""
-    candidate = os.path.join(home, ".claude", "plugins", "coordinator-claude")
+    candidate = os.path.join(home, "plugins", "coordinator-claude")
     marker = os.path.join(candidate, ".claude-plugin", "plugin.json")
     return candidate if os.path.isfile(marker) else ""
+
+
+def _cdr_marketplace_cache_rung() -> str:
+    """Rung 1.5b — Claude Code's REAL marketplace-install location,
+    `<claude_home>/plugins/cache/coordinator-claude/coordinator/<version>/`,
+    newest version wins (numeric compare, DR-148-safe). Ported from
+    `coordinator_registry.py::_mp_marketplace_cache_rung()` (same
+    Review: staff-eng BLOCKER-1(a) fix — `_cdr_flat_layout_probe_rung()`'s
+    candidate is not where a marketplace clone actually installs; this is).
+    Resolves to the repo root directly, gated by `_cdr_manifest_present`
+    like every other candidate in this ladder — no normalization needed
+    before that gate.
+
+    Home resolution delegates to `_mlir_claude_home()` (F6 fix, 2026-08-08)
+    — see `_cdr_flat_layout_probe_rung()`'s docstring and the module import
+    comment for why.
+    """
+    home = _mlir_claude_home()
+    if not home:
+        return ""
+    cache_parent = os.path.join(home, "plugins", "cache", "coordinator-claude", "coordinator")
+    if not os.path.isdir(cache_parent):
+        return ""
+    best = ""
+    best_key = (-1, -1, -1)
+    try:
+        entries = os.listdir(cache_parent)
+    except OSError:
+        return ""
+    for name in entries:
+        child = os.path.join(cache_parent, name)
+        if not os.path.isdir(child):
+            continue
+        parts = (name.split(".") + ["0", "0", "0"])[:3]
+        nums: list[int] = []
+        for part in parts:
+            digits = ""
+            for ch in part:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            nums.append(int(digits) if digits else 0)
+        key = (nums[0], nums[1], nums[2])
+        if key > best_key:
+            best_key = key
+            best = child
+    return best
 
 
 def _cdr_codename_free_root() -> str:
     """Rung 1.5 — codename-free ladder (C2). Runs ahead of rung 2
     (`coordinator_registry.doe_root()`), which has no codename-free rung of
     its own. Tries, in order: the `.doe-root` pointer file (durable, then
-    legacy), the flat marketplace-clone layout, `CLAUDE_PLUGIN_ROOT`, then
-    the `plugin.mirrors.coordinator-claude.live_path` registry key. Each
-    candidate is accepted only once it is a directory AND
-    `_cdr_manifest_present` confirms one of the two published manifest
-    layouts lives under it. See module docstring for why this rung exists.
+    legacy), the real marketplace-cache install location (Review: staff-eng
+    BLOCKER-1), the flat marketplace-clone layout, `CLAUDE_PLUGIN_ROOT`,
+    then the `plugin.mirrors.coordinator-claude.live_path` registry key
+    (Review: staff-eng MAJOR-3 — routed through the same
+    CLAUDE_PLUGIN_ROOT-shaped normalizer, not trusted as a repo root
+    unconverted; see that helper's docstring). Each candidate is accepted
+    only once it is a directory AND `_cdr_manifest_present` confirms one of
+    the two published manifest layouts lives under it. See module docstring
+    for why this rung exists.
 
     The registry sub-rung imports `coordinator_registry` LAZILY (only when
     the earlier file rungs miss) — see module docstring's "Import-time
@@ -246,6 +346,7 @@ def _cdr_codename_free_root() -> str:
     _plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     for candidate in (
         _cdr_doe_root_pointer_rung(),
+        _cdr_marketplace_cache_rung(),
         _cdr_flat_layout_probe_rung(),
         _cdr_repo_root_from_plugin_root_candidate(_plugin_root_env) if _plugin_root_env else "",
     ):
@@ -255,8 +356,10 @@ def _cdr_codename_free_root() -> str:
     from coordinator_registry import _registry_machine_local_get
 
     live_path = _registry_machine_local_get("plugin.mirrors.coordinator-claude.live_path") or ""
-    if live_path and os.path.isdir(live_path) and _cdr_manifest_present(live_path):
-        return live_path
+    if live_path:
+        live_normalized = _cdr_repo_root_from_plugin_root_candidate(live_path)
+        if live_normalized and os.path.isdir(live_normalized) and _cdr_manifest_present(live_normalized):
+            return live_normalized
     return ""
 
 
@@ -282,9 +385,11 @@ def data_root(dir_name: str) -> Path:
       1.5. Codename-free ladder (C2) — `.doe-root` pointer file, flat
          marketplace-clone layout, `CLAUDE_PLUGIN_ROOT`, registry
          `live_path`; see `_cdr_codename_free_root()` and module docstring.
-      2. Example-doctrine-repo-resident — `<doe_root()>/coordinator/<dir_name>`, delegating the
-         DOE_ROOT/machine-local resolution to `coordinator_registry.doe_root()`
-         (never reimplemented here — see module negative-spec).
+      2. Example-doctrine-repo-resident — `<doe_root()>/coordinator/<dir_name>` (private layout),
+         falling back to `<doe_root()>/<dir_name>` (OSS-flat layout, F2 fix
+         2026-08-08 -- see below), delegating the DOE_ROOT/machine-local
+         resolution to `coordinator_registry.doe_root()` (never reimplemented
+         here — see module negative-spec).
 
     Raises RuntimeError, naming `dir_name` and both candidate paths tried
     (or the example-doctrine-repo-resolution failure reason), if neither rung resolves to an
@@ -311,12 +416,30 @@ def data_root(dir_name: str) -> Path:
                 f"Rung 2 (example-doctrine-repo-resident) failed: {exc}"
             ) from exc
 
-    candidate = Path(doe) / "coordinator" / dir_name
-    if candidate.is_dir():
-        return candidate
+    # F2 fix (2026-08-08, hermetic-ac-reverify) -- the codename-free ladder's
+    # gate (`_cdr_manifest_present`/`_mp_candidate_manifest_path`) accepts
+    # EITHER published manifest layout: private example-doctrine-repo-repo shape
+    # (`<root>/coordinator/schemas/...`) AND OSS-flat shape
+    # (`<root>/schemas/...`, no `coordinator/` segment). This terminal join
+    # previously ALWAYS inserted `coordinator/`, so a correctly-resolved
+    # OSS-flat root (e.g. a real marketplace-cache install) produced a path
+    # that cannot exist. Try the private-shape join first (unchanged default
+    # for every existing caller/test resolving a private-layout root), then
+    # the OSS-flat shape -- see F2 in
+    # state/review-findings/2026-08-08-successor-partitioned/hermetic-ac-reverify.md.
+    # Must stay behaviourally identical to coordinator_core/data_root.py's
+    # own data_root() (AC4) -- same two-candidate order there.
+    private_candidate = Path(doe) / "coordinator" / dir_name
+    if private_candidate.is_dir():
+        return private_candidate
+
+    flat_candidate = Path(doe) / dir_name
+    if flat_candidate.is_dir():
+        return flat_candidate
 
     raise RuntimeError(
         f"coordinator_data_root: cannot resolve data dir {dir_name!r}. "
         f"Rung 1 (co-located) tried: {colocated} (not found). "
-        f"Rung 2 (example-doctrine-repo-resident) tried: {candidate} (not found)."
+        f"Rung 2 (example-doctrine-repo-resident) tried: {private_candidate} (private layout, not found), "
+        f"{flat_candidate} (OSS-flat layout, not found)."
     )

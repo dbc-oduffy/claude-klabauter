@@ -107,9 +107,9 @@ def cmd_coverage_gate(args: argparse.Namespace) -> int:
             print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
         print("", file=sys.stderr)
         print(
-            "Remediation offer: dispatch coordinator:review-code over the "
-            "uncovered commits listed above, then re-run /merge-to-main. "
-            "This is an offer, not a halt — the gate does not block on it.",
+            "The gate does not block on this — but the commits above are "
+            "still owed a review. Remedy: dispatch coordinator:review-code "
+            "over them, then re-run /merge-to-main.",
             file=sys.stderr,
         )
         overridden = args.override or os.environ.get(

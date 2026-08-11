@@ -447,10 +447,30 @@ def _foreign_consumer_guard(repo_root: Path, shipped_by_me: str, sid: str) -> tu
         is absence of evidence, not evidence of THIS session's ownership,
         and must not fall through to acceptance by default).
 
-    Neither field being SET is not itself disqualifying — the covered
-    legitimate case (a session ships/archives its own predecessor with no
-    claim ever stamped and no origin_session recorded either) must still
-    pass."""
+    Ownership must be POSITIVELY evidenced (tightened 2026-08-10 — example-retrieval-repo
+    memo `2026-08-10-example-retrieval-repo-em-wsc-archive-leg-infers-consumption-from-a-
+    touch.md`): at least one of the two reads must NAME this session. Both
+    reads coming back empty is the no-evidence case, and it now rejects rather
+    than falling through to acceptance, because "no one is on record as owning
+    this" is indistinguishable from "someone owns it and the record does not
+    say so" — which is exactly what a live peer's baton looks like once its
+    ledger claim is liveness-gated away and its frontmatter mirror carries no
+    `claimed_by` (the observed shape: touching an archived handoff via a
+    restore/rename/reformat commit was read as consuming it).
+
+    Fails closed by design. The cost is a session that genuinely ships and
+    archives its own predecessor while stamping NEITHER field — that now
+    resolves single-session, which `resolve_disposition` already surfaces as a
+    loud WARN ("archived a handoff this run but disposition resolved
+    single-session"), with the escalate-only `WSC_DISPOSITION` override as the
+    operator remedy. A skipped gate the operator is told about beats a
+    chain-end review silently scoped over a peer's ancestry.
+
+    Negative-spec: this is NOT a replacement for the sweep-subject filter in
+    `detector_b_shipped_by_me`. That filter is deliberately independent — it
+    rejects a bulk archival commit even when the swept record's claim holder
+    DOES equal this session, which a positive-ownership match alone would
+    wave through."""
     shipped_path = repo_root / shipped_by_me
     consumer = resolve_claim_state(shipped_path, repo_root=repo_root).holder or ""
     if consumer and consumer != sid:
@@ -463,6 +483,16 @@ def _foreign_consumer_guard(repo_root: Path, shipped_by_me: str, sid: str) -> tu
             "different session (unproven ownership fails closed — absence of a claim holder "
             "is not evidence of this session's ownership; 2026-08-05 chain-terminal "
             "misattribution incident)",
+        )
+    if not consumer and not origin:
+        return (
+            True,
+            "neither a claim holder nor origin_session names any session, so nothing "
+            "positively attributes this record to this session — a commit touching an "
+            "archived handoff (restore, rename, reformat, licence sweep) is not evidence "
+            "of consuming it, and an ownerless-looking record is routinely a live peer's "
+            "baton whose ledger claim is liveness-gated and whose mirror carries no "
+            "claimed_by (2026-08-10 archive-leg touch-vs-consume incident)",
         )
     return False, consumer
 
@@ -1186,11 +1216,11 @@ def is_coincidence_prone_detection(match_facts: dict[str, Any]) -> bool:
       - `exact_match_count` present — the live rule:
           - `== 0` -> coincidence-prone, at ANY match count (every matched
             entry was a prefix hit).
-          - `== 1` and `scope_size >= 2` -> coincidence-prone (one exact
-            hit against a multi-entry scope is weak whether or not prefix
-            hits ride along).
-          - `>= 2` -> NOT coincidence-prone (two or more exact matches is
-            real corroboration, regardless of accompanying prefix hits).
+          - `== 1` with a `scope_size` of two or more — coincidence-prone
+            (one exact hit against a multi-entry scope is weak whether or
+            not prefix hits ride along).
+          - two or more — NOT coincidence-prone (two or more exact matches
+            is real corroboration, regardless of accompanying prefix hits).
           - `== 1` and `scope_size == 1` -> NOT coincidence-prone (the
             narrowest, most specific attribution possible).
       - `exact_match_count` absent — stale-producer fallback, replaying the

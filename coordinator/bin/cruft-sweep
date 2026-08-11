@@ -288,7 +288,15 @@ def _read_doe_root_pointer() -> str:
     coordinator_core.resolve_coordinator_clone._read_doe_root_pointer (a
     private symbol of a sibling module) — same convention that module's own
     docstring already documents as accepted (each caller keeps its own copy
-    rather than sharing a private helper across module boundaries)."""
+    rather than sharing a private helper across module boundaries).
+
+    Deliberately terminates the `home` ladder at `CLAUDE_HOME or HOME or
+    USERPROFILE or ""` — no `expanduser("~")`/`Path.home()` PATH_HOME rung.
+    A missing home here correctly degrades to "no settings-home, no pointer
+    file" (empty return below); the caller's own fallback path takes over
+    from there. Intentional narrowing, not an unjustified ladder-shortening
+    (review: code-reviewer, info-only finding) — do not re-add the rung
+    without re-checking that reasoning."""
     settings_home_override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     home = (
         os.environ.get("CLAUDE_HOME")
@@ -414,6 +422,13 @@ class SweepConfig:
     class_: str = "all"
     json_mode: bool = False
     quiet: bool = False
+    # Deliberately shorter ladder (HOME -> USERPROFILE, no CLAUDE_HOME rung), per the
+    # home-resolution family's written-justification carve-out: both roots address the
+    # HARNESS's own scratch under the real OS home -- Claude Code writes
+    # ~/.claude/projects and ~/.claude/file-history there regardless of CLAUDE_HOME,
+    # which relocates the coordinator meta-repo, not the harness's session store. A
+    # CLAUDE_HOME rung here would point the sweep at a directory the harness never
+    # writes to, and the sweep would silently reclaim nothing.
     projects_root: str = field(default_factory=lambda: os.path.join(
         os.environ.get("HOME") or os.environ.get("USERPROFILE") or "",
         ".claude", "projects",

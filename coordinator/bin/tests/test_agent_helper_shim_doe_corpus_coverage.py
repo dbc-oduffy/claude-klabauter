@@ -367,7 +367,7 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
     os.environ["CLAUDE_KLABAUTER_ROOT"] = str(_CLAUDE_KLABAUTER_ROOT)
     try:
         _install_bin_resolvers(
-            ml_bin, ch_bin, bin_dst, None, False,
+            ml_bin, ch_bin, bin_dst, False,
             python3_cmd_resolved_bin=_resolve_baked_python_bin(),
         )
     finally:

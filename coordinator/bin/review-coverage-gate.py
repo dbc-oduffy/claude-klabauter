@@ -234,10 +234,16 @@ def main(argv: list[str]) -> int:
             f"review-coverage-gate.py: engine could not compute a verdict ({exc})",
             file=sys.stderr,
         )
-        print(
-            "  Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation (see diagnostics above)",
-            file=sys.stderr,
-        )
+        # Review: coordinator:code-reviewer P2 (2026-08-08) — a timeout is never install-
+        # related (AC7); gate the install-shaped remedy on is_timeout_error so this caller
+        # doesn't re-append the exact "Verify CLAUDE_KLABAUTER_ROOT" line C5 removed from cc_invoke.py
+        # itself. A non-timeout RuntimeError (e.g. engine-won't-start) may still legitimately
+        # name the install.
+        if not cc_invoke.is_timeout_error(exc):
+            print(
+                "  Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation (see diagnostics above)",
+                file=sys.stderr,
+            )
         return 1
 
     if not isinstance(result, dict):

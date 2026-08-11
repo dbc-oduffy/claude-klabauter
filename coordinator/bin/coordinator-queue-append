@@ -1261,6 +1261,7 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
         "--severity",
         default=None,
         metavar="LEVEL",
+        choices=["P0", "P1", "P2", "P3"],
         help="(debt-backlog, bug-backlog) Priority classification: P0, P1, P2, P3. Required for bug-backlog; optional (default P2) for debt-backlog.",
     )
 
@@ -1654,35 +1655,30 @@ def main() -> None:
             if args.created is not None:
                 _validate_created_date(args.created, parser)
     else:
-        # Shared base field-set schemas: title/body remain required; fail-loud if absent
-        # (parser-level required=True was relaxed to conditionally support the
-        # workstream-store schemas above — see _build_parser --title/--body help text).
-        if args.title is None:
-            parser.error("the following arguments are required: --title")
-        if args.body is None:
-            parser.error("the following arguments are required: --body")
-        # For non-lessons schemas, --status remains required; fail-loud if absent.
-        if args.status is None:
-            parser.error("the following arguments are required: --status")
-        # cross-repo-commitment domain-required fields (committed_by/memo/commitment/
-        # observed) — schema.validate would also catch these, but failing loud here
-        # (parser.error) matches the pre-existing pattern for the workstream-store
-        # schemas above and gives a clean argparse-shaped error before any native
-        # op call.
-        if schema_name == "cross-repo-commitment":
-            missing = [
-                f"--{name}" for name, val in (
-                    ("committed-by", args.committed_by),
-                    ("memo", args.memo),
-                    ("commitment", args.commitment),
-                    ("observed", args.observed),
-                ) if val is None
-            ]
-            if missing:
-                parser.error(
-                    f"the following arguments are required for --schema cross-repo-commitment: "
-                    f"{', '.join(missing)}"
-                )
+        # Shared base field-set schemas (debt-backlog, bug-backlog, improvement-queue,
+        # lessons, cross-repo-commitment): the required-field set is DERIVED from the
+        # native schema.describe op (the same call _print_schema_help already uses),
+        # so one run names every missing required flag at once instead of disclosing
+        # them one parser.error() at a time across repeated invocations. created/
+        # from_repo are excluded — both auto-resolve when omitted (see
+        # _AUTO_FILLED_FIELDS) — and `system` has no CLI flag (_NO_CLI_FLAG_FIELDS).
+        # Fixes cross-repo memo 2026-08-11-example-retrieval-repo-em-queue-append-required-fields-undiscoverable.md
+        # items 1 (--title/--body one-per-run) and 2 (--status/--risk not
+        # argparse-required despite the write refusing without them).
+        described = _schema_cli_describe(_SCHEMA_CLI_NAME.get(schema_name, schema_name))
+        required_fields = described.get("required") or []
+        missing = [
+            _flag_name_for_field(field)
+            for field in required_fields
+            if field not in _NO_CLI_FLAG_FIELDS
+            and field not in _AUTO_FILLED_FIELDS
+            and getattr(args, field, None) is None
+        ]
+        if missing:
+            parser.error(
+                f"the following arguments are required for --schema {schema_name}: "
+                f"{', '.join(missing)}"
+            )
 
     # Validate and resolve queue_scope (improvement-queue only; fail-loud on invalid).
     queue_scope = None

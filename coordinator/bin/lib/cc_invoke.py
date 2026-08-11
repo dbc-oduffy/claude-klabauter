@@ -173,6 +173,35 @@ def _no_console_kw(claude_klabauter_root: str) -> dict:
         return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
+def _no_console_passthrough_kw(claude_klabauter_root: str) -> dict:
+    """`_no_console_kw` for a child whose OUTPUT MUST REACH THE OPERATOR.
+
+    Same resolution and fail-open posture as `_no_console_kw` above, plus the
+    std fds. Console suppression alone is not enough: with no
+    ``stdout=``/``stderr=`` passed, CPython omits ``STARTF_USESTDHANDLES``, so
+    the child binds its standard handles to the fresh window-less console
+    ``CREATE_NO_WINDOW`` allocates instead of inheriting this process's -- and
+    everything it prints is lost. Passing the fds explicitly restores the
+    inheritance. Canonical implementation, kept in sync by hand because this
+    module fails open without coordinator_core:
+    ``coordinator_core.win_portability.no_console_passthrough_kwargs``.
+
+    Real fds, not ``sys.stdout``/``sys.stderr``: the child inherits OS handles,
+    and the fd is what a redirection actually moved. A stream with no fd
+    (``pythonw``, a captured object) contributes nothing and degrades to plain
+    inheritance rather than raising.
+    """
+    kwargs = dict(_no_console_kw(claude_klabauter_root))
+    for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        if fd >= 0:
+            kwargs[key] = fd
+    return kwargs
+
+
 def child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
     """Return an env dict safe to pass as `env=` to a spawned child that is
     NOT itself a coordinator_core.invoke dispatch.
@@ -339,6 +368,24 @@ def _resolve_claude_klabauter_root() -> str:
                 rung 2 performs, just invoked without a bash intermediary), then
                 hand resolution authority to the native module itself for
                 byte-identical behavior/remediation text once it's importable.
+      Rung 3 (NEW, TERMINAL): self-location from THIS module's own ``__file__``,
+                via the existing ``_walk_up_to_checkout`` helper — reached only
+                when rungs 1, 1.5, and 2 have all missed, immediately before the
+                function would otherwise raise. On a stranger's box none of the
+                registry/pointer/env rungs resolve, which is why ~24 of the
+                published-CLI failures this rung fixes were the single message
+                "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT". LIMITATION, stated
+                honestly: this answers with *cc_invoke.py's own* tree, not
+                necessarily the caller's — on a multi-checkout box a bare
+                ``_resolve_claude_klabauter_root()`` caller gets cc_invoke's tree, which is
+                exactly why this is the TERMINAL rung (reached only when the
+                alternative is raising) rather than an earlier one. A caller that
+                wants per-caller self-location semantics should call
+                ``resolve_engine_root(__file__)`` instead — that is not a general
+                recommendation to migrate every caller here, just the honest
+                answer for the multi-checkout case this rung cannot cover. In the
+                published payload the two trees are the same, which is the case
+                this rung targets.
 
     Returns the resolved absolute path.
     Raises RuntimeError on failure (unresolvable root).
@@ -394,6 +441,13 @@ def _resolve_claude_klabauter_root() -> str:
 
     _candidate = _machine_local_get("repos.claude_klabauter")
     if not _candidate or not os.path.isdir(_candidate):
+        # Rung 3 (terminal): self-locate from cc_invoke's OWN __file__ before
+        # raising. Reached only when env, pointer, and registry all missed —
+        # see the docstring's "Rung 3 (NEW, TERMINAL)" note for the limitation
+        # this rung knowingly carries.
+        _self_located = _walk_up_to_checkout(__file__)
+        if _self_located:
+            return _self_located
         raise RuntimeError(_remediation)
 
     _injected = _candidate not in sys.path
@@ -995,6 +1049,12 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
     (CC_INVOKE_CLIENT_MARGIN_SECS, default 10) covers cold python startup + import on top
     of the engine's own dispatch budget. Falls back to flat FLOOR when the engine's
     op-budget dump is absent or errored (with a once-per-process breadcrumb on error).
+
+    Substrate fact (2026-08-08 timeout-remedy fix): the long-unexplained "observed
+    consistently at 40s" in the backlog is this formula with the default constants —
+    max(FLOOR=10, engine_budget(op)=30 + MARGIN=10) = 40. See `_timeout_exceeded_message`,
+    which surfaces this derivation in the TimeoutExpired remedy text instead of the old
+    (and wrong, on a healthy engine) "verify CLAUDE_KLABAUTER_ROOT / installation" text.
     """
     global _OP_TIMEOUTS_BREADCRUMB_SHOWN
     floor = _read_positive_int_env("CC_INVOKE_TIMEOUT_SECS", 10)
@@ -1015,6 +1075,84 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
         )
         _OP_TIMEOUTS_BREADCRUMB_SHOWN = True
     return floor
+
+
+# Stable literal prefix of every TimeoutExpired-derived RuntimeError this module raises
+# (both cc_invoke() and cc_invoke_bare()) — the discriminator `is_timeout_error` matches
+# on. Kept as a named constant rather than inlined so the two places that must agree on
+# it (the builder below and the discriminator) cannot drift independently.
+_TIMEOUT_MESSAGE_PREFIX = "cc_invoke: engine timeout after "
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """True if `exc` is the TimeoutExpired-derived RuntimeError this module raises.
+
+    Lets a caller distinguish "engine was simply busy" (never install-related) from
+    every other RuntimeError this module's ladder can raise (which may legitimately be
+    install-related, e.g. `_engine_wont_start`) WITHOUT re-deriving or duplicating
+    `_timeout_exceeded_message`'s text. A caller that appends its own generic "verify
+    CLAUDE_KLABAUTER_ROOT / installation" remedy line after any `except RuntimeError` should gate
+    that line on `not is_timeout_error(exc)` — see AC7,
+    docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md § C5.
+    """
+    return isinstance(exc, RuntimeError) and str(exc).startswith(_TIMEOUT_MESSAGE_PREFIX)
+
+
+def _timeout_exceeded_message(op: str, timeout: int) -> str:
+    """Build the TimeoutExpired remedy text — names the COMPUTED ceiling, not the install.
+
+    Replaces the old "Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation" text, which
+    was flatly wrong on a demonstrably healthy engine (it cost a session four retries and
+    a wrong install diagnosis; reproduced on coverage.gate and ceremony.wsc_tail, neither
+    lock-related). Called AFTER `_op_timeout_ceiling(op, ...)` has already run for this
+    invocation, so `_OP_TIMEOUTS_STATE`/`_OP_TIMEOUTS_MAP` are already resolved — no
+    second engine spawn here.
+
+    Names the derivation (`max(FLOOR, engine_budget(op) + MARGIN)`) so the reader knows
+    CC_INVOKE_TIMEOUT_SECS is a FLOOR: it only raises the ceiling when set ABOVE the
+    already-computed `timeout`, and is a no-op at or below it.
+
+    That FLOOR sentence is true but incomplete on its own: on the `_OP_TIMEOUTS_STATE ==
+    "ok"` branch the binding term is usually the engine's own op budget, not the client
+    floor — CC_INVOKE_TIMEOUT_SECS provably cannot clear the timeout in that case. A
+    client-side floor cannot clear an engine-budget timeout; only
+    COORDINATOR_DISPATCH_TIMEOUT_SECS (`coordinator_core/ipc.py::DISPATCH_TIMEOUT_SECS`)
+    raises that budget. An operator who read only the FLOOR sentence set
+    CC_INVOKE_TIMEOUT_SECS=300, watched the same 30s-derived timeout recur, and had to
+    read ipc.py to find the real knob — see
+    `cross-repo/inbox/2026-08-10-example-doctrine-repo-em-wsc-tail-exceeds-the-30s-dispatch-budget.md`.
+    This function now names both knobs and which side of the wait each governs whenever
+    the engine-budget derivation is known; the degraded branch (dump unavailable) still
+    names both but does not assert a budget number it could not read.
+
+    The returned text always starts with `_TIMEOUT_MESSAGE_PREFIX` — `is_timeout_error`
+    depends on that invariant.
+    """
+    floor = _read_positive_int_env("CC_INVOKE_TIMEOUT_SECS", 10)
+    margin = _read_positive_int_env("CC_INVOKE_CLIENT_MARGIN_SECS", 10)
+    if _OP_TIMEOUTS_STATE == "ok":
+        budget = _OP_TIMEOUTS_MAP.get(op, _OP_TIMEOUTS_MAP["__default__"])
+        budget_int = int(budget)
+        derivation = f"max(floor {floor}, engine budget {budget_int} + margin {margin})"
+        knobs_line = (
+            f"  To raise the engine budget itself (currently {budget_int}s for op={op}), set\n"
+            "  COORDINATOR_DISPATCH_TIMEOUT_SECS: CC_INVOKE_TIMEOUT_SECS governs only the\n"
+            "  client-side wait; COORDINATOR_DISPATCH_TIMEOUT_SECS governs the op's own budget."
+        )
+    else:
+        derivation = f"floor {floor} (engine op-budget dump unavailable)"
+        knobs_line = (
+            "  CC_INVOKE_TIMEOUT_SECS governs only the client-side wait; the op's own budget\n"
+            "  (raised via COORDINATOR_DISPATCH_TIMEOUT_SECS) could not be read here."
+        )
+    return (
+        f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — "
+        "coordinator_core.invoke did not respond\n"
+        f"  Exceeded {timeout}s = {derivation}. The engine may simply be busy.\n"
+        "  CC_INVOKE_TIMEOUT_SECS is a FLOOR, not a ceiling: it only raises this number when\n"
+        f"  set ABOVE {timeout}s. Setting it at or below {timeout}s changes nothing.\n"
+        f"{knobs_line}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1101,11 +1239,7 @@ def cc_invoke(
         stderr_text = proc.stderr
     except subprocess.TimeoutExpired:
         # (1) Timeout — mirrors the retired bash transport's cs_timeout exit 124 branch.
-        raise RuntimeError(
-            f"cc_invoke: engine timeout after {timeout}s (op={op}) — "
-            "coordinator_core.invoke did not respond\n"
-            f"  Verify CLAUDE_KLABAUTER_ROOT ({claude_klabauter_root!r}) and coordinator_core installation"
-        )
+        raise RuntimeError(_timeout_exceeded_message(op, timeout))
 
     # (2) Nonzero process exit — distinguish engine-start failure from op-level error.
     # (3) Empty stdout — invoke always produces output on success.
@@ -1235,11 +1369,7 @@ def cc_invoke_bare(
             stderr_text = proc.stderr
         except subprocess.TimeoutExpired:
             # (1) Timeout — mirrors the retired bash transport's cs_timeout exit 124 branch.
-            raise RuntimeError(
-                f"cc_invoke: engine timeout after {timeout}s (op={op}) — "
-                "coordinator_core.invoke did not respond\n"
-                f"  Verify CLAUDE_KLABAUTER_ROOT ({claude_klabauter_root!r}) and coordinator_core installation"
-            )
+            raise RuntimeError(_timeout_exceeded_message(op, timeout))
     finally:
         try:
             os.unlink(_params_path)

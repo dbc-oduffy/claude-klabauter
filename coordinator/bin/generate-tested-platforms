@@ -95,7 +95,15 @@ REQUIRED_RECORD_FIELDS = [
     "invoking_repo",
 ]
 
-_MANIFEST_RELATIVE = os.path.join("coordinator", "docs", "install", "agent-install-manifest.json")
+# Two known layouts for the manifest, relative to repo root:
+#   - example-doctrine-repo:  coordinator/docs/install/agent-install-manifest.json
+#   - claude-klabauter:      docs/install/agent-install-manifest.json
+# `--repo-root` lets this tool probe either shape, so a single hardcoded
+# relative path cannot serve both (review: carried loose end, slice-3 review).
+_MANIFEST_RELATIVE_CANDIDATES = (
+    os.path.join("coordinator", "docs", "install", "agent-install-manifest.json"),
+    os.path.join("docs", "install", "agent-install-manifest.json"),
+)
 _RECORDS_RELATIVE = os.path.join("state", "platform-outcomes")
 
 
@@ -107,7 +115,17 @@ def _repo_root() -> str:
 
 
 def _manifest_path(repo_root: str) -> str:
-    return os.path.join(repo_root, _MANIFEST_RELATIVE)
+    """Resolve whichever manifest layout exists under `repo_root`, preferring
+    the repo's own shape. Neither exists -> raise FileNotFoundError naming
+    both attempted paths (fail loud, not a silent pick of the wrong one)."""
+    attempted = [os.path.join(repo_root, rel) for rel in _MANIFEST_RELATIVE_CANDIDATES]
+    for candidate in attempted:
+        if os.path.isfile(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "no agent-install-manifest.json found under repo root "
+        f"{repo_root!r}; tried: {', '.join(attempted)}"
+    )
 
 
 def _records_root(repo_root: str) -> str:
@@ -306,7 +324,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = args.repo_root or _repo_root()
-    manifest_path = _manifest_path(repo_root)
+    try:
+        manifest_path = _manifest_path(repo_root)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     records_root = _records_root(repo_root)
 
     try:

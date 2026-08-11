@@ -113,7 +113,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from coordinator_core.daily_day import local_day  # noqa: E402
 from coordinator_core.machine_resolver import compute_machine  # noqa: E402
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs  # noqa: E402
 
 _STITCH_SIDECAR_CLI = _BIN_DIR / "stitch-observer-sidecar.py"
 _STEP9_CLI = _BIN_DIR / "workday-complete-step9-append-changelog.py"
@@ -189,7 +189,7 @@ def cmd_step9_dispatch(args: argparse.Namespace) -> int:
     result = subprocess.run(
         [sys.executable, str(_STEP9_CLI), *forward],
         env=env,
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
     return result.returncode
 
@@ -269,7 +269,7 @@ def _dispatch_step9_row(
     result = subprocess.run(
         [sys.executable, str(_STEP9_CLI), *forward],
         env=env,
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
     return result.returncode
 

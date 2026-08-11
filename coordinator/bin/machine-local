@@ -46,7 +46,10 @@ _CLAUDE_HOME = (
     or str(Path.home())
 )
 _SETTINGS_HOME = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
-    os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~"),
+    os.environ.get("CLAUDE_HOME")
+    or os.environ.get("HOME")
+    or os.environ.get("USERPROFILE")
+    or str(Path.home()),
     ".coordinator-claude-settings",
 )
 # Durable settings-home install first, legacy ~/.claude/bin second.
