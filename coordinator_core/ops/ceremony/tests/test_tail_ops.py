@@ -503,6 +503,97 @@ def test_review_trail_complete_metadata_forwards_to_handler(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# write_review_trail_many -- N-slice sibling for the commit-tail path
+# (finishes the partitioned-review fix's second, previously-stopgapped half;
+# see directives_commit_tail.py's _review_fields_present docstring)
+# ---------------------------------------------------------------------------
+
+
+def test_write_review_trail_many_empty_list_skips_cleanly(tmp_path):
+    common_dir = _make_common_dir(tmp_path)
+    result = _run(tail_ops.write_review_trail_many(common_dir, []))
+    assert result["failed"] == []
+    assert "failed_critical" not in result
+    assert result["skipped"] == [f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"]
+
+
+def test_write_review_trail_many_writes_one_record_per_qualifying_slice(tmp_path):
+    common_dir = _make_common_dir(tmp_path)
+    calls = []
+
+    async def _handler(params: dict, repo_root=None) -> dict:
+        calls.append(dict(params))
+        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
+
+    slices = [
+        {
+            "sha_range": "a1..a2",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        },
+        {"sha_range": "incomplete-slice-missing-fields"},  # dropped, no write attempted
+        {
+            "sha_range": "b1..b2",
+            "reviewer": "staff-eng",
+            "scope": "session",
+            "verdict": "warn",
+            "diff_loc": 20,
+        },
+    ]
+
+    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
+        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
+
+    assert result["failed"] == []
+    assert "failed_critical" not in result
+    assert result["acted"] == [
+        f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/a1..a2.json",
+        f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/b1..b2.json",
+    ]
+    assert len(calls) == 2
+    assert calls[0]["sha_range"] == "a1..a2"
+    assert calls[1]["sha_range"] == "b1..b2"
+
+
+def test_write_review_trail_many_one_refused_slice_does_not_suppress_siblings(tmp_path):
+    common_dir = _make_common_dir(tmp_path)
+
+    from coordinator_core.ops.review_trail_write import ForeignSessionRangeRefused
+
+    slices = [
+        {
+            "sha_range": "foreign..range",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        },
+        {
+            "sha_range": "own..range",
+            "reviewer": "staff-eng",
+            "scope": "session",
+            "verdict": "warn",
+            "diff_loc": 20,
+        },
+    ]
+
+    async def _handler(params: dict, repo_root=None) -> dict:
+        if params["sha_range"] == "foreign..range":
+            raise ForeignSessionRangeRefused("refused: foreign session range")
+        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
+
+    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
+        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
+
+    assert result["acted"] == [f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/own..range.json"]
+    assert result["failed"] == []
+    assert len(result["failed_critical"]) == 1
+    assert "foreign..range" in result["failed_critical"][0] or "refused" in result["failed_critical"][0]
+
+
+# ---------------------------------------------------------------------------
 # render_handoff_tracker / refresh_roadmap_callout (STEP_2_75, C9 wiring-gap fix)
 # ---------------------------------------------------------------------------
 

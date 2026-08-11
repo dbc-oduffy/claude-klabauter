@@ -2706,6 +2706,87 @@ def test_explicit_stage_check_ignore_failure_fails_open_not_fatal(tmp_path, monk
     assert outcome.failed
 
 
+def test_explicit_stage_untrack_of_gitignored_path_is_not_declined(tmp_path):
+    """2026-08-11 fix (example-doctrine-repo-em memo `cross-repo/inbox/2026-08-11-doe-
+    claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md` § 2): a
+    `git rm --cached` untrack of a path `.gitignore` now matches must PASS,
+    not decline with `"excluded by .gitignore"` -- being gitignored is the
+    PRECONDITION of a legitimate untrack, not a violation. The file's content
+    stays on disk after `--cached` (unlike a real `git rm`), which is exactly
+    the case the old `exists()`-first ordering misclassified as an ordinary
+    ignored ADD."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _seed_file(repo, "settings.json", "machine-local content")
+    _git(["add", "--", "README.md", "settings.json"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, ".gitignore", "settings.json\n")
+    _git(["rm", "-q", "--cached", "settings.json"], repo)
+    assert (repo / "settings.json").exists(), "sanity: --cached leaves content on disk"
+
+    outcome = explicit_stage(repo, ["settings.json"], caller_paths={"settings.json"})
+    assert outcome.exit_code == 0
+    assert outcome.ignored_caller_paths == []
+    assert outcome.missing_caller_paths == []
+    assert outcome.staged_paths == ["settings.json"]
+    assert outcome.deletion_paths == ["settings.json"]
+    assert "already-staged-deleted:settings.json" in outcome.skipped
+    assert not any(s.startswith("ignored") for s in outcome.skipped)
+
+
+def test_explicit_stage_add_of_gitignored_path_still_declines(tmp_path):
+    """The A/M-against-gitignored-path case is UNCHANGED by the untrack fix
+    above: a genuinely untracked, `.gitignore`-blocked path (never staged as
+    a deletion) still declines with the same `"ignored-caller:<p>"` /
+    `ignored_caller_paths` reason -- `swept_delete` never contains it, so the
+    reordering in `explicit_stage()` does not touch this branch at all."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, ".gitignore", "ignored_dir/\n")
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", ".gitignore", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "ignored_dir/cache.md", "secret")
+
+    outcome = explicit_stage(
+        repo, ["ignored_dir/cache.md"], caller_paths={"ignored_dir/cache.md"}
+    )
+    assert outcome.exit_code == 2
+    assert outcome.ignored_caller_paths == ["ignored_dir/cache.md"]
+    assert "ignored-caller:ignored_dir/cache.md" in outcome.skipped
+    assert outcome.staged_paths == []
+
+
+def test_explicit_stage_mixed_untrack_and_add_gitignored_paths_partition_correctly(tmp_path):
+    """A single pathspec naming BOTH a staged untrack of a now-gitignored
+    path and a genuinely untracked gitignored path partitions correctly: the
+    untrack lands in `staged_paths`/`deletion_paths` with no ignore-decline,
+    the untracked add still declines via `ignored_caller_paths` -- exactly
+    the discriminator the memo asks for, exercised together in one call."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _seed_file(repo, "settings.json", "machine-local content")
+    _git(["add", "--", "README.md", "settings.json"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, ".gitignore", "settings.json\nignored_dir/\n")
+    _git(["rm", "-q", "--cached", "settings.json"], repo)
+    _seed_file(repo, "ignored_dir/cache.md", "secret")
+
+    outcome = explicit_stage(
+        repo,
+        ["settings.json", "ignored_dir/cache.md"],
+        caller_paths={"settings.json", "ignored_dir/cache.md"},
+    )
+    assert outcome.exit_code == 2  # driven by the still-declined add, not the untrack
+    assert outcome.ignored_caller_paths == ["ignored_dir/cache.md"]
+    assert outcome.deletion_paths == ["settings.json"]
+    assert "settings.json" in outcome.staged_paths
+    assert "already-staged-deleted:settings.json" in outcome.skipped
+    assert "ignored-caller:ignored_dir/cache.md" in outcome.skipped
+
+
 def test_pipeline_ignored_and_missing_paths_do_not_fail_the_batch_and_commit_lands(tmp_path):
     """The exact live-incident shape: a batch mixing real dirty files, one
     untracked `.gitignore`-blocked path, and one genuinely-absent path must
@@ -3609,3 +3690,224 @@ def test_make_pipeline_result_covers_every_field():
         "with a deliberate default so ceremony test doubles do not silently "
         "inherit one"
     )
+
+
+# ---------------------------------------------------------------------------
+# state/bug-backlog/2026-08-11-run-commit-pipeline-reports-a-concurrent-
+# 0a91ea7dc77b.yaml (P1) -- `resolve_post_push_sha` must adopt a post-push
+# re-read only when it can VERIFY the re-read names our own commit (by tree
+# identity with the caller's already-verified `pre_push_sha`), never on a
+# bare "the read succeeded" basis. Direct unit coverage of the helper, plus
+# one `run_commit_pipeline` integration test exercising the actual call
+# site's wiring.
+# ---------------------------------------------------------------------------
+
+
+def _rev_parse_head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+class TestResolvePostPushSha:
+    def test_ordinary_landed_push_head_matches_pre_push_sha(self, tmp_path):
+        """No rebase, no race: HEAD after push IS the pre-push sha -- adopted
+        trivially (the common, non-racy case)."""
+        repo = _init_repo(tmp_path)
+        _seed_file(repo, "README.md", "seed")
+        _git(["add", "--", "README.md"], repo)
+        _git(["commit", "-q", "-m", "seed"], repo)
+        sha = _rev_parse_head(repo)
+
+        resolved = commit_pipeline_mod.resolve_post_push_sha(repo, sha)
+
+        assert resolved == sha
+
+    def test_peer_lands_in_window_keeps_our_own_pre_push_sha(self, tmp_path):
+        """Ordinary push, peer lands in the window: HEAD has moved to a
+        FOREIGN commit (different tree) by the time of the re-read -- must
+        NOT be adopted; the caller's own known-good pre-push sha is kept."""
+        repo = _init_repo(tmp_path)
+        _seed_file(repo, "README.md", "seed")
+        _git(["add", "--", "README.md"], repo)
+        _git(["commit", "-q", "-m", "seed"], repo)
+        our_sha = _rev_parse_head(repo)
+
+        # Simulate a peer's commit landing on this shared branch after our
+        # push completed but before this call's re-read runs.
+        _seed_file(repo, "PEER.md", "peer content")
+        _git(["add", "--", "PEER.md"], repo)
+        _git(["commit", "-q", "-m", "peer commit\n\nSession-Id: peer-session-id"], repo)
+        peer_sha = _rev_parse_head(repo)
+        assert peer_sha != our_sha
+
+        resolved = commit_pipeline_mod.resolve_post_push_sha(repo, our_sha)
+
+        assert resolved == our_sha
+        assert resolved != peer_sha
+
+    def test_empty_peer_commit_in_window_keeps_our_own_pre_push_sha(self, tmp_path):
+        """The case tree-equality alone cannot see. An empty commit inherits
+        its parent's tree verbatim, so a peer's no-op commit landing on top of
+        ours has a tree IDENTICAL to ours -- a tree-only check would read that
+        as a rebase and adopt the stranger's sha. Ancestry discriminates it:
+        our commit is still reachable from the new tip, which a real rebase
+        (which rewrites it) would never leave true."""
+        repo = _init_repo(tmp_path)
+        _seed_file(repo, "README.md", "seed")
+        _git(["add", "--", "README.md"], repo)
+        _git(["commit", "-q", "-m", "seed"], repo)
+        our_sha = _rev_parse_head(repo)
+
+        _git(["commit", "-q", "--allow-empty", "-m", "peer no-op\n\nSession-Id: peer-session-id"], repo)
+        peer_sha = _rev_parse_head(repo)
+        assert peer_sha != our_sha
+        # The premise of this test: the trees really are identical, so the
+        # tree check cannot be what saves us here.
+        def _tree_of(sha: str) -> str:
+            return subprocess.run(
+                ["git", "rev-parse", f"{sha}^{{tree}}"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+        assert _tree_of(our_sha) == _tree_of(peer_sha)
+
+        resolved = commit_pipeline_mod.resolve_post_push_sha(repo, our_sha)
+
+        assert resolved == our_sha
+        assert resolved != peer_sha
+
+    def test_rebase_retry_adopts_the_rewritten_sha(self, tmp_path):
+        """A genuine reject-triggered `rebase --onto`: HEAD names a NEW sha
+        (different parent) carrying the IDENTICAL tree as our pre-push
+        commit -- this is the case the re-read exists for, and must still be
+        adopted."""
+        repo = _init_repo(tmp_path)
+        _seed_file(repo, "README.md", "seed")
+        _git(["add", "--", "README.md"], repo)
+        _git(["commit", "-q", "-m", "seed"], repo)
+        base_sha = _rev_parse_head(repo)
+
+        _seed_file(repo, "feature.md", "our change")
+        _git(["add", "--", "feature.md"], repo)
+        _git(["commit", "-q", "-m", "our commit"], repo)
+        our_sha = _rev_parse_head(repo)
+        our_tree = subprocess.run(
+            ["git", "rev-parse", f"{our_sha}^{{tree}}"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # The fetched remote tip `push_with_retry`'s rebase lands on. It must
+        # be a SIBLING of our commit, branching off `base_sha` -- never a
+        # descendant of it. A push is rejected precisely because the remote
+        # advanced WITHOUT our commit, so a remote tip that already contained
+        # ours could not have produced the reject this rebase exists to
+        # recover from. Built via `commit-tree` off `base_sha` directly rather
+        # than by committing on top of HEAD, which would silently make our own
+        # commit an ancestor of the rewritten one and misrepresent the shape.
+        other_blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=str(repo), input="unrelated fetched content", capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "read-tree", base_sha],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        )
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo", f"100644,{other_blob},OTHER.md"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        )
+        other_tree = subprocess.run(
+            ["git", "write-tree"], cwd=str(repo), capture_output=True, text=True, check=True
+        ).stdout.strip()
+        new_base_sha = subprocess.run(
+            ["git", "commit-tree", other_tree, "-p", base_sha, "-m", "unrelated fetched commit"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert new_base_sha != base_sha
+        # The property that makes this a rebase and not a peer landing on top.
+        assert subprocess.run(
+            ["git", "merge-base", "--is-ancestor", our_sha, new_base_sha],
+            cwd=str(repo), capture_output=True, text=True,
+        ).returncode != 0
+        subprocess.run(
+            ["git", "read-tree", our_sha], cwd=str(repo), capture_output=True, text=True, check=True
+        )
+
+        # A rebase --onto this new base reapplies the identical diff -- same
+        # tree, new sha, new parent. Reproduce that shape directly via
+        # `commit-tree` rather than driving a real rebase, since only the
+        # RESULT shape (same tree, different sha/parent) matters here.
+        new_parent_result = subprocess.run(
+            ["git", "commit-tree", our_tree, "-p", new_base_sha, "-m", "our commit"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        )
+        rewritten_sha = new_parent_result.stdout.strip()
+        assert rewritten_sha != our_sha
+        _git(["update-ref", "HEAD", rewritten_sha], repo)
+        assert _rev_parse_head(repo) == rewritten_sha
+
+        resolved = commit_pipeline_mod.resolve_post_push_sha(repo, our_sha)
+
+        assert resolved == rewritten_sha
+
+    def test_reread_failure_falls_back_to_pre_push_sha(self, tmp_path):
+        """The post-push `rev-parse HEAD` itself failing (e.g. an unborn
+        branch) must fall back to the caller's pre-push value, exactly as
+        before this fix -- never downgrade a known-good value to None."""
+        repo = _init_repo(tmp_path)
+        # No commits at all -- `git rev-parse HEAD` fails (unborn branch).
+
+        resolved = commit_pipeline_mod.resolve_post_push_sha(repo, "deadbeef" * 5)
+
+        assert resolved == "deadbeef" * 5
+
+    def test_none_pre_push_sha_passes_through_unchanged(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        assert commit_pipeline_mod.resolve_post_push_sha(repo, None) is None
+
+
+def test_pipeline_post_push_peer_race_keeps_own_committed_sha(tmp_path, monkeypatch):
+    """End-to-end regression for the filed defect: `run_commit_pipeline`
+    must report ITS OWN `committed_sha`, never a peer's, even though the
+    post-push leg still re-reads HEAD after a landed push. `push_with_retry`
+    is monkeypatched to simulate a peer's commit landing on the shared
+    branch in exactly the window between "push landed" and "re-read HEAD" --
+    without this fix, `final_committed_sha` would silently become the
+    peer's sha."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    def fake_push_with_retry(root):
+        _seed_file(root, "PEER.md", "peer content")
+        _git(["add", "--", "PEER.md"], root)
+        _git(["commit", "-q", "-m", "peer commit\n\nSession-Id: peer-session-id"], root)
+        return commit_pipeline_mod.PushOutcome(
+            exit_code=0, acted=["push"], skipped=[], failed=[], message=None,
+            pushed_range=None, pushed_count=None,
+        )
+
+    monkeypatch.setattr(commit_pipeline_mod, "push_with_retry", fake_push_with_retry)
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: peer race regression",
+        stage_paths=["tasks/feature/todo.md"],
+        caller_paths={"tasks/feature/todo.md"},
+    )
+
+    own_sha = result.commit.committed_sha
+    peer_sha = _rev_parse_head(repo)
+
+    assert result.push_status == commit_pipeline_mod.PUSH_STATUS_PUSHED
+    assert own_sha is not None
+    assert own_sha != peer_sha
+    assert result.committed_sha == own_sha

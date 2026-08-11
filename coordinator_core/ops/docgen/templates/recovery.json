@@ -36,6 +36,11 @@
       "",
       "<!-- Replace with any partially-written work recovered from the crashed session. -->",
       "<!-- Usually \"nothing partially written\" — state that explicitly if true. -->",
+      "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
       ""
     ]}
   ]

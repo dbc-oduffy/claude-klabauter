@@ -157,6 +157,8 @@ from coordinator_core.ops.fleet.migrate_handoff_vocabulary import (
     _successor_ref,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
@@ -1042,6 +1044,16 @@ async def _delete_tracked_and_append_log(
             return [], denorm_written, denorm_write_failed, failed + commit_failed
 
         # Non-fatal index resync (mirrors rm_and_commit's own posture).
+        # MUST run before the claim-release call below: the commit just
+        # above landed via the isolated private index (idx_path), so the
+        # MAIN .git/index is still stale relative to HEAD until this loop
+        # brings it in line — `release_committed_claims` reads `git status
+        # --porcelain` against the main index, and a stale main index
+        # reports every reaped path as dirty (`AD <path>`, added-in-index/
+        # deleted-in-worktree), tripping the function's fail-safe RETAIN
+        # and silently no-op'ing the release (latent-bug fix, C3c: caught
+        # by this route's own claim-release test — see
+        # test_distill_apply_disposal_claim_release.py).
         main_env = _make_git_env()
         for p in reaped:
             rc, _out, err = await _run_git(
@@ -1074,6 +1086,32 @@ async def _delete_tracked_and_append_log(
         # Commit succeeded — tracked-parent denorm entries finally land too.
         for p in staged_denorm:
             denorm_written.extend(denorm_applied_by_parent.get(rel_id(p, worktree_root), []))
+
+        # Post-commit claim release (C3, AC1): same worktree, this
+        # session's own sid, explicit pathspec (commit_paths, the exact
+        # scope of the commit above) — run only now, after the main-index
+        # resync loop above, so `git status --porcelain` reads a clean
+        # main index (see that loop's comment for why ordering matters
+        # here). Never fails an already-landed commit. Offloaded via
+        # `asyncio.to_thread` — this module's own D4 mandate (module
+        # docstring, DR-228) is "never blocking subprocess.run";
+        # `release_committed_claims` issues a synchronous `git status
+        # --porcelain` subprocess, so it must not be called in place on
+        # this coroutine's event-loop turn.
+        try:
+            release_paths = [rel_id(Path(p), worktree_root) for p in commit_paths]
+            await asyncio.to_thread(
+                session_scope.release_committed_claims,
+                session_core.resolve_session_id(str(worktree_root)),
+                release_paths,
+                str(worktree_root),
+            )
+        except Exception:
+            _LOG.debug(
+                "distill.apply_disposal: release_committed_claims failed "
+                "post-commit; claim(s) retained",
+                exc_info=True,
+            )
 
         return (
             [rel_id(p, worktree_root) for p in reaped],

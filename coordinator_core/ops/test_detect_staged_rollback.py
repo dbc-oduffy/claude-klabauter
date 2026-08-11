@@ -376,6 +376,30 @@ def test_absolute_floor_fires_independent_of_ratio(tmp_path, monkeypatch):
     assert rc == 1
 
 
+def test_mass_deletion_should_fire_boundary_at_production_floor():
+    """`_mass_deletion_should_fire` against the REAL, unmonkeypatched
+    MASS_DELETION_ABS_FLOOR (5127) — a synthetic MassDeletionFinding, no repo
+    fixture needed. `test_absolute_floor_fires_independent_of_ratio` above
+    exercises the floor's arithmetic but monkeypatches the constant down to 3
+    for fixture speed; this test closes the gap by running the `>=` boundary
+    check against the actual production number directly, with a ratio kept
+    at 0.0 (below MASS_DELETION_RATIO_THRESHOLD) so only the floor leg can
+    fire."""
+    below = _dsr.MassDeletionFinding(
+        deleted_count=MASS_DELETION_ABS_FLOOR - 1, tracked_total=1_000_000, ratio=0.0
+    )
+    at = _dsr.MassDeletionFinding(
+        deleted_count=MASS_DELETION_ABS_FLOOR, tracked_total=1_000_000, ratio=0.0
+    )
+    above = _dsr.MassDeletionFinding(
+        deleted_count=MASS_DELETION_ABS_FLOOR + 1, tracked_total=1_000_000, ratio=0.0
+    )
+
+    assert _dsr._mass_deletion_should_fire(below) is False
+    assert _dsr._mass_deletion_should_fire(at) is True
+    assert _dsr._mass_deletion_should_fire(above) is True
+
+
 def test_mass_deletion_override_permits_commit_but_still_reports(tmp_path, capsys):
     repo = _init_repo(tmp_path / "mass-override")
     names = [f"f{i}.txt" for i in range(10)]

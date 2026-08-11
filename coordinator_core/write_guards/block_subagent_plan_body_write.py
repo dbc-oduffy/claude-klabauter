@@ -156,6 +156,7 @@ from coordinator_core.bash_guards._helpers import (
 )
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
@@ -390,14 +391,30 @@ def _resolve_executing_plan_keys(git_root: Optional[str], session_id: str) -> se
     return keys
 
 
-def _advisory_reason(file_path: str) -> str:
+def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str:
     """C16 narrowing — non-blocking nudge for an executor writing a
     plan/problem-set body OTHER than the one its own sidecar names as the
     plan it is executing. Deliberately much shorter than
     ``_deny_reason_executor``: this leg never blocks, so it does not carry
     the override-env note (there is nothing to bypass).
+
+    ``subagent_type`` names the kind that actually reached this leg. It
+    defaults to ``coordinator:executor`` because that was the only caller
+    before C3 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-
+    dispatch.md) routed cleanly-resolved unenumerated kinds here too — an
+    operator reading a nudge that names a type they did not dispatch
+    debugs the wrong thing.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
+    if subagent_type != _EXECUTOR_TYPE:
+        return (
+            f"Note: {file_path_safe} is a plan/problem-set body, and the "
+            f"dispatched subagent_type {subagent_type!r} is not on coordinator's "
+            "enumerated agent roster. Unenumerated kinds are treated as untrusted "
+            "for plan-body writes rather than waved through — if this type is "
+            "legitimate, it belongs on the roster; if editing THIS file is your "
+            "stated deliverable, confirm scope with the EM."
+        )
     return (
         f"Note: {file_path_safe} is a plan/problem-set body outside the plan "
         "you are currently executing. coordinator:executor dispatches "
@@ -422,12 +439,33 @@ def _deny_reason_ambiguous(agent_id: str, file_path: str) -> str:
     )
 
 
-def _deny_reason_executor(agent_id: str, file_path: str) -> str:
+def _deny_reason_executor(
+    agent_id: str, file_path: str, subagent_type: str = _EXECUTOR_TYPE
+) -> str:
     """Byte-for-byte port of the coordinator:executor-branch REASON, widened
     2026-07-24 to also name ``docs/problems/**`` ratified problem-sets
     alongside plan bodies (see module docstring).
+
+    ``subagent_type`` names the kind that actually reached this leg; the
+    ``coordinator:executor`` default preserves the ported REASON byte-for-byte
+    for the original caller. C3 (docs/plans/2026-08-10-deny-unenumerated-
+    agent-types-at-dispatch.md) also routes cleanly-resolved unenumerated
+    kinds here, and the executor-specific remediation below ("route to
+    coordinator:enricher/review-integrator") is wrong advice for those — the
+    fix for an unenumerated kind is the roster, not a re-route.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
+    if subagent_type != _EXECUTOR_TYPE:
+        return (
+            "Use instead:\n"
+            f"  {file_path_safe}: the dispatched subagent_type {subagent_type!r} is "
+            "not on coordinator's enumerated agent roster, so it may not write this "
+            "plan/problem-set body. Unenumerated kinds are treated as untrusted here "
+            "rather than waved through. If this type is legitimate, add it to the "
+            "roster; if the write is your deliverable, ask the EM to dispatch an "
+            "enumerated kind (coordinator:enricher/review-integrator)\n\n"
+            + operator_override_note(_OVERRIDE_ENV_VAR)
+        )
     return (
         "Use instead:\n"
         f"  {file_path_safe}: coordinator:executor may not write this plan/problem-set "
@@ -516,13 +554,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Block when SUBAGENT_TYPE is coordinator:executor OR AMBIGUOUS (AC14
     # collision sentinel). All other types — including empty/lookup-failure —
-    # allow.
+    # allow. AC6/C3: "all other types" is narrowed to enumerated-roster
+    # types only — a lookup FAILURE (kind_unresolved) still allows through
+    # this same exit, unchanged from the 2026-06-09 ruling above, but a
+    # type that resolves CLEANLY to something absent from the roster
+    # (C1's own union-of-three roster, coordinator_core.hooks.
+    # block_unenumerated_agent_type.resolve_roster) falls through to the
+    # SAME executor-scoped logic below rather than exiting here — an
+    # invented type gets no more trust than coordinator:executor for this
+    # guard's purposes. A roster-load error is a peer-repo hiccup, not this
+    # guard's problem to newly deny on: C1's PreToolUse(Agent) deny is the
+    # primary fix, so this stays defence in depth and falls back to
+    # today's allow rather than denying on an unresolvable roster.
     if not is_ambiguous and subagent_type != _EXECUTOR_TYPE:
         if kind_unresolved:
             emit_kind_resolution_failure_signal(
                 "block_subagent_plan_body_write", agent_id, git_root, None
             )
-        return None
+            return None
+        roster, _roster_error = resolve_roster()
+        if roster is None or subagent_type in roster:
+            return None
 
     # AMBIGUOUS collision sentinel: unconditional fail-closed, unaffected by
     # the C16 plan-scoping narrowing below (identity failure, not a scope
@@ -547,7 +599,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     target_key = _plan_body_key(normalized)
     executing_keys = _resolve_executing_plan_keys(git_root, session_id)
     if not target_key or target_key not in executing_keys:
-        reason = _advisory_reason(file_path)
+        reason = _advisory_reason(file_path, subagent_type)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -557,7 +609,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Block confirmed: this IS the plan body being executed.
     _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
-    reason = _deny_reason_executor(agent_id or raw_agent_id, file_path)
+    reason = _deny_reason_executor(agent_id or raw_agent_id, file_path, subagent_type)
 
     result = {
         "hookSpecificOutput": {

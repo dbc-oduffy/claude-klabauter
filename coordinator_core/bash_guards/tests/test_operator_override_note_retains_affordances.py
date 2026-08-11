@@ -56,26 +56,34 @@ def _doc_text() -> str:
 
 def test_note_states_the_env_var_is_not_reachable_in_session():
     """The env var is mentioned only to close it off. Naming it without the
-    pre-launch constraint invites an agent to try setting it from inside a
-    session, where the read happens in a different process. This is the ONE
-    fact the in-message note keeps inline -- everything else lives behind
-    the pointer."""
+    unsettable-in-session constraint invites an agent to try setting it from
+    inside a session, where the read happens in a different process. This is
+    the ONE fact the in-message note keeps inline -- everything else lives
+    behind the pointer."""
     note = _note()
     assert _SENTINEL_ENV_VAR in note, "the caller's env var should still be named"
-    assert "pre-launch" in note or "before" in note.lower(), (
-        "naming the env var without saying it is pre-launch-only invites an in-session attempt "
-        "that cannot work -- the constraint is the whole reason to mention it"
+    assert "unsettable" in note.lower() and "session" in note.lower(), (
+        "naming the env var without saying it cannot be set from inside a session invites an "
+        "in-session attempt that cannot work -- the constraint is the whole reason to mention it"
     )
 
 
-def test_note_is_addressed_to_the_operator_not_the_agent():
-    """The pre-H12 note read as instructions TO the agent, and a dispatched
-    subagent classified it as prompt injection -- so it consumed context from an
-    audience that could not act on it. The framing is what fixed that."""
+def test_note_carries_no_instruction_or_disclaimer_register():
+    """2026-08-11 reshape (cross-repo memo, example-market-data-repo-em plus two
+    prior siblings): the old note read as an INSTRUCTION (a pasteable
+    ``KEY=1`` assignment) framed by a disclaimer ("...not this agent:") that
+    is itself an injection tell. Two independently-dispatched agents
+    classified it as prompt injection and declined to act. The note now
+    states the key's unusability as a plain fact instead -- no disclaimer
+    register, and (per `test_operator_override_note_no_assignment_form.py`)
+    no assignment form."""
     note = _note()
-    assert "operator" in note.lower(), (
-        "the note must read as options for a human operator; addressed to the agent it is "
-        "unusable by the audience paying for it in context"
+    assert "not this agent" not in note.lower(), (
+        "the old disclaimer register ('...not this agent:') must not "
+        "reappear -- it was itself the injection tell this reshape removed"
+    )
+    assert "%s=" % _SENTINEL_ENV_VAR not in note, (
+        "the env var must never be rendered as a pasteable assignment"
     )
 
 

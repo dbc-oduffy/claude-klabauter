@@ -206,6 +206,23 @@ def _ensure_engine_on_path() -> str | None:
 
 _ensure_engine_on_path()
 
+# Canonical Session Ledger block — owned by coordinator_core.session_ledger (the
+# package that also parses it, session_ledger.aggregate_chain_loe). Best-effort
+# import matching _ensure_engine_on_path()'s documented graceful-skip convention:
+# an unresolvable engine must not hard-fail every doc type (memo, plan, decision,
+# sidecar, ...), only the six ledger-owing scaffolders that actually need this
+# constant — those fail loudly at the point of use instead (see
+# _require_session_ledger_block below).
+# Review: code-reviewer 49e8b242 P1 — bare module-level import broke --help and
+# every non-ledger-owing doc type on an unresolvable engine; this restores the
+# file's own fail-open convention while keeping the six ledger-owing scaffolders
+# loud on the same failure.
+# Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C2
+try:
+    from coordinator_core.session_ledger import SESSION_LEDGER_BLOCK_LINES  # noqa: E402
+except ImportError:  # noqa: BLE001 -- best-effort import; unresolvable engine degrades to None
+    SESSION_LEDGER_BLOCK_LINES = None
+
 
 def _no_console_creationflags() -> dict:
     """``subprocess`` kwargs that suppress a console window on Windows.
@@ -548,11 +565,29 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
         sys.exit(1)
 
 
+# Handoff-family kinds that owe a `## Session Ledger` block (C1: all six scaffolders
+# now emit it, C3 makes its absence a write-time refusal). PM ruling 2026-08-11
+# (docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § Problem):
+# all handoff-family kinds are ledger-owing, including goal-seed.
+_LEDGER_OWING_KINDS: frozenset[str] = frozenset({
+    "session-handoff",
+    "recovery",
+    "spinoff",
+    "roadmap-baton",
+    "roadmap-seed",
+    "goal-seed",
+})
+
+
 def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str | None) -> None:
     """Fail loud (sys.exit 1) if the freshly-generated ``content`` fails the
     schema its own kind/path resolves to in this repo's vendored corpus
     (``coordinator_core/frontmatter/schemas/``), so the emitter cannot mint a
-    record its own repo's validator would reject.
+    record its own repo's validator would reject. Also refuses (sys.exit 1)
+    a ledger-owing kind (``_LEDGER_OWING_KINDS``) whose body carries no
+    ``## Session Ledger`` heading (C3) — the write-time backstop for "every
+    present and future baton generator remembering to do so" that C1's
+    generator-side emission alone cannot guarantee.
 
     Scoped to doc types whose kind or output path resolves to a schema in
     that corpus (``match_schema``/``match_schema_for_path``) — most doc
@@ -562,7 +597,10 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
     a weakened warning: only doc types WITH a schema are actually enforced.
     Content with no parseable frontmatter is likewise left alone here (this
     is a self-check on the emitter's own output shape, not a general
-    frontmatter-presence gate).
+    frontmatter-presence gate). The ledger-heading check is scoped the same
+    way — it only ever runs on content whose frontmatter parsed and whose
+    schema matched, so an unresolvable/malformed scaffold degrades exactly
+    like the schema check does, never a separate failure mode.
 
     Degrades gracefully (skips the check, no exit) when ``repo_root`` cannot
     be resolved or when ``coordinator_core`` cannot be imported — mirrors
@@ -571,16 +609,19 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
     environment this tool already tolerates elsewhere. A schema-corpus load
     or frontmatter-parse failure degrades the same way (fail-open — never
     block a write on the self-check's own infra trouble); only an actual
-    schema-shape violation on the generated content triggers the hard exit.
+    schema-shape violation, or a ledger-owing kind missing its heading, on
+    the generated content triggers the hard exit.
 
     Spec backlink: cross-repo memo
     2026-08-01-example-doctrine-repo-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
     § "Also worth noting regardless of the above".
+    Spec backlink (C3): docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C3
     """
     if not repo_root:
         return
     try:
         _ensure_engine_on_path()
+        from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE
         from coordinator_core.frontmatter.schema_validate import (
             _SCHEMAS_DIR,
             load_schemas,
@@ -593,7 +634,9 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
 
     try:
         repo_rel = os.path.relpath(out_path, repo_root).replace(os.sep, "/")
-        frontmatter = parse_frontmatter(content).get("frontmatter")
+        parsed = parse_frontmatter(content)
+        frontmatter = parsed.get("frontmatter")
+        body = parsed.get("body") or ""
         schemas = load_schemas(_SCHEMAS_DIR)
         match = match_schema(repo_rel, frontmatter, schemas)
     except Exception:  # noqa: BLE001 -- fail-open on corpus-load/parse trouble, never block on infra
@@ -603,20 +646,35 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
         return
 
     result = validate_frontmatter_obj(frontmatter, match["schema"])
-    if result.get("ok"):
-        return
+    if not result.get("ok"):
+        schema_name = match.get("schemaName", "(unknown schema)")
+        lines = [
+            f"error: refusing to write {out_path} — generated frontmatter fails "
+            f"its own schema ({schema_name}). The emitter refused to write:",
+        ]
+        for e in result.get("errors") or []:
+            field = e.get("field") or "(unknown)"
+            hint = f" (hint: {e['hint']})" if e.get("hint") else ""
+            lines.append(f"  {field}: {e.get('error')}{hint}")
+        print("\n".join(lines), file=sys.stderr)
+        sys.exit(1)
 
-    schema_name = match.get("schemaName", "(unknown schema)")
-    lines = [
-        f"error: refusing to write {out_path} — generated frontmatter fails "
-        f"its own schema ({schema_name}). The emitter refused to write:",
-    ]
-    for e in result.get("errors") or []:
-        field = e.get("field") or "(unknown)"
-        hint = f" (hint: {e['hint']})" if e.get("hint") else ""
-        lines.append(f"  {field}: {e.get('error')}{hint}")
-    print("\n".join(lines), file=sys.stderr)
-    sys.exit(1)
+    kind = frontmatter.get("kind") if isinstance(frontmatter, dict) else None
+    if kind in _LEDGER_OWING_KINDS:
+        # Review: code-reviewer 49e8b242 P2/P3 — was _compile_heading_re("Session Ledger")
+        # over the full frontmatter+body `content` (near-missed the parser's grammar,
+        # and a frontmatter field literal-matching the heading text could spuriously
+        # satisfy it); now the canonical parser-shared regex, scoped to `body` only.
+        if not SESSION_LEDGER_HEADING_RE.search(body):
+            print(
+                f"error: refusing to write {out_path} — kind: {kind} is ledger-owing "
+                "and its body carries no '## Session Ledger' heading. "
+                "session_ledger.aggregate_chain_loe sums that block's rows to compute "
+                "chain effort; a ledger-owing handoff with no block silently renders any "
+                "chain headed by it as zero effort. The emitter refused to write.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
 
 def _resolve_state_root(central: bool = False) -> str | None:
@@ -1322,6 +1380,41 @@ def _validate_category(value: str) -> None:
         sys.exit(1)
 
 
+# Canonical Session Ledger block, shared verbatim by every handoff-family scaffolder
+# (_scaffold_handoff/_scaffold_recovery/_scaffold_spinoff/_scaffold_roadmap_baton/
+# _scaffold_roadmap_seed/_scaffold_goal_seed). session_ledger.aggregate_chain_loe sums this
+# block's rows; the comment's one-line grammar MUST stay the format parse_session_ledgers
+# reads (_ONELINE_RE) — do not fork this literal per-kind, that duplication is the defect
+# this constant exists to close.
+# Owned by coordinator_core.session_ledger (the parser's own package) — imported here,
+# not re-typed, so emitter and parser cannot drift independently.
+# Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C1/C2
+_SESSION_LEDGER_BLOCK: list[str] | None = SESSION_LEDGER_BLOCK_LINES
+
+
+def _require_session_ledger_block() -> list[str]:
+    """Fail loudly (sys.exit 1) if the module-level import of
+    ``SESSION_LEDGER_BLOCK_LINES`` degraded to ``None`` (unresolvable engine).
+
+    Called by each of the six ledger-owing scaffolders before they emit their
+    body — those kinds cannot produce a conformant, ledger-summable body
+    without the canonical block, so silently proceeding without it would
+    reproduce the exact "chain reads zero effort" defect this plan exists to
+    close. Non-ledger-owing doc types never call this and are unaffected by
+    an absent engine.
+    """
+    if _SESSION_LEDGER_BLOCK is None:
+        print(
+            "error: cannot scaffold this doc type — coordinator_core.session_ledger "
+            "did not import (unresolvable engine seam), and this kind owes a "
+            "'## Session Ledger' block. Fix the engine seam (see "
+            "_ensure_engine_on_path) and retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return _SESSION_LEDGER_BLOCK
+
+
 def _scaffold_handoff(
     title: str,
     branch: str,
@@ -1467,11 +1560,7 @@ def _scaffold_handoff(
         "",
         "<!-- Replace with what the next session should do first. -->",
         "",
-        "## Session Ledger",
-        "",
-        "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
-        "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
-        "",
+        *_require_session_ledger_block(),
     ])
     return "\n".join(lines)
 
@@ -1573,6 +1662,7 @@ def _scaffold_recovery(
         "<!-- Replace with any partially-written work recovered from the crashed session. -->",
         "<!-- Usually \"nothing partially written\" — state that explicitly if true. -->",
         "",
+        *_require_session_ledger_block(),
     ])
     return "\n".join(lines)
 
@@ -1673,6 +1763,7 @@ def _scaffold_spinoff(
         "",
         "<!-- Failure modes a context-less EM might hit. Negative scope. -->",
         "",
+        *_require_session_ledger_block(),
     ])
     return "\n".join(lines)
 
@@ -1816,6 +1907,7 @@ def _scaffold_roadmap_baton(
         "",
         "- None identified at authoring time.",
         "",
+        *_require_session_ledger_block(),
         f"<!-- roadmap-baton: {roadmap_id} {stub_id} by roadmap-planning -->",
     ]
     return "\n".join(lines)
@@ -1942,6 +2034,7 @@ def _scaffold_goal_seed(
         "",
         "<!-- This stub does NOT auto-flesh into a goal — PM re-entry via goal-setting is required. -->",
         "",
+        *_require_session_ledger_block(),
     ])
     return "\n".join(lines)
 
@@ -2077,6 +2170,7 @@ def _scaffold_roadmap_seed(
         "",
         "<!-- This stub does NOT author the roadmap plan itself — roadmap-planning owns that. -->",
         "",
+        *_require_session_ledger_block(),
     ])
     return "\n".join(lines)
 

@@ -181,6 +181,14 @@ def test_ac2_non_matcher_tool_never_bumps(tmp_path):
 
 
 def test_marker_present_in_own_gitdir_clears_the_bump(tmp_path):
+    """MIGRATION GUARANTEE, not the advertised shape (2026-08-10 per-target
+    narrowing). An anchor-sited marker is the PRE-narrowing location; it
+    still clears, for every target, so a marker a live session already holds
+    does not stop working mid-session. The guard no longer ADVERTISES this
+    location -- see the `_marker_locations` tests below for what it prints
+    now. Keep this test: it is the only thing pinning the grandfathered
+    read, and dropping it would let a "tidy-up" silently deny writes to a
+    session that already cleared the bump."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-marker-clear"
@@ -196,6 +204,153 @@ def test_marker_present_in_own_gitdir_clears_the_bump(tmp_path):
     other_foreign = _init_repo(tmp_path, "another-foreign-repo")
     payload2 = _payload("Edit", str(other_foreign / "y.txt"), session_id, str(own))
     assert guard.check(payload2) is None
+
+
+# ---------------------------------------------------------------------------
+# Per-target marker narrowing (2026-08-10 parity pass) -- one clear covers
+# the target it was made for, not every target for the session. Mirrors the
+# Bash leg's AC4 (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
+#
+# AC9: every verdict-asserting test below first asserts `bump_applies()` is
+# True AND that the guard actually FIRES on the un-cleared target, so the
+# "still denies elsewhere" half can never pass vacuously against a guard
+# that never engaged.
+# ---------------------------------------------------------------------------
+
+
+def _assert_denies(payload) -> str:
+    result = guard.check(payload)
+    assert result is not None, "expected a deny -- a vacuous pass otherwise"
+    out = result["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    return out["permissionDecisionReason"]
+
+
+def test_target_sited_marker_clears_only_the_target_it_was_made_for(tmp_path):
+    own = _init_repo(tmp_path, "own-repo")
+    target_a = _init_repo(tmp_path, "foreign-a")
+    target_b = _init_repo(tmp_path, "foreign-b")
+    session_id = "sess-per-target"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    assert applicability.bump_applies(session_id, cwd=str(own)) is True
+
+    payload_a = _payload("Write", str(target_a / "x.txt"), session_id, str(own))
+    payload_b = _payload("Write", str(target_b / "y.txt"), session_id, str(own))
+    _assert_denies(payload_a)
+    _assert_denies(payload_b)
+
+    gitdir_a = marker.resolve_gitdir(str(target_a))
+    assert gitdir_a is not None
+    (gitdir_a / marker.marker_basename(session_id)).touch()
+
+    assert guard.check(payload_a) is None
+    _assert_denies(payload_b)
+
+
+def test_advertised_clear_line_names_the_target_gitdir_not_the_anchor(tmp_path):
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-clear-line-target"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    assert applicability.bump_applies(session_id, cwd=str(own)) is True
+
+    reason = _assert_denies(
+        _payload("Edit", str(foreign / "x.txt"), session_id, str(own))
+    )
+
+    target_gitdir = marker.resolve_gitdir(str(foreign))
+    own_gitdir = marker.resolve_gitdir(str(own))
+    assert target_gitdir is not None and own_gitdir is not None
+    assert marker.marker_path(target_gitdir, session_id).as_posix() in reason
+    assert marker.marker_path(own_gitdir, session_id).as_posix() not in reason
+
+
+def test_marker_falls_back_to_anchor_when_target_is_in_no_repo(tmp_path, monkeypatch):
+    """The one shape with no target gitdir to narrow into -- structurally the
+    same no-op as the Bash leg's OUTSIDE_ANY_REPO class.
+
+    Repoints the temp-root classifier off `tmp_path`'s own ancestry (pytest's
+    `tmp_path` lives under the REAL system temp root) so this destination is
+    not caught by the unrelated `target_is_bare_temp_scratch` AC9 exemption
+    instead -- same repoint `test_ac4_non_repo_destination_still_bumps`
+    applies, for the identical reason."""
+    fake_system_temp = tmp_path / "not-the-real-system-temp-fallback"
+    fake_system_temp.mkdir()
+    monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(fake_system_temp))
+    monkeypatch.setattr(applicability, "_posix_tmp_literal", lambda: str(fake_system_temp))
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.delenv(var, raising=False)
+
+    own = _init_repo(tmp_path, "own-repo")
+    _isolate_home(monkeypatch, tmp_path / "claude-home-anchor-fallback")
+    loose = tmp_path / "no-repo-here"
+    loose.mkdir()
+    session_id = "sess-anchor-fallback"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    assert applicability.bump_applies(session_id, cwd=str(own)) is True
+
+    payload = _payload("Write", str(loose / "x.txt"), session_id, str(own))
+    reason = _assert_denies(payload)
+
+    own_gitdir = marker.resolve_gitdir(str(own))
+    assert own_gitdir is not None
+    assert marker.marker_path(own_gitdir, session_id).as_posix() in reason
+
+    (own_gitdir / marker.marker_basename(session_id)).touch()
+    assert guard.check(payload) is None
+
+
+def test_marker_locations_split_advertised_from_grandfathered(tmp_path):
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    own_gitdir = marker.resolve_gitdir(str(own))
+    foreign_gitdir = marker.resolve_gitdir(str(foreign))
+    assert own_gitdir is not None and foreign_gitdir is not None
+
+    assert guard._marker_locations(own_gitdir, foreign_gitdir) == (
+        foreign_gitdir,
+        own_gitdir,
+    )
+    # No target repo -> anchor, nothing grandfathered (the location never
+    # moved for this shape).
+    assert guard._marker_locations(own_gitdir, None) == (own_gitdir, None)
+    # No session repo -> target, unchanged from pre-narrowing behaviour.
+    assert guard._marker_locations(None, foreign_gitdir) == (foreign_gitdir, None)
+    # Same repo on both sides -> never a duplicate stat of one directory.
+    assert guard._marker_locations(own_gitdir, own_gitdir) == (own_gitdir, None)
+
+
+def test_narrowing_adds_no_expiry_identity_gating_or_fail_closed(tmp_path):
+    """AC6 of docs/plans/2026-08-03-narrow-write-confinement-bump.md, asserted
+    NON-vacuously: the guard is shown to fire first, and the absence
+    properties are asserted against that fired-then-cleared path."""
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-ac6-absence"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    assert applicability.bump_applies(session_id, cwd=str(own)) is True
+
+    payload = _payload("Write", str(foreign / "x.txt"), session_id, str(own))
+    _assert_denies(payload)
+
+    gitdir = marker.resolve_gitdir(str(foreign))
+    assert gitdir is not None
+    marker_file = gitdir / marker.marker_basename(session_id)
+    # A bare `touch` of an ordinary, zero-byte file -- no body, no identity,
+    # no signature -- still clears, exactly as XREPO_MARKER_IS_ORDINARY_FILE
+    # requires. The clear is not gated on who created it or when.
+    marker_file.touch()
+    assert marker_file.stat().st_size == 0
+    os.utime(marker_file, (0, 0))  # epoch-old: no expiry window may exist
+    assert guard.check(payload) is None
+
+    # Band/posture unchanged by the narrowing: still the `write_guards`
+    # hard-deny CLASS it already had, with no `fail_closed` promotion and no
+    # `GuardBand` membership of its own (this surface is registered by
+    # `write_guards/engine.py`, which has no CONFINEMENT_DENY band).
+    assert guard.CLASS == "hard-deny"
+    assert getattr(guard, "fail_closed", False) is False
+    assert getattr(guard, "BAND", None) is None
 
 
 # ---------------------------------------------------------------------------

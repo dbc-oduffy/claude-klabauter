@@ -243,7 +243,7 @@ import asyncio
 import datetime
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
@@ -958,7 +958,13 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 _CLOSE_CONFLICTING_TERMINALS = frozenset({"shipped", "continued"})
 
 
-def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> dict:
+def _close(
+    handoff_path: str,
+    reason: str,
+    worktree: Path,
+    repo_root: Path,
+    live_children_recheck: Optional[Callable[[], dict]] = None,
+) -> dict:
     """Apply close transition (deployment_state: <any, except shipped|continued>
     → closed, closed_reason: <reason>).
 
@@ -997,6 +1003,29 @@ def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> d
     Routes the read-modify-write through locked_rmw for cross-process
     serialisation. Domain-abort paths raise MutateAbort from inside the
     mutate closure so the lock is released and no write occurs.
+
+    `live_children_recheck` (optional, zero-arg callable returning a dict
+    shaped like `handoff_children._handoff_has_live_children`'s reply —
+    i.e. `{"exit_code": 0|1|2, ...}`) is invoked INSIDE the `locked_rmw`
+    mutate closure, immediately before a real (non-idempotent) write is
+    built, so a caller with its own pre-write live-lineage-edge guard (see
+    `handoff_reconcile_close_terminal._handler`) can re-verify that guard
+    atomically with the write it gates, closing the TOCTOU window between
+    an unlocked pre-check and this function's own lock acquisition.
+    `exit_code != 1` (0 = a live edge now exists, 2 = indeterminate)
+    aborts the write via `MutateAbort` — same fail-closed posture as the
+    caller's own unlocked guard. Absent (None), `_close` behaves exactly
+    as before this recheck was added — no other caller of this function
+    supplies it.
+
+    Warning: `_close` itself is called via `asyncio.to_thread` by its
+    sole production caller, so a `live_children_recheck` that internally
+    calls `asyncio.run` is safe today only because that thread has no
+    running event loop. Any supplied `live_children_recheck` must not
+    assume the absence of a running event loop — a future caller that
+    invokes `_close` from inside an already-running loop would hit
+    `RuntimeError: asyncio.run() cannot be called from a running event
+    loop`.
     """
     if reason not in _CLOSED_REASONS:
         return _err(
@@ -1045,6 +1074,28 @@ def _close(handoff_path: str, reason: str, worktree: Path, repo_root: Path) -> d
                 f'close refuses to overwrite deployment_state:"{deployment}" '
                 f"(already a different completed terminal) — {handoff_path}"
             )
+
+        # Live-lineage-edge re-check, INSIDE the locked_rmw critical section
+        # and immediately before the write is built — closes the TOCTOU gap
+        # between a caller's own unlocked pre-check (e.g.
+        # handoff_reconcile_close_terminal._handler's step-0 guard, which
+        # runs before this lock is even acquired) and this function's write.
+        # Only reachable here (past the idempotency no-op above), i.e. only
+        # when a real write is about to happen — the no-op path changes
+        # nothing so no successor edge it could stamp over.
+        if live_children_recheck is not None:
+            recheck = live_children_recheck()
+            recheck_exit = recheck.get("exit_code")
+            if recheck_exit != 1:
+                raise MutateAbort(
+                    f"close: live-lineage-edge re-check inside the lock "
+                    f"returned exit_code={recheck_exit} (0=live edge now "
+                    f"present, 2=indeterminate/fail-closed) for "
+                    f"{handoff_path} — refusing to stamp closed_reason:"
+                    f"{reason!r} over what is now (or may be) a live "
+                    f"successor edge: "
+                    f"{recheck.get('error') or recheck.get('children')}"
+                )
 
         fm = split.fm_text
 

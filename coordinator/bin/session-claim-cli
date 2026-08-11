@@ -96,7 +96,13 @@
 #                 stderr as "could not determine", NEVER read as
 #                 "unclaimed" (an unanswerable index entry authorizing a
 #                 silent pass-through would repeat the exact fail-open
-#                 shape the commit gate itself refuses to allow).
+#                 shape the commit gate itself refuses to allow). A second
+#                 stderr line names WHICH of the three abort causes fired
+#                 (claim_index.ABORT_CAUSE_EMPTY_BASE / _CAP_EXCEEDED /
+#                 _IO_ERROR, or "unknown" if the lookup result carries none)
+#                 -- additive only; the refusal sentence above and this exit
+#                 code are unchanged (C1/C2, docs/plans/2026-08-11-claim-
+#                 index-abort-cause-and-cli-blindness.md).
 #     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError),
 #                 OR liveness.session_live raised unexpectedly for one of the
 #                 claimants (same reused code as is-session-live above).
@@ -461,7 +467,8 @@ def _dispatch(argv: list[str]) -> int:
         # traceback, indistinguishable from a determinate "confirmed dead"-
         # shaped exit on this CLI. Same three-line guard as its sibling.
         try:
-            claimants = claim_index_mod.lookup([path], cwd=cwd).get(path, [])
+            lookup_result = claim_index_mod.lookup([path], cwd=cwd)
+            claimants = lookup_result.get(path, [])
         except Exception as exc:  # noqa: BLE001 - see is-session-live's own guard
             print("indeterminate")
             print(
@@ -472,12 +479,19 @@ def _dispatch(argv: list[str]) -> int:
             )
             return _TRANSPORT_FAIL
         if claim_index_mod.UNANSWERABLE in claimants:
+            # C1 (docs/plans/2026-08-11-claim-index-abort-cause-and-cli-
+            # blindness.md) adds `abort_cause` alongside `.complete` on the
+            # lookup() result -- additive to this refusal line, never a
+            # replacement: the "NOT a verdict that the path is unclaimed"
+            # sentence below is unchanged verbatim, and the exit code stays 1.
+            abort_cause = getattr(lookup_result, "abort_cause", None) or "unknown"
             print(
                 f"session-claim-cli: who-claims-path: claim ownership for {path!r} "
                 "could not be determined (claim index rebuild aborted/unresolvable) "
                 "-- NOT a verdict that the path is unclaimed",
                 file=sys.stderr,
             )
+            print(f"session-claim-cli: who-claims-path: abort cause: {abort_cause}", file=sys.stderr)
             return 1
         # Review: staff-eng slice-A P1 #2 — collect every claimant's verdict
         # before printing any of them. Printing per-claimant inside the loop

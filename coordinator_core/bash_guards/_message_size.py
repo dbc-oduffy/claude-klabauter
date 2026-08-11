@@ -434,7 +434,73 @@ def _data_block_bytes(text: str) -> int:
     return total
 
 
-_OVERRIDE_ENV_VAR_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})=1\b")
+#: Sentinel key rendered through `operator_override_note` at import time
+#: purely to discover the LITERAL TEXT that immediately precedes the env-var
+#: name in each of its two branches (flag-shaped, `reason_placeholder=`-
+#: shaped) -- never a hardcoded transcription of that builder's prose. See
+#: `_derive_override_env_var_prefixes` for why this must stay derived.
+_OVERRIDE_PREFIX_SENTINEL = "ZZZOVERRIDESENTINELZZZ"
+
+
+def _derive_override_env_var_prefixes() -> List[str]:
+    """Recover the literal prefix text `operator_override_note` renders
+    immediately before its `env_var` argument, for BOTH branches (default
+    flag-shaped, and `reason_placeholder=`-shaped), by rendering the
+    builder with a sentinel key and slicing off everything before the
+    sentinel.
+
+    NEGATIVE SPEC (2026-08-11 incident): `_OVERRIDE_ENV_VAR_RE` used to be
+    an INDEPENDENT, hand-transcribed pattern (`r"\\b([A-Z][A-Z0-9_]{3,})=1\\b"`)
+    keyed on a `KEY=1` assignment shape. `operator_override_note`'s
+    2026-08-11 reshape (commit ba3bf8a98) removed the assignment form
+    entirely (NEGATIVE SPEC 4 on that function -- the key is now named
+    BARE), and this independent transcription silently decoupled: it
+    recovered nothing, `_tail_bytes` subtracted nothing, and the ~170-byte
+    SSOT tail landed back inside every guard's prose budget uncredited (30+
+    corpus cells over the 220-byte cap). A pattern built by TRANSCRIBING a
+    builder's output shape can always drift out of sync with the builder
+    silently, because nothing ties the two together -- this function is the
+    fix: it renders the ACTUAL builder and reads the prefix back off ITS
+    OWN output, so a future reshape of `operator_override_note`'s rendered
+    text automatically changes what this function derives too. Do not
+    replace this with a second hand-copied literal, ever -- that is the
+    exact defect class this function exists to close.
+    """
+    prefixes: List[str] = []
+    for rendered in (
+        operator_override_note(_OVERRIDE_PREFIX_SENTINEL),
+        operator_override_note(_OVERRIDE_PREFIX_SENTINEL, reason_placeholder="a caller-supplied reason placeholder"),
+    ):
+        idx = rendered.index(_OVERRIDE_PREFIX_SENTINEL)
+        prefixes.append(rendered[:idx])
+    return prefixes
+
+
+def _derive_override_env_var_common_suffix() -> str:
+    """The two branches' prefixes (`_derive_override_env_var_prefixes`)
+    diverge only in the parenthetical SHAPE text (``"(flag)"`` vs.
+    ``'(reason, e.g. "<placeholder>")'`` -- the latter interpolates the
+    CALLER's own `reason_placeholder` text, which `_discoverable_env_vars`
+    cannot know in advance for an arbitrary guard message). Everything
+    AFTER that parenthetical (``"), unsettable from inside this session --
+    read only at hook-process spawn: "``) is identical between the two
+    branches regardless of placeholder text, so anchoring on the common
+    SUFFIX of the two derived prefixes -- rather than either prefix whole
+    -- recovers the env var independent of which placeholder text a given
+    call site used. Still fully derived from a live render, never a
+    transcription of this literal string.
+    """
+    prefixes = _derive_override_env_var_prefixes()
+    a, b = prefixes[0], prefixes[1]
+    length = 0
+    while length < min(len(a), len(b)) and a[len(a) - 1 - length] == b[len(b) - 1 - length]:
+        length += 1
+    return a[len(a) - length :]
+
+
+_OVERRIDE_ENV_VAR_RE = re.compile(
+    re.escape(_derive_override_env_var_common_suffix()) + r"([A-Z][A-Z0-9_]{3,})"
+)
 
 
 def _tail_bytes(
@@ -474,6 +540,18 @@ def _discoverable_env_vars(text: str) -> List[str]:
     key, and it fails silently by over-counting prose (the tail lands back in
     the cap) rather than loudly. Recovering the argument from the message keeps
     the SSOT in the guard's own call site, where it belongs.
+
+    NEGATIVE SPEC (2026-08-11) -- `_OVERRIDE_ENV_VAR_RE` MUST stay DERIVED
+    from `operator_override_note`'s own render
+    (`_derive_override_env_var_prefixes`), never re-transcribed as an
+    independent literal pattern. The 2026-08-11 reshape of that builder
+    (commit ba3bf8a98, removing the `KEY=1` assignment form) broke this
+    recovery precisely because the prior pattern was authored as a
+    standalone copy of the builder's output shape, with nothing tying the
+    two together -- the builder changed, the copy did not, and recovery
+    silently went to zero. Any future reshape of `operator_override_note`'s
+    rendered text must not be able to decouple this regex again without
+    also changing what it derives from.
     """
     return _OVERRIDE_ENV_VAR_RE.findall(text)
 

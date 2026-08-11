@@ -162,8 +162,331 @@ _VALID_REVIEWERS = frozenset(
         "waived",
         "ubt-compile",
         "wsc-auto-adjudication",
+        "em-verified",
     }
 )
+
+# ---------------------------------------------------------------------------
+# reviewer_evidence — refuse an unevidenced reviewer verdict
+# ---------------------------------------------------------------------------
+#
+# state/bug-backlog/2026-08-10-coordinator-write-review-trail-accepts-a-295d3cd80d13.yaml.
+# Prior to this, --reviewer/--verdict were free parameters: nothing correlated
+# them with any artifact showing a review occurred. Demonstrated against the
+# EM itself on 2026-08-10 (see that bug-backlog record's `evidence` field): two
+# verdict-"ok" records were written for commits no reviewer had seen, and the
+# CLI accepted both. This section makes the wrong record unwritable rather
+# than merely forbidden in prose (the workstream-complete skill's existing,
+# unenforced rule).
+#
+# Reviewer values split into three evidence classes:
+#
+#   DELEGATE  ({code-reviewer, staff-eng, code-reviewer+staff-eng,
+#              ubt-compile}) -- a real reviewer actually ran. Evidence MUST be
+#              one of:
+#                (a) a sidecar path that exists on disk at write time
+#                    (state/subagent-share/... or state/plan-sidecars/...,
+#                    resolved relative to caller_worktree), or
+#                (b) a dispatch id resolvable in THIS session's own
+#                    `.git/coordinator-sessions/<sid>/dispatched-agents.txt`.
+#              Both are artifacts a reviewer dispatch actually produces --
+#              typing a string proves nothing; a resolvable path/id does.
+#
+#   WAIVED    ({waived}) -- no reviewer is coming, by deliberate decision.
+#              Evidence is a free-text justification, held to a floor
+#              (`_MIN_JUSTIFICATION_CHARS`) high enough that a one-word
+#              placeholder ("later", "n/a") fails it -- this is the "explicit
+#              waived form carrying its own justification" the bug-backlog
+#              record calls for. This is deliberately CHEAPER than resolving a
+#              real sidecar/dispatch id (typing a sentence vs. actually
+#              dispatching a reviewer), which is the correct ordering: waiving
+#              review is a real, lighter-weight decision than performing one.
+#              It is NOT free, though -- an empty or trivial value refuses --
+#              so it does not become the road every session takes at 22:40
+#              purely because refusing costs more than typing a placeholder.
+#              (Design question (b) in the bug-backlog record: whatever it
+#              costs to use, it must cost more than the current zero. A
+#              justification floor is the cheapest defensible instrument
+#              available without inventing a second-party approval mechanism
+#              this repo has nowhere to source from -- see that record's
+#              design-question (b) for the fuller reasoning this trades off.)
+#
+#   EM-VERIFIED ({em-verified}) -- design question (a) in the bug-backlog
+#              record: an EM that reads a diff, runs the code, and satisfies
+#              itself has done something real, but it is not a delegate
+#              review (forcing it into `code-reviewer` is the exact
+#              falsification this whole section exists to close) and it
+#              overstates nothing to also call it `waived` (a waiver asserts
+#              NO verification happened; this asserts real, if self-graded,
+#              verification did). It gets its OWN reviewer value and its own
+#              evidence floor -- concrete checks performed, held to the same
+#              justification floor as `waived` -- rather than being folded
+#              into either existing bucket. Downstream consumers that weight
+#              trust by `reviewer` can and should treat `em-verified` as
+#              weaker than a delegate reviewer without having to first infer
+#              that from a `waived` record's absence of any real verification.
+#
+#   MACHINE-PROVENANCE ({wsc-auto-adjudication}) -- pre-existing, narrower
+#              carve-out. Not a human typing --reviewer on a CLI: it is the
+#              old wsc_commit.py machine auto-source sentinel this module's
+#              own docstring already documents as distinct from a human/CI
+#              reviewer name (module docstring, `_VALID_REVIEWERS` comment).
+#              Left EXEMPT from the evidence requirement -- accepted, narrow,
+#              named gap: nothing here stops a caller from typing
+#              `--reviewer wsc-auto-adjudication` by hand to dodge the
+#              evidence gate. Closing that fully needs a caller-identity
+#              signal this op has no way to source (there is no
+#              machine-vs-human provenance channel on this call), so it is
+#              named rather than silently left implicit -- see this comment
+#              instead of assuming it was overlooked.
+#
+# Existing on-disk records are UNCHANGED and keep validating: this check runs
+# only at WRITE time, on the write path, and never re-validates or rejects a
+# record already on disk (no on-disk schema change, no new required key on
+# read).
+#
+# Chain-ancestry waivers (`state/review-trail/chain-ancestry-waivers/`,
+# `coordinator_core.chain_ancestry_waivers`) are NOT this mechanism -- they
+# are a separate, per-SHA, gate-minted provenance-not-discharge marker
+# consumed by `_guard_foreign_session_range` above, orthogonal to whether a
+# reviewer's OWN verdict is evidenced. Design question (c) in the bug-backlog
+# record: do not conflate the two; this section adds nothing to, and takes
+# nothing from, that mechanism.
+
+_DELEGATE_REVIEWERS = frozenset(
+    {"code-reviewer", "staff-eng", "code-reviewer+staff-eng", "ubt-compile"}
+)
+_JUSTIFICATION_REVIEWERS = frozenset({"waived", "em-verified"})
+_EVIDENCE_EXEMPT_REVIEWERS = frozenset({"wsc-auto-adjudication"})
+
+#: Floor for a `waived`/`em-verified` free-text justification -- high enough
+#: that "n/a", "later", "skip" (all comfortably under this) fail, without
+#: policing content this op has no authority to grade for substance.
+_MIN_JUSTIFICATION_CHARS = 20
+
+#: Sidecar-shaped path prefixes a delegate-reviewer evidence path must fall
+#: under -- mirrors the two locations this repo's own subagent dispatch
+#: machinery actually writes to (§ Run-Report Sidecar / plan-sidecar
+#: conventions), so an arbitrary existing file elsewhere in the tree cannot
+#: be pointed at as if it were review evidence.
+_SIDECAR_EVIDENCE_PREFIXES = ("state/subagent-share/", "state/plan-sidecars/")
+
+#: Opt-in enforcement switch (default OFF — advisory only). See
+#: `_verify_reviewer_evidence`'s Negative-spec block for why the default is
+#: advisory and what flips it.
+_REVIEW_TRAIL_EVIDENCE_ENFORCE_ENV = "COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE"
+
+_TRUTHY = frozenset({"1", "true", "yes"})
+
+
+def _evidence_enforcement_enabled() -> bool:
+    """True iff `COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE` is set to a
+    truthy value (case-insensitive `1`/`true`/`yes`). Default (unset, or any
+    other value) is False — advisory-only. See `_verify_reviewer_evidence`'s
+    Negative-spec block.
+    """
+    return os.environ.get(_REVIEW_TRAIL_EVIDENCE_ENFORCE_ENV, "").strip().lower() in _TRUTHY
+
+
+def _dispatched_agents_file(caller_worktree: Path, session_id: str) -> Path:
+    """Path to THIS session's own dispatch ledger — never a peer session's."""
+    return (
+        caller_worktree
+        / ".git"
+        / "coordinator-sessions"
+        / session_id
+        / "dispatched-agents.txt"
+    )
+
+
+def _dispatch_id_resolvable(
+    dispatch_id: str, caller_worktree: Path, session_id: str
+) -> bool:
+    """True iff *dispatch_id* exactly matches column 1 (the ``agent_id``
+    dedup key) of some row in this session's own ``dispatched-agents.txt``
+    ledger. Fails safe (False) on any read error — an unreadable ledger
+    proves nothing, so it must never be read as evidence.
+
+    Negative-spec: this is a field-exact match against column 1, NOT a
+    substring test against the raw line (``track_dispatched_agents.py``'s
+    row shape is tab-delimited ``<agentId>\\t<model>\\t<subagent_type>\\t
+    <unix-epoch>``, with column 1 the sole dedup key — see that module's
+    ``_process_dispatched_sync`` docstring). A substring test would let a
+    short or generic evidence value resolve by incidentally appearing
+    inside an unrelated row's model name, subagent_type, or timestamp
+    column, or inside a longer agent id it is merely a prefix/infix of —
+    exactly the false-positive gap Finding P2 (state/subagent-share/
+    db6e6193-1773-4bbc-a13d-444606ccbfc2/coordinatorcode-reviewer-5086cf69.md)
+    named against the module's own stated design goal ("typing a string
+    proves nothing; a resolvable path/id does").
+    """
+    ledger = _dispatched_agents_file(caller_worktree, session_id)
+    try:
+        text = ledger.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    dispatch_id = dispatch_id.strip()
+    if not dispatch_id:
+        return False
+    for line in text.splitlines():
+        agent_id_col = line.split("\t", 1)[0]
+        if agent_id_col == dispatch_id:
+            return True
+    return False
+
+
+def _sidecar_evidence_exists(evidence: str, caller_worktree: Path) -> bool:
+    """True iff *evidence* names a sidecar-shaped path (see
+    ``_SIDECAR_EVIDENCE_PREFIXES``) that exists on disk under
+    ``caller_worktree``. Rejects any path outside those prefixes, and any
+    absolute/``..``-escaping path, before ever touching the filesystem —
+    evidence must live where this repo's own dispatch machinery actually
+    writes it, not merely be a path that happens to resolve.
+    """
+    normalized = evidence.strip().replace("\\", "/").lstrip("/")
+    if not normalized.startswith(_SIDECAR_EVIDENCE_PREFIXES):
+        return False
+    if ".." in Path(normalized).parts:
+        return False
+    candidate = caller_worktree / normalized
+    try:
+        return candidate.is_file()
+    except OSError:
+        return False
+
+
+def _compose_reviewer_evidence_message(
+    reviewer: str,
+    verdict: str,
+    reviewer_evidence: Optional[str],
+    caller_worktree: Optional[Path],
+    resolved_session_id: str,
+) -> Optional[str]:
+    """Return the diagnostic message for an unevidenced/unresolvable
+    ``reviewer`` claim, or ``None`` if the claim is adequately evidenced (or
+    exempt/not-yet-applicable).
+
+    Single message-composition site shared by the enforcing (raise) and
+    advisory (warn-to-stderr) paths in `_verify_reviewer_evidence` — so a
+    future edit to the wording only has one place to land, not two that can
+    drift apart.
+    """
+    if reviewer in _EVIDENCE_EXEMPT_REVIEWERS:
+        return None
+    if verdict == "pending" and reviewer not in _JUSTIFICATION_REVIEWERS:
+        return None
+
+    evidence = (reviewer_evidence or "").strip()
+
+    if reviewer in _JUSTIFICATION_REVIEWERS:
+        if len(evidence) < _MIN_JUSTIFICATION_CHARS:
+            return (
+                f"review_trail.write: reviewer={reviewer!r} requires "
+                "--reviewer-evidence carrying a real justification "
+                f"(at least {_MIN_JUSTIFICATION_CHARS} characters after "
+                f"trimming; got {len(evidence)}) — a typed verdict with no "
+                "correlating artifact is the exact falsification this gate "
+                "exists to refuse. State concretely why no delegate "
+                "reviewer is needed (waived) or what was actually checked "
+                "(em-verified)."
+            )
+        return None
+
+    if reviewer in _DELEGATE_REVIEWERS:
+        if not evidence:
+            return (
+                f"review_trail.write: reviewer={reviewer!r} requires "
+                "--reviewer-evidence naming either an existing sidecar path "
+                "(state/subagent-share/... or state/plan-sidecars/...) or a "
+                "dispatch id resolvable in this session's own "
+                "dispatched-agents.txt — nothing here correlates a typed "
+                "reviewer name with an artifact showing a review occurred "
+                "otherwise."
+            )
+        if caller_worktree is None:
+            return (
+                f"review_trail.write: reviewer={reviewer!r} evidence "
+                f"{evidence!r} cannot be verified — no caller_worktree to "
+                "resolve it against."
+            )
+        if _sidecar_evidence_exists(evidence, caller_worktree):
+            return None
+        if _dispatch_id_resolvable(evidence, caller_worktree, resolved_session_id):
+            return None
+        return (
+            f"review_trail.write: reviewer={reviewer!r} evidence "
+            f"{evidence!r} does not resolve — it is neither an existing "
+            "sidecar path under state/subagent-share/ or "
+            "state/plan-sidecars/, nor a dispatch id present in this "
+            "session's own .git/coordinator-sessions/"
+            f"{resolved_session_id}/dispatched-agents.txt. Refusing to "
+            "persist a reviewer claim nothing correlates to an actual "
+            "review."
+        )
+
+    # Unreachable given `_VALID_REVIEWERS` gates `reviewer` before this runs
+    # (defensive — a new enum value added without updating the three sets
+    # above must fail loud, not silently pass unevidenced).
+    return (
+        f"review_trail.write: reviewer={reviewer!r} has no evidence "
+        "classification (delegate / justification / exempt) — refusing to "
+        "write rather than silently accepting an unclassified reviewer."
+    )
+
+
+def _verify_reviewer_evidence(
+    reviewer: str,
+    verdict: str,
+    reviewer_evidence: Optional[str],
+    caller_worktree: Optional[Path],
+    resolved_session_id: str,
+) -> None:
+    """Refuse to write a record whose ``reviewer`` claim is unevidenced —
+    unless enforcement is off (the default), in which case log an advisory
+    and let the write proceed.
+
+    See the module-level "reviewer_evidence" comment block above for the
+    full design (evidence classes, why each is shaped as it is, and the
+    named machine-provenance carve-out). When enforcing, raises
+    ``ValueError`` on any unevidenced/unresolvable claim; never mutates
+    ``reviewer`` or ``verdict``, and never persists ``reviewer_evidence``
+    itself to the on-disk record (a write-time gate only, not a new schema
+    key).
+
+    ``verdict == "pending"`` is EXEMPT from the delegate-reviewer evidence
+    check (found live during this change: ``freeze-review-diff.py`` writes
+    an open-loop ``reviewer="code-reviewer", verdict="pending"`` record at
+    review-freeze time, before any reviewer has run — the whole point of
+    that record is to OPEN a review loop, not assert one already closed, so
+    there is no artifact to require yet. A ``pending`` record makes no
+    completed-review claim for anything to falsify; only a terminal verdict
+    (ok/warn/blocked) or an explicit ``waived`` does, and both stay fully
+    gated below.
+
+    Negative-spec: this gate is advisory-by-default, NOT enforcing-by-default,
+    controlled by ``COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE`` (unset/falsy
+    → advisory; truthy `1`/`true`/`yes` → enforcing). Shipping this
+    enforcing-by-default broke the entire fleet on 2026-08-10 for ~10
+    minutes: `coordinator/bin/wsc-coverage-gate-runner.py`'s `write-trail`
+    subcommand had no `--reviewer-evidence` flag at all, so every peer
+    session's `/workstream-complete` that wrote a trail record failed at
+    once, and the EM reverted the change to a scratchpad patch. Do not flip
+    the env var's default to truthy until (a) `wsc-coverage-gate-runner.py
+    write-trail` forwards `--reviewer-evidence` at every call site that needs
+    it, and (b) the full test suite is green with enforcement on. Until
+    then, an operator who wants to test enforcement locally sets
+    `COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE=1`.
+    """
+    message = _compose_reviewer_evidence_message(
+        reviewer, verdict, reviewer_evidence, caller_worktree, resolved_session_id
+    )
+    if message is None:
+        return
+    if _evidence_enforcement_enabled():
+        raise ValueError(message)
+    logger.warning("review_trail.write advisory (would refuse if enforcing): %s", message)
+
+
 _VALID_SCOPES = frozenset({"chain", "session", "workstream-close-auto"})
 _VALID_VERDICTS = frozenset({"ok", "warn", "blocked", "waived", "pending"})
 _VALID_SCOPE_KINDS = frozenset({"diff", "plan", "integration"})
@@ -584,6 +907,28 @@ def _guard_foreign_session_range(
     clears it; the range must be narrowed instead. Do not read the paragraph
     above as an unconditional remedy.
 
+    NEGATIVE SPEC 2 — the covered-in-chain-foreign shape, and why it is NOT a
+    defect (ruled 2026-08-11; state/bug-backlog/2026-08-11-a-covered-in-chain-
+    commit-owned-by-another.yaml, closed by that ruling). The gate mints over
+    ``result.uncovered_shas`` only, so a commit that is simultaneously in the
+    chain walk, COVERED, and trailer-owned by another session receives no
+    waiver and is refused permanently. This is correct, not a mechanism gap:
+    ``coverage.run_coverage_gate`` derives COVERED as ``sha in reviewed_set``
+    (i.e. a covering trail record already exists) or as ledger-only
+    bookkeeping. In the first case the write this guard refuses would be a
+    SECOND record over another session's commit that its owner already
+    recorded — it credits nothing not already credited, discharges no
+    obligation, and blocks no close (DR-245's 2026-08-08 correction: the C13
+    PARTITION-MANDATORY halt for the ancestor/foreign-only case is gone, so no
+    session is stopped on account of this alone). In the second, the refused
+    write is a stranger session recording a review of another session's
+    ledger churn, which this guard should refuse on its own terms. Neither
+    relaxing the guard to accept coverage-credit as provenance (coverage
+    credit includes review-free bookkeeping — it is not an attestation) nor
+    widening the mint to covered-in-chain commits buys any crediting the
+    system does not already have. The reviewer's findings sidecar is the
+    durable evidence for this shape.
+
     A range whose foreign-attributed SHAs are only PARTIALLY
     covered by the waiver set still refuses, naming only the uncovered
     remainder — this closes the chain-terminal ``/workstream-complete``
@@ -775,7 +1120,16 @@ def _guard_foreign_session_range(
             "to the session that AUTHORED it, so a handoff with no walked "
             "predecessor edge (predecessor: none on a continuation handoff) "
             "collapses the walk to one node, mints nothing, and leaves this "
-            "refusal exactly where it was. Also note this refusal is a "
+            "refusal exactly where it was. SECOND EXCEPTION — the gate mints "
+            "only for commits it counts UNCOVERED, so an in-chain foreign "
+            "commit the gate counts COVERED never receives a waiver and this "
+            "refusal is permanent for it. That is not a gap to work around: "
+            "COVERED means a covering review-trail record already exists for "
+            "that commit (or it is ledger-only bookkeeping), so the record "
+            "you are attempting would duplicate another session's record over "
+            "another session's commit, crediting nothing that is not already "
+            "credited. Keep the reviewer's findings sidecar as the evidence "
+            "and do not re-run the gate. Also note this refusal is a "
             "verdict on THIS call site, not on the range: the close-side "
             "write (coordinator-write-review-trail with an explicit "
             "verdict) may succeed for this very range once waivers exist, "
@@ -1546,6 +1900,7 @@ def write_review_trail_entry(
     session_id: Optional[str] = None,
     workstream: Optional[str] = None,
     reviewed_paths: Optional[List[str]] = None,
+    reviewer_evidence: Optional[str] = None,
     caller_worktree: Optional[Path] = None,
     _timestamp: Optional[str] = None,
 ) -> dict:
@@ -1571,6 +1926,13 @@ def write_review_trail_entry(
                       from ``freeze-review-diff.py --paths``). Persisted ONLY when
                       ``scope_kind == "diff"`` (docs/plans/2026-07-27-review-trail-scope-guard.md
                       § C9); ignored/omitted for ``plan``/``integration`` records.
+        reviewer_evidence — evidence correlating ``reviewer`` with an artifact showing a
+                      review occurred. See the module-level "reviewer_evidence" comment
+                      block for the full evidence-class design. Enforced (raises
+                      ``ValueError``) only when ``COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE``
+                      is truthy; advisory (logs, does not raise) by default — see
+                      ``_verify_reviewer_evidence``'s Negative-spec block. Never persisted
+                      to the on-disk record.
         caller_worktree — the caller's repo worktree root (from main_worktree_root(repo_root)).
         _timestamp  — injectable timestamp string for test isolation (bypasses _compute_timestamp).
 
@@ -1630,6 +1992,18 @@ def write_review_trail_entry(
             f"review_trail.write: session_id contains unsafe JSON character "
             f"(no '\"' or '\\\\' allowed): {resolved_session_id!r}"
         )
+
+    # Refuse (or, advisory-mode, warn on) an unevidenced reviewer claim
+    # (state/bug-backlog/2026-08-10-coordinator-write-review-trail-accepts-a-
+    # 295d3cd80d13.yaml) — see the module-level "reviewer_evidence" comment
+    # block for the full design. Runs after session_id resolution (evidence
+    # for a delegate reviewer is verified against THIS session's own dispatch
+    # ledger) and before any git-backed range work, so an enforced-mode
+    # unevidenced claim never reaches the foreign-session guard or the
+    # filesystem write at all.
+    _verify_reviewer_evidence(
+        reviewer, verdict, reviewer_evidence, caller_worktree, resolved_session_id
+    )
 
     # Concretize any symbolic ref (HEAD, a branch, ...) in sha_range to its
     # current concrete SHA — persisting a literal "HEAD" lets the record's
@@ -1774,6 +2148,9 @@ async def _review_trail_write_handler(
         workstream (str)  — workstream slug override; null → scan/env/fallback.
         reviewed_paths (list[str]) — reviewed-path set (only persisted when scope_kind
                       is ``diff``; see ``write_review_trail_entry``'s docstring).
+        reviewer_evidence (str) — evidence correlating ``reviewer`` with an artifact
+                      showing a review occurred; see ``write_review_trail_entry``'s
+                      docstring and the module-level "reviewer_evidence" comment block.
 
     Returns:
         {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
@@ -1822,6 +2199,7 @@ async def _review_trail_write_handler(
         session_id=session_id if session_id else None,
         workstream=params.get("workstream"),
         reviewed_paths=raw_reviewed_paths,
+        reviewer_evidence=params.get("reviewer_evidence"),
         caller_worktree=caller_worktree,
     )
     return result

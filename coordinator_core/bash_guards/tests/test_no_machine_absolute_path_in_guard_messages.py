@@ -116,17 +116,15 @@ when it runs on macOS/Linux, and vice versa.
 THE EXEMPTION MECHANISM
 
 A narrow, named, individually-justified allowlist (`_EXEMPT_SPANS`
-builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
+builder + `_is_corpus_fixture_echo`), not a blanket opt-out. As of
+2026-08-11 (PM ruling, "a guard's block message must STOP carrying its
+own unlock recipe"), `guard_unlock_sentinel.annotate_deny` no longer
+renders the sentinel path at all -- the exemption that used to cover it
+(structurally matched via `_SENTINEL_PREFIX`) is gone, not merely
+unused, so `annotate_deny`'s output is now covered by this ratchet with
+NO exception, same as any other guard message:
 
-  1. ``operator-unlock-sentinel`` -- `guard_unlock_sentinel.annotate_deny`
-     appends a REAL, operator-must-create sentinel path (`sentinel_path()`,
-     rooted at `tempfile.gettempdir()`) to every hard-deny this suite
-     fires. That path is deliberately real and actionable (the module's
-     own docstring: "a path meant to be pasted into a shell has to be
-     real") -- the opposite of the doc-pointer leak class this ratchet
-     targets. Matched structurally via the sentinel's own
-     `_SENTINEL_PREFIX`, not hand-copied.
-  2. ``grant-cli-invocation`` -- `block_unauthorized_claude_md_write.
+  1. ``grant-cli-invocation`` -- `block_unauthorized_claude_md_write.
      _grant_cli_invocation()` legitimately resolves an absolute,
      in-process root into a command the SAME operator pastes into their
      OWN shell immediately after reading it (that module's own docstring
@@ -135,7 +133,7 @@ builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
      calling the function fresh and stripping its EXACT literal output,
      not a wildcard pattern -- so a change to what it renders is measured
      against its own current behavior, never silently widened.
-  3. ``corpus-fixture-echo`` -- this suite's own firing corpus builds
+  2. ``corpus-fixture-echo`` -- this suite's own firing corpus builds
      REAL scratch git repos/files (see `guard_message_corpus.py`'s
      `fire_row`/`fire_write_guard_row`/`fire_hook_row`, all rooted under
      `tempfile.TemporaryDirectory()`) specifically so a guard has a real
@@ -146,9 +144,9 @@ builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
      fired, or (b) rooted under `tempfile.gettempdir()` (this process's
      own temp root, covering setup-synthesized scratch paths `row.input`
      never mentions) is exempted. This is the SAME class as exemption 1,
-     generalized to the corpus's own fixtures rather than the one
-     sentinel path.
-  4. ``fallback-authoring-root`` -- `block_derived_global_doctrine_write.
+     generalized to the corpus's own fixtures rather than one specific
+     literal.
+  3. ``fallback-authoring-root`` -- `block_derived_global_doctrine_write.
      _FALLBACK_AUTHORING_ROOT` (``"X:/example-doctrine-repo"``) is a fixed,
      illustrative, message-text-only fallback used ONLY when a registry
      lookup fails -- already marked ``abs-path-ok`` at its own definition
@@ -156,7 +154,7 @@ builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
      `block_home_dir_memo_delivery._FALLBACK_RECEIVER` per that module's
      own comment). Imported directly here (single point of truth), not
      hand-copied.
-  5. ``write-guard-corpus-content-literal`` -- two `WRITE_GUARD_ROWS`
+  4. ``write-guard-corpus-content-literal`` -- two `WRITE_GUARD_ROWS`
      fixtures (`guard_message_corpus._wg_concrete_path_citations_fire`,
      `_wg_settings_json_write_fire`) deliberately write FILE CONTENT
      containing a synthetic Windows-shaped path string, specifically to
@@ -166,24 +164,24 @@ builder + `_is_corpus_fixture_echo`), not a blanket opt-out:
      definition in that corpus module. `WriteGuardRow`'s capture seam
      (`fire_write_guard_row`) does not return the payload it fired (no
      `row_input` equivalent reaches this module, unlike `CorpusRow.input`
-     for the bash rows above -- see exemption 3), so these two exact
+     for the bash rows above -- see exemption 2), so these two exact
      literals are named here instead of diffed structurally. Kept to
      exactly the two strings the corpus already documents as synthetic,
      not widened into a pattern.
-  6. ``resolved-interpreter-invocation`` -- the BX-16 auto-rewrite rows
+  5. ``resolved-interpreter-invocation`` -- the BX-16 auto-rewrite rows
      (`check_find_exec_rewrite`/`check_grep_via_bash_rewrite`/
      `check_multiprobe_banner_rewrite`/`check_head_tail_plumbing_rewrite`)
      all prefix their emitted ``updatedInput.command`` with
      ``_bt_python3_invocation()``'s resolved interpreter path -- on a
      python.org Windows install with no ``python3`` on PATH, that is an
      absolute, machine-resolved ``python.exe`` path. Same rationale class
-     as exemption 1/2 (a value "meant to be pasted into a shell has to be
+     as exemption 1 (a value "meant to be pasted into a shell has to be
      real" -- here, a value the HARNESS re-executes verbatim, which is an
      even harder requirement than an operator pasting it by hand): this
      is not the doc-pointer leak class the ratchet targets, it is the
      necessarily-real command the auto-rewrite exists to produce. Matched
      structurally by calling ``_bt_python3_invocation()`` fresh and
-     stripping its exact literal output, same discipline as exemption 2,
+     stripping its exact literal output, same discipline as exemption 1,
      so a change to what it resolves is measured against its own current
      behavior, never a hand-copied path fragment.
 
@@ -211,10 +209,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_row,
     fire_write_guard_row,
 )
-from coordinator_core.session.guard_unlock_sentinel import (
-    _SENTINEL_PREFIX,
-    annotate_deny,
-)
+from coordinator_core.session.guard_unlock_sentinel import annotate_deny
 from coordinator_core.write_guards.block_derived_global_doctrine_write import (
     _FALLBACK_AUTHORING_ROOT,
 )
@@ -322,34 +317,30 @@ def _is_exempt(
 ) -> bool:
     """True if `span` (one `_find_absolute_paths` match) is a named,
     individually-justified legitimate absolute path rather than a leak."""
-    # 1. Operator-unlock sentinel -- structural match on its own prefix,
-    #    not a hand-copied path fragment.
-    if _SENTINEL_PREFIX in span:
-        return True
-    # 2. grant-CLI-invocation -- exact literal produced by the function
+    # 1. grant-CLI-invocation -- exact literal produced by the function
     #    itself, called fresh per assertion (see caller).
     if grant_cli_text and _contains_normalized(grant_cli_text, span):
         return True
-    # 6. Resolved-interpreter-invocation -- exact literal produced by
+    # 5. Resolved-interpreter-invocation -- exact literal produced by
     #    `_bt_python3_invocation()` itself, called fresh per assertion
-    #    (see module docstring item 6 and caller).
+    #    (see module docstring item 5 and caller).
     if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
-    # 3. Corpus-fixture echo -- either literally present in the fired
+    # 2. Corpus-fixture echo -- either literally present in the fired
     #    input text, or rooted under this process's own temp directory
     #    (covers setup-synthesized scratch repos `row_input` never names).
     if row_input and _contains_normalized(row_input, span):
         return True
     if span.startswith(_TEMP_ROOT):
         return True
-    # 4. Fallback-authoring-root -- fixed, illustrative, message-text-only
+    # 3. Fallback-authoring-root -- fixed, illustrative, message-text-only
     #    literal, imported from its own already-marked-`abs-path-ok`
-    #    definition (single point of truth, see module docstring item 4).
+    #    definition (single point of truth, see module docstring item 3).
     if _contains_normalized(span, _FALLBACK_AUTHORING_ROOT) or _contains_normalized(
         _FALLBACK_AUTHORING_ROOT, span
     ):
         return True
-    # 5. Write-guard corpus content literals -- see module docstring item 5.
+    # 4. Write-guard corpus content literals -- see module docstring item 4.
     for literal in _WRITE_GUARD_CORPUS_CONTENT_LITERALS:
         if _contains_normalized(span, literal) or _contains_normalized(literal, span):
             return True
@@ -494,12 +485,22 @@ def test_operator_override_note_reason_shaped_is_portable():
     )
 
 
-def test_annotate_deny_funnel_leaks_nothing_beyond_its_own_sentinel():
+def test_annotate_deny_funnel_renders_no_machine_absolute_path_at_all():
     """`annotate_deny` is the SINGLE seam both `write_guards.engine` and
     `bash_guards.dispatch` route every hard-deny through (see that
     function's own docstring) -- exercising it directly, independent of
     any one guard's own message text, pins the funnel itself rather than
-    relying only on corpus rows that happen to trigger a hard-deny."""
+    relying only on corpus rows that happen to trigger a hard-deny.
+
+    Superseded (2026-08-11, PM ruling -- "a guard's block message must
+    STOP carrying its own unlock recipe"): this used to exempt the
+    sentinel path it rendered (`_SENTINEL_PREFIX`-matched). `annotate_deny`
+    no longer renders the sentinel path at all, so that exemption is gone
+    and this asserts the funnel leaks NO machine-absolute path,
+    full stop -- an assertion that would fail on the pre-2026-08-11 text
+    (which rendered a real `tempfile.gettempdir()`-rooted sentinel path)
+    and passes on the current one, unlike the old form which would have
+    passed either way once the sentinel-exemption carve-out existed."""
     envelope: Dict[str, Any] = {
         "hookSpecificOutput": {
             "permissionDecision": "deny",
@@ -513,10 +514,8 @@ def test_annotate_deny_funnel_leaks_nothing_beyond_its_own_sentinel():
         resolve_override_keys_doc_display(),
     )
     reason = annotated["hookSpecificOutput"]["permissionDecisionReason"]
-    violations = [
-        span for span in _find_absolute_paths(reason) if _SENTINEL_PREFIX not in span
-    ]
+    violations = _find_absolute_paths(reason)
     assert not violations, (
-        "annotate_deny() rendered a machine-absolute path outside its own "
-        "sentinel: %r in %r" % (violations, reason)
+        "annotate_deny() rendered a machine-absolute path: %r in %r"
+        % (violations, reason)
     )

@@ -91,6 +91,27 @@ an ordinary file, forgeable by anyone, with no identity check and no
 expiry -- that mechanism, not the breadth of what one clear covers, is what
 XREPO_MARKER_IS_ORDINARY_FILE protects.
 
+ALL THREE SURFACES NARROW ON THE SAME RULE (parity pass, 2026-08-10). The
+paragraph above described the two Bash legs when C3 landed; the tool-surface
+leg (`write_guards/bump_out_of_repo_tool_write.py`) kept an anchor-sited
+marker for a further week on the mistaken ground that the PARENT plan's AC6
+("with the marker present, none of the three surfaces bump for the rest of
+the session") demanded one clear cover every target. It does not -- that
+criterion is load-bearing on the TIME axis (see that plan's own § "Marker
+liveness -- session-scoped, not time-scoped"), and the successor plan's AC4
+had already superseded its breadth reading on the target axis. The tool leg
+now sites its marker per-(session, target) too, so `marker_path()`/
+`clear_line()` mean the same thing on every surface. Note "AC6" is ambiguous
+across at least three plans in this area -- cite the plan filename with it.
+
+MIGRATION IS THE CALLER'S JOB, NOT THIS MODULE'S. Nothing here is versioned
+or dual-located: `marker_present()` answers about ONE gitdir. A guard that
+relocates its marker while sessions holding the old one are live must call
+`marker_present()` against both locations itself and advertise only the new
+one -- see `bump_out_of_repo_tool_write._marker_locations` for the shape.
+Do not add a "check the old place too" fallback to this module; which
+locations are in play is a per-surface question this module cannot see.
+
 UNWRITABLE/UNREADABLE TARGET GITDIR -- SAME DISPOSITION AS UNRESOLVABLE:
 ALLOW, never an unclearable deny (STAFF-ENG F0, AC5). This extends
 `check_bump_foreign_repo_write`'s own existing precedent -- `if

@@ -65,6 +65,7 @@ assembly) and ~2350-2358 (session-scope archive-on-exit).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -81,6 +82,11 @@ _REVIEW_TRAIL_FLAGS = (
     "--review-diff-loc",
 )
 
+#: `--review-slice` JSON keys, mirroring `_REVIEW_TRAIL_FLAGS`' underlying
+#: field names (not the dashed flag spellings) plus the one optional
+#: passthrough `wsc-tail.py`'s own `--review-slice` accepts.
+_REVIEW_SLICE_REQUIRED_FIELDS = ("sha_range", "reviewer", "scope", "verdict", "diff_loc")
+
 
 def _build_tail_args(
     deleted_paths: list[str] | None,
@@ -91,11 +97,26 @@ def _build_tail_args(
     review_verdict: str | None,
     review_diff_loc: str | None,
     review_scope_kind: str | None = None,
+    review_slices: "list[dict] | None" = None,
 ) -> list[str]:
     """Pure assembly — no I/O — so the unit test can exercise every branch
     without argv/stdout plumbing. Returns the ordered list of extra argv
     tokens for the `wsc-tail.py` call; raises ValueError on a partial
-    `--review-*` supply (see module docstring)."""
+    `--review-*` supply (see module docstring), or if BOTH `review_slices`
+    and any discrete `review_*` value are supplied (ambiguous -- mirrors
+    `wsc-tail.py`'s own mutual-exclusion refusal one layer up, so a caller
+    of THIS assembler gets the same loud refusal before ever reaching the
+    trampoline).
+
+    `review_slices` (additive, partitioned-review fix): each entry is
+    ALREADY a validated, complete dict (`directives_commit_tail.
+    build_close_tail_args_directive` filters incomplete entries out before
+    calling this — see that function's own docstring) -- this only
+    serializes each one to a compact JSON token, one `--review-slice <json>`
+    pair per entry, in list order. Does not itself re-validate field
+    completeness/enum values; `wsc-tail.py`'s own `_parse_review_slices`
+    is the authoritative validator for a caller that reaches it any other
+    way."""
     args: list[str] = []
 
     if deleted_paths:
@@ -114,6 +135,18 @@ def _build_tail_args(
         review_diff_loc,
     )
     supplied = [v for v in review_values if v]
+    if review_slices and (supplied or review_scope_kind):
+        raise ValueError(
+            "review_slices and a discrete review_* value were both supplied — ambiguous "
+            "(mirrors wsc-tail.py's own --review-slice / --review-* mutual exclusion)"
+        )
+    if review_slices:
+        for entry in review_slices:
+            payload = {k: entry[k] for k in _REVIEW_SLICE_REQUIRED_FIELDS}
+            if entry.get("scope_kind"):
+                payload["scope_kind"] = entry["scope_kind"]
+            args.extend(["--review-slice", json.dumps(payload, sort_keys=True)])
+        return args
     if supplied and len(supplied) != len(review_values):
         missing = [
             flag
@@ -140,6 +173,35 @@ def _build_tail_args(
 
 
 def _cmd_tail_args(args: argparse.Namespace) -> int:
+    review_slices: "list[dict] | None" = None
+    if args.review_slices:
+        review_slices = []
+        for index, raw in enumerate(args.review_slices):
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError) as exc:
+                print(f"wsc-close.py tail-args: --review-slice[{index}]: invalid JSON ({exc})", file=sys.stderr)
+                return 1
+            if not isinstance(parsed, dict):
+                print(
+                    f"wsc-close.py tail-args: --review-slice[{index}]: must be a JSON "
+                    f"object, got {type(parsed).__name__}",
+                    file=sys.stderr,
+                )
+                return 1
+            missing = [
+                k for k in _REVIEW_SLICE_REQUIRED_FIELDS
+                if not isinstance(parsed.get(k), str) or not parsed[k].strip()
+            ]
+            if missing:
+                print(
+                    f"wsc-close.py tail-args: --review-slice[{index}]: missing/blank "
+                    f"required field(s): {', '.join(missing)}",
+                    file=sys.stderr,
+                )
+                return 1
+            review_slices.append(parsed)
+
     try:
         tokens = _build_tail_args(
             deleted_paths=args.deleted_paths,
@@ -150,6 +212,7 @@ def _cmd_tail_args(args: argparse.Namespace) -> int:
             review_verdict=args.review_verdict,
             review_diff_loc=args.review_diff_loc,
             review_scope_kind=args.review_scope_kind,
+            review_slices=review_slices,
         )
     except ValueError as exc:
         print(f"wsc-close.py tail-args: {exc}", file=sys.stderr)
@@ -225,6 +288,14 @@ def _build_parser() -> argparse.ArgumentParser:
     tail_args_p.add_argument("--review-verdict", dest="review_verdict", default=None)
     tail_args_p.add_argument("--review-diff-loc", dest="review_diff_loc", default=None)
     tail_args_p.add_argument("--review-scope-kind", dest="review_scope_kind", default=None)
+    tail_args_p.add_argument(
+        "--review-slice",
+        dest="review_slices",
+        action="append",
+        default=None,
+        help="Partitioned-review slice, one compact JSON object per flag (repeatable). "
+        "Additive to --review-*; mutually exclusive with it.",
+    )
     tail_args_p.set_defaults(func=_cmd_tail_args)
 
     archive_session_p = subparsers.add_parser(

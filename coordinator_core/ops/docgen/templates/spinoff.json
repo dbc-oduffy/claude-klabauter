@@ -47,6 +47,11 @@
       "## Anti-scope",
       "",
       "<!-- Failure modes a context-less EM might hit. Negative scope. -->",
+      "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
       ""
     ]}
   ]

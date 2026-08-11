@@ -101,3 +101,63 @@ def test_override_bypasses_the_new_markers_too(tmp_path):
 
     assert result.returncode == 0
     assert "skipped" in result.stderr
+
+
+# --- 2026-08-11: glob lens (`_TRACKED_SIDECAR_GLOBS`) coverage --------------
+#
+# Reproduces the five paths from the example-doctrine-repo cross-repo memo
+# (2026-08-11-example-doctrine-repo-em-two-gaps-that-let-machine-local-files-stay-tracked.md
+# § "1.") that were tracked in a live `~/.claude` while this guard's original
+# exact-basename lens ran clean — three of them byte-identical to files the
+# exact lens DOES protect, the other two plugin-manifest snapshots nested
+# alongside them in the same backup directory.
+
+_GLOB_EVIDENCE_PATHS = (
+    "settings.json.bak-2026-08-07-dead-hooks",
+    "_prag-fix-backup-20260720T144452Z/.claude.settings.json",
+    "_prag-fix-backup-20260720T144452Z/.claude.settings.local.json",
+    "_prag-fix-backup-20260720T144452Z/plugins.installed_plugins.json",
+    "_prag-fix-backup-20260720T144452Z/plugins.known_marketplaces.json",
+)
+
+
+def test_glob_lens_catches_each_evidenced_backup_path(tmp_path):
+    for rel in _GLOB_EVIDENCE_PATHS:
+        meta, home = _make_meta_repo(tmp_path / rel.replace("/", "_").lstrip("."))
+        target = meta / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("machine-local\n", encoding="utf-8")
+        _git(["add", "-f", rel], meta)
+
+        result = _run(meta, home)
+
+        assert result.returncode == 1, f"{rel} should have blocked the commit"
+        assert "BLOCKED" in result.stderr
+        assert rel in result.stderr
+        assert "[glob match]" in result.stderr
+
+
+def test_glob_lens_leaves_an_unrelated_nested_json_clean(tmp_path):
+    """Negative control for the glob lens: a normal JSON file at depth,
+    with no settings/plugin-manifest-shaped basename, must pass clean —
+    otherwise the glob lens would prove nothing by blocking everything."""
+    meta, home = _make_meta_repo(tmp_path)
+    nested = meta / "docs" / "notes" / "example.json"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("{}\n", encoding="utf-8")
+    _git(["add", "docs/notes/example.json"], meta)
+
+    result = _run(meta, home)
+
+    assert result.returncode == 0
+
+
+def test_exact_lens_still_reports_exact_match_tag(tmp_path):
+    meta, home = _make_meta_repo(tmp_path)
+    (meta / "settings.json").write_text("{}\n", encoding="utf-8")
+    _git(["add", "-f", "settings.json"], meta)
+
+    result = _run(meta, home)
+
+    assert result.returncode == 1
+    assert "[exact match]" in result.stderr

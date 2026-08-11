@@ -58,6 +58,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 import workday_ceremony_lib as wc  # noqa: E402
@@ -169,6 +170,83 @@ def _exec_reconcile() -> int:
     return result.returncode
 
 
+# ---------------------------------------------------------------------------
+# Check 4 — session-meta branch carry (AC8-AC10)
+# ---------------------------------------------------------------------------
+
+def _session_meta_dirs() -> "list[str]":
+    """Enumerate this tree's session-claim directories under the git common
+    dir's ``coordinator-sessions/`` hub (``coordinator_core.session.core.
+    sessions_dir``), skipping the hub's own non-session bookkeeping entries
+    (``_NON_SESSION_DIR_NAMES`` — the same denylist ``live_session_ids``
+    filters on). Deliberately unfiltered by liveness: a session that has
+    already ended still has other readers of its ``meta.json:branch`` field
+    (``pickup_assemble/holder_evidence.py``), so a stale/dead session's
+    record needs the same old->new carry a live one does.
+
+    Returns ``[]`` on any resolution failure (not a git repo, hub walk
+    raised) — callers treat that as "no sessions to touch", not as an error
+    to propagate; the rename itself must never depend on this succeeding.
+    """
+    from coordinator_core.session import core as session_core
+    from coordinator_core.session import liveness as session_liveness
+
+    try:
+        base = session_core.sessions_dir()
+    except Exception:
+        return []
+    if not base:
+        return []
+    basep = Path(base)
+    if not basep.is_dir():
+        return []
+    dirs: list[str] = []
+    try:
+        for entry in basep.iterdir():
+            if not entry.is_dir() or entry.name in session_liveness._NON_SESSION_DIR_NAMES:
+                continue
+            dirs.append(str(entry))
+    except OSError:
+        return dirs
+    return dirs
+
+
+def _rewrite_session_meta_branch(old: str, new: str) -> None:
+    """Rewrites ``meta.json:branch`` from ``old`` to ``new`` for every session
+    directory on this tree currently recording ``old`` (AC8). Keeps the
+    session hub's branch bookkeeping in step with Check 4's
+    ``git branch -m old new``, which renames the ONE local ref every
+    concurrent session on this shared tree is sitting on (see module
+    docstring / ``_rename_across_midnight``) — the rename site is the only
+    place that knows the old->new mapping, so read-time resolution elsewhere
+    cannot substitute for this.
+
+    Best-effort and never fatal (AC9): an unwritable or corrupt meta is
+    skipped with a stderr note rather than raising. A failed meta rewrite is
+    strictly less bad than a failed rename, and by the time this runs the
+    local rename has already happened.
+    """
+    from coordinator_core.session import core as session_core
+
+    for sdir in _session_meta_dirs():
+        try:
+            recorded = session_core.read_meta_field(sdir, "branch")
+        except Exception as exc:
+            _err(f"WARN: could not read session meta branch at '{sdir}': {exc}")
+            continue
+        if recorded != old:
+            continue
+        try:
+            wrote = session_core.update_meta_field(sdir, "branch", new)
+        except Exception as exc:
+            _err(f"WARN: could not rewrite session meta branch at '{sdir}' "
+                 f"({old} -> {new}): {exc}")
+            continue
+        if not wrote:
+            _err(f"WARN: session meta at '{sdir}' unwritable or corrupt; "
+                 f"branch field left at '{old}' (expected rewrite to '{new}').")
+
+
 def _handle_rename_push_failure(old: str, new: str, attempted_remote_delete: bool) -> int:
     """Push-failure handler for Check 4's rename push, called AFTER the local
     ``git branch -m old new`` has already happened.
@@ -192,6 +270,10 @@ def _handle_rename_push_failure(old: str, new: str, attempted_remote_delete: boo
           already-applied signature), does NOT guess a rollback direction —
           fails loudly instead, leaves local as-is, and tells the operator
           exactly what was observed and how to reconcile by hand.
+        - On the clean-rollback path, also reverses the session-meta
+          ``branch`` rewrite ``_rename_across_midnight`` performed (AC10) — a
+          local-only rollback with no meta reversal would leave live session
+          directories recording the now-nonexistent ``new`` name.
     """
     ls = wc.git("ls-remote", "--heads", "origin", old, new)
     ls_lines = (ls.stdout or "").splitlines() if ls.returncode == 0 else []
@@ -204,6 +286,9 @@ def _handle_rename_push_failure(old: str, new: str, attempted_remote_delete: boo
         rollback_env.update(_OVERRIDE_ENV_BASE)
         rollback_env["COORDINATOR_OVERRIDE_BRANCH_REASON"] = "workday-start step 0 rename rollback"
         wc.git("branch", "-m", new, old, env=rollback_env)
+        # AC10: reverse the forward meta rewrite too, or the rollback leaves
+        # behind the stale `new` names it exists to undo.
+        _rewrite_session_meta_branch(new, old)
         _out(f"RENAME-PUSH-FAILED old={old}")
         _err(f"Remote rename rejected; remote confirmed unchanged (origin/{old} present, "
              f"origin/{new} absent); local rolled back to '{old}'. Investigate remote "
@@ -248,6 +333,13 @@ def _rename_across_midnight(old: str, new: str) -> int:
         - Push failure handling is delegated to ``_handle_rename_push_failure``,
           which re-verifies actual remote state rather than assuming the local
           rollback alone restores consistency.
+        - Every session directory on this tree recording ``old`` as its
+          ``meta.json:branch`` is rewritten to ``new`` right after the local
+          rename succeeds (AC8) — best-effort, never fails the rename (AC9).
+          Without this, ``_shared_branch_live_count`` in
+          ``coordinator_core/hooks/auto_push.py`` string-compares that stale
+          field and undercounts live peers on exactly the branch a rename
+          just touched.
     """
     rename_env = dict(os.environ)
     rename_env.update(_OVERRIDE_ENV_BASE)
@@ -255,6 +347,11 @@ def _rename_across_midnight(old: str, new: str) -> int:
     _rename = wc.git("branch", "-m", old, new, env=rename_env)
     sys.stderr.write((_rename.stdout or "") + (_rename.stderr or ""))
     sys.stderr.flush()
+
+    if _rename.returncode == 0:
+        # AC8: carry every session's meta.json:branch across the rename this
+        # process just performed on the ONE shared local ref.
+        _rewrite_session_meta_branch(old, new)
 
     from coordinator_core.session.worktree_safety import history_rewrite_verdict
     try:

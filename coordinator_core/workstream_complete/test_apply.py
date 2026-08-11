@@ -2305,7 +2305,7 @@ def test_coverage_gate_directive_carries_no_depends_on() -> None:
 
 
 def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_failed(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
 
@@ -2330,7 +2330,15 @@ def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_faile
     )
     directives = [plan_claim_directive] + pair
 
-    exit_code, report = ws_apply._execute_directives(directives, [], {})
+    # Review: code-reviewer (Finding 2) — this dispatches `d-coverage-gate`
+    # through the real `_execute_directives` seam with exit_code==0 and
+    # `consumed_handoff="state/handoffs/x.md"`, a directive id/verdict-shape
+    # `record_gate_verdict_if_passed` DOES memoize. Without `repo_root`
+    # pinned to an isolated `tmp_path`, `_lazy_repo_root()` resolves the
+    # REAL repo root and writes a fixture memo into live
+    # `state/ceremony/wsc-gate-verdict-memo/` — exactly the leaked file this
+    # finding traced.
+    exit_code, report = ws_apply._execute_directives(directives, [], {}, repo_root=tmp_path)
 
     assert report["failed"] == [
         {"id": "d-claim-plan-execution-lock", "error": "wsc-coverage-gate-runner-claim exited 1 (args=[])"}

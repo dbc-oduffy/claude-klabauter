@@ -72,6 +72,7 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.loe_thresholds import DEFAULT_THRESHOLDS, compute_tshirt, load_thresholds
+from coordinator_core.session import core as _session_core
 from coordinator_core.state_root import StateRootError, coordinator_state_root
 
 _EDGE_KINDS = {"predecessor", "additional_predecessors"}
@@ -446,6 +447,113 @@ def parse_session_ledgers(text: str) -> List[Dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# dispatched-agents.txt fallback — invoked ONLY when a handoff carries NO
+# ``## Session Ledger`` block at all (e.g. a machine-generated crash-
+# reconstruction recovery baton, which the pickup skill's frozen-body rule
+# forbids retrofitting a Session Ledger block onto). A fallback, not an
+# additional source: ``aggregate()`` below calls this per-handoff exactly
+# when ``parse_session_ledgers`` returned zero records for that handoff's
+# text — never both for the same handoff (see ``aggregate()``'s loop).
+#
+# Bug: state/debt-backlog/2026-08-11-chain-loe-renders-a-fully-dispatched-
+# ses-d6981e622244.yaml — chain LoE aggregated ONLY Session Ledger rows, so
+# a chain-terminal session closing over a Session-Ledger-less recovery
+# baton reported agent_dispatches: 0 / tshirt: XS despite the crashed
+# session it reconstructs having dispatched 8 agents (typed + timestamped
+# in that session's own ``dispatched-agents.txt``). Chosen resolution:
+# option (a) from that backlog entry (fall back to dispatched-agents.txt)
+# — the data is already on disk, per-session, typed and timestamped, and
+# needs no baton-generator cooperation, unlike option (b) (emit an empty
+# Session Ledger block at recovery-baton generation time), which depends
+# on every present and future baton generator remembering to do so.
+# ---------------------------------------------------------------------------
+
+def _resolve_fallback_session_id(text: str) -> Optional[str]:
+    """Resolve the session id whose dispatch effort a ledger-less handoff
+    should be attributed to.
+
+    kind: recovery reads ``recovers_session`` — the crashed session actually
+    being reconstructed, which is the session that did the dispatching this
+    baton describes (the recovery baton's OWN authoring session, if any, is
+    a machine-generated reconstruction run and did not dispatch these
+    agents). Every other kind (and a recovery baton with no
+    ``recovers_session`` stamped) falls back to ``authoring_session``.
+    Returns ``None`` when neither field is present.
+    """
+    kind = extract_frontmatter_field(text, "kind")
+    if kind == "recovery":
+        recovers = extract_frontmatter_field(text, "recovers_session")
+        if recovers:
+            return recovers
+    authoring = extract_frontmatter_field(text, "authoring_session")
+    return authoring or None
+
+
+def _count_dispatches_from_agents_file(agents_file: Path) -> tuple:
+    """Count ``(agent_dispatches, opus_dispatches)`` from a
+    ``dispatched-agents.txt`` file — same counting rule as
+    ``coordinator_core.ops.coordinator_complete_entry._count_session_
+    dispatches`` (newline-count / case-insensitive ``opus`` substring on the
+    tab-delimited 2nd field), duplicated here rather than imported to avoid
+    a session_ledger -> ops import (ops already imports session_ledger).
+
+    Returns ``(None, None)`` when *agents_file* does not exist — distinct
+    from a present-but-empty file, which legitimately yields ``(0, 0)``.
+    """
+    if not agents_file.is_file():
+        return None, None
+    try:
+        text = agents_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+
+    ad = text.count("\n")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    od = 0
+    for line in lines:
+        field2 = line.split("\t", 1)[1] if "\t" in line else line
+        if "opus" in field2.lower():
+            od += 1
+    return ad, od
+
+
+def _dispatch_fallback_record(text: str) -> Optional[Dict[str, str]]:
+    """Build a synthetic Session-Ledger-shaped record from
+    ``dispatched-agents.txt`` for a handoff carrying no Session Ledger block.
+
+    Returns ``None`` when no session id is resolvable, or when that
+    session's ``dispatched-agents.txt`` does not exist — a genuinely absent
+    source degrades to "no data" (same as the no-ledger case ever did), NOT
+    a fabricated zero. Only a session with a REAL (even if empty)
+    ``dispatched-agents.txt`` produces a record.
+    """
+    sid = _resolve_fallback_session_id(text)
+    if not sid:
+        return None
+
+    base = _session_core.sessions_dir()
+    if not base:
+        return None
+
+    agents_file = Path(base) / sid / "dispatched-agents.txt"
+    ad, od = _count_dispatches_from_agents_file(agents_file)
+    if ad is None:
+        return None
+
+    created = extract_frontmatter_field(text, "created")
+    return {
+        "session_id": sid,
+        "agent_dispatches": str(ad),
+        "opus_dispatches": str(od),
+        "em_tokens": "null",
+        "commits": "",
+        "created": created,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Aggregation helpers
 # ---------------------------------------------------------------------------
 
@@ -453,6 +561,39 @@ def parse_session_ledgers(text: str) -> List[Dict[str, str]]:
 def _to_int(value: str) -> int:
     """Sanitize a numeric field: non-all-digits => 0 (mirrors bash :502-503)."""
     return int(value) if _NUMERIC_RE.match(value or "") else 0
+
+
+def _is_same_session(ledger_sid: str, closing_sid: str) -> bool:
+    """Do a ledger row's session id and a caller-supplied one name one session?
+
+    The two grammars carry DIFFERENT id widths for the same session, so an
+    equality test silently never matches: the one-line-append grammar
+    (``_ONELINE_RE``, what the scaffolder emits and every live handoff uses)
+    records a 4-12 hex abbreviation — ``sid6``, the full id's last 6 chars —
+    while a caller naming its own session supplies the full uuid. Comparing
+    them raw would leave ``closing_session`` permanently un-deduplicated and
+    double-count the closing session's tally on every re-run once its row
+    landed. Suffix-match, case-insensitively, in whichever direction the
+    abbreviation runs.
+    """
+    if not ledger_sid or not closing_sid:
+        return False
+    a, b = ledger_sid.lower(), closing_sid.lower()
+    return a == b or a.endswith(b) or b.endswith(a)
+
+
+def _coerce_count(value: Any) -> int:
+    """Closing-session dispatch count → int; unresolved (None/non-numeric) => 0.
+
+    Mirrors ``_to_int``'s sanitize-don't-fail posture for the caller-supplied
+    half of the aggregate: an absent ``dispatched-agents.txt`` renders no
+    attribution rather than aborting a read-only report.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    return _to_int(str(value or ""))
 
 
 def _parse_date_prefix(value: str) -> Optional[datetime]:
@@ -471,6 +612,7 @@ def aggregate(
     handoffs_dir: Union[str, Path],
     archive_dir: Union[str, Path],
     thresholds: Optional[List[Dict[str, Any]]] = None,
+    closing_session: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Core aggregation — the full chain-walk + Session-Ledger-sum pipeline.
 
@@ -489,13 +631,26 @@ def aggregate(
             — see module docstring negative-spec).
         thresholds: t-shirt threshold rows (``loe_thresholds.load_thresholds``
             shape). Defaults to ``loe_thresholds.DEFAULT_THRESHOLDS`` when None.
+        closing_session: the chain-terminal session's own identity and tally —
+            ``{"session_id": str, "agent_dispatches": int, "opus_dispatches":
+            int, "em_tokens": int}`` (counts optional). That session heads no
+            handoff of its own and appends its Session Ledger row after this
+            aggregate is scaffolded, so summing handoff rows alone always
+            undercounts by its contribution. Supplying it attributes the tally
+            and switches ``chain_sessions_with_ledger`` to a session basis.
+            None (the default) preserves the handoff-based bash-oracle output
+            exactly — see the closing-session block below.
 
     Returns a dict with keys: ``exit_code`` (0 success, 1 error), and on
     success: ``chain_total``, ``agent_dispatches``, ``opus_dispatches``,
     ``em_tokens`` (int or None), ``tshirt``, ``commits`` (list[str]),
-    ``chain_sessions_with_ledger`` (str), ``chain_span_days`` (int or None),
-    ``chain_starting_handoff`` (str or None), ``chain_walk_terminated_early``
-    (str, ``''`` when clean). On error: ``error`` (str).
+    ``chain_sessions_with_ledger`` (str),
+    ``chain_sessions_with_dispatch_fallback`` (str — count of handoffs whose
+    LoE was attributed via the ``dispatched-agents.txt`` fallback rather
+    than a real Session Ledger block; see the fallback section above),
+    ``chain_span_days`` (int or None), ``chain_starting_handoff`` (str or
+    None), ``chain_walk_terminated_early`` (str, ``''`` when clean). On
+    error: ``error`` (str).
     """
     repo_root = Path(repo_root)
     handoffs_dir = Path(handoffs_dir)
@@ -526,7 +681,9 @@ def aggregate(
     total_tok: Optional[int] = None
     commits: List[str] = []
     seen_sids: set = set()
+    anonymous_records = 0
     handoffs_with_ledger = 0
+    handoffs_with_dispatch_fallback = 0
 
     for hpath in chain_order:
         try:
@@ -545,6 +702,15 @@ def aggregate(
         records = parse_session_ledgers(text)
         if records:
             handoffs_with_ledger += 1
+        else:
+            # Fallback is a FALLBACK, not an additional source: only invoked
+            # when this handoff carried zero Session Ledger records, so a
+            # handoff with both a ledger block AND a dispatched-agents.txt
+            # for the same session never sums both.
+            fallback_rec = _dispatch_fallback_record(text)
+            if fallback_rec is not None:
+                records = [fallback_rec]
+                handoffs_with_dispatch_fallback += 1
 
         for rec in records:
             sid = rec["session_id"]
@@ -552,6 +718,8 @@ def aggregate(
                 if sid in seen_sids:
                     continue
                 seen_sids.add(sid)
+            else:
+                anonymous_records += 1
 
             total_ad += _to_int(rec["agent_dispatches"])
             total_od += _to_int(rec["opus_dispatches"])
@@ -568,7 +736,47 @@ def aggregate(
                     if c and c not in commits:
                         commits.append(c)
 
-    chain_sessions_with_ledger = f"{handoffs_with_ledger} of {chain_total}"
+    # Closing-session attribution. The chain's LAST session heads no handoff of
+    # its own and appends its Session Ledger row as a genuine-EM action with no
+    # directive — so it necessarily lands AFTER the scaffold that calls this
+    # aggregator. Summing handoff ledger rows alone therefore undercounts by
+    # exactly that session's own contribution: half a two-session chain, all of
+    # a one-session one. When the caller identifies itself (`closing_session`),
+    # attribute its on-disk tally here and report a session-based
+    # numerator/denominator so the missing row is visible as `N of N+1`.
+    #
+    # Idempotent by session_id: once that row IS appended, the sid appears in
+    # `seen_sids` and this block contributes nothing, so a re-run never
+    # double-counts.
+    #
+    # Negative-spec: with `closing_session` None (standalone/report invocation
+    # — there is no closing session to owe a row) the emitted counts and both
+    # `N of M` strings stay handoff-based, byte-identical to the bash oracle.
+    closing_sid = str((closing_session or {}).get("session_id") or "")
+    closing_row_missing = bool(closing_sid) and not any(
+        _is_same_session(s, closing_sid) for s in seen_sids
+    )
+    if closing_row_missing:
+        assert closing_session is not None  # implied by closing_sid truthiness
+        total_ad += _coerce_count(closing_session.get("agent_dispatches"))
+        total_od += _coerce_count(closing_session.get("opus_dispatches"))
+        closing_tok = closing_session.get("em_tokens")
+        if isinstance(closing_tok, int):
+            total_tok = closing_tok if total_tok is None else total_tok + closing_tok
+
+    if closing_sid:
+        sessions_attributed = len(seen_sids) + anonymous_records
+        session_total = sessions_attributed + (1 if closing_row_missing else 0)
+        chain_sessions_with_ledger = f"{sessions_attributed} of {session_total}"
+        chain_sessions_with_dispatch_fallback = (
+            f"{handoffs_with_dispatch_fallback} of {session_total}"
+        )
+    else:
+        session_total = chain_total
+        chain_sessions_with_ledger = f"{handoffs_with_ledger} of {chain_total}"
+        chain_sessions_with_dispatch_fallback = (
+            f"{handoffs_with_dispatch_fallback} of {chain_total}"
+        )
 
     # chain_span_days: first (root, chain_order[-1]) vs last (terminal, chain_order[0])
     # 'created' frontmatter field date diff, degrading to None on any parse failure.
@@ -607,12 +815,18 @@ def aggregate(
     return {
         "exit_code": 0,
         "chain_total": chain_total,
+        # The count rendered as `sessions:`. Equals chain_total (a HANDOFF
+        # count) on the no-closing-session leg — the historical mislabel,
+        # preserved there for byte-parity; a genuine session count once a
+        # closing session identifies itself.
+        "chain_session_total": session_total,
         "agent_dispatches": total_ad,
         "opus_dispatches": total_od,
         "em_tokens": total_tok,
         "tshirt": tshirt,
         "commits": commits,
         "chain_sessions_with_ledger": chain_sessions_with_ledger,
+        "chain_sessions_with_dispatch_fallback": chain_sessions_with_dispatch_fallback,
         "chain_span_days": chain_span_days,
         "chain_starting_handoff": chain_starting_handoff,
         "chain_walk_terminated_early": terminated_early,
@@ -630,7 +844,7 @@ def format_yaml_frontmatter(result: Dict[str, Any]) -> str:
 
     lines = [
         "chain_loe:",
-        f"  sessions: {result['chain_total']}",
+        f"  sessions: {result.get('chain_session_total', result['chain_total'])}",
         f"  agent_dispatches: {result['agent_dispatches']}",
         f"  opus_dispatches: {result['opus_dispatches']}",
         f"  em_tokens: {em_tokens_out}",
@@ -644,6 +858,10 @@ def format_yaml_frontmatter(result: Dict[str, Any]) -> str:
             lines.append(f'  - "{c}"')
 
     lines.append(f'chain_sessions_with_ledger: "{result["chain_sessions_with_ledger"]}"')
+
+    fallback = result.get("chain_sessions_with_dispatch_fallback")
+    if fallback and not fallback.startswith("0 of"):
+        lines.append(f'chain_sessions_with_dispatch_fallback: "{fallback}"')
 
     if result["chain_span_days"] is not None:
         lines.append(f"chain_span_days: {result['chain_span_days']}")
@@ -665,7 +883,7 @@ def format_json(result: Dict[str, Any]) -> str:
 
     obj: Dict[str, Any] = {
         "chain_loe": {
-            "sessions": result["chain_total"],
+            "sessions": result.get("chain_session_total", result["chain_total"]),
             "agent_dispatches": result["agent_dispatches"],
             "opus_dispatches": result["opus_dispatches"],
             "em_tokens": tok_json,
@@ -677,6 +895,11 @@ def format_json(result: Dict[str, Any]) -> str:
         obj["commits"] = result["commits"]
 
     obj["chain_sessions_with_ledger"] = result["chain_sessions_with_ledger"]
+
+    fallback = result.get("chain_sessions_with_dispatch_fallback")
+    if fallback and not fallback.startswith("0 of"):
+        obj["chain_sessions_with_dispatch_fallback"] = fallback
+
     obj["chain_span_days"] = result["chain_span_days"]
 
     if result["chain_starting_handoff"]:
@@ -722,6 +945,19 @@ Options:
                                    chain-terminal session (the immediate predecessor).
                                    Absolute or relative to cwd. Required.
   --format <yaml-frontmatter|json> Output format (default: yaml-frontmatter)
+  --closing-session-id <sid>       Session id of the chain-terminal session — the
+                                   one closing the chain, which heads no handoff
+                                   and appends its Session Ledger row AFTER this
+                                   report is scaffolded. Supplying it attributes
+                                   that session's own tally (below) and switches
+                                   both `N of M` counts to a session basis, so a
+                                   not-yet-appended row shows as "N of N+1".
+                                   Omit it for a standalone/report invocation.
+  --closing-agent-dispatches <n>   That session's dispatch counts, as the caller
+  --closing-opus-dispatches <n>    already read them from its own
+  --closing-em-tokens <n>          dispatched-agents.txt / token env. Ignored
+                                   once that session's ledger row exists (dedup
+                                   is by session id, so this never double-counts).
   -h, --help                       Show this help
 
 Output yaml-frontmatter example:
@@ -769,9 +1005,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     terminal_handoff = ""
     fmt = "yaml-frontmatter"
+    closing: Dict[str, Any] = {}
+    _closing_flags = {
+        "--closing-session-id": "session_id",
+        "--closing-agent-dispatches": "agent_dispatches",
+        "--closing-opus-dispatches": "opus_dispatches",
+        "--closing-em-tokens": "em_tokens",
+    }
     i = 0
     while i < len(args):
         a = args[i]
+        if a in _closing_flags:
+            if i + 1 >= len(args):
+                print(f"Error: {a} is required", file=sys.stderr)
+                return 1
+            key = _closing_flags[a]
+            raw = args[i + 1]
+            closing[key] = raw if key == "session_id" else _to_int(raw)
+            i += 2
+            continue
         if a == "--terminal-handoff":
             if i + 1 >= len(args):
                 print("Error: --terminal-handoff is required", file=sys.stderr)
@@ -818,6 +1070,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         handoffs_dir=handoffs_dir,
         archive_dir=archive_dir,
         thresholds=thresholds,
+        closing_session=closing or None,
     )
     if result["exit_code"] != 0:
         print(f"Error: {result['error']}", file=sys.stderr)
@@ -891,12 +1144,17 @@ async def _session_ledger_aggregate_chain_loe(params: dict, repo_root: Optional[
 
     thresholds = resolve_thresholds(params.get("thresholds_path"))
 
+    closing_session = params.get("closing_session")
+    if closing_session is not None and not isinstance(closing_session, dict):
+        return {"exit_code": 1, "error": "closing_session must be an object"}
+
     result = aggregate(
         terminal_handoff=terminal_handoff,
         repo_root=worktree_root,
         handoffs_dir=handoffs_dir,
         archive_dir=archive_dir,
         thresholds=thresholds,
+        closing_session=closing_session or None,
     )
     if result["exit_code"] != 0:
         return result

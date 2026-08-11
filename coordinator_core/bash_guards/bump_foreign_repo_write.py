@@ -880,6 +880,7 @@ def _evaluate_foreign_repo_candidate(
     env: dict,
     agent_id: str,
     raw_target: Optional[str] = None,
+    anchor_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """One candidate write-sink `target_dir`, already resolved to an
     absolute-or-cwd-relative string by the caller's own extraction leg,
@@ -894,7 +895,13 @@ def _evaluate_foreign_repo_candidate(
     token to offer (see `_iter_write_sink_candidates`'s own docstring for
     the git-subcommand case). Threaded into `render_bump_message` only when
     it differs from `target_dir` -- identical values collapse to the single
-    display form (AC2's "never print the same string twice" instruction)."""
+    display form (AC2's "never print the same string twice" instruction).
+
+    `anchor_root` (AC7 fix, 2026-08-11) is the SESSION's own resolved git
+    root (`resolve_git_root(anchor)`), computed ONCE by the caller and
+    threaded through -- see "TWO ROOTS, NEVER CONFLATED" below for why this
+    must never be `marker_probe_root` (the TARGET's root, computed further
+    down in this function for the marker's own siting)."""
     probe_dir = _nearest_existing_ancestor(target_dir)
     if probe_dir is None:
         # No existing ancestor at all -- cannot resolve a git root
@@ -980,9 +987,34 @@ def _evaluate_foreign_repo_candidate(
         # with this as `cwd`, which requires an EXISTING directory.
         marker_probe = probe_dir
 
+    # TWO ROOTS, NEVER CONFLATED (AC7 fix, 2026-08-11, bug
+    # `2026-08-11-a-dispatched-coordinator-executor-is-den`; call-site count
+    # corrected 2026-08-11, review finding P3). `marker_probe_root` is the
+    # TARGET's own resolved root -- correct for WHERE the marker file lives
+    # (`marker_probe`/`marker_gitdir` below) and for the `target_repo_label`
+    # display string, since both name the target. It is WRONG for `bump_is_
+    # cleared`'s `git_root=`, both `effective_session_id` calls, and
+    # `resolve_agent_class`'s own internal `resolve_effective_types` lookup
+    # below (FOUR call sites total): all of them resolve the EM-inheritance
+    # back-pointer at `<git_root>/.git/coordinator-sessions/.agents/
+    # <agent_id>/em-session-id.txt`, which only ever exists in the SESSION's
+    # own repo (written by `session-start-write-bump-anchor.py` against the
+    # session's own anchor). Resolved against the target root instead (the
+    # pre-fix behaviour), that lookup silently misses, `effective_session_id`
+    # falls back to the subagent's OWN `session_id`, and a dispatched
+    # subagent re-bumps despite its EM having cleared the target -- the
+    # exact defect this fix closes. `anchor_root` (the caller's `resolve_
+    # git_root(anchor)`, the SAME resolution `check_bump_foreign_repo_write`
+    # already performs for `anchor_common_cf`) is the correct root for all
+    # four: it is the session's own repo regardless of which foreign target
+    # this candidate names. Falls back to `marker_probe_root` only when the
+    # caller could not resolve an anchor root at all (`anchor_root` is
+    # `None`) -- matching this function's own fail-open posture rather than
+    # raising or silently using an empty string.
     marker_probe_root = resolve_git_root(marker_probe)
+    session_root_for_marker = anchor_root if anchor_root is not None else marker_probe_root
     if bump_is_cleared(
-        marker_probe, session_id, git_root=marker_probe_root, agent_id=agent_id
+        marker_probe, session_id, git_root=session_root_for_marker, agent_id=agent_id
     ):
         return None
 
@@ -997,13 +1029,18 @@ def _evaluate_foreign_repo_candidate(
         # uid) takes the identical disposition as an unresolvable one.
         return None
 
-    agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, marker_probe_root)
+    agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, session_root_for_marker)
+    effective_sid = effective_session_id(session_id, session_root_for_marker, agent_id)
+    # `session_root_for_marker` (the SESSION's own root, not the target's)
+    # here too -- the tool-surface twin's own `_resolve_sandbox_root(own_
+    # git_root or target_repo, session_id)` prefers the session root for the
+    # identical reason: `state/subagent-share/<session-id>/` is a directory
+    # under the SESSION's own repo, never the foreign target's.
     sandbox_root = (
-        _sandbox_root_hint(marker_probe_root, effective_session_id(session_id, marker_probe_root, agent_id))
+        _sandbox_root_hint(session_root_for_marker, effective_sid)
         if agent_class == AGENT_CLASS_SUBAGENT
         else ""
     )
-    effective_sid = effective_session_id(session_id, marker_probe_root, agent_id)
 
     target_repo_label = probe_root or target_dir
     session_repo_label = resolve_git_root(anchor) or anchor
@@ -1110,8 +1147,15 @@ def check_bump_foreign_repo_write(
     anchor_has_repo = anchor_gitdir is not None
     # AC14 -- the COMMON-dir form (worktree-safe), not `anchor_gitdir`'s
     # per-worktree private form, is what `_same_repo_root` compares on.
+    # `anchor_root` -- the SESSION's own resolved root, resolved ONCE here
+    # and threaded to every candidate's `_evaluate_foreign_repo_candidate`
+    # call (AC7 fix) -- MUST be the same `resolve_git_root(anchor)` call
+    # `anchor_common_cf` already performs, never re-derived per candidate
+    # from the TARGET's own root (see that function's own "TWO ROOTS, NEVER
+    # CONFLATED" docstring section).
+    anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
     anchor_common_cf = (
-        _common_dir_cf_from_root(resolve_git_root(anchor)) if anchor_has_repo else None
+        _common_dir_cf_from_root(anchor_root) if anchor_has_repo else None
     )
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
@@ -1130,6 +1174,7 @@ def check_bump_foreign_repo_write(
             env=env,
             agent_id=agent_id,
             raw_target=raw_target,
+            anchor_root=anchor_root,
         )
         if result is not None:
             return result
@@ -1228,8 +1273,13 @@ def _check_bump_foreign_repo_write_powershell(
         return None
     anchor_gitdir = resolve_gitdir(anchor)
     anchor_has_repo = anchor_gitdir is not None
+    # `anchor_root` -- see the Bash body's own identical assignment above
+    # (AC7 fix): the SESSION's own resolved root, threaded to every
+    # candidate rather than re-derived from the TARGET's root inside
+    # `_evaluate_foreign_repo_candidate`.
+    anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
     anchor_common_cf = (
-        _common_dir_cf_from_root(resolve_git_root(anchor)) if anchor_has_repo else None
+        _common_dir_cf_from_root(anchor_root) if anchor_has_repo else None
     )
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
@@ -1319,6 +1369,7 @@ def _check_bump_foreign_repo_write_powershell(
                 env=env,
                 agent_id=agent_id,
                 raw_target=raw_target,
+                anchor_root=anchor_root,
             )
             if result is not None:
                 return result

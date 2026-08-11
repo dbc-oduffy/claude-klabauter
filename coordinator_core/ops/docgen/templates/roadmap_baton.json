@@ -73,6 +73,11 @@
       "",
       "- None identified at authoring time.",
       "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      "",
       "<!-- roadmap-baton: {roadmap_id} {stub_id} by roadmap-planning -->"
     ]}
   ]

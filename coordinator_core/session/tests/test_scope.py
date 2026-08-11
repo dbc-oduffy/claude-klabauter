@@ -367,6 +367,47 @@ class TestTouchNormalization:
         assert scope._is_absolute("") is False
 
 
+class TestNormalizeTouchPathRelativeDialectFold:
+    """C1 (docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-
+    clear.md): normalize_touch_path's relative arm previously fell straight
+    through to `return fpath` verbatim -- a backslashed relative pathspec
+    reached touched.txt with backslashes intact, while
+    claim_index._normalize_key folded unconditionally, so the two dialects
+    disagreed. These pins assert the relative arm now folds via the shared
+    coordinator_core.session.path_dialect.canonicalize_relative_path."""
+
+    def test_backslashed_and_forward_slashed_relative_paths_are_byte_identical(
+        self, tmp_path
+    ):
+        repo = _make_repo(tmp_path)
+        backslashed = scope.normalize_touch_path("state\\x.md", cwd=str(repo))
+        forward = scope.normalize_touch_path("state/x.md", cwd=str(repo))
+        assert backslashed == forward == "state/x.md"
+
+    def test_relative_arm_matches_claim_index_normalize_key(self, tmp_path):
+        from coordinator_core.session import claim_index
+
+        repo = _make_repo(tmp_path)
+        scope_key = scope.normalize_touch_path("a\\b\\c.md", cwd=str(repo))
+        claim_key = claim_index._normalize_key("a\\b\\c.md")
+        assert scope_key == claim_key == "a/b/c.md"
+
+    def test_relative_arm_dotdot_containing_still_returns_a_value(self, tmp_path):
+        """Regression: normalize_touch_path guards absoluteness only -- it
+        does NOT enforce containment (that is classify_touch_entry's job,
+        unchanged by this chunk). A '..'-containing relative entry still
+        canonicalizes and returns non-None here."""
+        repo = _make_repo(tmp_path)
+        assert (
+            scope.normalize_touch_path("docs\\..\\peer\\x.md", cwd=str(repo))
+            == "peer/x.md"
+        )
+
+    def test_relative_arm_dot_relative_entry_normalizes(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert scope.normalize_touch_path("./x.md", cwd=str(repo)) == "x.md"
+
+
 class TestNormalizeTouchPathSpawnCount:
     """Spawn-COUNT coverage for the ``root``-supplied ``core.git_root(cwd)``
     skip added 2026-08-08 (docs/plans/2026-08-08-touched-path-normalize-
@@ -3595,5 +3636,136 @@ class TestReleaseCommittedClaims:
         mtime_before = touched.stat().st_mtime_ns
 
         scope.release_committed_claims("s-rel10", ["untouched.py"], cwd=str(repo))
-
         assert touched.stat().st_mtime_ns == mtime_before
+
+
+class TestCrossDialectClaimCancellation:
+    """C1 (docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-
+    clear.md), A2/A3 -- a release written under one path dialect (backslashed
+    or forward-slashed relative pathspec) must cancel a claim written under
+    the OTHER dialect. Asserted through claim_index's own lookup (the real
+    consumer of both writers' output), never by comparing normalized strings
+    directly -- a string-equality pin alone does not exercise the actual
+    claim-index read path a commit-gate check goes through."""
+
+    def test_release_under_forward_slash_cancels_claim_under_backslash(
+        self, tmp_path
+    ):
+        from coordinator_core.session import claim_index
+
+        repo = _make_repo(tmp_path)
+        core.init("s-xd1", cwd=str(repo))
+        (repo / "state").mkdir()
+        (repo / "state" / "x.md").write_text("y")
+
+        # Claim written under the backslashed relative dialect.
+        scope.touch("s-xd1", "state\\x.md", cwd=str(repo))
+        sessions_dir = core.sessions_dir(cwd=str(repo))
+        before = claim_index.lookup(["state/x.md"], sessions_dir=sessions_dir)
+        assert before == {"state/x.md": ["s-xd1"]}
+
+        # Commit it so release_committed_claims sees it clean, then release
+        # under the forward-slashed dialect via the real release helper.
+        subprocess.run(["git", "add", "state/x.md"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit state/x.md"], cwd=repo, check=True
+        )
+        scope.release_committed_claims("s-xd1", ["state/x.md"], cwd=str(repo))
+
+        after = claim_index.lookup(["state/x.md"], sessions_dir=sessions_dir)
+        assert after == {"state/x.md": []}
+
+    def test_release_under_backslash_cancels_claim_under_forward_slash(
+        self, tmp_path
+    ):
+        """Reverse direction: a claim written forward-slashed, released by
+        passing the BACKSLASHED pathspec straight into
+        ``release_committed_claims`` -- the real release-side call shape,
+        now that its own ``requested``/``clean`` set-diff canonicalizes both
+        sides before comparing (C1 follow-up)."""
+        from coordinator_core.session import claim_index
+
+        repo = _make_repo(tmp_path)
+        core.init("s-xd2", cwd=str(repo))
+        (repo / "state").mkdir()
+        (repo / "state" / "y.md").write_text("y")
+
+        # Claim written under the forward-slashed dialect.
+        scope.touch("s-xd2", "state/y.md", cwd=str(repo))
+        sessions_dir = core.sessions_dir(cwd=str(repo))
+        before = claim_index.lookup(["state\\y.md"], sessions_dir=sessions_dir)
+        assert before == {"state\\y.md": ["s-xd2"]}
+
+        subprocess.run(["git", "add", "state/y.md"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit state/y.md"], cwd=repo, check=True
+        )
+        scope.release_committed_claims("s-xd2", ["state\\y.md"], cwd=str(repo))
+
+        after = claim_index.lookup(["state/y.md"], sessions_dir=sessions_dir)
+        assert after == {"state/y.md": []}
+
+
+class TestBackslashedRelativePathspecCommitClearsClaimEndToEnd:
+    """C1, A2/A3 -- end-to-end shape the plan explicitly requires: a claim
+    written via a backslashed relative pathspec, committed, and released
+    through release_committed_claims (the mechanism
+    ops/ceremony/scoped_git_commit.py's real commit op calls post-commit)
+    must clear -- read back through claim_index.lookup, the commit gate's
+    own read path."""
+
+    def test_backslashed_relative_pathspec_claim_clears_after_commit_and_release(
+        self, tmp_path
+    ):
+        from coordinator_core.session import claim_index
+
+        repo = _make_repo(tmp_path)
+        core.init("s-e2e", cwd=str(repo))
+        (repo / "pkg").mkdir()
+        (repo / "pkg" / "mod.py").write_text("v1")
+
+        scope.touch("s-e2e", "pkg\\mod.py", cwd=str(repo))
+        sessions_dir = core.sessions_dir(cwd=str(repo))
+        assert claim_index.lookup(["pkg/mod.py"], sessions_dir=sessions_dir) == {
+            "pkg/mod.py": ["s-e2e"]
+        }
+
+        subprocess.run(["git", "add", "pkg/mod.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit pkg/mod.py"], cwd=repo, check=True
+        )
+        scope.release_committed_claims("s-e2e", ["pkg\\mod.py"], cwd=str(repo))
+
+        assert claim_index.lookup(["pkg/mod.py"], sessions_dir=sessions_dir) == {
+            "pkg/mod.py": []
+        }
+
+    def test_forward_slashed_relative_pathspec_claim_clears_after_commit_and_release(
+        self, tmp_path
+    ):
+        """Sibling pin for the forward-slashed dialect, alongside the
+        backslashed case above -- both dialects pinned end-to-end through
+        the same claim -> commit -> release_committed_claims -> claim_index
+        path."""
+        from coordinator_core.session import claim_index
+
+        repo = _make_repo(tmp_path)
+        core.init("s-e2e-fwd", cwd=str(repo))
+        (repo / "pkg2").mkdir()
+        (repo / "pkg2" / "mod.py").write_text("v1")
+
+        scope.touch("s-e2e-fwd", "pkg2/mod.py", cwd=str(repo))
+        sessions_dir = core.sessions_dir(cwd=str(repo))
+        assert claim_index.lookup(["pkg2/mod.py"], sessions_dir=sessions_dir) == {
+            "pkg2/mod.py": ["s-e2e-fwd"]
+        }
+
+        subprocess.run(["git", "add", "pkg2/mod.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit pkg2/mod.py"], cwd=repo, check=True
+        )
+        scope.release_committed_claims("s-e2e-fwd", ["pkg2/mod.py"], cwd=str(repo))
+
+        assert claim_index.lookup(["pkg2/mod.py"], sessions_dir=sessions_dir) == {
+            "pkg2/mod.py": []
+        }

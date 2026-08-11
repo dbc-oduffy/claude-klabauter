@@ -495,6 +495,55 @@ not already present.
 """
 
 
+_SENTINEL_ELIGIBLE_ADVISORY_GUARDS: "frozenset[str]" = frozenset(
+    {"bump-foreign-repo-write", "bump-outside-repo-write"}
+)
+"""Explicit per-guard opt-in for in-session-operator-unlock sentinel
+eligibility among `fail_closed=False` `guard_chain` entries -- Review:
+coordinator:code-reviewer P1 (re-derived independently by
+review-integrator). Membership rule: a `fail_closed=False` guard belongs
+here only if (a) it composes a genuine `permissionDecision: "deny"` on a
+normal, non-crash path, AND (b) a sentinel drop is an appropriate remedy
+for that deny -- a product judgment made per guard, not a mechanical
+consequence of (a) alone. `validate-commit` and
+`git-commit-safe-commit-advise` satisfy (a) but fail (b), so they stay
+out; see the rationale below. Do not trust any historical count of how
+many `fail_closed=False` entries satisfy (a) -- three independent audits
+of this chain (two, then four, then five) each found one the last had
+missed, so a stated number invites a false sense that the census is
+closed rather than a reflection of the actual test. To determine (a) for
+a given guard, read its backing module and confirm it can return a
+`{"permissionDecision": "deny", ...}` envelope (directly, or via
+`_hook_envelope.deny()`) on a path that isn't a bare exception-swallow
+`return None`/allow default -- `guard_chain`'s own entries name each
+guard's backing check. Audit history, not a live count: a first walk
+found two (`bump-foreign-repo-write`, `bump-outside-repo-write`); a
+second found two more (`validate-commit`,
+`git-commit-safe-commit-advise`); a third found a fifth
+(`inprocess-search`, correctly excluded here -- its deny means "already
+answered", not "refused", and satisfies (a) but not (b) for the same
+reason as the commit-safety pair below).
+
+Every `fail_closed=True` (CONFINEMENT_DENY / PLATFORM_CONDITIONED_DENY)
+guard stays unconditionally sentinel-eligible (see `_sentinel_eligible`'s
+own computation in `evaluate_payload_json`'s loop) -- this allowlist scopes
+ONLY the `fail_closed=False` population, restoring the two `bump-*` speed
+bumps to clearable/advertised (the original defect this dispatch's parent
+fix addressed) while leaving `validate-commit`'s strict-mode scope deny and
+`git-commit-safe-commit-advise`'s foreign-staged-index deny NON-clearable
+by a sentinel drop -- both are commit-safety denies on a worktree nine-plus
+concurrent sessions share, and a single sentinel drop suppressing either
+would reintroduce the exact "one session's commit absorbs another's staged
+work" hazard `block-subagent-stash-creation`'s own module docstring records
+a live incident of, for a different guard in the same worktree-sharing
+class. Widening this set to include either commit-safety guard is a
+product decision (does a sentinel drop become an appropriate remedy for a
+commit-safety deny), not a mechanical consequence of anything here -- if
+that is ever wanted, it belongs in a plan of its own, not a silent
+allowlist edit.
+"""
+
+
 _RESOLUTION_CLASS_PHRASES: Dict[str, str] = {
     "resolved-engine": "resolved engine",
     "live-working-tree": "live working tree",
@@ -908,6 +957,9 @@ def evaluate_payload_json(
     session_id = payload.get("session_id") or ""
     if not isinstance(session_id, str):
         session_id = ""
+    agent_id = payload.get("agent_id") or ""
+    if not isinstance(agent_id, str):
+        agent_id = ""
     cwd = payload.get("cwd") or ""
     if not isinstance(cwd, str):
         cwd = ""
@@ -1121,19 +1173,49 @@ def evaluate_payload_json(
             # allow, per each one's own registration comment) while still
             # returning `permissionDecision: "deny"` as their real, intended
             # verdict, so their deny was neither `guard_unlock_sentinel`-
-            # clearable nor advertised one. Every other `fail_closed=False`
-            # entry in `guard_chain` returns only `"allow"` envelopes on its
-            # own normal path (audited: `block-dev-repo-sentinel-removal-
-            # advisory`'s registered `check_advisory` leg renders
-            # `permissionDecision: "allow"` unconditionally; no other
-            # ADVISORY_REWRITE entry's backing module ever composes a
-            # `"deny"` string), so dropping the `fail_closed and` conjunct
-            # changes behaviour for exactly these two bump guards.
+            # clearable nor advertised one. CORRECTION (Review:
+            # coordinator:code-reviewer P1, re-derived independently by
+            # review-integrator): the claim below this comment originally
+            # made -- that only these two bump guards are affected -- was
+            # incomplete. Other `fail_closed=False` entries also compose a
+            # genuine `"deny"` on their own normal path (`validate-commit`,
+            # `git-commit-safe-commit-advise`, and more found on later
+            # audits); see `_SENTINEL_ELIGIBLE_ADVISORY_GUARDS`'s own
+            # docstring immediately above this function for the membership
+            # rule (not a fixed count -- repeated independent audits have
+            # each found a case the last one missed) and why sentinel
+            # eligibility for `fail_closed=False` entries is now an
+            # explicit per-guard allowlist rather than following from
+            # `_is_hard_deny_envelope` alone.
             _is_hard_deny_envelope = (
                 isinstance(out, dict)
                 and isinstance(_hso, dict)
                 and _hso.get("permissionDecision") == "deny"
             )
+            # Review: coordinator:code-reviewer (P1, re-derived independently
+            # by review-integrator) -- envelope-only (`_is_hard_deny_envelope`
+            # alone) is TOO WIDE for sentinel eligibility: it makes every
+            # `fail_closed=False` guard that composes a genuine deny on its
+            # normal path clearable/advertisable, and this chain has more
+            # than the two (`bump-foreign-repo-write`/`bump-
+            # outside-repo-write`) the fix that dropped the old `fail_closed
+            # and` conjunct was scoped to -- see
+            # `_SENTINEL_ELIGIBLE_ADVISORY_GUARDS`'s own docstring for the
+            # membership rule; do not trust a fixed count here, repeated
+            # independent audits have each turned up a case the last one
+            # missed. Guards like `validate-commit`'s strict-mode scope deny
+            # and `git-commit-safe-commit-advise`'s foreign-staged-index deny
+            # are commit-safety denies on a worktree nine-plus sessions
+            # share; a sentinel drop is not an appropriate remedy for either
+            # (neither guard's own registration comment argues it should be
+            # suppressible this way), so clearability stays an explicit
+            # per-guard opt-in rather than a side effect of composing a deny
+            # envelope. Every `fail_closed=True` (CONFINEMENT_DENY /
+            # PLATFORM_CONDITIONED_DENY) guard remains unconditionally
+            # eligible, unchanged from before this fix -- only the
+            # `fail_closed=False` population is now gated by this explicit
+            # allowlist.
+            _sentinel_eligible = fail_closed or name in _SENTINEL_ELIGIBLE_ADVISORY_GUARDS
             # Review: coordinator:code-reviewer Finding 3 (P2) -- compute
             # host-default suppression BEFORE consuming any unlock grant
             # (within-iteration reorder only; the guard-chain CALL order
@@ -1159,6 +1241,7 @@ def evaluate_payload_json(
             )
             if (
                 _is_hard_deny_envelope
+                and _sentinel_eligible
                 and not _suppressed
                 and session_id
                 and _consume_unlock(session_id, name)
@@ -1170,7 +1253,7 @@ def evaluate_payload_json(
                     file=sys.stderr,
                 )
                 continue
-            if _is_hard_deny_envelope and not _suppressed:
+            if _is_hard_deny_envelope and _sentinel_eligible and not _suppressed:
                 # C4 (docs/plans/2026-08-03-in-session-operator-unlock-for-
                 # the-hard-.md): the grant check just above failed (no
                 # sentinel, or an unresolvable session_id), so this envelope
@@ -1180,7 +1263,13 @@ def evaluate_payload_json(
                 # wording cannot drift between the two legs. Every one of the
                 # 47 hard-deny guards inherits the line for free; no per-guard
                 # edit.
-                out = _annotate_unlock(out, session_id, name, _override_keys_doc_display())
+                out = _annotate_unlock(
+                    out,
+                    session_id,
+                    name,
+                    _override_keys_doc_display(),
+                    agent_id=agent_id,
+                )
             if _suppressed:
                 emitted = _resolve_suppressed_envelope(out)
                 print(

@@ -552,6 +552,30 @@ def test_dir_size_bytes_still_sums_normally_under_a_generous_budget(tmp_path):
     assert size == cruft_sweep._dir_size_bytes(d)  # default budget, same result
 
 
+def test_dir_size_bytes_no_st_blocks_platform_falls_back_to_st_size(tmp_path, monkeypatch):
+    """Windows st_blocks-absence fix (2026-08-11): simulate a platform whose
+    os.stat_result has no st_blocks attribute (Windows) and assert the
+    fallback total is the raw byte-accurate sum against a hand-summed
+    st_size total (no KB-floor rounding, unlike the st_blocks path — see
+    _dir_size_bytes's "KB-floor half" docstring note), rather than silently
+    landing on 0. Simulated via monkeypatching os.stat_result rather than
+    relying on the host platform, so this is meaningful on both Linux and
+    Windows CI."""
+    d = tmp_path / "winlike"
+    d.mkdir()
+    expected_size = 0
+    for i in range(5):
+        content = ("x" * (100 + i * 37)).encode("utf-8")
+        (d / f"file-{i}.txt").write_bytes(content)
+        expected_size += len(content)
+
+    monkeypatch.setattr(cruft_sweep.os, "stat_result", object)
+
+    size = cruft_sweep._dir_size_bytes(d)
+    assert size == expected_size
+    assert size > 0
+
+
 # ---------------------------------------------------------------------------
 # Drift-audit D4 — sweep_scratch's already-pruned-parent skip must recognize
 # BOTH path separators, not just "/" (os.walk yields native/backslash paths

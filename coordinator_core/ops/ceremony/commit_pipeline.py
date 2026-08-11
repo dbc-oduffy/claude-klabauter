@@ -300,6 +300,22 @@ class StageOutcome:
     deletion_paths: List[str] = field(default_factory=list)
     missing_caller_paths: List[str] = field(default_factory=list)
     ignored_caller_paths: List[str] = field(default_factory=list)
+    #: Caller-supplied paths that landed in `missing_caller_paths` while ONE
+    #: OR BOTH of the two probes that rule out "this is actually a rename or
+    #: a deletion" (`git diff --cached --name-status --find-renames` for
+    #: `swept_rename`/`swept_delete`, `git ls-files --deleted` for
+    #: `worktree_deleted`) returned a non-ok `GitResult` -- i.e. the "genuinely
+    #: absent" classification was never actually TESTED for this path, only
+    #: defaulted to on a probe failure (see this function's own inline
+    #: comments at each probe: both degrade to "found nothing" on failure,
+    #: best-effort, never raising). A member of THIS set is always also a
+    #: member of `missing_caller_paths` -- never a separate bucket a caller
+    #: could miss by only reading one field -- it exists purely so a caller
+    #: rendering a decline reason (`scoped_git_commit._declined_paths`) can
+    #: tell "confirmed absent" from "absence merely assumed because a probe
+    #: could not answer" and word the reason honestly instead of asserting a
+    #: fact this function never verified.
+    unverifiable_missing_caller_paths: List[str] = field(default_factory=list)
 
 
 _MAX_DIAGNOSTIC_CHARS = 2000
@@ -423,7 +439,11 @@ def explicit_stage(
                                           `"missing:<p>"` (ambiguous to a
                                           pipe-delimited forwarding value).
       `p` is a staged deletion source (2026-08-04 fix, defect B -- see
-      "Deletion staging" below) ->
+      "Deletion staging" below) -> checked BEFORE the plain `exists()` test
+      above (2026-08-11 fix, example-doctrine-repo-em memo `cross-repo/inbox/2026-08-11-
+      example-doctrine-repo-em-two-gaps-that-let-machine-local-files-stay-tracked.md`
+      § 2 -- see "Untrack vs. add" below for why the ordering itself is the
+      fix) ->
         `p` not in `caller_paths`     -> skipped `"swept-deleted:<p>"`
                                           (benign -- a GENERATED artifact the
                                           tail's own archival step git-rm'd;
@@ -477,6 +497,33 @@ def explicit_stage(
                                           ignored, untracked path was never
                                           staged before this call and is not
                                           staged now.
+
+    Untrack vs. add (2026-08-11 fix, example-doctrine-repo-em memo `cross-repo/inbox/
+    2026-08-11-example-doctrine-repo-em-two-gaps-that-let-machine-local-files-stay-
+    tracked.md` § 2 "`scoped-git-commit` cannot perform an untrack commit, by
+    construction"): a `git rm --cached` untrack leaves the file's CONTENT on
+    disk (only the index entry is removed), so `(worktree_root / p).exists()`
+    is True for it -- same as any ordinary tracked-and-modified path. Before
+    this fix the loop tested `exists()` FIRST, so an untracked-but-still-on-
+    disk path fell into `existing` and reached the ignored-path pre-filter
+    below, where -- now that nothing tracks it -- it matches whatever
+    `.gitignore` rule motivated the untrack in the first place, and gets
+    refused with `"excluded by .gitignore"`. That reading is correct for an
+    ADD (a caller trying to `git add` a path `.gitignore` blocks) and
+    INVERTED for an UNTRACK (being gitignored is the *precondition* of a
+    legitimate untrack, not a violation of one) -- so the one ceremony this
+    repo's doctrine names for scoped commits was structurally unable to land
+    an untrack of a gitignored path, pushing callers toward a bare
+    `git commit` instead. The fix is ordering, not a new predicate: `p in
+    swept_delete` (derived from `git diff --cached --name-status`, an INDEX
+    fact independent of worktree existence) is now checked before `exists()`,
+    so a staged deletion is classified as `already-staged-deleted`/`swept-
+    deleted` regardless of whether its content still sits on disk, and never
+    reaches `existing` or the ignore pre-filter at all. A staged ADD/MODIFY
+    against a gitignored path is untouched by this reordering -- it was never
+    in `swept_delete` (that set holds `D`-status entries only) and still
+    resolves via `exists()` into `existing`, still hits the ignore pre-filter,
+    still declines with the unchanged `"excluded by .gitignore"` reason.
 
     `caller_paths` defaults to the empty set -- treat none as caller-supplied
     (every path classified as a benign GENERATED-path skip on miss).
@@ -581,15 +628,47 @@ def explicit_stage(
     if deleted_result.ok:
         worktree_deleted = {line for line in deleted_result.stdout.splitlines() if line}
 
+    # Whether the two probes that rule out "this missing path is actually a
+    # rename or deletion" (`diff_result`, `deleted_result` above) actually
+    # ANSWERED, rather than degrading to their empty best-effort default on
+    # failure. A caller path classified "genuinely absent" while this is
+    # False was never actually tested against a rename/deletion -- see
+    # `StageOutcome.unverifiable_missing_caller_paths`'s own docstring for
+    # why that distinction matters to a reason string rendered downstream.
+    rename_delete_probes_ok = diff_result.ok and deleted_result.ok
+
     existing: List[str] = []
     skipped: List[str] = []
     swept_renames: List[Tuple[str, str]] = []
     missing_caller_paths: List[str] = []
+    unverifiable_missing_caller_paths: List[str] = []
     already_staged_deletions: List[str] = []
     to_delete: List[str] = []
 
     for p in paths:
-        if (root / p).exists():
+        # `swept_delete` membership is checked BEFORE `exists()` (2026-08-11
+        # fix, see this function's own docstring "Untrack vs. add"): a
+        # `git rm --cached` untrack leaves the file's content on disk, so
+        # `exists()` alone cannot distinguish it from an ordinary tracked
+        # path, and would route it into `existing` -- reaching the
+        # ignored-path pre-filter below, where a gitignored untrack is
+        # wrongly refused as if it were a blocked `git add`. `swept_delete`
+        # is an INDEX fact (`git diff --cached --name-status`), independent
+        # of worktree existence, so testing it first classifies a staged
+        # deletion correctly regardless of whether its content still sits on
+        # disk -- and an ADD/MODIFY path (never a `swept_delete` member) is
+        # completely unaffected by this reordering.
+        if p in swept_delete:
+            if p in caller_paths:
+                # This IS the caller's own deletion, already staged (e.g. a
+                # prior `git rm`) -- no `git add` needed, but it belongs in
+                # the commit set exactly like a diverged path does (staged,
+                # not re-touched by this call).
+                skipped.append(f"already-staged-deleted:{p}")
+                already_staged_deletions.append(p)
+            else:
+                skipped.append(f"swept-deleted:{p}")
+        elif (root / p).exists():
             existing.append(p)
         elif p in swept_rename:
             new = swept_rename[p]
@@ -606,21 +685,13 @@ def explicit_stage(
                 if p in caller_paths:
                     skipped.append(f"missing-caller:{p}")
                     missing_caller_paths.append(p)
+                    if not rename_delete_probes_ok:
+                        unverifiable_missing_caller_paths.append(p)
                 else:
                     skipped.append(f"missing:{p}")
             else:
                 skipped.append(f"swept:{p}->{new}")
                 swept_renames.append((p, new))
-        elif p in swept_delete:
-            if p in caller_paths:
-                # This IS the caller's own deletion, already staged (e.g. a
-                # prior `git rm`) -- no `git add` needed, but it belongs in
-                # the commit set exactly like a diverged path does (staged,
-                # not re-touched by this call).
-                skipped.append(f"already-staged-deleted:{p}")
-                already_staged_deletions.append(p)
-            else:
-                skipped.append(f"swept-deleted:{p}")
         elif p in worktree_deleted:
             if p in caller_paths:
                 skipped.append(f"deleted:{p}")
@@ -630,6 +701,8 @@ def explicit_stage(
         elif p in caller_paths:
             skipped.append(f"missing-caller:{p}")
             missing_caller_paths.append(p)
+            if not rename_delete_probes_ok:
+                unverifiable_missing_caller_paths.append(p)
         else:
             skipped.append(f"missing:{p}")
 
@@ -711,6 +784,7 @@ def explicit_stage(
             ],
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
+            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
         )
 
@@ -753,6 +827,7 @@ def explicit_stage(
             staged_paths=staged_paths,
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
+            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
             checked_paths=set(existing),
             diverged_paths=diverged,
@@ -769,6 +844,7 @@ def explicit_stage(
             staged_paths=staged_paths,
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
+            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
             checked_paths=set(existing),
             diverged_paths=diverged,
@@ -847,6 +923,7 @@ def explicit_stage(
         staged_paths=staged_paths,
         swept_renames=swept_renames,
         missing_caller_paths=missing_caller_paths,
+        unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
         ignored_caller_paths=ignored_caller_paths,
         checked_paths=set(existing),
         diverged_paths=diverged,
@@ -1237,6 +1314,89 @@ def commit(
         except OSError:
             print(f"skip: commit: msg_file.unlink() failed: {sys.exc_info()[1]}", file=sys.stderr)
             pass
+
+def resolve_post_push_sha(worktree_root: Union[str, Path], pre_push_sha: Optional[str]) -> Optional[str]:
+    """Re-resolve HEAD after a landed push, WITHOUT trusting a bare read.
+
+    state/bug-backlog/2026-08-11-run-commit-pipeline-reports-a-concurrent-
+    0a91ea7dc77b.yaml (P1): all three post-push call sites in this ceremony
+    (`run_commit_pipeline` here, `consumed_handoff_stamp.
+    _commit_and_push_follow_up`, `post_commit_tail.
+    _commit_and_push_origin_stub_close`) used to adopt a bare
+    `git rev_parse_head()` unconditionally once a push landed, to cover the
+    case where `push_with_retry()` fetched + `git rebase --onto` the commit
+    on a rejected push before re-pushing (which genuinely rewrites its sha).
+    But that bare read fires on EVERY landed push, not just a rebase-retry --
+    on a busy shared branch a peer's push landing in the window between our
+    push completing and this read running was silently adopted as ours (3 of
+    5 calls wrong, observed live). Shape (b) from the filed analysis: keep
+    the re-read, but VERIFY it names our own commit before adopting it,
+    rather than gating on a "did a rebase actually fire" signal that
+    `PushOutcome` does not expose (shape (a) -- would need a new field
+    threaded out of `push_with_retry`, more invasive, not less).
+
+    Verification is by TREE identity, not the token-trailer `git log --grep`
+    the agree branch (`commit()`, above) uses for its OWN pre-push
+    resolution: that mechanism depends on the per-call `Commit-Token:`
+    trailer minted inside `commit()`, which `CommitOutcome` does not carry
+    back to any caller, and threading it out to three call sites (one of
+    which -- the two `consumed_handoff_stamp.py` / `post_commit_tail.py`
+    follow-up commits -- doesn't mint a token at all, using
+    `git_native.commit_scoped` directly) is exactly the "new plumbing" (b)
+    is supposed to avoid. Tree identity needs none: a `rebase --onto` that
+    only moves a commit's PARENT (the only kind `push_with_retry` performs)
+    reapplies the identical diff and so produces an identical tree; a
+    concurrent peer commit landing in the race window carries a DIFFERENT
+    diff and so a different tree. Tree identity is checked SECOND, behind an
+    ancestry check, because it cannot see an EMPTY peer commit: an empty
+    commit inherits its parent's tree verbatim, so a peer `--allow-empty`
+    landing on top of ours matches our tree exactly and a tree-only check
+    would adopt it. Ancestry separates the two cleanly in every case — a
+    rebase rewrites our commit and so drops it out of the new tip's history,
+    while anything built on top of ours necessarily keeps it as an ancestor.
+    `pre_push_sha` is the caller's own
+    already-verified value (`commit_outcome.committed_sha` in
+    `run_commit_pipeline`; the pre-push `rev_parse_head()` capture in the
+    other two) -- the anchor this function either confirms or falls back to,
+    never a value it invents.
+
+    Returns `pre_push_sha` unchanged (the safe default) when: `pre_push_sha`
+    is `None` (nothing to anchor against); the post-push read fails or is
+    blank (today's existing fallback, unaffected by this fix); or the two
+    trees disagree (peer race -- keep our own known-good value rather than
+    adopting a stranger's). Returns the freshly-read HEAD sha only when it
+    equals `pre_push_sha` outright (the ordinary non-rebase case) or its
+    tree matches `pre_push_sha`'s (a genuine rebase-retry).
+    """
+    if pre_push_sha is None:
+        return pre_push_sha
+    post_push = git_native.rev_parse_head(worktree_root)
+    if not post_push.ok:
+        return pre_push_sha
+    post_push_sha = post_push.stdout.strip()
+    if not post_push_sha:
+        return pre_push_sha
+    if post_push_sha == pre_push_sha:
+        return post_push_sha
+    # Ancestry first, because the tree check below cannot see the empty-commit
+    # case: an empty commit inherits its parent's tree verbatim, so a peer's
+    # `--allow-empty` (or otherwise no-op) commit landing on top of ours has a
+    # tree IDENTICAL to ours and a tree-only check would adopt its sha. The
+    # rebase this whole re-read exists for REWRITES our commit, so the pre-push
+    # sha stops being reachable from the new tip; anything that still carries it
+    # as an ancestor was built ON TOP of ours and is therefore not ours.
+    base = git_native.merge_base(worktree_root, pre_push_sha, post_push_sha)
+    if base.ok and base.stdout.strip() == pre_push_sha:
+        return pre_push_sha
+    pre_tree = git_native.rev_parse(worktree_root, f"{pre_push_sha}^{{tree}}")
+    post_tree = git_native.rev_parse(worktree_root, f"{post_push_sha}^{{tree}}")
+    if not pre_tree.ok or not post_tree.ok:
+        return pre_push_sha
+    pre_tree_sha = pre_tree.stdout.strip()
+    post_tree_sha = post_tree.stdout.strip()
+    if pre_tree_sha and pre_tree_sha == post_tree_sha:
+        return post_push_sha
+    return pre_push_sha
 
 
 # ---------------------------------------------------------------------------
@@ -2490,10 +2650,20 @@ def run_commit_pipeline(
             # fall back to the pre-push sha rather than downgrading a
             # known-good value to None -- it is correct unless a
             # rebase-retry actually fired, and a stale-but-real sha is a
-            # better audit trail than a hole.
-            post_push = git_native.rev_parse_head(root)
-            if post_push.ok and post_push.stdout.strip():
-                final_committed_sha = post_push.stdout.strip()
+            # better audit trail than a hole. state/bug-backlog/2026-08-11-
+            # run-commit-pipeline-reports-a-concurrent-0a91ea7dc77b.yaml
+            # (P1): that fallback comment used to describe the ONLY
+            # hazard here, but the bare read below fired on every landed
+            # push (this whole `if` is `push_status == PUSH_STATUS_PUSHED`,
+            # true of an ordinary first-try push too) -- not just the
+            # rebase-retry case, so a peer's push landing in this window
+            # was silently adopted as ours. `resolve_post_push_sha` re-reads
+            # HEAD exactly as before but only ADOPTS it once its tree
+            # matches `commit_outcome.committed_sha`'s (see that helper's
+            # own docstring for why tree identity, not another `git log
+            # --grep`, is the right discriminator here); a mismatch keeps
+            # the pre-push value instead of guessing.
+            final_committed_sha = resolve_post_push_sha(root, commit_outcome.committed_sha)
         # C2: re-derived off `push_status == "push-failed"` rather than
         # `pushed is False` -- a branch-policy decline is also `pushed is
         # False` and must NOT report a breach; nothing was breached, the

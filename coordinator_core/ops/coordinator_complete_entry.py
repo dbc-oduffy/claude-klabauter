@@ -763,12 +763,49 @@ def _native_single_session_loe() -> str:
     )
 
 
+def _closing_session_argv() -> List[str]:
+    """`--closing-*` flags naming THIS session to the chain aggregator.
+
+    The closing session heads no handoff, and its Session Ledger row is a
+    genuine-EM action with no directive — it lands after this scaffold runs.
+    Without these flags the aggregate omits the closing session entirely and
+    its `N of M` tell reads all-clear (`"1 of 1"` on a single-handoff chain)
+    in precisely the case where the undercount is total.
+
+    Degrades to `[]` on an unresolvable session id — the aggregate then falls
+    back to its handoff-based counts rather than failing the scaffold.
+    """
+    sid = _session_core.resolve_session_id()
+    if not sid:
+        return []
+
+    argv = ["--closing-session-id", sid]
+
+    base = _session_core.sessions_dir()
+    if base:
+        ad, od = _count_session_dispatches(Path(base) / sid / "dispatched-agents.txt")
+        if ad is not None:
+            argv += ["--closing-agent-dispatches", str(ad)]
+        if od is not None:
+            argv += ["--closing-opus-dispatches", str(od)]
+
+    in_tok = os.environ.get("CLAUDE_SESSION_INPUT_TOKENS", "")
+    out_tok = os.environ.get("CLAUDE_SESSION_OUTPUT_TOKENS", "")
+    if in_tok.isdigit() and out_tok.isdigit():
+        argv += ["--closing-em-tokens", str(int(in_tok) + int(out_tok))]
+
+    return argv
+
+
 def _chain_terminal_loe(consumed_handoff: str) -> str:
     """Step 2.6.5a chain-terminal LoE — in-process call to the ported aggregator."""
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
-            rc = _agg_loe_mod.main(["--terminal-handoff", consumed_handoff, "--format", "yaml-frontmatter"])
+            rc = _agg_loe_mod.main(
+                ["--terminal-handoff", consumed_handoff, "--format", "yaml-frontmatter"]
+                + _closing_session_argv()
+            )
     except Exception:
         print(f"skip: _chain_terminal_loe: with redirect_stdout(buf): failed: {sys.exc_info()[1]}", file=sys.stderr)
         return ""

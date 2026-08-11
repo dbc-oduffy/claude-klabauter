@@ -169,6 +169,48 @@ def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
     assert _verdict.was_silent("block_subagent_plan_body_bash_write", silences)
 
 
+def test_unenumerated_type_falls_through_to_advisory(monkeypatch):
+    """AC6/C3 -- the SAME identity gate's Case 2 (kind resolves CLEANLY to
+    something absent from C1's roster) no longer exits as allow; it falls
+    through to the SAME target-detection axis coordinator:executor reaches,
+    landing on the same ADVISORY_REWRITE allow+additionalContext shape --
+    no more trust than coordinator:executor for this guard's purposes.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
+    monkeypatch.setattr(
+        guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+    )
+    payload = _payload(_WRITE_CMD)
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "additionalContext" in result["hookSpecificOutput"]
+
+
+def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
+    """Case 2, positive direction -- a kind that resolves cleanly to
+    something ON the roster keeps today's silent allow, unaffected by the
+    narrowing.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
+    monkeypatch.setattr(
+        guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+    )
+    payload = _payload(_WRITE_CMD)
+    assert guard.check(payload) is None
+
+
+def test_roster_load_error_falls_back_to_allow(monkeypatch):
+    """A roster-load failure is a peer-repo hiccup, not this guard's problem
+    to newly deny on (C1's PreToolUse(Agent) deny is the primary fix) --
+    falls back to today's allow rather than denying.
+    """
+    _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
+    monkeypatch.setattr(guard, "resolve_roster", lambda: (None, "roster unresolved"))
+    payload = _payload(_WRITE_CMD)
+    assert guard.check(payload) is None
+
+
 def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch):
     """Identity axis still gates first: a non-executor kind never reaches
     the PowerShell target-detection leg at all, so no SILENT is recorded.

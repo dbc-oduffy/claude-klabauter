@@ -149,6 +149,18 @@
       "type": "string",
       "description": "The verbatim PM utterance that named execution. The FOURTH field of the stamp: plan-execute-session-split.md § Pinned conventions pins the stamp as a byte-identical FOUR-field contract (by/at/sha/note); note is the self-attesting field — a stamp without a note that names execution signals the write-bar may not have been met. Do NOT drop it. OPTIONAL, mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C1"
     },
+    "status_override_by": {
+      "type": "string",
+      "description": "The session that overrode the completeness verdict when stamping `status: implemented`. OPTIONAL — one of the three-field override stamp (by/reason/at), written ONLY by `plan-status-transition stamp-implemented --override-reason`. Negative-spec: this stamp records an override of the SPINE/AC completeness verdict only; it never relaxes the live-foreign-holder refusal, which still runs unchanged. Supersedes the unschema'd hand-edit route (`status_stamped_by: EM-manual`, `status_stamped_by_hand`) that improvised two different field spellings across two repos because the engine offered no sanctioned path when it declined. Spec backlink: cross-repo/inbox/2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-reading-the-ac-table.md"
+    },
+    "status_override_reason": {
+      "type": "string",
+      "description": "The verbatim operator reason for overriding the completeness verdict. REQUIRED by the op whenever an override is taken — `--override-reason` refuses empty text, so a bare force with no stated cause cannot reach disk. OPTIONAL here in shape terms (absent on every non-override plan). One of the three-field override stamp (by/reason/at)."
+    },
+    "status_override_at": {
+      "type": "string",
+      "description": "ISO 8601 date-time of the completeness-verdict override. OPTIONAL — one of the three-field override stamp (by/reason/at), written in the same locked_rmw mutate closure as the status flip it accompanies, so the stamp and the flip cannot diverge."
+    },
     "grouping_approvals": {
       "type": "object",
       "additionalProperties": false,

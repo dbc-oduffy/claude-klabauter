@@ -1,12 +1,13 @@
 """
 coordinator_core.ops.fleet.archive_actioned_memos — fleet.archive_actioned_memos op.
 
-Purpose: Archive actioned, unclaimed cross-repo memos from cross-repo/inbox/ into
-cross-repo/archive/ (flat — no YYYY-MM/ subdirs, mirroring the memo channel convention).
+Purpose: Archive actioned or superseded, unclaimed cross-repo memos from
+cross-repo/inbox/ into cross-repo/archive/ (flat — no YYYY-MM/ subdirs, mirroring
+the memo channel convention).
 A memo is terminal iff:
-  1. frontmatter status == "actioned"
+  1. frontmatter status == "actioned" OR status == "superseded"
   2. At least one disposition field is present (decision, decision_note,
-     realized_by, or actioned_note — see _DISPOSITION_FIELDS)
+     realized_by, actioned_note, or superseded_by — see _DISPOSITION_FIELDS)
   3. No live session holds its memo-claim dir
 
 Self-scan: enumerates cross-repo/inbox/*.md directly — does NOT call records.query.
@@ -27,11 +28,12 @@ Spec backlinks:
   - Port of: coordinator-session.sh (example-doctrine-repo e34f2484, 2026-07-22) cs_sweep_actioned_memos
 
 Negative-spec:
-  - Does NOT archive a memo carrying status:actioned but no disposition field
-    (decision/decision_note/realized_by/actioned_note) — such a memo is treated
-    as NOT terminal and left in the inbox (see _REASON_ACTIONED_NO_DISPOSITION).
+  - Does NOT archive a memo carrying status:actioned or status:superseded but
+    no disposition field (decision/decision_note/realized_by/actioned_note/
+    superseded_by) — such a memo is treated as NOT terminal and left in the
+    inbox (see _REASON_ACTIONED_NO_DISPOSITION / _REASON_SUPERSEDED_NO_DISPOSITION).
     A hand `Edit` of frontmatter status (bypassing memo.transition's mandatory
-    one-of-four-fields requirement) is exactly the shape that swallowed 34
+    one-of-fields requirement) is exactly the shape that swallowed 34
     memos unread across four sweep commits (70a54f9b, 47bc7eed, 989bf41b,
     ca9d3e83) — this predicate is the fail-closed-to-keep close of that hole.
   - Does NOT call records.query — self-scans cross-repo/inbox/ directly (AC C3 anti-scope).
@@ -82,13 +84,14 @@ _LOG = logging.getLogger(__name__)
 _REASON_DEST_CONFLICT = "archive-dest-conflict"
 
 #: The one place the disposition-field vocabulary is enumerated — the memo.transition
-#: op's "exactly one of decision/decision_note/realized_by/actioned_note" requirement
-#: (memo_transition.py _action, ~:563-570), mirrored here so this predicate can tell a
-#: PROGRAMMATICALLY-actioned memo (which always carries one) from a memo whose
-#: `status: actioned` was hand-written into frontmatter with no disposition attached.
+#: op's "exactly one of decision/decision_note/realized_by/actioned_note/superseded_by"
+#: requirement (memo_transition.py _action, ~:563-570), mirrored here so this predicate
+#: can tell a PROGRAMMATICALLY-actioned-or-superseded memo (which always carries one)
+#: from a memo whose `status: actioned`/`status: superseded` was hand-written into
+#: frontmatter with no disposition attached.
 #: Tests import this constant rather than re-listing the field names (single source
 #: of truth — see the module docstring's negative-spec).
-_DISPOSITION_FIELDS = ("decision", "decision_note", "realized_by", "actioned_note")
+_DISPOSITION_FIELDS = ("decision", "decision_note", "realized_by", "actioned_note", "superseded_by")
 
 #: Skip reason for "status says actioned but no disposition field is present".
 #: Deliberately distinct from `status={...!r} (not actioned)` above: THIS memo's
@@ -100,6 +103,14 @@ _DISPOSITION_FIELDS = ("decision", "decision_note", "realized_by", "actioned_not
 #: disposition fields, two including an unread reply to an open ask).
 #: Spec backlink: cross-repo report to example-cockpit-repo, 2026-07-26.
 _REASON_ACTIONED_NO_DISPOSITION = "actioned-no-disposition"
+
+#: Sibling reason for the SAME fail-closed-to-keep shape, but for a memo whose
+#: status genuinely reads "superseded" with no superseded_by (or other
+#: disposition field) attached — kept as a THIRD, distinct string rather than
+#: folded into _REASON_ACTIONED_NO_DISPOSITION: the two reasons name different
+#: on-disk status values, and blurring them would mislead a human reading
+#: skipped[] into believing the memo's status is "actioned" when it is not.
+_REASON_SUPERSEDED_NO_DISPOSITION = "superseded-no-disposition"
 
 # Destination archive family label for the wire envelope (contract §2.1).
 _FAMILY = "memo"
@@ -189,7 +200,7 @@ async def _is_terminal(memo_path: Path, common_dir: Path) -> Tuple[bool, str]:
     """Return (is_terminal, note_or_reason).
 
     A memo is terminal iff:
-      1. frontmatter status == "actioned"
+      1. frontmatter status == "actioned" OR status == "superseded"
       2. At least one disposition field is present (_DISPOSITION_FIELDS)
       3. No live session holds the memo-claim dir
 
@@ -220,19 +231,24 @@ async def _is_terminal(memo_path: Path, common_dir: Path) -> Tuple[bool, str]:
     under a live claim.
     """
     status = parse_frontmatter_status(memo_path)
-    if status != "actioned":
+    if status not in ("actioned", "superseded"):
         return False, f"status={status!r} (not actioned)"
 
     if not _has_disposition(memo_path):
+        reason = (
+            _REASON_ACTIONED_NO_DISPOSITION
+            if status == "actioned"
+            else _REASON_SUPERSEDED_NO_DISPOSITION
+        )
         _LOG.warning(
-            "fleet.archive_actioned_memos: %s carries status: actioned but no "
+            "fleet.archive_actioned_memos: %s carries status: %s but no "
             "disposition field (%s) — archiving it now would swallow it unread. "
             "Action it through the memo.transition op instead (it requires and "
             "attaches exactly one of those fields); this memo stays in the inbox "
             "until it does.",
-            memo_path, "/".join(_DISPOSITION_FIELDS),
+            memo_path, status, "/".join(_DISPOSITION_FIELDS),
         )
-        return False, _REASON_ACTIONED_NO_DISPOSITION
+        return False, reason
 
     # Liveness guard: skip if a live session holds the memo-claim dir.
     claim_dir = _memo_claim_dir(common_dir, memo_path.name)
@@ -396,13 +412,14 @@ async def archive_actioned_memos_internal(
 
 @register_op("fleet.archive_actioned_memos")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """fleet.archive_actioned_memos — git-mv actioned memos from inbox to archive.
+    """fleet.archive_actioned_memos — git-mv actioned or superseded memos from
+    inbox to archive.
 
     Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md
     §2 (shapes), §3 (D1–D4), §5 (exit codes).
 
-    dry_run:true  → T1 preview: enumerate actioned, unclaimed memos in
-                    cross-repo/inbox/; return candidates[] (mutates nothing).
+    dry_run:true  → T1 preview: enumerate actioned or superseded, unclaimed
+                    memos in cross-repo/inbox/; return candidates[] (mutates nothing).
     dry_run:false → T3 act: per-candidate D1 terminality re-verify (status +
                     liveness guard), git-mv into cross-repo/archive/ (flat), commit.
 

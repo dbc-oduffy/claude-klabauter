@@ -273,6 +273,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # 5. Commit WITHOUT path restriction — the DR-151 point. A path-restricted
     #    commit silently resets the staged mode under core.fileMode=false.
     #    This branch runs on every platform; there is no POSIX variant.
+    #
+    #    Claim-release ineligible (C3, docs/plans/2026-08-11-claim-release-
+    #    and-the-gate-that-cannot-clear.md): this commit is issued with NO
+    #    pathspec at all (`["commit", "-m", ...]`, no `--`) — deliberately,
+    #    per the DR-151 point above. `release_committed_claims` releases
+    #    exactly the caller-supplied paths that turn out clean; a release
+    #    keyed off "what this commit covered" has no bounded answer when
+    #    the commit itself covers whatever was staged, unrestricted. No
+    #    release call is added here.
     # ------------------------------------------------------------------
     commit = _git(
         ["commit", "-m", f"chore: restore executable bit on {rel_path} (DR-151)"],

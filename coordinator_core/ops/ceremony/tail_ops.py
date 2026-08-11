@@ -822,6 +822,12 @@ async def write_review_trail(
     # Spec: docs/plans/2026-07-27-review-trail-scope-guard.md § C9.
     if review_trail.get("reviewed_paths"):
         params["reviewed_paths"] = review_trail["reviewed_paths"]
+    # Evidence correlating `reviewer` with an artifact showing a review
+    # occurred -- enforced op-side (review_trail_write._verify_reviewer_evidence);
+    # this tail-op only forwards it verbatim.
+    # Spec: state/bug-backlog/2026-08-10-coordinator-write-review-trail-accepts-a-295d3cd80d13.yaml
+    if review_trail.get("reviewer_evidence"):
+        params["reviewer_evidence"] = review_trail["reviewer_evidence"]
 
     try:
         result = await handler(params, repo_root=common_dir)
@@ -838,6 +844,92 @@ async def write_review_trail(
     except Exception as exc:  # noqa: BLE001 -- best-effort tail op, never raises
         _LOG.warning("tail_ops: review_trail.write raised %s: %s", type(exc).__name__, exc)
         return _fail(OP_REVIEW_TRAIL, f"{type(exc).__name__} -- {str(exc)[:160]}")
+
+
+async def write_review_trail_many(
+    common_dir: Path,
+    review_trail_list: Optional[list],
+    *,
+    b_adjudication_present: bool = False,
+) -> TailResult:
+    """N-slice sibling of ``write_review_trail``, for a ``decisions["review"]``
+    list-shaped payload (partitioned-review fix, ``workstream_complete.
+    build_write_trail_directives``) reaching the commit-tail path via
+    ``wsc-tail.py``'s repeatable ``--review-slice`` flag -- the second of the
+    two trail-writing paths that shape now needed to reach (the first,
+    ``build_write_trail_directives`` itself, landed in ``a3d90f24dc16``).
+
+    Calls ``write_review_trail`` once per qualifying slice -- never a single
+    batched op call -- so ONE slice's foreign-session-range refusal or write
+    failure can never suppress a sibling's write. This mirrors the directive
+    path's own isolation (each ``d-write-trail-<index>`` dispatches through
+    ``_execute_directives``'s per-directive halt contract independently), but
+    reimplemented here as a plain sequential in-process loop: this call has
+    no directive boundary to isolate at, and ``write_review_trail`` itself
+    already never raises (every failure mode -- missing handler, a caught
+    ``ForeignSessionRangeRefused``, any other exception -- collapses to a
+    returned ``failed``/``failed_critical`` entry, not a raise), so a loop
+    with no per-iteration try/except still cannot let one slice's failure
+    abort the rest.
+
+    A non-dict entry, or a dict missing/blanking one of
+    ``_REVIEW_TRAIL_REQUIRED_FIELDS``, is silently dropped from
+    ``qualifying`` before any write is attempted -- mirrors ``build_write_
+    trail_directives``'s own "an incomplete entry contributes NO directive"
+    convention (see that function's docstring) rather than forwarding a
+    partial dict for ``write_review_trail`` to skip one-by-one. The CLI/argv
+    assembly layer (``directives_commit_tail.build_close_tail_args_
+    directive`` -> ``wsc-close.py tail-args`` -> ``wsc-tail.py``) is expected
+    to have already filtered incomplete entries out before they ever become a
+    ``--review-slice`` token; this is the same defensive posture one layer
+    down, for a caller that invokes this op directly with an unfiltered list.
+
+    ``b_adjudication_present``'s breach check is evaluated ONCE across the
+    whole list, never per slice: a reviewed close-out is in breach only when
+    NOTHING usable was supplied at all (an empty/absent list, or every entry
+    incomplete) -- surfacing N near-identical breach messages for N
+    incomplete slices would be pure noise, and a caller that supplied at
+    least one complete slice (regardless of whether that slice's own write
+    later failed/was refused) has discharged the adjudication requirement;
+    a genuine write failure on a qualifying slice still surfaces through that
+    slice's own ``failed``/``failed_critical`` entry below, unaffected by
+    this once-only gate.
+    """
+    qualifying = [
+        entry
+        for entry in (review_trail_list or [])
+        if isinstance(entry, dict)
+        and all(entry.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS)
+    ]
+
+    if not qualifying:
+        if b_adjudication_present:
+            fields_str = ", ".join(_REVIEW_TRAIL_REQUIRED_FIELDS)
+            msg = (
+                f"{OP_REVIEW_TRAIL}: b_adjudication present but review_trail (list) had no "
+                f"complete entries -- required fields: {fields_str}"
+            )
+            return {"acted": [], "skipped": [], "failed": [], "failed_critical": [msg]}
+        return {"acted": [], "skipped": [f"{OP_REVIEW_TRAIL}:no-review-metadata"], "failed": []}
+
+    acted: list = []
+    skipped: list = []
+    failed: list = []
+    failed_critical: list = []
+    for entry in qualifying:
+        # b_adjudication_present=False per-slice, deliberately: the breach
+        # gate is evaluated once above, across the whole list, not per
+        # entry -- see this function's own docstring.
+        result = await write_review_trail(common_dir, entry, b_adjudication_present=False)
+        acted.extend(result.get("acted", []))
+        skipped.extend(result.get("skipped", []))
+        failed.extend(result.get("failed", []))
+        failed_critical.extend(result.get("failed_critical", []))
+
+    out: TailResult = {"acted": acted, "skipped": skipped, "failed": failed}
+    if failed_critical:
+        out["failed_critical"] = failed_critical
+    return out
 
 
 # ---------------------------------------------------------------------------

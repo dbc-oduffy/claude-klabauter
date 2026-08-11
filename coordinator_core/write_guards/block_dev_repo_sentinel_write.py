@@ -55,11 +55,12 @@ auto-append at the `write_guards.engine` seam,
 docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md § C4,
 applies only to the hard-deny phase -- this guard's advisory no longer
 reaches it, and its reason text does not depend on that append.) The
-pre-launch env-var line is addressed to a human operator, not this agent --
-the established "Bypass options for a human operator, not this agent: ..."
-register -- so naming it is not the sanctioned-bypass signal the
-basename-withholding note above still guards against; that framing applied
-to the target path, never to the operator's own remediation channel.
+pre-launch env-var line names a key settable only in the environment before
+session launch, not an assignment an agent could paste and run (see
+`operator_override_note`'s own 2026-08-11 NEGATIVE SPEC 4) -- so naming it
+is not the sanctioned-bypass signal the basename-withholding note above
+still guards against; that framing applied to the target path, never to
+the operator's own remediation channel.
 
 Override: `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1` (pre-launch) -- same
 env var as the Bash-leg sibling, so a single override covers both legs of

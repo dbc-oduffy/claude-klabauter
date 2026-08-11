@@ -91,14 +91,26 @@ _VIOLATION_RE = re.compile(
 #: this phrase NOT within a short lookahead window is exactly the dead-end
 #: shape this gate exists to catch: the env var is named, but the reader has
 #: no way to know it cannot be set from inside the session.
-_REACHABILITY_MARKER = "(pre-launch only)"
+#:
+#: 2026-08-11 reshape: `operator_override_note` itself no longer renders a
+#: `NAME=1`/`NAME="..."` assignment at all (see that function's own
+#: docstring, NEGATIVE SPEC 4, and
+#: `test_operator_override_note_no_assignment_form.py`), so this marker/
+#: lookahead machinery now only matters for a HAND-WRITTEN `NAME=1` site that
+#: bypasses the builder entirely (e.g. `_deny_reason_mutex`'s own known,
+#: out-of-scope `%s=1`, see `_KNOWN_UNFIXED_SITES` below) -- a real-world hit
+#: through this gate is now doubly wrong (an assignment AND unrouted through
+#: the builder), not merely missing a marker. Updated to the builder's
+#: current wording so a future hand-written site that copies the builder's
+#: OLD marker text is still caught as unattached.
+_REACHABILITY_MARKER = "unsettable from inside this session"
 
 #: How far past the end of a `NAME=1` match the reachability marker may
 #: appear and still count as "attached to this mention" -- generous enough
-#: to span `operator_override_note`'s own `"%s=1 (pre-launch only)"` layout
-#: (one space) while still failing a mention on the opposite end of a long
+#: to span a hand-written `"%s=1 (unsettable from inside this session)"`-
+#: style layout while still failing a mention on the opposite end of a long
 #: paragraph.
-_LOOKAHEAD_CHARS = 40
+_LOOKAHEAD_CHARS = 60
 
 
 def assert_render_carries_reachability_constraint(text: str, *, context: str) -> None:
@@ -208,11 +220,23 @@ def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
     edit needs room, take it from prose or raise this ceiling deliberately --
     do not buy it by dropping the override note, the pointer, or the worked
     scoped-test examples.
+
+    Moved a fourth time, 58 -> 62 (2026-08-11, this dispatch, PM-raised
+    break-class fix): `operator_override_note`'s reshape -- dropping the
+    disclaimer register that two independently-dispatched agents classified
+    as prompt injection, and the pasteable `KEY=1` assignment shape that was
+    the other half of that tell -- grew the note itself by a few words (it
+    now states the key's unusability as a plain fact, plus an explicit
+    "unsettable from inside this session" clause, instead of a shorter
+    disclaimer clause). That growth is exactly the "load-bearing" case this
+    docstring's own rule names: the override note is one of the three things
+    this budget is forbidden to buy room by dropping. Ceiling raised with 2
+    words of headroom over the observed 60.
     """
     rendered = _ctsi._deny_reason_grant("pytest", "pytest tests/", is_tie=True)
     word_count = len(rendered.split())
-    assert word_count <= 58, (
-        "tie-branch deny text grew to %d words (budget: 58) -- see this "
+    assert word_count <= 62, (
+        "tie-branch deny text grew to %d words (budget: 62) -- see this "
         "test's docstring and _deny_reason_grant's; take the words back from "
         "prose, not from the override note, the Grant detail pointer, or the "
         "worked scoped-test examples, each of which has already been deleted "
@@ -271,7 +295,8 @@ class TestDetectorSelfTest:
         this is a proximity check, not a whole-text substring check."""
         padding = "x" * 200
         text = (
-            "Override: COORDINATOR_OVERRIDE_FAR_AWAY=1\n" + padding + " (pre-launch only)"
+            "Override: COORDINATOR_OVERRIDE_FAR_AWAY=1\n" + padding
+            + " (unsettable from inside this session)"
         )
         with pytest.raises(AssertionError):
             assert_render_carries_reachability_constraint(text, context="synthetic")

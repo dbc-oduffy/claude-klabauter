@@ -93,6 +93,7 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
@@ -194,8 +195,29 @@ def _deny_reason_ambiguous(agent_id: str, cmd_safe: str) -> str:
     )
 
 
-def _deny_reason_executor(agent_id: str, cmd_safe: str) -> str:
-    """Compressed port of the coordinator:executor-branch REASON (reference hook)."""
+def _deny_reason_executor(
+    agent_id: str, cmd_safe: str, subagent_type: str = _EXECUTOR_TYPE
+) -> str:
+    """Compressed port of the coordinator:executor-branch REASON (reference hook).
+
+    ``subagent_type`` names the kind that actually reached this leg; the
+    ``coordinator:executor`` default preserves the ported REASON for the
+    original caller. Twin of ``block_subagent_plan_body_write``'s function of
+    the same name — C3 (docs/plans/2026-08-10-deny-unenumerated-agent-types-
+    at-dispatch.md) routes cleanly-resolved unenumerated kinds here too, and
+    "wrong agent, ask the EM to re-route" is wrong advice for those: the fix
+    for an unenumerated kind is the roster, not a re-route.
+    """
+    if subagent_type != _EXECUTOR_TYPE:
+        return (
+            f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's\n"
+            "enumerated agent roster, so it can't write docs/plans/*.md via Bash.\n\n"
+            "Status stamps use instead:\n"
+            "  state/subagent-share/<path>.md (report_sidecar)\n\n"
+            "Type is legitimate? It belongs on the roster. Body edit was your\n"
+            "deliverable? Ask the EM to dispatch an enumerated kind.\n\n"
+            + operator_override_note(_OVERRIDE_ENV_VAR)
+        )
     return (
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
         "Status stamps use instead:\n"
@@ -299,13 +321,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Block when SUBAGENT_TYPE is coordinator:executor OR AMBIGUOUS
     # (fail-closed, no carve-out -- reference hook 160-167). All other
-    # types -- including empty/lookup-failure -- allow.
+    # types -- including empty/lookup-failure -- allow. AC6/C3 (mirrors the
+    # write-guard sibling above, deliberate twins): "all other types" is
+    # narrowed to enumerated-roster types only -- a lookup FAILURE
+    # (kind_unresolved) still allows through this same exit, unchanged from
+    # the 2026-06-09/2026-07-30 ruling above, but a type that resolves
+    # CLEANLY to something absent from the roster (C1's own union-of-three
+    # roster, coordinator_core.hooks.block_unenumerated_agent_type.
+    # resolve_roster) falls through to the SAME target-detection axis below
+    # rather than exiting here -- an invented type gets no more trust than
+    # coordinator:executor for this guard's purposes. A roster-load error is
+    # a peer-repo hiccup, not this guard's problem to newly deny on: C1's
+    # PreToolUse(Agent) deny is the primary fix, so this stays defence in
+    # depth and falls back to today's allow rather than denying on an
+    # unresolvable roster.
     if not is_ambiguous and subagent_type != _EXECUTOR_TYPE:
         if kind_unresolved:
             emit_kind_resolution_failure_signal(
                 "block_subagent_plan_body_bash_write", agent_id, git_root, None
             )
-        return None
+            return None
+        roster, _roster_error = resolve_roster()
+        if roster is None or subagent_type in roster:
+            return None
 
     # ------------------------------------------------------------------
     # TARGET-DETECTION AXIS -- independent of identity. AMBIGUOUS denies
@@ -357,7 +395,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if is_ambiguous:
         reason = _deny_reason_ambiguous(agent_id or raw_agent_id, cmd_safe)
     else:
-        reason = _deny_reason_executor(agent_id or raw_agent_id, cmd_safe)
+        reason = _deny_reason_executor(agent_id or raw_agent_id, cmd_safe, subagent_type)
 
     # ADVISORY_REWRITE (C14c) -- allow the command through and surface the
     # advisory in `additionalContext` rather than denying via

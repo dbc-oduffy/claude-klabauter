@@ -349,6 +349,37 @@ class TestClaimArtifact:
             _claim_dir(repo, "handoff", new_basename) / "session_id"
         ).read_text().strip() == "fe113177"
 
+    def test_relocate_collision_returns_false_not_raises(self, tmp_path, monkeypatch):
+        """Destination collision (a DIFFERENT claim already sits at
+        new_basename) stays a `False` return, reserved for exactly this
+        refuse-to-clobber case — never conflated with an `OSError`."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, sid="fe113177")
+        assert claims.claim_artifact("handoff", "h-old", cwd=str(repo)) is True
+        _write_session(repo, "fe113177", _fresh())
+        _set_me(monkeypatch, sid="other-sid")
+        _make_claim(repo, "handoff", "h-new", session_id="other-sid")
+        assert (
+            claims.relocate_artifact_claim("handoff", "h-old", "h-new", cwd=str(repo))
+            is False
+        )
+
+    def test_relocate_os_failure_raises_not_false(self, tmp_path, monkeypatch):
+        """Review: code-reviewer P2 — a genuine `os.replace` failure must be
+        distinguishable from the collision `False` above: it now raises
+        `ClaimRelocationError` instead of returning a conflated `False`."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, sid="fe113177")
+        assert claims.claim_artifact("handoff", "h-old2", cwd=str(repo)) is True
+        _write_session(repo, "fe113177", _fresh())
+
+        def _boom(*_a, **_kw):
+            raise OSError("simulated os.replace failure")
+
+        monkeypatch.setattr(claims.os, "replace", _boom)
+        with pytest.raises(claims.ClaimRelocationError):
+            claims.relocate_artifact_claim("handoff", "h-old2", "h-new2", cwd=str(repo))
+
     def test_dead_holder_takeover(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
@@ -808,6 +839,96 @@ class TestClearClaimIfDead:
             )
             is False
         )
+
+
+# ---------------------------------------------------------------------------
+# class_ == "artifact" (PATH-TOUCH claim plane widening)
+#
+# cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+# artifact-has-no-clear-path.md -- who-claims-path answers over the
+# PATH-TOUCH plane (claim_index / touched.txt T-R events), a DIFFERENT
+# store than the mkdir-based handoff/memo/plan claim-record store the
+# classes above manage. These tests exercise the class_=="artifact"
+# widening of clear_claim_if_dead / release_artifact onto that plane.
+# ---------------------------------------------------------------------------
+
+
+def _write_touch_claim(repo, sid, path, when=None):
+    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    touched = sdir / "touched.txt"
+    with open(touched, "a", encoding="utf-8") as fh:
+        fh.write(scope.format_touch_event("T", path, when) + "\n")
+    return touched
+
+
+class TestClearClaimIfDeadArtifactClass:
+    _TARGET = "coordinator/commands/workday-start.md"
+
+    def test_dead_claimant_on_non_classed_path_clears(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sid = "11111111-1111-4111-8111-111111111111"
+        _write_session(repo, sid, _stale())
+        touched = _write_touch_claim(repo, sid, self._TARGET)
+        assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is True
+        verb, _ts, path = scope.parse_touch_event(
+            touched.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        assert (verb, path) == ("R", self._TARGET)
+
+    def test_live_claimant_on_non_classed_path_refuses(self, tmp_path):
+        # Negative control: a live claimant must NOT be cleared.
+        repo = _make_repo(tmp_path)
+        sid = "22222222-2222-4222-8222-222222222222"
+        _write_session(repo, sid, _fresh())
+        touched = _write_touch_claim(repo, sid, self._TARGET)
+        assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is False
+        verb, _ts, _path = scope.parse_touch_event(
+            touched.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        assert verb == "T"  # untouched -- still claimed
+
+    def test_unclaimed_path_is_clean_noop(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert claims.clear_claim_if_dead("artifact", "some/never/touched.md", cwd=str(repo)) is True
+
+    def test_legacy_classed_forms_unchanged(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "handoff", "c-dead", session_id="33333333-3333-4333-8333-333333333333")
+        _write_session(repo, "33333333-3333-4333-8333-333333333333", _stale())
+        assert claims.clear_claim_if_dead("handoff", "c-dead", cwd=str(repo)) is True
+        assert not _claim_dir(repo, "handoff", "c-dead").exists()
+
+        _make_claim(repo, "memo", "m-live", session_id="44444444-4444-4444-8444-444444444444")
+        _write_session(repo, "44444444-4444-4444-8444-444444444444", _fresh())
+        assert claims.clear_claim_if_dead("memo", "m-live", cwd=str(repo)) is False
+        assert _claim_dir(repo, "memo", "m-live").is_dir()
+
+        assert claims.clear_claim_if_dead("bogus", "x", cwd=str(repo)) is False
+
+
+class TestReleaseArtifactArtifactClass:
+    _TARGET = "coordinator/commands/workday-start.md"
+
+    def test_holder_self_releases(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        touched = _write_touch_claim(repo, "me-sid", self._TARGET)
+        assert claims.release_artifact("artifact", self._TARGET, cwd=str(repo)) is True
+        verb, _ts, path = scope.parse_touch_event(
+            touched.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        assert (verb, path) == ("R", self._TARGET)
+
+    def test_non_holder_path_is_noop(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        touched = _write_touch_claim(repo, "other-sid", self._TARGET)
+        assert claims.release_artifact("artifact", self._TARGET, cwd=str(repo)) is True
+        verb, _ts, _path = scope.parse_touch_event(
+            touched.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        assert verb == "T"  # a peer's claim -- release_artifact never touches it
 
 
 # ---------------------------------------------------------------------------

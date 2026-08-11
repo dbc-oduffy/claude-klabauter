@@ -362,6 +362,65 @@ class TestKindResolutionFailureIsMeasuredNotConfined:
         assert capsys.readouterr().err == ""
 
 
+class TestUnenumeratedTypeNarrowing:
+    """AC6/C3 -- the SAME gate's Case 2 (kind resolves CLEANLY to something
+    absent from C1's roster) is narrowed: it no longer exits the gate as
+    "allow", it falls through to the SAME executor-scoped logic below,
+    getting no more trust than coordinator:executor. Case 1 (kind_unresolved
+    -- the 2026-06-09 lookup-failure allow) is unaffected and is re-verified
+    as still-allow in ``TestKindResolutionFailureIsMeasuredNotConfined``
+    above, unchanged by this class.
+
+    Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C3 / AC6
+    """
+
+    def test_unenumerated_type_falls_through_and_denies_executing_body(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")
+        )
+        monkeypatch.setattr(
+            guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+        )
+        monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
+        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
+        _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/2026-08-10-x.md")
+
+        payload = _payload(tmp_path, "docs/plans/2026-08-10-x.md")
+        result = guard.check(payload)
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_enumerated_non_executor_type_still_allows(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:enricher")
+        )
+        monkeypatch.setattr(
+            guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+        )
+
+        payload = _payload(tmp_path, "docs/plans/2026-08-10-x.md")
+        assert guard.check(payload) is None
+
+    def test_roster_load_error_falls_back_to_allow(self, tmp_path, monkeypatch):
+        """A roster-load failure is a peer-repo hiccup, not this guard's
+        problem to newly deny on (C1's PreToolUse(Agent) deny is the
+        primary fix) -- falls back to today's allow rather than denying.
+        """
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")
+        )
+        monkeypatch.setattr(guard, "resolve_roster", lambda: (None, "roster unresolved"))
+
+        payload = _payload(tmp_path, "docs/plans/2026-08-10-x.md")
+        assert guard.check(payload) is None
+
+
 class TestAmbiguousBranchMessageNamesIdentifyingDetail:
     """Review finding (coordinatorcode-reviewer-54284751, Finding 2, P1):
     the AMBIGUOUS collision-sentinel deny branch is this guard's

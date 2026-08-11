@@ -144,12 +144,14 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_PUSHED,
     derive_push_status,
     push_with_retry,
+    resolve_post_push_sha,
 )
 from coordinator_core.ops.ceremony.git_native import (
     commit_scoped,
     rev_parse_head,
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session import scope as session_scope
 
 _LOG = logging.getLogger(__name__)
 
@@ -199,7 +201,11 @@ def _compose_origin_stub_close_message(closed_paths: list[str], committed_sha: s
 
 
 def _commit_and_push_origin_stub_close(
-    worktree_root: Path, closed_paths: list[str], committed_sha: str, push_mode: str = PUSH_MODE_SYNC
+    worktree_root: Path,
+    closed_paths: list[str],
+    committed_sha: str,
+    push_mode: str = PUSH_MODE_SYNC,
+    sid: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism follow-up commit (`git_native.commit_scoped`) for
     the closed origin-stub file(s) -- its OWN small commit, a sibling to
@@ -285,6 +291,42 @@ def _commit_and_push_origin_stub_close(
     rev_result = rev_parse_head(worktree_root)
     follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
 
+    # Post-commit claim release (C3d, docs/plans/2026-08-11-claim-release-
+    # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
+    # `closed_paths` is already repo-relative (each `stub_path` in the
+    # composed `handoff.close_origin_stub` op's `closed` list is `rel_id(
+    # stub_path, worktree)` -- see `handoff_close_origin_stub.py` line
+    # ~703), and `sid` is `run()`'s own required "WSC session id" caller
+    # param, threaded down through `_run_origin_stub_close` unchanged --
+    # the SAME session this whole post-commit tail is running on behalf
+    # of, not a guess (`git_native.commit_scoped`'s own comment names
+    # exactly this self/other ambiguity as why it does not wire release
+    # in itself). Run synchronously here -- this function already executes
+    # off the event loop via the caller's `_to_thread_commit_and_push`
+    # (`asyncio.to_thread`), so a second `to_thread` hop would only add a
+    # needless thread-pool round trip. Failure direction mirrors every
+    # other C3 site: a release failure must never fail a commit that
+    # already landed -- the commit above is the durable outcome; a
+    # retained stale claim is the safe residue.
+    # `sid` is Optional on this signature, and an unattributable release is
+    # not a release: releasing under an unknown sid would be a guess at
+    # authorship, which is the one thing this whole seam refuses to do.
+    # Skipping is the same fail-safe RETAIN direction every other C3 site
+    # takes -- and skipping EXPLICITLY, rather than letting a None fall into
+    # the `except` below, keeps a genuine failure distinguishable from a
+    # caller that simply had no sid to give.
+    try:
+        if sid:
+            session_scope.release_committed_claims(
+                sid, closed_paths, cwd=str(worktree_root)
+            )
+    except Exception:
+        _LOG.debug(
+            "_commit_and_push_origin_stub_close: release_committed_claims "
+            "failed post-commit; claim(s) retained",
+            exc_info=True,
+        )
+
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
@@ -303,8 +345,14 @@ def _commit_and_push_origin_stub_close(
         # paths below never rewrite anything, so they keep the pre-push
         # value untouched. If the re-read itself fails, fall back to the
         # pre-push SHA rather than downgrading a known-good value to None.
-        post_push = rev_parse_head(worktree_root)
-        landed_sha = post_push.stdout.strip() if post_push.ok else follow_up_sha
+        # state/bug-backlog/2026-08-11-run-commit-pipeline-reports-a-
+        # concurrent-0a91ea7dc77b.yaml (P1): that bare re-read fired on
+        # every landed push, not just a rebase-retry, and could silently
+        # adopt a peer's push landing in this window. `resolve_post_push_sha`
+        # re-reads HEAD exactly as before but only adopts it once its tree
+        # matches `follow_up_sha`'s (see that helper's own docstring); a
+        # mismatch keeps `follow_up_sha`.
+        landed_sha = resolve_post_push_sha(worktree_root, follow_up_sha)
         return landed_sha, True, push_status, None
     if push_status == PUSH_STATUS_FAILED:
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
@@ -325,6 +373,7 @@ async def _run_origin_stub_close(
     close_origin_stub_handler: Callable[[dict, Path], Awaitable[dict]],
     *,
     push_mode: str = PUSH_MODE_SYNC,
+    sid: Optional[str] = None,
 ) -> dict:
     """Close the origin spinoff/spinoff-roadmap stub this session shipped
     (step 5d), composing the standalone `handoff.close_origin_stub` op via
@@ -436,7 +485,7 @@ async def _run_origin_stub_close(
 
     closed_paths = list(closed_by_stub.keys())
     follow_up_sha, _pushed, follow_up_push_status, follow_up_error = await _to_thread_commit_and_push(
-        worktree_root, closed_paths, committed_sha, push_mode
+        worktree_root, closed_paths, committed_sha, push_mode, sid
     )
     if follow_up_error:
         failed.append(f"follow-up: {follow_up_error}")
@@ -534,7 +583,11 @@ async def _run_deliverable_cascade(
 
 
 async def _to_thread_commit_and_push(
-    worktree_root: Path, closed_paths: list[str], committed_sha: str, push_mode: str
+    worktree_root: Path,
+    closed_paths: list[str],
+    committed_sha: str,
+    push_mode: str,
+    sid: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """`asyncio.to_thread` wrapper around `_commit_and_push_origin_stub_close`
     -- split out purely so the import stays local to this call (AC6 event-
@@ -542,7 +595,7 @@ async def _to_thread_commit_and_push(
     import asyncio
 
     return await asyncio.to_thread(
-        _commit_and_push_origin_stub_close, worktree_root, closed_paths, committed_sha, push_mode
+        _commit_and_push_origin_stub_close, worktree_root, closed_paths, committed_sha, push_mode, sid
     )
 
 
@@ -630,6 +683,7 @@ async def run(
             initial_consumed,
             close_origin_stub_handler,
             push_mode=push_mode,
+            sid=sid,
         )
 
     resolved_cascade_handler = cascade_handler

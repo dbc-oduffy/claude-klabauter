@@ -1777,6 +1777,26 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   when the affirmation explicitly justifies it. Spec: strang-11 C1a.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "records.query": OpClass.COMPUTE_ONLY,
+    # handoff.columns — the four-column projection over live + (opt-in) archived handoff
+    # records, serving a cross-repo fleet-board consumer that reads on a page request rather
+    # than on our ceremony close (DR-287 § Open direction — push vs. pull).
+    #   1. Writes, deletes, or reorders coordinator substrate?               No.
+    #      Reads frontmatter via records_query's own collectors; writes nothing.
+    #   2. Writes outside its own module's return value?                     No.
+    #      Output is the returned {"records": [...]} dict; no path is opened for writing.
+    #   3. Shells out to a mutating command?                                 No.
+    #      One `git log` for shipped_in SHA→date resolution — a read, and batched to exactly
+    #      one spawn per query rather than one per record (the per-record loop would have been
+    #      a read-path repeat of the emit cost DR-287 halted the cadence over).
+    #   4. Mutates shared mutable state outside its own module?              No.
+    #   5. Persistent state changes observable across process boundaries?    No.
+    # COMPUTE_ONLY justification: all five No — a pure read, same profile as records.query
+    #   whose collection path it reuses unmodified. The fail-closed MUTATING default would be
+    #   safe but wrong here, and this affirmation is what DR-208 § Fail-closed requires in
+    #   order to depart from it.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
+    "handoff.columns": OpClass.COMPUTE_ONLY,
     # ceremony.wsc_tail — MUTATING: the C9 single-pass rebuild orchestrator (docs/plans/
     # 2026-07-16-wsc-pure-python-tail-rebuild.md). Supersedes the two-phase
     # ceremony.wsc_resolve / ceremony.wsc_commit pipeline (both ops' registrations were

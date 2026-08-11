@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
 from coordinator_core.session import core, liveness
+from coordinator_core.session.path_dialect import canonicalize_relative_path
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
@@ -753,7 +754,7 @@ def normalize_touch_path(
     ``hooks.track_touched_files::_handler`` too, and clause 5 of the
     zero-spawn guard below (``root_is_worktree_root``) VERIFIES it rather
     than trusting it, because at least one caller
-    (``coordinator_core.ops.session.claims.release_committed_claims`` calls
+    (``coordinator_core.session.scope.release_committed_claims`` calls
     ``normalize_touch_path(raw_path, cwd, root=cwd)``) passes an op-supplied
     working directory that is not provably a worktree root. If ``root`` were
     actually a subdirectory, :func:`_relpath_candidate` would return a
@@ -953,7 +954,27 @@ def normalize_touch_path(
 
     if _is_absolute(fpath):
         return None
-    return fpath
+
+    # Relative-arm dialect fold (C1,
+    # docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-clear.md):
+    # a caller-supplied relative pathspec may carry backslash separators
+    # (routine on Windows, this repo's first-class platform) — fold it into
+    # the same forward-slash/normpath dialect the absolute arm above already
+    # produces, and that touched.txt keys are written in and read back
+    # against (coordinator_core.session.claim_index._normalize_key). Without
+    # this, a backslashed relative touch and its forward-slashed equivalent
+    # key differently, so a release event written under one dialect never
+    # cancels a claim written under the other. Re-test absoluteness AFTER
+    # canonicalizing — the ``None`` contract above means "still absolute
+    # after normalization", never "still absolute after a transform that
+    # could not have introduced or removed absoluteness" — but a bare
+    # separator fold + normpath cannot turn a relative path into an absolute
+    # one (or vice versa) on this function's own ``_is_absolute`` dialect, so
+    # this re-test is defense-in-depth, not a reachable divergence.
+    canonicalized = canonicalize_relative_path(fpath)
+    if _is_absolute(canonicalized):
+        return None
+    return canonicalized
 
 
 @dataclass
@@ -990,9 +1011,10 @@ def classify_touch_entry(
     escape the worktree without starting with a literal ``../`` at all
     (e.g. ``docs/../../peer/x.md``, ``./../peer/x.md``, a backslash
     separator the token loop never matches). This function instead computes
-    ONE canonical value — ``posixpath.normpath(entry.replace("\\", "/"))``
-    — and uses it for both the containment test and the return value; see
-    the ``clean``/``dropped`` classes below. Converges with
+    ONE canonical value — ``coordinator_core.session.path_dialect.
+    canonicalize_relative_path(entry)`` (``posixpath.normpath(entry.replace(
+    "\\", "/"))``) — and uses it for both the containment test and the
+    return value; see the ``clean``/``dropped`` classes below. Converges with
     ``coordinator_core.ops.session.safe_commit_offer.
     _normalize_agent_touched_entry``, which already applies exactly this
     predicate (reject absolute forms up front, separator-normalize,
@@ -1000,8 +1022,14 @@ def classify_touch_entry(
     for the same entry class in this repo today and itself returns the
     normalized value, not the raw entry.
 
-    Do NOT re-inline a third copy of this transform at a new call site;
-    import and call this.
+    ``coordinator_core.session.path_dialect.canonicalize_relative_path`` is
+    now the canonical home for this transform (C1,
+    docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-clear.md) —
+    ``coordinator_core.session.claim_index._normalize_key`` and this
+    function's own relative-arm counterpart at
+    ``normalize_touch_path`` both import it rather than keeping a separate
+    inline copy. Do NOT re-inline a further copy of this transform at a new
+    call site; import and call ``path_dialect.canonicalize_relative_path``.
 
     ``normalize_touch_path`` alone does NOT touch a ``../``-prefixed entry —
     it guards absoluteness only — so this function is the actual fix for
@@ -1113,7 +1141,7 @@ def classify_touch_entry(
     # normalized entry left a backslash shape like 'state\\x.md' compared
     # equal to itself and returned raw, un-normalized, on precisely the
     # shape this normalization exists to catch).
-    canonical = posixpath.normpath(entry.replace("\\", "/"))
+    canonical = canonicalize_relative_path(entry)
     if (
         canonical in (".", "..")
         or canonical.startswith("../")
@@ -2327,10 +2355,13 @@ def release_committed_claims(
     session ever touched (which ``git status --porcelain`` reports clean
     forever by construction) would get silently released. Cleanliness is
     computed with ONE ``git status --porcelain -- <paths>`` call, never N
-    per-path calls (see :func:`_porcelain_dirty_paths`); a rename line or
-    any other unparseable line fails the WHOLE call safe to DIRTY (nothing
-    releases this call) rather than guessing which path a malformed line
-    concerns. ``ops/ceremony/scoped_git_commit.py::_commit_paths_are_clean``
+    per-path calls (see :func:`_porcelain_dirty_paths`); a rename line
+    (``XY OLD -> NEW``) parses cleanly and marks BOTH ``OLD`` and ``NEW``
+    dirty — a renamed path never releases cleanly through its from-name
+    alone — while any genuinely unparseable line (one that does not fit the
+    ``XY PATH``/``XY OLD -> NEW`` shape) fails the WHOLE call safe to DIRTY
+    (nothing releases this call) rather than guessing which path a
+    malformed line concerns. ``ops/ceremony/scoped_git_commit.py::_commit_paths_are_clean``
     is the aggregate cousin — ONE bool over a whole pathspec — and is NOT
     reused here: it cannot say WHICH of several paths is clean, only
     whether ALL are.
@@ -2352,8 +2383,21 @@ def release_committed_claims(
     own docstring). Before the root was threaded through, a non-root
     ``cwd`` was silently corrected by a per-entry ``git rev-parse``
     re-derivation; the spawn is gone and the requirement is now the
-    caller's to meet. ``ops/ceremony/scoped_git_commit.py`` — the sole
-    production caller — passes ``cwd=worktree_root``.
+    caller's to meet. EIGHT production callers as of C3a/C3c/C3d — each
+    passes ``cwd=<worktree root>``. Four call it directly
+    (``ops/ceremony/scoped_git_commit.py``,
+    ``ops/ceremony/post_commit_tail.py``,
+    ``ops/ceremony/consumed_handoff_stamp.py``,
+    ``ops/ceremony/detached_render_commit.py``) and four reach it through
+    ``asyncio.to_thread`` because their own call frame is async
+    (``ops/fleet/_common.py`` ×2, ``ops/session/boot_sweep.py``,
+    ``ops/distill_apply_disposal.py``).
+
+    That split is stated because it is a documented trap, not a detail: the
+    ``to_thread`` sites pass this function BY REFERENCE, so a grep for a
+    call-shaped ``release_committed_claims(`` finds only the first four and
+    silently undercounts by half. A count in this docstring was already
+    wrong once for exactly that reason.
 
     Fail-safe is RETAIN, not raise: any ``OSError``, git failure, or parse
     ambiguity skips the affected file's release for this call — mirrors
@@ -2390,7 +2434,30 @@ def release_committed_claims(
     if dirty is None:
         return  # unparseable line — fail-safe RETAIN for the whole call
 
-    clean = requested - dirty
+    # C1 follow-up (docs/plans/2026-08-11-claim-release-and-the-gate-that-
+    # cannot-clear.md): both sides of this set-diff MUST be folded through
+    # the SAME path_dialect canonicalizer before comparison. `requested` is
+    # the caller-supplied pathspec verbatim — a backslashed relative
+    # pathspec routinely reaches here (Windows, this repo's first-class
+    # platform) — while `dirty` comes from `git status --porcelain`, which
+    # always emits forward-slash paths. Without this fold, `requested -
+    # dirty` string-compares a backslashed entry against a forward-slashed
+    # one, they never match, and `clean` silently keeps the backslashed
+    # entry as if it were still dirty — the release for that path never
+    # happens at all, not merely under the wrong key. Canonicalizing `dirty`
+    # is a practical no-op (porcelain output is already forward-slashed) but
+    # makes the comparison dialect-safe BY CONSTRUCTION rather than by luck,
+    # matching this chunk's canonicalize-both-sides thesis
+    # (`claim_index.lookup` does the identical thing for its own set-diff).
+    # `clean` is expressed in CANONICAL form (not the caller's original
+    # dialect): `_release_from_touched_file` below tests membership via
+    # `norm in clean`, where `norm` is always the canonical output of its
+    # own `normalize` callback — so `clean` must be canonical too, or that
+    # membership test reintroduces the identical dialect fork one level
+    # down.
+    clean = {canonicalize_relative_path(p) for p in requested} - {
+        canonicalize_relative_path(p) for p in dirty
+    }
     if not clean:
         return  # nothing clean to release this call
 

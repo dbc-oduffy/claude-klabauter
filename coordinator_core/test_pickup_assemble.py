@@ -7095,6 +7095,78 @@ class TestArchivedOpenMemoKindDispatch:
         assert "decision: accepted" in text
 
 
+class TestSupersededMemoNotPickupable:
+    """AC5, docs/plans/2026-08-11-receiver-side-supersession-pair-a-writab.md
+    C4 — a `status: superseded` memo must never present as pickup-able, at
+    each of the three sites `_MEMO_TERMINAL_STATUS` widens:
+      :1859 classify()'s memo-shape gate
+      :6583 archive-fallback classification (terminal_fields.status check)
+      :6969 the M0 terminal short-circuit in brief()
+    """
+
+    def test_classify_site_recognises_superseded_as_memo_shape(self, tmp_path):
+        """Site 1 (classify): a live in-inbox `status: superseded` memo
+        classifies as `memo`, not `ambiguous` — pa.brief()'s own
+        classification field is the observable proxy for classify()'s verdict."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(
+            repo, "m1.md", status="superseded",
+            extra="superseded_by: successor.md\n",
+        )
+
+        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+
+        assert result.decision_object["artifact"]["classification"] == "memo"
+
+    def test_m0_short_circuit_treats_superseded_as_terminal_no_claim_directive(self, tmp_path):
+        """Site 3 (:6969): a superseded memo hits the SAME read-only terminal
+        short-circuit an actioned memo does — no claim directive, no
+        kind-dispatch judgment point. Not pickup-able."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(
+            repo, "m1.md", kind="fyi", status="superseded",
+            extra="superseded_by: successor.md\n",
+        )
+
+        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        decision = result.decision_object
+        assert decision["artifact"]["classification"] == "memo"
+        assert decision["artifact"]["terminal_state"]["status"] == "superseded"
+        assert decision["artifact"]["terminal_state"]["superseded_by"] == "successor.md"
+        assert decision["directives"] == []
+        cli_names = {d.get("cli") for d in decision["directives"]}
+        assert "session-claim-cli" not in cli_names
+        assert decision["next_move"] == "Nothing further to do — this memo already closed."
+
+    def test_archive_fallback_site_treats_superseded_as_terminal(self, tmp_path):
+        """Site 2 (:6583): an archived memo whose terminal status reads
+        `superseded` does NOT fall into the "not actually closed" kind-dispatch
+        branch — mirrors test_archived_memo_status_actioned_is_byte_identical_
+        to_today above, superseded in place of actioned."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        live = _seed_memo(
+            repo, "m1.md", kind="fyi", to="receiver-session", status="superseded",
+            extra="superseded_by: successor.md\n",
+        )
+        archived = _archive_memo(repo, live, status="superseded")
+
+        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        decision = result.decision_object
+        assert decision["artifact"]["classification"] == "archived"
+        assert decision["artifact"]["resolution"]["archived_class"] == "memo"
+        assert decision["directives"] == []
+        assert decision["judgment_points"] == []
+        assert decision["gates"]["coast"]["verdict"] == "clear"
+        assert "not actually closed" not in decision["narration"]
+
+
 class TestMemoLivenessJ1ResolvesActionMemo:
     """Defect fix (2026-07-25) — `j1`'s `proceed` disposition must resolve
     EVERY directive `build_memo_directives` emits (`d1`, `claim-memo-stamp`,

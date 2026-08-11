@@ -689,6 +689,82 @@ conservative default, since the ruleset itself is code-pinned now.
 Reported: `state/bug-backlog/2026-08-10-a-reviewer-s-confinement-policy-is-
 edita-459e2790ebb7.yaml`.
 
+Divergence 15 (2026-08-10, C2 of
+`docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md`, AC5 --
+unenumerated-type-is-confined-not-exempt): `_is_confined_type` gains a THIRD
+leg, `_helpers.is_confined_by_roster_absence`, OR'd onto the existing
+`bash_policy:`-key and `is_confined_findings_agent` legs. Before this
+divergence, a `subagent_type`/`agent_type` absent from BOTH existing legs
+fell through to "not confined" -- unrestricted Bash -- which meant an
+INVENTED type had a WIDER Bash surface than `coordinator:code-reviewer`,
+this project's own findings agent. The new leg answers a different question
+than the first two ("is this a type we chose to confine" vs. "do we even
+know this type at all"): it confines only when `effective_type` is absent
+from C1's dispatch-seam roster (`coordinator_core.hooks.
+block_unenumerated_agent_type.resolve_roster` -- the same union-of-three
+roster C1 denies dispatch against), never for a type this project simply
+left unconfined on purpose (`coordinator:enricher` and siblings, on the
+roster but in neither of the first two sets, are unaffected). Defense in
+depth, not the primary fix -- C1's `PreToolUse(Agent)` deny already refuses
+to let an unenumerated type reach dispatch at all; this leg only matters for
+a caller that bypassed or predates that gate. See `is_confined_by_roster_
+absence`'s own docstring for the fail-closed-on-roster-load-failure
+contract and why it is checked last (real disk I/O, unlike the two cheaper
+legs it supplements).
+
+Divergence 16 (2026-08-11, named-teammate effective_type resolution fix):
+confirmed live, same session, twice -- a `coordinator:executor` dispatched
+WITH a `name` (an Agent-teams teammate) was denied `python3 -m pytest ...`
+under the reviewer-shaped default ruleset, while the identical type
+dispatched WITHOUT a `name` ran the same command fine. Root cause (pinned by
+reading the payload-identity resolution, not guessed):
+`payload["agent_type"]` for a NAMED dispatch is the teammate's `name` string,
+not the real `coordinator:*` type (see the Design section's "Secondary:
+subagent_type ... covers NAMED/teammate dispatch where agent_type is the
+teammate name", already documented above this divergence). The old
+`effective_type` selection (`agent_type if _is_confined_type(agent_type,
+policy) else subagent_type`) asked only "is this leg confined at all" --
+Divergence 15's leg 3 (unenumerated-roster catch-all) correctly confines the
+raw name string (it genuinely is not a known type), which then WON priority
+over the correctly back-pointer-resolved `subagent_type`, so
+`effective_type` became the garbage name and `_resolve_ruleset` fell through
+to the conservative default (no `_DEFAULT_RULESET_TYPE_OVERRIDES` entry
+matches a random name) regardless of the dispatched agent's real type.
+See `_is_type_known`/`_resolve_effective_type` for the fix: prefer a leg
+resolving to a KNOWN identity (confined via legs 1/2, or simply enumerated
+on the roster) over a leg confined only via leg 3's defensive catch-all.
+Leg 3's fail-closed confinement verdict for a genuinely unknown type on
+BOTH legs is unchanged -- this divergence only changes WHICH already-
+confined identity's ruleset applies, never whether confinement fires at all
+(negative spec, restated in `_resolve_effective_type`'s own docstring).
+
+Divergence 17 (2026-08-11, THIS change -- close the accepted type-smuggling
+residual): Divergence 16's fix above was accepted with a known residual --
+`_resolve_effective_type` preferred a KNOWN `agent_type` outright without
+ever comparing it against a KNOWN `subagent_type`, on the reasoning that the
+dispatcher already chooses the agent type so this crosses no trust boundary.
+That reasoning is overruled: `agent_type` on a NAMED dispatch is caller-
+chosen free text, while `subagent_type` is derived exclusively from actual
+dispatch records via the back-pointer chain -- a caller-chosen string must
+never outrank a back-pointer-derived identity. Concretely, a caller could
+previously dispatch a `coordinator:code-reviewer` with
+`name: "coordinator:executor"` and have it run under the executor's wider
+ruleset (`interpreter_allowed_modules: ("pytest",)`, empty
+`scaffolder_required_arg`), because `agent_type == "coordinator:executor"`
+(known) won over the correctly-resolved `subagent_type ==
+"coordinator:code-reviewer"` (also known, but never consulted once
+`agent_type` was known). Fix: `_resolve_effective_type` now checks
+`subagent_type` FIRST -- a known `subagent_type` always wins over `agent_type`,
+known or not, agreeing or not. `agent_type` is consulted only when
+`subagent_type` is not known, which is exactly the unnamed-dispatch case
+(`subagent_type` empty/absent) and Divergence 16's original named-dispatch
+fix case (`agent_type` free text, unknown). See `_resolve_effective_type`'s
+own docstring for the full ordering and why each of the four required
+resolution shapes still holds. `is_confined` (the OR of `_is_confined_type`
+over both legs, computed in `check()`) is untouched by this divergence --
+only WHICH already-confined identity's ruleset applies can change, never
+whether confinement fires at all.
+
 Test surface: `coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist.py`
 -- the eight probe commands from the verdict record
 (`docs/research/spike-verdicts/2026-08-07-powershell-guard-detection-and-
@@ -768,6 +844,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._helpers import (
     is_confined_findings_agent,
+    is_confined_by_roster_absence,
     resolve_git_root,
     _read_backpointer_subagent_type,
     prefix_denies,
@@ -1056,7 +1133,25 @@ _GIT_VALUE_TAKING_OPTIONS = frozenset({"-C", "--git-dir", "--work-tree"})
 
 #: git global options ALLOWED before the subcommand that take NO value
 #: argument.
-_GIT_NO_VALUE_OPTIONS = frozenset({"--no-pager", "--literal-pathspecs"})
+#:
+#: Divergence N (2026-08-11, cross-guard conflict audit): added
+#: ``--no-optional-locks``. This module's confinement check runs in the
+#: ``CONFINEMENT_DENY`` band, strictly BEFORE ``git-no-optional-locks``
+#: (``guard_no_optional_locks.py``, ``ADVISORY_REWRITE`` band) ever executes
+#: -- ``dispatch.py``'s band ordering and single-pass "first non-None wins"
+#: loop mean a confined agent's OWN pre-rewrite command is what this module
+#: sees, so the auto-rewrite's inserted flag was never actually reachable by
+#: this allowlist and the two guards were never in conflict via that path.
+#: The real gap: a confined agent typing ``--no-optional-locks`` itself --
+#: which `docs/wiki/machine-load-norm.md` and the fleet-wide index-lock
+#: campaign explicitly brief every agent to do on read-only git invocations
+#: -- hit this allowlist directly and was denied for a flag its own briefing
+#: told it to use. The flag is strictly read-only-safe: per
+#: ``guard_no_optional_locks.py``'s own module docstring, it only suppresses
+#: write-back of refreshed index stat data (never the refresh itself, and
+#: never any content the command would not otherwise read), granting a
+#: confined agent no capability beyond what bare ``git`` already has.
+_GIT_NO_VALUE_OPTIONS = frozenset({"--no-pager", "--literal-pathspecs", "--no-optional-locks"})
 
 #: git subcommand-level options that are write/exec vectors even though the
 #: subcommand itself is on the read-only allowlist. ``--output``/``-o``
@@ -1286,7 +1381,17 @@ def _validate_ruleset(raw: Any) -> Optional[Dict[str, Any]]:
 
 def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
     """(Divergence 7, AC11) Resolve the Tier A/B allowlist ruleset for
-    ``effective_type``: a validated ``bash_policy:`` entry for that exact
+    ``effective_type``.
+
+    Review: code-reviewer -- ``policy`` is VESTIGIAL as of Divergence 14
+    below: this function no longer reads it at all (it terminates
+    unconditionally in ``_default_ruleset(effective_type)``), kept ONLY for
+    call-site parity with ``_is_confined_type`` (which still does consult
+    ``policy`` for set-membership, see that function's docstring). Do not
+    read the summary line above as "still policy-driven" -- see Divergence
+    14 for why the YAML-entry path was deliberately removed.
+
+    ``effective_type`` is a validated ``bash_policy:`` entry for that exact
     type if one is present and well-formed, else ``_default_ruleset()`` --
     the prior hardcoded enforcement. ``policy`` is whatever
     ``engine.load_policy`` returned (already fail-open to an empty
@@ -1394,20 +1499,160 @@ def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
 
 
 def _is_confined_type(effective_type: str, policy: Any) -> bool:
-    """(Divergence 7, AC11) A ``subagent_type``/``agent_type`` leg is
-    confined if it is either an exact key in the loaded ``bash_policy:``
-    table (the new, data-driven SSOT -- what lets a second confined type
-    land as a pure-data addition, AC10) OR a member of the ORIGINAL
-    hardcoded ``_helpers._CONFINED_FINDINGS_AGENTS`` set (the AC11
-    fallback -- consulted whenever the policy is absent, unreadable,
-    malformed, or simply has no key for this type). This is an OR, not an
-    override: the hardcoded set is never suppressed by a present-but-empty
-    policy, only ever supplemented by a well-formed one.
+    """(Divergence 7, AC11; Divergence 15/AC5, 2026-08-10) A
+    ``subagent_type``/``agent_type`` leg is confined if:
+
+      1. it is an exact key in the loaded ``bash_policy:`` table (the
+         data-driven SSOT -- what lets a second confined type land as a
+         pure-data addition, AC10); OR
+      2. it is a member of the ORIGINAL hardcoded ``_helpers.
+         _CONFINED_FINDINGS_AGENTS`` set (the AC11 fallback -- consulted
+         whenever the policy is absent, unreadable, malformed, or simply has
+         no key for this type); OR
+      3. (Divergence 15, AC5) it is absent from C1's dispatch-seam roster
+         entirely (``_helpers.is_confined_by_roster_absence`` --
+         ``coordinator_core.hooks.block_unenumerated_agent_type.
+         resolve_roster``). Legs 1-2 above answer "is this type one we
+         deliberately chose to confine"; leg 3 answers a DIFFERENT question
+         this function never used to ask -- "do we even know this type at
+         all". Before this leg, a ``subagent_type`` absent from BOTH of the
+         first two checks fell through to "not confined", granting an
+         INVENTED type a wider Bash surface than ``coordinator:
+         code-reviewer`` -- the "less governed than any agent in the stable"
+         defect docs/plans/2026-08-10-deny-unenumerated-agent-types-at-
+         dispatch.md's Problem section names. An enumerated-but-
+         not-explicitly-confined type (e.g. ``coordinator:enricher``, on the
+         roster but in neither of the first two sets) still returns
+         ``False`` overall -- leg 3 only fires for a type this function
+         cannot find on ANY of the three legitimate-dispatch sources, never
+         for a type this project simply chose to leave unconfined.
+
+    This is an OR across all three legs: none of them is ever suppressed by
+    another failing or being empty, only ever supplemented.
+
+    Leg 3 is checked LAST, deliberately -- it is the one leg that performs
+    real disk I/O (``resolve_roster()`` reads example-doctrine-repo's policy YAML, walks
+    ``coordinator/agents/*.md``, and walks the plugin discovery tree), so
+    the common case (an already-known confined OR already-known-and-exempt
+    enumerated type) never reaches it. Defense in depth, not the primary
+    fix: C1's ``PreToolUse(Agent)`` deny already refuses to let an
+    unenumerated type reach dispatch at all, so leg 3 only fires for a
+    caller that bypassed or predates that gate.
     """
     raw = getattr(policy, "bash_policy", None)
     if effective_type and isinstance(raw, dict) and effective_type in raw:
         return True
-    return is_confined_findings_agent(effective_type)
+    if is_confined_findings_agent(effective_type):
+        return True
+    return is_confined_by_roster_absence(effective_type)
+
+
+def _is_type_known(effective_type: str, policy: Any) -> bool:
+    """(Divergence 16, 2026-08-11) ``True`` when ``effective_type`` resolves
+    to a genuine dispatch-seam identity -- either a type this project
+    deliberately confined (legs 1/2 of ``_is_confined_type``: a
+    ``bash_policy:`` key, or membership in ``_helpers.
+    _CONFINED_FINDINGS_AGENTS``), or a type C1's dispatch-seam roster
+    enumerates at all (``not is_confined_by_roster_absence(...)``).
+
+    This is a NARROWER question than ``_is_confined_type`` answers: leg 3 of
+    that function (``is_confined_by_roster_absence``) confines an
+    unenumerated string defensively (AC5/Divergence 15) -- correct for the
+    confinement VERDICT, but it does not mean the string is a real type
+    identity worth trusting for ruleset RESOLUTION. See
+    ``_resolve_effective_type`` immediately below for why that distinction
+    is the fix.
+    """
+    if not effective_type:
+        return False
+    raw = getattr(policy, "bash_policy", None)
+    if isinstance(raw, dict) and effective_type in raw:
+        return True
+    if is_confined_findings_agent(effective_type):
+        return True
+    return not is_confined_by_roster_absence(effective_type)
+
+
+def _resolve_effective_type(agent_type: str, subagent_type: str, policy: Any) -> str:
+    """(Divergence 16, 2026-08-11, fix for the confirmed defect recorded at
+    ``docs/problems/2026-08-11-a-dispatched-coordinator-executor-is-den.md``)
+
+    Root cause, pinned by reading the payload-identity resolution above
+    (``check()``, step 3) rather than guessed: for a NAMED (Agent-teams
+    teammate) dispatch, ``payload["agent_type"]`` is NOT the dispatched
+    agent's real ``coordinator:*`` type -- it is the teammate's own ``name``
+    string (an arbitrary caller-chosen identifier, e.g. ``"archive-guard"``),
+    per the module docstring's Design section ("Secondary: subagent_type via
+    the dispatched-agents back-pointer chain (covers NAMED/teammate dispatch
+    where agent_type is the teammate name)"). That string is, correctly,
+    absent from C1's dispatch-seam roster, so ``_is_confined_type`` at
+    Divergence 15's leg 3 (``is_confined_by_roster_absence``) confines it --
+    the fail-closed-on-unknown-type verdict is right. The bug was the OLD
+    ``effective_type`` selection (``agent_type if _is_confined_type(agent_type,
+    policy) else subagent_type``): it asked ONLY "is this leg confined at
+    all", so a raw teammate name confined solely via the defensive leg-3
+    catch-all outranked the correctly back-pointer-resolved ``subagent_type``
+    (the real ``coordinator:executor``/``coordinator:code-reviewer`` etc.)
+    every time -- ``effective_type`` became the garbage name string, which
+    matches no ``_DEFAULT_RULESET_TYPE_OVERRIDES`` entry, so
+    ``_resolve_ruleset`` fell through to the conservative base ruleset (the
+    reviewer-shaped scaffolder requirement) regardless of the dispatched
+    agent's real, correctly-resolved type.
+
+    Fix: prefer a leg that is KNOWN (``_is_type_known`` above -- confined via
+    legs 1/2, or simply enumerated on the roster) over a leg that is confined
+    ONLY via leg 3's defensive unknown-type catch-all. ``agent_type`` still
+    wins when it IS a known identity (the unnamed/foreground-dispatch case,
+    where ``agent_type`` already carries the real type and
+    ``subagent_type`` is empty -- unaffected by this fix). When neither leg
+    is known (a genuinely fabricated type on both legs, or a named dispatch
+    of a type absent from the roster on both legs), this degrades to the
+    ORIGINAL selection (whichever leg ``_is_confined_type`` accepts, agent_type
+    first) -- fail-closed leg 3 confinement, and the resulting ruleset
+    resolution, are UNCHANGED for that case; only a KNOWN-vs-garbage
+    resolution priority was added.
+
+    Negative spec: this does not, and must not, let a known-but-NOT-confined
+    type (e.g. a real ``coordinator:enricher`` on either leg) smuggle a wider
+    surface into an actually-confined dispatch -- ``is_confined`` (computed by
+    the caller via the unmodified OR of ``_is_confined_type`` over both legs)
+    still governs whether this guard evaluates the command at all; this
+    function only ever changes WHICH already-confined identity's ruleset
+    applies, never whether confinement fires.
+
+    Divergence 17 (2026-08-11, close the type-smuggling residual accepted
+    above): the ordering above was itself incomplete -- it preferred a KNOWN
+    ``agent_type`` unconditionally, without ever comparing it against a KNOWN
+    ``subagent_type``. ``subagent_type`` is derived exclusively from the
+    dispatch-record back-pointer chain (``_read_backpointer_subagent_type``);
+    ``agent_type`` on a NAMED dispatch is free text the caller chose. A
+    caller who names a teammate with a literal known type STRING (e.g.
+    ``name: "coordinator:executor"`` while actually dispatching a
+    ``coordinator:code-reviewer``) previously won outright, because both legs
+    being "known" was never distinguished from only ``agent_type`` being
+    known -- the reviewer ran under the executor's wider ruleset. Principle:
+    a caller-chosen string must never outrank a back-pointer-derived
+    identity. Fix: check ``subagent_type`` FIRST -- a known ``subagent_type``
+    always wins, whether or not ``agent_type`` is also known and whether or
+    not the two agree. ``agent_type`` is consulted only when ``subagent_type``
+    is NOT known (absent/empty for an unnamed dispatch, or itself
+    unresolvable) -- this is what preserves the unnamed-dispatch path (bullet
+    3: ``subagent_type`` empty -> not known -> falls through to
+    ``agent_type``) and Divergence 16's original named-dispatch fix (bullet
+    1: ``agent_type`` free text, unknown -> falls through to the correctly
+    back-pointer-resolved ``subagent_type``) while closing the disagreement
+    hole (bullet 2: both known, ``subagent_type`` now wins instead of
+    ``agent_type``). ``is_confined`` is unaffected -- see the negative spec
+    directly above; this function still only ever changes WHICH already-
+    confined identity's ruleset applies.
+    """
+    if _is_type_known(subagent_type, policy):
+        return subagent_type
+    if _is_type_known(agent_type, policy):
+        return agent_type
+    if _is_confined_type(agent_type, policy):
+        return agent_type
+    return subagent_type
 
 
 def _strip_crlf(cmd: str) -> str:
@@ -2368,8 +2613,39 @@ def _evaluate_python3_interpreter(tokens: list, ruleset: Dict[str, Any]) -> Opti
       - ``tokens[1]`` is a script path (does not start with ``-``) and
         ``ruleset["interpreter_allow_scripts"]`` is true -> ``(True, None)``.
     """
-    if len(tokens) < 2 or tokens[0] != "python3":
+    if len(tokens) < 2:
         return None
+    raw_leading = tokens[0]
+    basename = _normalize_executable_basename(raw_leading)
+    if basename != "python3":
+        # (C1b, 2026-08-11) A PATH-PREFIXED python-family basename (e.g.
+        # `.venv/Scripts/python.exe`, `/repo/.venv/bin/python`) is a LOCATION
+        # the caller chose deliberately -- on Windows there is often no
+        # `python3.exe` sibling to retype to (see the plan's "Amended
+        # 2026-08-11 (C1 execution)" section), so the "retype as python3"
+        # remedy below would be a trap-offer for this spelling. Admit it into
+        # this SAME decision the exact `python3` spelling already enters --
+        # every check below (inline-code deny, -m module allowlist) still
+        # applies unconditionally. A BARE python-family token (no path
+        # separator) is a NAME the caller got wrong, not a location -- it
+        # stays out of this tier and keeps the existing "retype as python3"
+        # remedy path (`_python_family_alias_token` /
+        # `_python_family_misspelling_deny_reason`) byte-identical.
+        # Decided off the RAW token, not the normalized basename, since
+        # normalization is exactly what discards the path-vs-bare distinction.
+        # (P3 fix, 2026-08-11) A bare trailing separator with no real
+        # directory component (e.g. `python/`) is NOT a chosen location --
+        # strip trailing separators first so this predicate means what it
+        # says ("the caller named a directory before the basename"), not
+        # merely "a separator character appears anywhere in the token".
+        # `_normalize_executable_basename` already collapses `python/` and
+        # `python` to the identical basename, so this tightening changes no
+        # downstream ALLOW/DENY outcome -- it only stops a degenerate
+        # spelling from being misclassified as path-prefixed.
+        raw_leading_stripped = raw_leading.rstrip("/\\")
+        has_path_separator = "/" in raw_leading_stripped or "\\" in raw_leading_stripped
+        if not (has_path_separator and _PYTHON_FAMILY_ALIAS_RE.match(basename)):
+            return None
     second = tokens[1]
     if second in _PY_INLINE_CODE_FLAGS:
         return False, _python3_inline_code_deny_reason(second)
@@ -2385,6 +2661,67 @@ def _evaluate_python3_interpreter(tokens: list, ruleset: Dict[str, Any]) -> Opti
     if ruleset.get("interpreter_allow_scripts"):
         return True, None
     return None
+
+
+#: Divergence 18 (2026-08-11, THIS change -- python-family misspelling
+#: remedy): a confined agent typing bare `python -m pytest ...` (no `3`)
+#: fell through to the generic Tier B deny message ("first command token is
+#: not coordinator-doc-new"), which both misnames the tier (this command IS
+#: in scope, merely misspelled) and closes with "report the blocker to the
+#: dispatching EM rather than retrying it" -- wrong advice when retrying
+#: with the one-character fix would allow. Measured live: three dispatched
+#: executors gave up and handed pytest back unrun rather than retry with
+#: `python3`. This tier fires ONLY as a fallthrough after Tier B's
+#: scaffolder check AND the exact-`python3` interpreter tier have both
+#: already declined to classify the command -- see `check()`'s call site.
+#: It never widens what executes: the command is still denied; only the
+#: reason text changes, and only when the substituted `python3 <same rest>`
+#: invocation would ITSELF be allowed by `_evaluate_python3_interpreter` for
+#: this `ruleset` -- a spelling whose corrected form would ALSO deny (e.g.
+#: `python -c "..."`) falls through to the untouched generic message, never
+#: advertising a retry that denies too (the exact trap-offer failure mode
+#: Divergence 1 above already warns this module against).
+_PYTHON_FAMILY_ALIAS_RE = re.compile(r"^(python2(\.\d+)?|python3\.\d+|python|py)$")
+
+
+def _python_family_alias_token(token: str) -> Optional[str]:
+    """Return the case/suffix-normalized basename of ``token`` when it is a
+    python-family interpreter spelling OTHER than the exact accepted
+    ``python3`` -- e.g. ``python``, ``py``, ``python2``, ``python3.11``, or
+    any of those with a path prefix and/or a ``.exe``/``.cmd`` suffix
+    (Windows), via the same ``_normalize_executable_basename`` every other
+    identity check in this module routes through. Returns ``None`` for
+    ``python3`` itself (already handled by the exact-tier above) and for
+    anything that isn't a recognized python spelling at all.
+    """
+    basename = _normalize_executable_basename(token)
+    if basename == "python3":
+        return None
+    if _PYTHON_FAMILY_ALIAS_RE.match(basename):
+        return basename
+    return None
+
+
+def _remedy_command_with_python3(cmd: str, leading_token: str) -> str:
+    """Rewrite ``cmd``'s leading python-family token to ``python3``,
+    preserving the rest of the command verbatim -- used only to render a
+    human-readable remedy suggestion in the deny message, never to actually
+    execute anything.
+    """
+    stripped = cmd.lstrip()
+    lead_ws = cmd[: len(cmd) - len(stripped)]
+    if stripped[: len(leading_token)] != leading_token:
+        return cmd  # defensive -- unexpected shape, leave cmd untouched
+    rest = stripped[len(leading_token):]
+    return f"{lead_ws}python3{rest}"
+
+
+def _python_family_misspelling_deny_reason(remedy_cmd: str) -> str:
+    return (
+        "first command token is a python interpreter spelling other than "
+        "the accepted `python3` -- this command IS in scope, just "
+        f"misspelled. Retry with: {remedy_cmd!r}"
+    )
 
 
 def _sanitize_cmd_for_reason(cmd: str) -> str:
@@ -2540,7 +2877,12 @@ _TIER_A_ENUM_BLOCK = (
 )
 
 
-def _deny_reason(effective_type: str, cmd: str, deny_reason: str) -> str:
+def _deny_reason(
+    effective_type: str,
+    cmd: str,
+    deny_reason: str,
+    suppress_retry_advice: bool = False,
+) -> str:
     """The REASON block, with the header line and the three
     agent-class-specific stanzas resolved per ``effective_type`` via
     ``_DENY_MESSAGE_STANZA_OVERRIDES`` (see that dict's docstring).
@@ -2557,13 +2899,23 @@ def _deny_reason(effective_type: str, cmd: str, deny_reason: str) -> str:
     the dispatching EM already knows which subagent it dispatched; the prior
     "Subagent:" line spent bytes restating information already known to the
     reader, not new information a denied agent needs to self-correct.
+
+    ``suppress_retry_advice`` (Divergence 18, 2026-08-11): the closing
+    stanza (only non-empty for ``coordinator:executor`` today) ends with
+    "report the blocker to the dispatching EM rather than retrying it" --
+    correct for a genuinely out-of-scope command, actively wrong for a
+    python-family misspelling whose ``python3``-corrected form would allow.
+    The caller sets this ``True`` for exactly that case; it forces the
+    closing stanza empty regardless of ``effective_type``, never adds text.
     """
     cmd_safe = _sanitize_cmd_for_reason(cmd)
     overrides = _DENY_MESSAGE_STANZA_OVERRIDES.get(effective_type, {})
     header_line = overrides.get("header", _DEFAULT_HEADER_LINE)
     scaffolder_stanza = overrides.get("scaffolder", _DEFAULT_SCAFFOLDER_STANZA)
     accepted_forms_stanza = overrides.get("accepted_forms", _DEFAULT_ACCEPTED_FORMS_STANZA)
-    closing_stanza = overrides.get("closing", _DEFAULT_CLOSING_STANZA)
+    closing_stanza = (
+        () if suppress_retry_advice else overrides.get("closing", _DEFAULT_CLOSING_STANZA)
+    )
     lines = [
         header_line,
         "",
@@ -2646,8 +2998,12 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         return None
 
     # Resolve the most informative type label for the deny message
-    # (reference hook 194-196).
-    effective_type = agent_type if _is_confined_type(agent_type, policy) else subagent_type
+    # (reference hook 194-196). (Divergence 16, 2026-08-11) A NAMED-teammate
+    # dispatch's agent_type is a raw name string, not a real type -- see
+    # _resolve_effective_type's own docstring for why a plain
+    # "whichever leg is confined at all" selection picks that garbage string
+    # over the correctly back-pointer-resolved subagent_type.
+    effective_type = _resolve_effective_type(agent_type, subagent_type, policy)
 
     # Resolve this effective_type's allowed Bash surface -- a validated
     # bash_policy entry if one exists, else _default_ruleset() (AC11).
@@ -2676,6 +3032,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
 
     deny = False
     deny_reason = ""
+    suppress_retry_advice = False
 
     if not cmd:
         deny = True
@@ -2782,9 +3139,8 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         # original generic deny. See _evaluate_python3_interpreter's
         # docstring: it returns None (not applicable/not granted) for every
         # case that must preserve the ORIGINAL deny message text (AC3).
-        interpreter_result = _evaluate_python3_interpreter(
-            _tokenize_segment(cmd_for_check), ruleset
-        )
+        tokens_for_interpreter = _tokenize_segment(cmd_for_check)
+        interpreter_result = _evaluate_python3_interpreter(tokens_for_interpreter, ruleset)
         if interpreter_result is not None:
             interpreter_allowed, interpreter_deny_reason = interpreter_result
             if interpreter_allowed:
@@ -2795,6 +3151,22 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             deny = True
             first_token = _extract_first_token(cmd_for_check)
             deny_reason = f"first command token is not coordinator-doc-new (got: {first_token or 'empty'})"
+            # (Divergence 18, 2026-08-11) The exact-`python3` tier above
+            # declined (tokens[0] != "python3") -- check whether tokens[0]
+            # is a python-family MISSPELLING whose `python3`-corrected form
+            # would itself be allowed by this ruleset. Only ever narrows the
+            # MESSAGE; the command above is already denied either way.
+            if tokens_for_interpreter:
+                alias_basename = _python_family_alias_token(tokens_for_interpreter[0])
+                if alias_basename is not None:
+                    remedy_tokens = ["python3"] + tokens_for_interpreter[1:]
+                    remedy_result = _evaluate_python3_interpreter(remedy_tokens, ruleset)
+                    if remedy_result is not None and remedy_result[0]:
+                        remedy_cmd = _remedy_command_with_python3(
+                            cmd_for_check, tokens_for_interpreter[0]
+                        )
+                        deny_reason = _python_family_misspelling_deny_reason(remedy_cmd)
+                        suppress_retry_advice = True
 
     if not deny and not _has_required_type_arg(cmd_for_check, ruleset):
         deny = True
@@ -2803,7 +3175,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     if not deny:
         return None
 
-    reason = _deny_reason(effective_type, cmd, deny_reason)
+    reason = _deny_reason(effective_type, cmd, deny_reason, suppress_retry_advice)
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

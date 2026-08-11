@@ -299,6 +299,88 @@ def test_write_trail_directive_requires_all_five_review_fields(monkeypatch, tmp_
     assert "d-write-trail" not in ids
 
 
+# ---------------------------------------------------------------------------
+# decisions["review"] as a list — a partitioned review's N per-slice records
+# (each with its own sha_range/reviewer/scope/verdict/diff_loc) that the
+# pre-existing single-object shape could not express. See
+# `build_write_trail_directives`'s own docstring.
+# ---------------------------------------------------------------------------
+
+_REVIEW_SLICE_A = {
+    "sha_range": "a1..a2",
+    "reviewer": "code-reviewer",
+    "scope": "chain",
+    "verdict": "blocked",
+    "diff_loc": 40,
+}
+_REVIEW_SLICE_B = {
+    "sha_range": "b1..b2",
+    "reviewer": "staff-eng",
+    "scope": "chain",
+    "verdict": "ok",
+    "diff_loc": 60,
+}
+
+
+def test_write_trail_directive_accepts_a_list_of_per_slice_records(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    directives_by_id = {d["id"]: d for d in decision_object["directives"]}
+    assert "d-write-trail-0" in directives_by_id
+    assert "d-write-trail-1" in directives_by_id
+    assert "d-write-trail" not in directives_by_id
+    assert directives_by_id["d-write-trail-0"]["args"] == [
+        "write-trail",
+        "--sha-range", "a1..a2",
+        "--reviewer", "code-reviewer",
+        "--scope", "chain",
+        "--verdict", "blocked",
+        "--diff-loc", "40",
+    ]
+    assert directives_by_id["d-write-trail-1"]["args"] == [
+        "write-trail",
+        "--sha-range", "b1..b2",
+        "--reviewer", "staff-eng",
+        "--scope", "chain",
+        "--verdict", "ok",
+        "--diff-loc", "60",
+    ]
+
+
+def test_write_trail_directive_single_object_shape_is_byte_identical_to_today(monkeypatch, tmp_path):
+    """Backward compatibility: a plain `dict` still produces exactly the
+    one pre-existing `d-write-trail` id, never `d-write-trail-0`."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {"review": dict(_REVIEW_SLICE_A)}
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    ids = {d["id"] for d in decision_object["directives"]}
+    assert "d-write-trail" in ids
+    assert "d-write-trail-0" not in ids
+
+
+def test_write_trail_directive_list_drops_incomplete_entries_without_dropping_siblings(monkeypatch, tmp_path):
+    incomplete = {"sha_range": "c1..c2", "reviewer": "code-reviewer"}  # missing scope/verdict/diff_loc
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {"review": [_REVIEW_SLICE_A, incomplete, _REVIEW_SLICE_B]}
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    ids = {d["id"] for d in decision_object["directives"]}
+    # Index preserved from the ORIGINAL list position -- the incomplete
+    # entry at index 1 contributes no directive, but index 2 (slice B)
+    # keeps its own original index rather than shifting down to 1.
+    assert "d-write-trail-0" in ids
+    assert "d-write-trail-1" not in ids
+    assert "d-write-trail-2" in ids
+
+
+def test_write_trail_directive_empty_list_and_none_emit_nothing(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    for review_value in ([], None):
+        decision_object = wsc.brief(decisions={"review": review_value}, repo_root=tmp_path)
+        ids = {d["id"] for d in decision_object["directives"]}
+        assert not any(i == "d-write-trail" or i.startswith("d-write-trail-") for i in ids)
+
+
 def test_deletion_blocks_directive_absent_when_no_msg_file(monkeypatch, tmp_path):
     """2026-07-27 finding: `d-deletion-blocks` names a CLI whose one
     positional (`<prepared-commit-msg-file>`) is REQUIRED — a `msg_file`-
@@ -355,6 +437,21 @@ def test_coverage_judgment_point_resolves_no_phantom_or_enforcing_id(monkeypatch
     assert dispositions_by_value["uncovered-or-indeterminate-override"] == ["d-write-trail"]
     assert dispositions_by_value["uncovered-or-indeterminate-proceed-with-warning"] == []
     assert "uncovered-or-indeterminate-halt" not in dispositions_by_value
+
+
+def test_coverage_judgment_point_resolves_every_partitioned_write_trail_id(monkeypatch, tmp_path):
+    """A partitioned `decisions["review"]` list builds N `d-write-trail-<i>`
+    directives (see `build_write_trail_directives`) -- `jp-coverage-verdict`
+    must resolve ALL of them, not just a hardcoded single id, or every
+    slice past the first is silently ungateable by this judgment point."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-coverage-verdict"]
+    assert len(matches) == 1
+    dispositions_by_value = {d["value"]: d["resolves"] for d in matches[0]["dispositions"]}
+    assert dispositions_by_value["covered"] == ["d-write-trail-0", "d-write-trail-1"]
+    assert dispositions_by_value["uncovered-or-indeterminate-override"] == ["d-write-trail-0", "d-write-trail-1"]
 
 
 def test_commit_tail_directive_carries_no_dependency_on_the_coverage_judgment(monkeypatch, tmp_path):
@@ -3819,9 +3916,76 @@ def test_review_flags_reach_the_wsc_tail_argv_token_transport():
     assert "--review-scope" in close_tail_args["args"]
     assert "--review-verdict" in close_tail_args["args"]
     assert "--review-diff-loc" in close_tail_args["args"]
-
     assert wsc_tail["depends_on"] == close_tail_args["id"]
     assert wsc_tail["args"][-1] == "{d-close-tail-args.argv}"
+
+
+# ---------------------------------------------------------------------------
+# List-shaped decisions["review"] reaching the commit-tail path (finishes the
+# partitioned-review fix's second half -- directives_review.py's
+# build_write_trail_directives covered the standalone directive path in
+# a3d90f24dc16; this is the wsc-close tail-args -> wsc-tail.py leg).
+# ---------------------------------------------------------------------------
+
+
+def test_build_close_tail_args_directive_single_dict_review_byte_identical():
+    """Backward compatibility is absolute: a single-`dict` review must keep
+    producing the exact same scalar `--review-*` flags it always has, never
+    the new `--review-slice` form."""
+    decisions = {
+        "review": {
+            "sha_range": "abc123..def456",
+            "reviewer": "staff-eng",
+            "scope": "chain",
+            "verdict": "approved",
+            "diff_loc": 42,
+        },
+    }
+    directive = _dc_tail.build_close_tail_args_directive(decisions)
+    assert directive["args"] == [
+        "tail-args",
+        "--review-sha-range", "abc123..def456",
+        "--review-reviewer", "staff-eng",
+        "--review-scope", "chain",
+        "--review-verdict", "approved",
+        "--review-diff-loc", "42",
+    ]
+    assert "--review-slice" not in directive["args"]
+
+
+def test_build_close_tail_args_directive_list_review_emits_one_slice_per_qualifying_entry():
+    import json as _json
+
+    decisions = {
+        "review": [
+            {
+                "sha_range": "a1..a2",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": 10,
+            },
+            {"sha_range": "incomplete-entry-dropped"},  # missing required fields -- no token
+            {
+                "sha_range": "b1..b2",
+                "reviewer": "staff-eng",
+                "scope": "session",
+                "verdict": "warn",
+                "diff_loc": 20,
+                "scope_kind": "diff",
+            },
+        ],
+    }
+    directive = _dc_tail.build_close_tail_args_directive(decisions)
+    args = directive["args"]
+    assert "--review-sha-range" not in args
+    slice_indices = [i for i, tok in enumerate(args) if tok == "--review-slice"]
+    assert len(slice_indices) == 2
+    payloads = [_json.loads(args[i + 1]) for i in slice_indices]
+    assert payloads[0]["sha_range"] == "a1..a2"
+    assert payloads[1]["sha_range"] == "b1..b2"
+    assert payloads[1]["scope_kind"] == "diff"
+    assert "scope_kind" not in payloads[0]
 
 
 # ---------------------------------------------------------------------------

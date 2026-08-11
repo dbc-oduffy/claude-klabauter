@@ -60,6 +60,7 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _build_json_record,
     _compute_timestamp,
     _diagnose_zero_chain_terminal_credit,
+    _dispatch_id_resolvable,
     _walk_range_commit_session_trailers,
     write_review_trail_entry,
 )
@@ -2057,5 +2058,150 @@ class TestWalkRangeAdoptsP2GrepLeg:
             "a merge commit must be classified foreign regardless of its "
             "own Session-Id trailer — the window walk must see merges "
             "(no --no-merges) so this classification can even happen"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: reviewer_evidence gate — advisory-by-default, opt-in enforcing
+# ---------------------------------------------------------------------------
+
+
+class TestReviewerEvidenceGate:
+    """`_verify_reviewer_evidence` is advisory unless
+    `COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE` is set truthy — see that
+    function's Negative-spec block for why."""
+
+    def _write(self, tmp_path, monkeypatch, *, reviewer, verdict, reviewer_evidence, caplog=None):
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        return write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer=reviewer,
+            scope="chain",
+            verdict=verdict,
+            diff_loc=0,
+            session_id=_TEST_SESSION,
+            reviewer_evidence=reviewer_evidence,
+        )
+
+    def test_advisory_default_unevidenced_delegate_write_succeeds(self, tmp_path, monkeypatch, caplog):
+        """Advisory (default, switch unset): an unevidenced delegate-reviewer
+        write succeeds and emits the advisory rather than raising."""
+        monkeypatch.delenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", raising=False)
+        with caplog.at_level("WARNING"):
+            result = self._write(
+                tmp_path, monkeypatch,
+                reviewer="code-reviewer", verdict="ok", reviewer_evidence=None,
+            )
+        assert result["out_path"]
+        assert any(
+            "review_trail.write advisory" in rec.message for rec in caplog.records
+        )
+
+    def test_enforcing_on_same_write_raises(self, tmp_path, monkeypatch):
+        """Enforcing (switch on): the same unevidenced delegate-reviewer
+        write raises ValueError instead of proceeding."""
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        with pytest.raises(ValueError, match="reviewer-evidence"):
+            self._write(
+                tmp_path, monkeypatch,
+                reviewer="code-reviewer", verdict="ok", reviewer_evidence=None,
+            )
+
+    def test_wsc_auto_adjudication_exempt_advisory(self, tmp_path, monkeypatch, caplog):
+        """`wsc-auto-adjudication` is exempt from the evidence check in
+        advisory mode — no advisory emitted, write succeeds."""
+        monkeypatch.delenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", raising=False)
+        with caplog.at_level("WARNING"):
+            result = self._write(
+                tmp_path, monkeypatch,
+                reviewer="wsc-auto-adjudication", verdict="ok", reviewer_evidence=None,
+            )
+        assert result["out_path"]
+        assert not any(
+            "review_trail.write advisory" in rec.message for rec in caplog.records
+        )
+
+    def test_wsc_auto_adjudication_exempt_enforcing(self, tmp_path, monkeypatch):
+        """`wsc-auto-adjudication` is exempt from the evidence check in
+        enforcing mode too — write succeeds without raising."""
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        result = self._write(
+            tmp_path, monkeypatch,
+            reviewer="wsc-auto-adjudication", verdict="ok", reviewer_evidence=None,
+        )
+        assert result["out_path"]
+
+    def test_pending_verdict_exempts_delegate_reviewer(self, tmp_path, monkeypatch):
+        """`verdict="pending"` exempts a delegate reviewer from the evidence
+        check (freeze-review-diff.py's open-loop record), even enforcing."""
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        result = self._write(
+            tmp_path, monkeypatch,
+            reviewer="code-reviewer", verdict="pending", reviewer_evidence=None,
+        )
+        assert result["out_path"]
+
+    def test_waived_pending_still_requires_justification(self, tmp_path, monkeypatch):
+        """`verdict="pending"` does NOT exempt a justification-class reviewer
+        (waived/em-verified) — those still need a real justification when
+        enforcing."""
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        with pytest.raises(ValueError, match="justification"):
+            self._write(
+                tmp_path, monkeypatch,
+                reviewer="waived", verdict="pending", reviewer_evidence=None,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: _dispatch_id_resolvable — field-exact match against ledger column 1
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchIdResolvable:
+    """`_dispatch_id_resolvable` matches column 1 (the ``agent_id`` dedup key)
+    exactly — a short/generic value must not resolve merely by appearing as a
+    substring anywhere in the ledger line (Review: code-reviewer — Finding P2,
+    coordinatorcode-reviewer-5086cf69.md)."""
+
+    def _ledger(self, tmp_path: Path, session_id: str, rows: list[str]) -> Path:
+        ledger_dir = tmp_path / ".git" / "coordinator-sessions" / session_id
+        ledger_dir.mkdir(parents=True)
+        ledger = ledger_dir / "dispatched-agents.txt"
+        ledger.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
+        return ledger
+
+    def test_genuine_dispatch_id_resolves(self, tmp_path):
+        self._ledger(
+            tmp_path, "sess1",
+            ["code-reviewer@session-sess1\topus\tgeneral-purpose\t1786451686"],
+        )
+        assert _dispatch_id_resolvable(
+            "code-reviewer@session-sess1", tmp_path, "sess1"
+        )
+
+    def test_short_incidental_substring_does_not_resolve(self, tmp_path):
+        """A short/generic value that merely appears as a substring inside
+        an unrelated row's agent_id, model, subagent_type, or timestamp
+        column must NOT resolve — only a full column-1 match counts."""
+        self._ledger(
+            tmp_path, "sess1",
+            ["spike-empirical@session-sess1\topus\tgeneral-purpose\t1786451686"],
+        )
+        # "sess1" appears inside the row (as part of the agent_id and the
+        # ledger path), but it is not itself the full agent_id.
+        assert not _dispatch_id_resolvable("sess1", tmp_path, "sess1")
+        # "opus" is the model column, not the agent_id column.
+        assert not _dispatch_id_resolvable("opus", tmp_path, "sess1")
+        # A substring of the genuine agent_id is not the whole agent_id.
+        assert not _dispatch_id_resolvable("spike-empirical", tmp_path, "sess1")
+
+    def test_unreadable_ledger_fails_safe(self, tmp_path):
+        assert not _dispatch_id_resolvable(
+            "anything@session-missing", tmp_path, "missing-session"
         )
 

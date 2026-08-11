@@ -188,9 +188,11 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_PUSHED,
     derive_push_status,
     push_with_retry,
+    resolve_post_push_sha,
 )
 from coordinator_core.ops.ceremony.resolver import find_all_consumed_handoffs
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session import scope as session_scope
 
 # Import side-effect: registers "handoff.has_live_children" and "handoff.stamp"
 # in the ipc op-registry so get_op_handler() below resolves via a direct
@@ -860,7 +862,7 @@ async def post_commit_stamp_and_ship(
         )
 
     follow_up_sha, pushed, follow_up_push_status, follow_up_error = await asyncio.to_thread(
-        _commit_and_push_follow_up, worktree_root, outcome_stamped, committed_sha, push_mode
+        _commit_and_push_follow_up, worktree_root, outcome_stamped, committed_sha, push_mode, session_id
     )
 
     return StampOutcome(
@@ -878,7 +880,11 @@ async def post_commit_stamp_and_ship(
 
 
 def _commit_and_push_follow_up(
-    worktree_root: Path, stamped_paths: list[str], committed_sha: str, push_mode: str = PUSH_MODE_SYNC
+    worktree_root: Path,
+    stamped_paths: list[str],
+    committed_sha: str,
+    push_mode: str = PUSH_MODE_SYNC,
+    session_id: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism commit (`git_native.commit_scoped`) of ONLY the
     stamped paths (AC17) — the commit leg is unconditional (anti-scope: never
@@ -969,6 +975,44 @@ def _commit_and_push_follow_up(
     rev_result = git_native.rev_parse_head(worktree_root)
     follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
 
+    # Post-commit claim release (C3d, docs/plans/2026-08-11-claim-release-
+    # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
+    # `stamped_paths` is already repo-relative (from `redrive_consumed_set`
+    # -> `find_all_consumed_handoffs`, wire-id relpaths -- see
+    # `_already_shipped_and_archived`'s docstring for the same "always
+    # forward-slash" convention), and `session_id` is `post_commit_stamp_
+    # and_ship`'s own required caller-supplied param: the SAME id
+    # `redrive_consumed_set(worktree_root, session_id)` above just used to
+    # derive this closing session's OWN consumed-handoff set -- i.e. this
+    # is genuinely the committing session's own sid, not a guess
+    # (`git_native.commit_scoped`'s own comment names exactly this
+    # ambiguity as the reason it does not wire release in itself). Run
+    # synchronously here -- this function already executes off the event
+    # loop via the caller's `asyncio.to_thread(_commit_and_push_follow_up,
+    # ...)`, so a second `to_thread` hop would only add a needless
+    # thread-pool round trip. Failure direction mirrors every other C3
+    # site: a release failure must never fail a commit that already
+    # landed -- the commit above is the durable outcome; a retained stale
+    # claim is the safe residue.
+    # `session_id` is Optional on this signature, and an unattributable
+    # release is not a release: releasing under an unknown sid would be a
+    # guess at authorship, which is the one thing this whole seam refuses to
+    # do. Skipping is the same fail-safe RETAIN direction every other C3 site
+    # takes -- and skipping EXPLICITLY, rather than letting a None fall into
+    # the `except` below, keeps a genuine failure distinguishable from a
+    # caller that simply had no sid to give.
+    try:
+        if session_id:
+            session_scope.release_committed_claims(
+                session_id, stamped_paths, cwd=str(worktree_root)
+            )
+    except Exception:
+        _LOG.debug(
+            "_commit_and_push_follow_up: release_committed_claims failed "
+            "post-commit; claim(s) retained",
+            exc_info=True,
+        )
+
     # Review: code-reviewer — Finding 3: use the canonical PUSH_MODE_SYNC
     # constant (commit_pipeline.py's own enum) instead of a bare string
     # literal so this stays in sync if the canonical value ever changes.
@@ -997,9 +1041,14 @@ def _commit_and_push_follow_up(
         # If the re-read itself fails, fall back to the pre-push SHA rather
         # than downgrading a known-good value to None — it is correct
         # unless a rebase-retry actually fired, and a stale-but-real SHA is
-        # a better audit trail than a hole.
-        post_push = git_native.rev_parse_head(worktree_root)
-        landed_sha = post_push.stdout.strip() if post_push.ok else follow_up_sha
+        # a better audit trail than a hole. state/bug-backlog/2026-08-11-
+        # run-commit-pipeline-reports-a-concurrent-0a91ea7dc77b.yaml (P1):
+        # that bare re-read fired on every landed push, not just a
+        # rebase-retry, and could silently adopt a peer's push landing in
+        # this window. `resolve_post_push_sha` re-reads HEAD exactly as
+        # before but only adopts it once its tree matches `follow_up_sha`'s
+        # (see that helper's own docstring); a mismatch keeps `follow_up_sha`.
+        landed_sha = resolve_post_push_sha(worktree_root, follow_up_sha)
         return landed_sha, True, push_status, None
     if push_status == PUSH_STATUS_FAILED:
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"

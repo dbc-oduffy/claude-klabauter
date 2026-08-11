@@ -639,3 +639,169 @@ def test_registered_under_op_key():
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("scratchpad.sweep") is _handler
+
+
+# ---------------------------------------------------------------------------
+# Archive-shaped exemption (size-cut-scoped only — TTL gate unaffected)
+# ---------------------------------------------------------------------------
+
+
+def _make_dated_session_with_files(claude_root, sid, age_days, files):
+    """Like `_make_dated_session` but takes {filename: size_bytes} so a
+    fixture can drop an archive-shaped file alongside (or instead of) a
+    plain one."""
+    sdir = claude_root / sid
+    sdir.mkdir()
+    scratch = sdir / "scratchpad"
+    scratch.mkdir()
+    for fname, size_bytes in files.items():
+        f = scratch / fname
+        f.write_text("x" * size_bytes, encoding="utf-8")
+        _age_file(f, age_days * 86400)
+
+
+def test_archive_shaped_file_is_detected_and_totaled(tmp_path):
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid = "70000000-0000-0000-0000-000000000001"
+    _make_dated_session_with_files(
+        claude_root, sid, 3.1, {"build.tar.zst": 500, "notes.txt": 20}
+    )
+
+    result = _sweep(
+        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+    )
+
+    entry = _entry_for(result, sid)
+    assert entry["archive_count"] == 1
+    assert entry["archive_bytes"] == 500
+    assert len(entry["archives"]) == 1
+    assert entry["archives"][0]["path"].endswith("build.tar.zst")
+    assert entry["bytes"] == 520
+
+
+@pytest.mark.parametrize(
+    "fname,is_archive",
+    [
+        ("build.tar.zst", True),
+        ("build.tgz", True),
+        ("build.zip", True),
+        ("build.ZIP", True),
+        ("plain.db", False),
+        ("plain.json", False),
+        ("plain.log", False),
+    ],
+)
+def test_archive_shape_pattern_set(tmp_path, fname, is_archive):
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid = "70000000-0000-0000-0000-000000000002"
+    _make_dated_session_with_files(claude_root, sid, 3.1, {fname: 50})
+
+    result = _sweep(
+        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+    )
+
+    entry = _entry_for(result, sid)
+    assert (entry["archive_count"] == 1) is is_archive
+
+
+def test_too_recent_entry_with_archive_is_size_cut_exempt(tmp_path):
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+
+    sid_archive = "70000000-0000-0000-0000-000000000003"
+    sid_plain = "70000000-0000-0000-0000-000000000004"
+    # Same cohort (day 3), same size — the sibling with no archive must still
+    # be size-cut even though the archived one is exempted.
+    _make_dated_session_with_files(claude_root, sid_archive, 3.1, {"release.tar.gz": 100})
+    _make_dated_session_with_files(claude_root, sid_plain, 3.1, {"a.txt": 100})
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+        size_cut_target_bytes=0,
+    )
+
+    archive_entry = _entry_for(result, sid_archive)
+    assert archive_entry["verdict"] == "too-recent"
+    assert archive_entry["size_cut_exempt"] is True
+    assert archive_entry["size_cut_exempt_reason"]
+    scratch_archive = claude_root / sid_archive / "scratchpad"
+    assert scratch_archive.is_dir()
+
+    plain_entry = _entry_for(result, sid_plain)
+    assert plain_entry["verdict"] == "size-cut-reclaimed"
+    assert plain_entry["size_cut_exempt"] is False
+
+    sc = result["size_cut"]
+    assert sc["archive_exempt_entries"] == 1
+    assert sc["archive_exempt_bytes"] == 100
+    # The exempted archive's bytes stay in remaining_after_size_cut — they
+    # were never reclaimed, so they must not be subtracted.
+    assert sc["remaining_after_size_cut"] >= 100
+
+
+def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
+    """Size-cut exemption is scoped to the size-cut pass only — an archive
+    aged past ttl_days is still reclaimed by the (unaffected) TTL gate."""
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid = "70000000-0000-0000-0000-000000000005"
+    _make_dated_session_with_files(claude_root, sid, 10, {"release.tar.zst": 100})
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+    )
+
+    entry = _entry_for(result, sid)
+    assert entry["verdict"] == "reclaimed"
+    scratch = claude_root / sid / "scratchpad"
+    assert not scratch.exists()
+
+
+def test_short_circuit_entries_carry_archive_keys(tmp_path):
+    """self / live / no-scratchpad / undeterminable entries must never be
+    missing the archive keys, even though _scan_dir never ran for them."""
+    _build_fixture(tmp_path)
+    result = _sweep(tmp_path)
+    for entry in result["entries"]:
+        assert "archives" in entry
+        assert "archive_count" in entry
+        assert "archive_bytes" in entry
+        if entry["verdict"] in ("self", "live", "no-scratchpad"):
+            assert entry["archive_count"] == 0
+            assert entry["archives"] == []
+
+
+def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid_a = "70000000-0000-0000-0000-000000000006"
+    sid_b = "70000000-0000-0000-0000-000000000007"
+    _make_dated_session_with_files(claude_root, sid_a, 3.1, {"small.zip": 50})
+    _make_dated_session_with_files(claude_root, sid_b, 3.1, {"big.tar.zst": 900})
+
+    result = _sweep(
+        tmp_path, slug_to_root_map={slug: "X:/claude-klabauter"}, project_slugs=[slug]
+    )
+
+    seen = result["archives_seen"]
+    assert [a["bytes"] for a in seen] == sorted(
+        [a["bytes"] for a in seen], reverse=True
+    )
+    assert {a["session_id"] for a in seen} == {sid_a, sid_b}
+    top = seen[0]
+    assert top["bytes"] == 900
+    assert top["session_id"] == sid_b
+    assert top["verdict"] == "too-recent"

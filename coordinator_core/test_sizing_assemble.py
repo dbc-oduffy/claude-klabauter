@@ -986,16 +986,25 @@ def test_sizing_object_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.9.0 since the sizing-guard-flags widen (cross-repo memo
-    # 2026-08-10-example-doctrine-repo-em-sizing-guard-flags.md) appended
-    # `boundary_counted_in_notch` and `scout_evidence_mention_count` to
-    # `detents.items.enum`. The bump class moves back DOWN to
-    # `enum-value-additive`: unlike 1.8.0's bundle, this bump adds no field at
-    # all — two values on one existing enum, nothing else shape-visible. This
-    # is the version example-doctrine-repo stamps against to bring their detent-parity and
-    # version-parity gates green; do not bump past it before they land (see
-    # the schema's own x-bump-note).
-    assert schema["x-schema-version"] == "1.9.0"
+    # 1.11.0 since the routine-ask-sized-XL widen appended
+    # `intent_em_elaborated`, `precedent_shipped_before` and
+    # `probe_raise_on_substrate_condition` to `detents.items.enum`. Bump class
+    # stays `enum-value-additive`: values on one existing enum, nothing else
+    # shape-visible. Example-doctrine-repo landed the matching stamp at e004e18f1 and told us
+    # this number (cross-repo memo 2026-08-11-example-doctrine-repo-em-sizing-intent-
+    # landed-1-11-0-and-one-counter.md).
+    #
+    # CORRECTION to the note this replaces, which said to hold a bump because
+    # an unequal version otherwise goes silent: it does not. Example-doctrine-repo's
+    # `test_vendored_schema_matches_doe_source` asserts version equality HARD
+    # (coordinator/tests/test_vendored_schema_version_parity.py, the
+    # doe_version == claude_klabauter_version assert) and only reaches the shape-hash
+    # compare once that passes; its only skips are an unresolvable sibling and
+    # an unvendored schema. BOTH stagger directions are red, not one red and
+    # one quiet — and it reads our COMMITTED HEAD, so their red clears when we
+    # commit, not when we write. Do not reintroduce the hold-for-silence
+    # reasoning.
+    assert schema["x-schema-version"] == "1.12.0"
     assert schema["x-bump-class"] == "enum-value-additive"
 
 
@@ -1061,6 +1070,16 @@ def test_vendored_schema_widened_enums_order_exact():
         # side stamps 1.9.0 against.
         "boundary_counted_in_notch",
         "scout_evidence_mention_count",
+        # Appended by the routine-ask-sized-XL widen (2026-08-11). Same
+        # order-exact, append-at-end discipline as the two above — example-doctrine-repo's
+        # canonical copy needs these three in exactly this position before
+        # their parity gate goes green (memo sent same day).
+        "intent_em_elaborated",
+        "precedent_shipped_before",
+        "probe_raise_on_substrate_condition",
+        # 1.12.0: example-doctrine-repo-em's counter — the symmetric mark on ask-scope,
+        # so the notch-preserving answer is no longer the unmarked one.
+        "probe_raise_ask_scope_asserted",
     ]
 
     completion_schema = json.loads(
@@ -1330,3 +1349,224 @@ def test_pejorative_appetite_sense_preserved_in_coordinator_doc_new():
         encoding="utf-8"
     )
     assert "### Weak OOS / hedges (appetite-based deferrals)" in text
+
+
+# ---------------------------------------------------------------------------
+# Routine-ask-sized-XL guards (2026-08-11 incident).
+#
+# The PM asked "commit it and push it" — an operation this fleet had shipped
+# repeatedly — and the lobby returned XL/pm-decision. Three inputs were
+# missing: the engine never saw the ask, nothing recorded that the operation
+# had precedent, and a probe raise built on the SUBSTRATE's condition was
+# indistinguishable from one built on the ASK's scope.
+# ---------------------------------------------------------------------------
+
+
+def test_substrate_condition_raise_is_not_applied():
+    """The incident's exact mechanism: a raise justified by findings about the
+    area, not the ask, must not move the notch."""
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="raise",
+        probe_raise_basis="substrate-condition",
+    )
+    assert out["resolved_estimate"]["tshirt"] == "L"
+    assert "probe_raise_on_substrate_condition" in out["detents"]
+    # The whole point: L routes to plan, XL would have routed to pm-decision.
+    assert out["route"] == "plan"
+    assert "route_boundary_crossed" not in out["detents"]
+
+
+def test_ask_scope_raise_still_applies():
+    """The suppression must not break the legitimate raise — an ask that
+    genuinely grew still moves the notch (Finding 2's under-read net)."""
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="raise",
+        probe_raise_basis="ask-scope",
+    )
+    assert out["resolved_estimate"]["tshirt"] == "XL"
+    assert "probe_raise_on_substrate_condition" not in out["detents"]
+    assert out["route"] == "pm-decision"
+
+
+def test_raise_without_a_declared_basis_is_unchanged():
+    """Back-compat: every existing caller omits the flag and must be unaffected."""
+    out = sa.route(estimate={"tshirt": "L"}, probe_signal="raise")
+    assert out["resolved_estimate"]["tshirt"] == "XL"
+    assert "probe_raise_on_substrate_condition" not in out["detents"]
+
+
+def test_collapse_is_never_suppressed_by_the_basis_flag():
+    """The basis flag qualifies a RAISE only — a collapse is the direction with
+    a downstream net and must always land."""
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="collapse",
+        probe_raise_basis="substrate-condition",
+    )
+    assert out["resolved_estimate"]["tshirt"] == "M"
+    assert "probe_raise_on_substrate_condition" not in out["detents"]
+
+
+def test_intent_is_echoed_so_the_ask_and_the_size_share_a_frame():
+    out = sa.route(
+        estimate={"tshirt": "XL"}, intent="commit it and push it"
+    )
+    assert out["intent"] == "commit it and push it"
+
+
+def test_intent_echoed_on_the_express_lane_too():
+    out = sa.route(
+        estimate={"tshirt": "XS"}, intent="commit it", express_lane=True
+    )
+    assert out["intent"] == "commit it"
+    assert out["detents"] == []
+
+
+def test_em_elaborated_intent_fires_at_every_size():
+    """Not size-gated, for boundary_counted_in_notch's reason: the size is what
+    an elaborated intent is suspected of having inflated."""
+    for tshirt in ("XS", "S", "M", "L", "XL", "XXL"):
+        out = sa.route(
+            estimate={"tshirt": tshirt}, intent_source="em-elaborated"
+        )
+        assert "intent_em_elaborated" in out["detents"], tshirt
+        assert "verbatim" in out["next_move"]
+
+
+def test_pm_verbatim_intent_fires_nothing():
+    out = sa.route(
+        estimate={"tshirt": "XL"}, intent_source="pm-verbatim"
+    )
+    assert "intent_em_elaborated" not in out["detents"]
+
+
+def test_shipped_before_precedent_fires_and_names_the_discharge():
+    out = sa.route(
+        estimate={"tshirt": "L"}, precedent="shipped-before"
+    )
+    assert "precedent_shipped_before" in out["detents"]
+    assert "SHIPPED IN THIS REPO BEFORE" in out["next_move"]
+    # Advisory only — never touches the route (module negative-spec).
+    assert out["route"] == "plan"
+
+
+def test_novel_precedent_fires_nothing():
+    out = sa.route(estimate={"tshirt": "L"}, precedent="novel")
+    assert "precedent_shipped_before" not in out["detents"]
+
+
+def test_the_incident_replayed_end_to_end():
+    """The exact call made on 2026-08-11, plus the three new answers, must no
+    longer produce an XL."""
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        premise_provenance="executed",
+        probe_signal="raise",
+        boundary_in_notch="no",
+        scout_evidence_kind="change-set",
+        scout_evidence=["378 dirty files in the klabauter mirror"],
+        intent="commit it and push it",
+        intent_source="em-elaborated",
+        precedent="shipped-before",
+        probe_raise_basis="substrate-condition",
+    )
+    assert out["resolved_estimate"]["tshirt"] == "L"
+    assert out["route"] != "pm-decision"
+    assert "pm_decision_pending" not in out["detents"]
+    for expected in (
+        "intent_em_elaborated",
+        "precedent_shipped_before",
+        "probe_raise_on_substrate_condition",
+    ):
+        assert expected in out["detents"]
+
+
+def test_new_flags_validate_unconditionally_even_on_express_lane():
+    """Same unconditional-validation property every sibling validator has
+    (Finding 5, code-reviewer 2026-07-24)."""
+    for kwargs in (
+        {"intent_source": "bogus"},
+        {"precedent": "bogus"},
+        {"probe_raise_basis": "bogus"},
+    ):
+        with pytest.raises(sa.SizingAssembleError):
+            sa.route(
+                estimate={"tshirt": "XS"}, express_lane=True, **kwargs
+            )
+
+
+def test_new_detents_are_declared_in_the_enum():
+    for name in (
+        "intent_em_elaborated",
+        "precedent_shipped_before",
+        "probe_raise_on_substrate_condition",
+    ):
+        assert name in sa.DETENT_ENUM
+
+
+# ---------------------------------------------------------------------------
+# The ask-scope symmetric mark (example-doctrine-repo-em's counter, 1.12.0).
+#
+# Without it, `substrate-condition` cost the EM the raise while `ask-scope`
+# cost nothing and was recorded nowhere queryable — an honesty gradient where
+# the notch-preserving answer was the free, unmarked one.
+# ---------------------------------------------------------------------------
+
+
+def test_ask_scope_raise_leaves_a_queryable_mark():
+    out = sa.route(
+        estimate={"tshirt": "L"}, probe_signal="raise", probe_raise_basis="ask-scope"
+    )
+    assert "probe_raise_ask_scope_asserted" in out["detents"]
+    # Marked, but NOT penalised — the raise it names still applied.
+    assert out["resolved_estimate"]["tshirt"] == "XL"
+    assert "ASK-SCOPE" in out["next_move"]
+
+
+def test_both_basis_answers_now_leave_a_mark():
+    """The gradient is closed: neither answer is the silent one."""
+    marks = set()
+    for basis in ("ask-scope", "substrate-condition"):
+        out = sa.route(
+            estimate={"tshirt": "L"}, probe_signal="raise", probe_raise_basis=basis
+        )
+        found = [
+            d
+            for d in out["detents"]
+            if d in (
+                "probe_raise_ask_scope_asserted",
+                "probe_raise_on_substrate_condition",
+            )
+        ]
+        assert len(found) == 1, (basis, out["detents"])
+        marks.add(found[0])
+    assert len(marks) == 2, "each answer must leave its OWN distinct mark"
+
+
+def test_ask_scope_mark_needs_an_actual_raise():
+    """The detent describes a raise's basis — with no raise there is nothing to
+    describe, so a stray flag must not manufacture one."""
+    for signal in (None, "collapse"):
+        out = sa.route(
+            estimate={"tshirt": "L"},
+            probe_signal=signal,
+            probe_raise_basis="ask-scope",
+        )
+        assert "probe_raise_ask_scope_asserted" not in out["detents"], signal
+
+
+def test_ask_scope_mark_is_advisory_only():
+    """Same advisory contract as its siblings — never touches route/xl_exit."""
+    marked = sa.route(
+        estimate={"tshirt": "S"}, probe_signal="raise", probe_raise_basis="ask-scope"
+    )
+    unmarked = sa.route(estimate={"tshirt": "S"}, probe_signal="raise")
+    assert marked["route"] == unmarked["route"]
+    assert marked["xl_exit"] is None
+    assert marked["resolved_estimate"] == unmarked["resolved_estimate"]
+
+
+def test_ask_scope_detent_is_declared_in_the_enum():
+    assert "probe_raise_ask_scope_asserted" in sa.DETENT_ENUM

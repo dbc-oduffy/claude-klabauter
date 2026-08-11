@@ -47,6 +47,7 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.records_query import (
+    _ARCHIVE_GLOB_FOR_TYPE,
     _LEGACY_PROSE_ENTRY_LINE_RE,
     _TYPE_DISPLAY,
     _TYPE_TO_GLOB,
@@ -54,6 +55,7 @@ from coordinator_core.ops.records_query import (
     _collect_files,
     _collect_handoff_ledger_records,
     _collect_research_claim_records,
+    _collect_type_records,
     _handler,
     _load_record,
     _normalize_roadmap_status,
@@ -2400,3 +2402,132 @@ class TestParseRelativeDateUsesUtcClock:
         import coordinator_core.ops.records_query as rq
 
         assert rq._parse_relative_date("2026-01-01", "since") == "2026-01-01"
+
+
+class TestArchiveCoverageOptIn:
+    """C2 (docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md):
+    ``records.query``'s ``include_archived`` param is OPT-IN, defaulting off.
+
+    AC2 is the specific guarantee this class pins: the default-off result set
+    for ``type=handoff`` is byte-identical to pre-change behaviour (asserted
+    against an explicit expected set, not merely "non-empty" — a widened glob
+    that accidentally swallowed archive files would still look "non-empty").
+    The opt-in path is exercised separately, including a
+    ``deployment_state=shipped`` archived record — the shape that is entirely
+    invisible without this flag.
+    """
+
+    @pytest.fixture()
+    def tmp_repo_with_archive(self, tmp_path: Path):
+        """A minimal git repo with one live handoff and two archived handoffs
+        (one carrying ``deployment_state: shipped``), month-bucketed under
+        ``archive/handoffs/2026-07/`` — mirrors the real on-disk shape.
+        """
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+
+        _write_handoff(
+            worktree / "state" / "handoffs",
+            "hoff-live.md",
+            roadmap_id="live-roadmap",
+        )
+
+        archive_dir = worktree / "archive" / "handoffs" / "2026-07"
+        archive_dir.mkdir(parents=True)
+        _write_handoff(
+            archive_dir,
+            "hoff-archived-shipped.md",
+            roadmap_id="archived-roadmap",
+            deployment_state="shipped",
+        )
+        _write_handoff(
+            archive_dir,
+            "hoff-archived-other.md",
+            roadmap_id="archived-roadmap-2",
+            deployment_state="abandoned",
+        )
+
+        return git_dir, worktree
+
+    def test_default_off_result_set_for_handoff_unchanged(self, tmp_repo_with_archive):
+        """AC2: omitting ``include_archived`` entirely returns EXACTLY the
+        pre-existing default-off result — the one live handoff, none of the
+        two archived ones — asserted as an explicit set, not a non-empty check.
+        """
+        git_dir, worktree = tmp_repo_with_archive
+        result = _run(
+            _handler(
+                params={"type": "handoff", "format": "paths"},
+                repo_root=git_dir,
+            )
+        )
+        paths = [p for p in result["records"].split("\n") if p]
+        basenames = {Path(p).name for p in paths}
+        assert basenames == {"hoff-live.md"}
+
+    def test_include_archived_false_explicit_matches_default_off(
+        self, tmp_repo_with_archive,
+    ):
+        """Explicitly passing ``include_archived: False`` must match the
+        omitted-param default byte-for-byte — the flag has exactly one
+        off-state, not two independently-behaving ones.
+        """
+        git_dir, worktree = tmp_repo_with_archive
+        result = _run(
+            _handler(
+                params={
+                    "type": "handoff", "format": "paths", "include_archived": False,
+                },
+                repo_root=git_dir,
+            )
+        )
+        paths = [p for p in result["records"].split("\n") if p]
+        assert {Path(p).name for p in paths} == {"hoff-live.md"}
+
+    def test_include_archived_true_picks_up_archived_records(
+        self, tmp_repo_with_archive,
+    ):
+        """Opt-in path: both archived handoffs join the live one, including
+        the ``deployment_state=shipped`` record — the shape AC2's opt-in
+        coverage exists to surface.
+        """
+        git_dir, worktree = tmp_repo_with_archive
+        result = _run(
+            _handler(
+                params={
+                    "type": "handoff", "format": "json", "include_archived": True,
+                },
+                repo_root=git_dir,
+            )
+        )
+        records = result["records"]
+        basenames = {Path(r["path"]).name for r in records}
+        assert basenames == {
+            "hoff-live.md", "hoff-archived-shipped.md", "hoff-archived-other.md",
+        }
+        shipped = next(
+            r for r in records if Path(r["path"]).name == "hoff-archived-shipped.md"
+        )
+        assert shipped["frontmatter"]["deployment_state"] == "shipped"
+
+    def test_collect_type_records_default_matches_collect_files(self, tmp_repo_with_archive):
+        """`_collect_type_records`'s default-off path collects the exact same
+        file set as calling `_collect_files` directly — the merge step is
+        strictly additive, never present when `include_archived` is unset.
+        """
+        _git_dir, worktree = tmp_repo_with_archive
+        default_records = _collect_type_records(worktree, "handoff")
+        direct_files = _collect_files(worktree, "handoff")
+        assert {r["path"] for r in default_records} == {
+            "state/handoffs/" + f.name for f in direct_files
+        }
+        assert len(default_records) == 1
+
+    def test_archive_glob_map_covers_handoff_plan_memo(self):
+        """Archive coverage is wired consistently across every type that has
+        an archive location on disk (handoff/plan/memo), not special-cased to
+        handoff alone — see archive/ directory census at fix time."""
+        assert set(_ARCHIVE_GLOB_FOR_TYPE) == {"handoff", "plan", "cross-repo-memo"}
+        assert _ARCHIVE_GLOB_FOR_TYPE["handoff"] == _TYPE_TO_GLOB["handoff-archived"]
+        assert _ARCHIVE_GLOB_FOR_TYPE["cross-repo-memo"] == _TYPE_TO_GLOB["archived-memo"]
+        assert _ARCHIVE_GLOB_FOR_TYPE["plan"] == "archive/specs/**/*.md"

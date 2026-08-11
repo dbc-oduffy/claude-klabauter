@@ -1350,11 +1350,31 @@ def _first_result(
         return None
 
     cwd = payload.get("cwd") or os.getcwd()
-    repo_root = _git_show_toplevel(cwd=cwd) or cwd
     abs_file_path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
+    # Cwd-vs-target defect: repo_root is resolved from the TARGET FILE's own
+    # repo, not the session's cwd. A session rooted at repo A writing into
+    # SIBLING repo B's tree used to derive repo_root from cwd (repo A), so
+    # `_to_repo_relative` always returned None for a repo-B path and this
+    # whole walk short-circuited before ANY schema step ran — every
+    # schema-governed doc type was silently unvalidated on a cross-repo
+    # write. See `check()` for the companion rule this enables: a write
+    # whose repo_root differs from the session's OWN repo is a cross-repo
+    # write, and gets ADVISORY-ONLY treatment there — never a deny, whatever
+    # the finding class (DR-277) — even for the four findings that deny
+    # unconditionally in-repo. In-repo callers (repo_root == session repo)
+    # are unaffected: the resolved root is identical either way.
+    target_dir = os.path.dirname(abs_file_path) or cwd
+    repo_root = _git_show_toplevel(cwd=target_dir) or cwd
     repo_rel = _to_repo_relative(abs_file_path, repo_root)
     if not repo_rel:
         return None
+
+    session_repo_root = _git_show_toplevel(cwd=cwd) or cwd
+    is_cross_repo_write = os.path.normcase(os.path.abspath(repo_root)) != os.path.normcase(
+        os.path.abspath(session_repo_root)
+    )
+    if _forensics is not None:
+        _forensics["is_cross_repo_write"] = is_cross_repo_write
 
     ctx = _load_context(_forensics=_forensics)
     if ctx is None:
@@ -1587,26 +1607,42 @@ def _capture_guard_forensics(
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the frontmatter-schema HARD-DENY leg.
 
+    Cwd-vs-target defect + advisory-only cross-repo rule (2a): `_first_result`
+    resolves `repo_root` from the TARGET FILE's own repo, not the session's
+    cwd (see its own comment) — a session rooted at one repo writing into a
+    SIBLING repo's tree used to see `_to_repo_relative` return `None` before
+    any schema step ran, so every schema-governed doc type was silently
+    unvalidated on a cross-repo write. Making that write reachable does NOT
+    make it denyable: a write whose resolved `repo_root` differs from the
+    session's OWN repo (`forensics["is_cross_repo_write"]`) gets ADVISORY-ONLY
+    treatment below, whatever the finding class — including the four findings
+    that deny unconditionally in-repo. This is DR-277 (guards are advisory by
+    default) applied deliberately, not a hardening: a sibling guard's hardness
+    on another tool surface (here, this module's own in-repo behavior) is not
+    grounds for hardening the cross-repo case too. In-repo behavior
+    (`is_cross_repo_write` False) is BYTE-IDENTICAL to before this fix.
+
     Returns a hard-deny envelope only for the four genuinely-UNCONDITIONAL
     findings (own-inbox misplacement, lineage-reachability, grouping-approval
     scope cut, out-of-enum handoff `kind` — see the four "UNCONDITIONAL deny"
     call sites in `_reachability_and_schema_step` and `_memo_guard_step`'s
     own-inbox branch), none of which are gated on `COORDINATOR_SCHEMA_STRICT`
-    at all. Every other first-firing step is shape=="advisory" (2026-08-06 PM
-    ruling: a schema-shaped violation warns, never hard-blocks — see this
-    module's docstring). In default (non-strict) mode this leg stays silent
-    for those and lets ``validate_frontmatter_schema_advisory`` render the
-    warning (mutual exclusivity, unchanged); under
-    ``COORDINATOR_SCHEMA_STRICT=1`` the advisory sibling stands down for its
-    own warn-by-default branches and THIS module renders the identical
-    `additionalContext` warning instead — strict no longer escalates these
-    findings to a deny, it only moves which module renders the warning. One
-    further non-blocking exception: when `_match_schema` found nothing
-    because the write's doc type is `offerable: true` in the manifest but has
-    no vendored schema (see `_unvendored_offerable_doc_type`), this returns a
-    non-blocking `additionalContext` diagnostic instead of the silent `None`
-    a genuinely-non-matching write gets — that silence is the regression
-    this closes (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-twelve-doc-types-
+    at all, and ONLY for an in-repo target. Every other first-firing step is
+    shape=="advisory" (2026-08-06 PM ruling: a schema-shaped violation warns,
+    never hard-blocks — see this module's docstring). In default (non-strict)
+    mode this leg stays silent for those and lets
+    ``validate_frontmatter_schema_advisory`` render the warning (mutual
+    exclusivity, unchanged); under ``COORDINATOR_SCHEMA_STRICT=1`` the
+    advisory sibling stands down for its own warn-by-default branches and
+    THIS module renders the identical `additionalContext` warning instead —
+    strict no longer escalates these findings to a deny, it only moves which
+    module renders the warning. One further non-blocking exception: when
+    `_match_schema` found nothing because the write's doc type is
+    `offerable: true` in the manifest but has no vendored schema (see
+    `_unvendored_offerable_doc_type`), this returns a non-blocking
+    `additionalContext` diagnostic instead of the silent `None` a genuinely-
+    non-matching write gets — that silence is the regression this closes
+    (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-twelve-doc-types-
     lost-write-enforcement-today.md).
     """
     forensics: Dict[str, Any] = {}
@@ -1643,6 +1679,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     shape, message = result
     if shape == "deny":
+        if forensics.get("is_cross_repo_write"):
+            # DR-277 advisory-by-default (docs/decisions/DR-277-guards-are-
+            # advisory-by-default-two-named.md): a target outside the
+            # session's OWN repo never denies here, whatever the finding
+            # class — including the four findings that deny unconditionally
+            # in-repo (own-inbox misplacement, lineage-reachability,
+            # grouping-approval scope cut, out-of-enum handoff `kind`). This
+            # is closing the cwd-vs-target blindness (`_first_result`) into
+            # a WARNING, not a new hard-block surface: cross-surface parity
+            # with the in-repo deny is explicitly not grounds for hardening
+            # (DR-277). In-repo behavior (this branch's `else`) is untouched.
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": (
+                        "[frontmatter-schema guard — advisory only, cross-repo target, "
+                        f"write proceeds] {message}"
+                    ),
+                }
+            }
         _capture_guard_forensics(payload, forensics, capture_reason="deny", deny_reason=message)
         return {
             "hookSpecificOutput": {

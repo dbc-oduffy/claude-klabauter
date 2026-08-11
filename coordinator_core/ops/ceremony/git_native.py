@@ -1009,6 +1009,29 @@ def _commit_scoped_private_index(
         temp_index.unlink(missing_ok=True)
 
 
+    # Claim-release classification (C3, docs/plans/2026-08-11-claim-release-
+    # and-the-gate-that-cannot-clear.md): NOT instrumented here, deliberately.
+    # `commit_scoped()` has THREE production callers, not one:
+    # `commit_pipeline.commit()` (via `scoped_git_commit.py::_handler`,
+    # already the reference release site — releasing again here would
+    # double the `git status --porcelain` spawn for that path), plus TWO
+    # direct callers this chunk's file list does not own
+    # (`ops/ceremony/post_commit_tail.py`, `ops/ceremony/consumed_handoff_
+    # stamp.py`). Those two callers are genuinely uninstrumented today and
+    # a real gap this chunk did not close — flagged as a finding rather than
+    # fixed here, for two reasons: (1) file-scope (neither is in this
+    # executor's in-scope list), and (2) `commit_scoped()` itself has no
+    # notion of "the committing session's own sid" the way its callers do —
+    # `scoped_git_commit.py` resolves it via `_resolve_committing_session_id`
+    # (params-aware, not a bare env-var read), which may legitimately differ
+    # from a blind `session_core.resolve_session_id(cwd)` call made from
+    # inside this shared helper. Wiring a release call in here risks
+    # attributing a release to the wrong sid for whichever caller's
+    # resolution semantics differ — exactly the self/other boundary this
+    # plan's own hard constraints forbid guessing at. Report this to the EM
+    # as an open C3 gap for `post_commit_tail.py`/`consumed_handoff_stamp.py`
+    # to pick up as their own dispatch, each resolving its own committing
+    # sid the way its own call site already knows how to.
 def commit_scoped(
     paths: Sequence[str],
     msg_file: Union[str, Path],

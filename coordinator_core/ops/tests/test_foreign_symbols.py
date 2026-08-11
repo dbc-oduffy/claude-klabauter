@@ -203,6 +203,7 @@ def test_missing_grammar_uses_real_diagnostic_text_shape():
         ),
         "file": None,
         "line": None,
+        "language": "typescript",
     }
     result = _result(files=[], diagnostics=[diagnostic])
     findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
@@ -232,6 +233,7 @@ def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent
         ),
         "file": None,
         "line": None,
+        "language": "typescript",
     }
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
@@ -276,6 +278,7 @@ def test_aggregate_symbol_count_does_not_mask_per_extension_gap():
         ),
         "file": None,
         "line": None,
+        "language": "javascript",
     }
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
@@ -661,3 +664,285 @@ def test_every_js_ts_extension_gets_its_own_asserted_finding(extension):
     this_ext = [f for f in findings if f["extension"] == extension]
     assert len(this_ext) == 1
     assert this_ext[0]["state"] == "corpus_fact"
+
+
+# ---------------------------------------------------------------------------
+# Forward-compatible migration for `ExtractionDiagnostic.language`/`code`
+# (memo reply 7e6559f1; debt record
+# state/debt-backlog/2026-08-11-foreign-symbols-substring-language-match-aw.yaml).
+# Neither field exists on the installed wheel at the pinned
+# example-retrieval-repo-symbol-extract ref, but `_diagnostic_names_language` must
+# already honour field-preferred/prose-fallback precedence so the fields go
+# live with no further code edit once the pin moves.
+# ---------------------------------------------------------------------------
+
+
+def test_language_field_present_and_matching_wins_over_prose_naming_other_language():
+    # The message's prose names "javascript" — a different language than the
+    # populated field — proving the field decided the match, not the prose.
+    diagnostic = {
+        "level": "error",
+        "message": "grammar unavailable for javascript: file(s) skipped",
+        "file": None,
+        "line": None,
+        "language": "typescript",
+    }
+    result = _result(files=[], diagnostics=[diagnostic])
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    ts_findings = [f for f in findings if f["extension"] == ".ts"]
+    assert len(ts_findings) == 1
+    assert ts_findings[0]["state"] == "missing_grammar"
+
+
+def test_language_field_present_and_not_matching_overrides_prose_substring_match():
+    # The prose WOULD substring-match "typescript", but the populated field
+    # says "javascript" — the field must win, so .ts must NOT be attributed.
+    diagnostic = {
+        "level": "error",
+        "message": "grammar unavailable for typescript: file(s) skipped",
+        "file": None,
+        "line": None,
+        "language": "javascript",
+    }
+    result = _result(files=[], diagnostics=[diagnostic])
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    ts_findings = [f for f in findings if f["extension"] == ".ts"]
+    assert len(ts_findings) == 1
+    assert ts_findings[0]["state"] == "corpus_fact"
+
+    js_findings = [f for f in findings if f["extension"] == ".js"]
+    assert len(js_findings) == 1
+    assert js_findings[0]["state"] == "missing_grammar"
+
+
+def test_language_field_absent_attributes_to_nothing_and_is_unattributed():
+    # A `language`-absent diagnostic no longer falls back to substring
+    # matching (the transitional fallback was deleted once the pin move
+    # occurred) — it attributes to NOTHING and surfaces as
+    # `unattributed_diagnostic`, never silently classified as this
+    # extension's `missing_grammar`.
+    diagnostic = {
+        "level": "error",
+        "message": "grammar unavailable for typescript: file(s) skipped",
+        "file": None,
+        "line": None,
+        "language": None,
+    }
+    result = _result(files=[], diagnostics=[diagnostic])
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    ts_findings = [f for f in findings if f["extension"] == ".ts"]
+    assert len(ts_findings) == 1
+    assert ts_findings[0]["state"] == "corpus_fact"
+
+    unattributed = [f for f in findings if f["state"] == "unattributed_diagnostic"]
+    assert len(unattributed) == 1
+    assert unattributed[0]["detail"] == diagnostic["message"]
+
+
+def test_language_field_names_language_absent_from_census_is_unattributed():
+    diagnostic = {
+        "level": "error",
+        "message": "grammar unavailable for typescript: file(s) skipped",
+        "file": None,
+        "line": None,
+        "language": "rust",
+    }
+    result = _result(files=[], diagnostics=[diagnostic])
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    unattributed = [f for f in findings if f["state"] == "unattributed_diagnostic"]
+    assert len(unattributed) == 1
+    assert unattributed[0]["detail"] == diagnostic["message"]
+
+    # No JS/TS extension may absorb this diagnostic as missing_grammar,
+    # since the field names "rust", which is absent from the census.
+    assert not any(f["state"] == "missing_grammar" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# Name-invariant drop discriminator — example-retrieval-repo-em memo
+# cross-repo/inbox/2026-08-11-example-retrieval-repo-em-symbol-name-invariant-now-drops-rows.md:
+# `ExtractionResult.__post_init__` drops a `Symbol` whose `name` carries a
+# line terminator or exceeds 1024 chars, appending an `error`-level
+# diagnostic with a non-None `file`. Must classify as `name_invariant_drop`,
+# never `parse_failure` — the file itself parsed fine.
+# ---------------------------------------------------------------------------
+
+
+def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
+    diagnostic = {
+        "level": "error",
+        "message": "symbol name invariant violated — name contains a line terminator",
+        "file": "src/app.ts",
+        "line": 7,
+        "code": "symbol_name_invariant",
+    }
+    result = _result(
+        files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
+        diagnostics=[diagnostic],
+    )
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    drops = [f for f in findings if f["state"] == "name_invariant_drop"]
+    assert len(drops) == 1
+    assert drops[0]["extension"] == ".ts"
+
+    assert not any(f["state"] == "parse_failure" for f in findings)
+
+
+def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure():
+    # Precedence test: `code` is populated but names a DIFFERENT diagnostic
+    # class, even though the prose WOULD prefix-match the drop message —
+    # the field must win and this must stay a parse_failure.
+    diagnostic = {
+        "level": "error",
+        "message": "symbol name invariant violated — coincidental prefix match",
+        "file": "src/app.ts",
+        "line": 7,
+        "code": "some_other_diagnostic_code",
+    }
+    result = _result(
+        files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
+        diagnostics=[diagnostic],
+    )
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    assert not any(f["state"] == "name_invariant_drop" for f in findings)
+    parse_failures = [f for f in findings if f["state"] == "parse_failure"]
+    assert len(parse_failures) == 1
+
+
+def test_code_none_with_documented_prefix_is_not_a_drop_stays_parse_failure():
+    # The prose prefix fallback was deleted once the pin move occurred — a
+    # `code is None` diagnostic is no longer treated as a drop even when its
+    # message carries the documented prose prefix verbatim.
+    diagnostic = {
+        "level": "error",
+        "message": "symbol name invariant violated — name exceeds 1024 chars",
+        "file": "src/app.ts",
+        "line": 3,
+        "code": None,
+    }
+    result = _result(
+        files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
+        diagnostics=[diagnostic],
+    )
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    assert not any(f["state"] == "name_invariant_drop" for f in findings)
+    parse_failures = [f for f in findings if f["state"] == "parse_failure"]
+    assert len(parse_failures) == 1
+
+
+def test_code_none_ordinary_parse_error_stays_parse_failure():
+    diagnostic = {
+        "level": "error",
+        "message": "parse error in src/broken.ts: unexpected token",
+        "file": "src/broken.ts",
+        "line": 42,
+        "code": None,
+    }
+    result = _result(
+        files=[{"path": "src/broken.ts", "functions": []}],
+        diagnostics=[diagnostic],
+    )
+    findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
+
+    assert not any(f["state"] == "name_invariant_drop" for f in findings)
+    parse_failures = [f for f in findings if f["state"] == "parse_failure"]
+    assert len(parse_failures) == 1
+
+
+def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeypatch, tmp_path):
+    import coordinator_core.ops.foreign_symbols as mod
+
+    clean_target = tmp_path / "clean.md"
+    clean_target.write_text("# heading", encoding="utf-8")
+    dropped_target = tmp_path / "dropped.md"
+    dropped_target.write_text("# heading\nwith\nnewline", encoding="utf-8")
+    errored_target = tmp_path / "errored.md"
+    errored_target.write_text("# broken", encoding="utf-8")
+
+    class _FakeDiagDrop:
+        level = "error"
+        message = "symbol name invariant violated — name contains a line terminator"
+        file = str(dropped_target)
+        line = 1
+        code = "symbol_name_invariant"
+
+    class _FakeDiagError:
+        level = "error"
+        message = "parse error: unexpected token"
+        file = str(errored_target)
+        line = 2
+        code = None
+
+    class _FakeExtractionResult:
+        symbols = [_FakeSymbol("main", "function", decl_text="clean", range_start_line=1)]
+        symbols[0].file = str(clean_target)
+        diagnostics = [_FakeDiagDrop(), _FakeDiagError()]
+
+    class _FakeSymbolExtract:
+        @staticmethod
+        def extract(root, changed_files):
+            return _FakeExtractionResult()
+
+        @staticmethod
+        def language_for_extension(extension):
+            return "markdown"
+
+    monkeypatch.setattr(mod, "_import_symbol_extract", lambda: _FakeSymbolExtract)
+
+    result = build_foreign_symbols(
+        target_root=tmp_path,
+        files=[str(clean_target), str(dropped_target), str(errored_target)],
+    )
+
+    entries_by_path = {entry["path"]: entry for entry in result["files"]}
+
+    dropped_entry = entries_by_path["dropped.md"]
+    assert dropped_entry["name_invariant_drops"] == [_FakeDiagDrop.message]
+    assert "error" not in dropped_entry
+
+    errored_entry = entries_by_path["errored.md"]
+    assert errored_entry["error"] == _FakeDiagError.message
+    assert "name_invariant_drops" not in errored_entry
+
+    clean_entry = entries_by_path["clean.md"]
+    assert "error" not in clean_entry
+    assert "name_invariant_drops" not in clean_entry
+
+
+# ---------------------------------------------------------------------------
+# Floor test — proves the field-only contract holds against the REAL
+# installed wheel, not only against fixtures/fakes. Skips cleanly when the
+# optional `symbols` extra is not installed (same convention as
+# test_cartography_symbols.py's test_real_typescript_extraction_end_to_end).
+# ---------------------------------------------------------------------------
+
+
+def test_extraction_diagnostic_carries_code_and_language_on_real_wheel():
+    pytest.importorskip(
+        "symbol_extract",
+        reason="the optional [symbols] extra is not installed in this environment",
+    )
+    import dataclasses
+
+    import symbol_extract
+    from symbol_extract._result import (
+        DIAGNOSTIC_CODE_GRAMMAR_UNAVAILABLE,
+        DIAGNOSTIC_CODE_PARSE_FAILURE,
+        DIAGNOSTIC_CODE_SYMBOL_NAME_INVARIANT,
+        DIAGNOSTIC_CODE_UNREADABLE_FILE,
+    )
+
+    field_names = {f.name for f in dataclasses.fields(symbol_extract.ExtractionDiagnostic)}
+    assert {"code", "language"} <= field_names
+
+    assert DIAGNOSTIC_CODE_GRAMMAR_UNAVAILABLE == "grammar_unavailable"
+    assert DIAGNOSTIC_CODE_PARSE_FAILURE == "parse_failure"
+    assert DIAGNOSTIC_CODE_UNREADABLE_FILE == "unreadable_file"
+    assert DIAGNOSTIC_CODE_SYMBOL_NAME_INVARIANT == "symbol_name_invariant"

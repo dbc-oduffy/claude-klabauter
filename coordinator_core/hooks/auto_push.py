@@ -154,6 +154,15 @@ _PAT_GH_LFS_QUOTA = re.compile(
 _PAT_REF_LOCK = re.compile(
     r"(cannot lock ref|failed to lock|Reference has changed|reference already exists)"
 )
+# A local branch ref that no longer exists at push time (e.g. renamed out
+# from under a stale pending-push record, or deleted between resolve and
+# push) -- client-side, printed by `git push` itself before it ever reaches
+# the remote. Matched here, ahead of the FF/transient/network arms below,
+# because it is the most specific read of "does not match any": nothing
+# later in the ladder describes a dead local refspec, so an earlier position
+# only widens which stderrs this catches, never narrows another arm's own
+# match set.
+_PAT_DEAD_REF = re.compile(r"src refspec .* does not match any")
 _PAT_NON_FAST_FORWARD = re.compile(
     r"(non-fast-forward|rejected.*fetch first|tip of your current branch is behind|stale info)"
 )
@@ -206,6 +215,8 @@ def classify_error(stderr_text: str) -> str:
         return "gh-lfs-quota"
     if _PAT_REF_LOCK.search(stderr_text):
         return "ref-lock"
+    if _PAT_DEAD_REF.search(stderr_text):
+        return "dead-ref"
     if _PAT_NON_FAST_FORWARD.search(stderr_text):
         return "non-fast-forward"
     if _PAT_GH_TRANSIENT.search(stderr_text):
@@ -613,6 +624,37 @@ def log_race_resolved(repo_root: str, branch: str, route: str, attempts: int) ->
     print(
         f"coordinator-auto-push: race resolved on {branch} ({route}, "
         f"after {attempts} attempt(s)) -- commit already on origin, no data at risk",
+        file=sys.stderr,
+    )
+
+
+def log_dead_ref_failure(
+    repo_root: str, branch: str, route: str, attempts: int, stderr_text: str
+) -> None:
+    """Stderr-only report for a `dead-ref` push rejection (AC3).
+
+    Deliberately NEVER written to `.git/push-failures.log`, following
+    `log_race_resolved()`'s precedent verbatim: that file's entire job is
+    "crash insurance is not currently working" (see its docstring), and a
+    `src refspec ... does not match any` rejection means the push targeted a
+    branch ref that is simply gone -- there is no crash-insurance question
+    to answer, and this class is deliberately excluded from
+    `_RETRYABLE_CLASSES` so it is reported exactly once per attempt, never
+    looped. Both `workday.surface_auto_push_failure_stats` and the
+    Stop-time mid-session detector (`runtime-tripwire-em-check.py::
+    _check_push_failures`, example-doctrine-repo) read `push-failures.log`; keeping
+    dead-ref rejections out of it is what keeps their counts meaning
+    "unrecovered failures" rather than "lines written." The pending-record
+    loop this class was introduced to close is `drain_pending_push()`'s own
+    concern (AC4-AC7) -- this function is purely the forensic trace for the
+    push attempt itself, unconditional repo_root parameter kept only for
+    call-site symmetry with `log_failure`/`log_race_resolved`.
+    """
+    first_err = extract_first_err(stderr_text)
+    print(
+        f"coordinator-auto-push: push failed on {branch} ({route}/dead-ref "
+        f"after {attempts}) -- branch refspec no longer exists upstream, "
+        f"not retrying: {first_err or '<empty>'}",
         file=sys.stderr,
     )
 
@@ -1050,6 +1092,94 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     return True
 
 
+def _branch_resolves_locally(repo_root: str, branch: str) -> bool:
+    """True if `branch` still names a local ref -- `git rev-parse --verify
+    refs/heads/<branch>` succeeds. Used by `drain_pending_push` to detect a
+    record left behind by a branch rename (or any other disappearance of
+    the local ref) BEFORE attempting the push (AC4), rather than
+    discovering it only after `push_once` fails with `dead-ref`.
+    """
+    return _run_git(repo_root, ["rev-parse", "--verify", f"refs/heads/{branch}"]) is not None
+
+
+def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
+    """Resolve a pending record whose `branch` no longer resolves as a
+    local ref (AC5-AC7) -- the closed loop the record's own presence would
+    otherwise drive forever: once `hold_until` has passed, `due` stays true
+    on every later commit, so without this the record would be re-drained
+    (and, pre-AC1/AC2, re-failed into push-failures.log) on every commit
+    from here on.
+
+    Branches on the pinned `sha`, in this order:
+      1. `sha` absent, or already reachable from origin's copy of the
+         CURRENT branch (typically the rename's own push, which already
+         carried the commit) -- the queued push either never had a payload
+         or has already landed by some other path. Drop, stderr note only
+         (AC6). Checked first: if the commit is already safely on origin,
+         there is nothing left to retarget-and-push, even if it also
+         happens to be locally reachable from the current branch.
+      2. `sha` reachable from the CURRENT local branch (not yet on origin)
+         -- the commits moved with the rename and the queued push is still
+         wanted, just misaddressed. Re-target the record onto the current
+         branch via `_write_pending_record` and push it (AC5); that push's
+         own success clears the just-rewritten record via
+         `_clear_pending_record_if_branch`, same as any other successful
+         push.
+      3. Reachable from nowhere this function can check -- a genuine loss
+         risk, not a rename artifact. ONE loud `push-failures.log` row
+         naming the orphaned sha, then drop (AC7): retrying can never
+         succeed (the ref that named it is gone and no live branch carries
+         it), so looping would only convert a real signal into noise.
+    """
+    sha = record.get("sha")
+    current_branch = resolve_branch(repo_root)
+
+    if not sha or (current_branch and _is_superseded(repo_root, current_branch, sha)):
+        print(
+            f"coordinator-auto-push: dropping pending push for {branch} -- "
+            "branch no longer resolves locally and the commit is already "
+            "on origin (or no commit was pinned); nothing to retry.",
+            file=sys.stderr,
+        )
+        _remove_pending_record(repo_root)
+        return
+
+    if current_branch and _is_ancestor(repo_root, sha, current_branch):
+        retargeted = _write_pending_record(
+            repo_root,
+            current_branch,
+            sha,
+            record.get("hold_until", time.time()),
+            record.get("holder_pid", os.getpid()),
+        )
+        if retargeted:
+            print(
+                f"coordinator-auto-push: pending push for {branch} "
+                f"re-targeted to {current_branch} (branch rename) -- "
+                "pushing.",
+                file=sys.stderr,
+            )
+            run_push_with_retry(repo_root, current_branch, _skip_hold=True)
+            return
+        # _write_pending_record failed (AC14a's own precondition-(1)
+        # contract: a failed write is never trusted) -- fall through to the
+        # orphaned-report path below rather than silently dropping a
+        # payload that IS still reachable somewhere, so the loss is at
+        # least reported once instead of vanishing unlogged.
+
+    log_failure(
+        repo_root,
+        branch,
+        "drain",
+        "dead-ref-orphaned",
+        1,
+        f"pending push for {branch} orphaned: sha {sha!r} unreachable from "
+        "the current local branch or origin; commits may be lost",
+        "",
+    )
+    _remove_pending_record(repo_root)
+
+
 def drain_pending_push(repo_root: str) -> None:
     """Drain point for the durable pending-push record (AC14).
 
@@ -1084,8 +1214,18 @@ def drain_pending_push(repo_root: str) -> None:
     A record is only actioned once its hold window has elapsed (`hold_until`
     reached) or its holder is confirmed dead (`_record_is_stale`) -- an
     in-window, live-holder record is left alone; draining it early would
-    just race the incumbent's own wake-and-push. Pushes the record's
-    branch synchronously via `run_push_with_retry(..., _skip_hold=True)` --
+    just race the incumbent's own wake-and-push.
+
+    Before pushing, the record's `branch` is checked for local resolvability
+    (`_branch_resolves_locally`, AC4) -- a branch that no longer resolves
+    (most commonly: renamed out from under the record by
+    `workday-start-step0`'s midnight rename) is handed to
+    `_drain_dead_ref_record` instead of `run_push_with_retry`, which would
+    otherwise fail every attempt with `dead-ref` and, since `due` stays true
+    on every commit once `hold_until` has passed, do so forever (AC5-AC7).
+
+    When the branch DOES resolve, behavior is unchanged from before AC4-AC7:
+    pushed synchronously via `run_push_with_retry(..., _skip_hold=True)` --
     bypassing `_hold_window` entirely, since this call IS the drain, not a
     new hold decision -- and that call's own success path removes the
     record (`_clear_pending_record_if_branch`), so a push that fails here
@@ -1104,6 +1244,9 @@ def drain_pending_push(repo_root: str) -> None:
         hold_until = record.get("hold_until")
         due = isinstance(hold_until, (int, float)) and now >= hold_until
         if not due and not _record_is_stale(record, now):
+            return
+        if not _branch_resolves_locally(repo_root, branch):
+            _drain_dead_ref_record(repo_root, record, branch)
             return
         run_push_with_retry(repo_root, branch, _skip_hold=True)
     except Exception:
@@ -1187,6 +1330,15 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
             return
 
         err_class = classify_error(stderr_text)
+
+        if err_class == "dead-ref":
+            # Not in _RETRYABLE_CLASSES (AC2) -- a dead local branch ref
+            # cannot self-heal by resending the same push, so report once
+            # and stop rather than falling through to the generic
+            # log_failure() path below (AC3). See log_dead_ref_failure's
+            # docstring for why this stays out of push-failures.log.
+            log_dead_ref_failure(repo_root, branch, route, attempt, stderr_text)
+            return
 
         if err_class == "non-fast-forward":
             if local_sha and _is_superseded(repo_root, branch, local_sha):

@@ -399,6 +399,28 @@ _WILDCARD_DIR_TYPES: frozenset[str] = frozenset({
 # `_collect_research_claim_records`.
 _SYNTHETIC_TYPES: frozenset[str] = frozenset({'handoff-ledger', 'research-claim'})
 
+# OPT-IN archive coverage (default OFF — see the `include_archived` param on
+# `_collect_type_records` and the `records.query` handler below). Maps a
+# *live* record type to the glob that additionally surfaces its archived
+# counterpart when a caller explicitly asks for it. Every existing caller
+# (ceremony renderers, the tracker, refresh-queries) passes nothing and is
+# therefore unaffected — `_TYPE_TO_GLOB`/`_collect_files` themselves are NOT
+# touched by this map; it is consulted only from the opt-in merge step.
+#
+# `handoff` and `cross-repo-memo` reuse the archive globs already wired as
+# first-class types (`handoff-archived`, `archived-memo`) rather than
+# duplicating the glob string. `plan`'s archive home
+# (`archive/specs/**/*.md`, month-bucketed, same canonical-filename shape as
+# `docs/plans/` — verified against on-disk archived specs at fix time) has no
+# first-class `_TYPE_TO_GLOB` entry of its own: nothing outside this opt-in
+# path needs to query archived plans independently of their live
+# counterpart, so it is named only here.
+_ARCHIVE_GLOB_FOR_TYPE: dict[str, str] = {
+    'handoff':         _TYPE_TO_GLOB['handoff-archived'],
+    'cross-repo-memo': _TYPE_TO_GLOB['archived-memo'],
+    'plan':            'archive/specs/**/*.md',
+}
+
 # ---------------------------------------------------------------------------
 # Legacy prose-queue invisibility signal (DR-115 — example-doctrine-repo
 # docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md).
@@ -1616,7 +1638,9 @@ def _apply_since_where_filters(
     return results
 
 
-def _collect_type_records(worktree_root: Path, record_type: str) -> list[dict]:
+def _collect_type_records(
+    worktree_root: Path, record_type: str, *, include_archived: bool = False,
+) -> list[dict]:
     """Collect every record of one type — no since/older-than/where/sort/limit applied.
 
     Factored out of ``_handler`` (and reused by ``_query_unattached_all``) so
@@ -1627,6 +1651,16 @@ def _collect_type_records(worktree_root: Path, record_type: str) -> list[dict]:
     single-type handler turns it into an ``incomplete``/``error`` payload; the
     union lens warns-and-skips that one type, matching query-records.js's
     ``queryUnattachedAll`` try/catch-and-continue).
+
+    ``include_archived`` (default ``False``, OPT-IN): when true and
+    ``record_type`` has an entry in ``_ARCHIVE_GLOB_FOR_TYPE``, additionally
+    walks that archive glob and appends its files to the live candidate list
+    BEFORE loading — live files first, then archive files (same ordering
+    ``_collect_handoff_ledger_records`` already uses for its own live+archive
+    merge). ``_collect_files`` itself is never called with anything but the
+    live ``record_type``, so the default-off path is byte-identical to
+    pre-existing behaviour: this parameter only ever ADDS files on top of
+    what ``_collect_files(worktree_root, record_type)`` already returns.
     """
     if record_type == 'handoff-ledger':
         return _collect_handoff_ledger_records(worktree_root)
@@ -1636,6 +1670,14 @@ def _collect_type_records(worktree_root: Path, record_type: str) -> list[dict]:
     candidates = _collect_files(worktree_root, record_type)
     if record_type == 'plan':
         candidates = _apply_plan_filename_filter(candidates)
+
+    if include_archived:
+        archive_glob = _ARCHIVE_GLOB_FOR_TYPE.get(record_type)
+        if archive_glob is not None:
+            archive_files = _walk_glob_segments(worktree_root, archive_glob.split('/'))
+            if record_type == 'plan':
+                archive_files = _apply_plan_filename_filter(archive_files)
+            candidates = [*candidates, *archive_files]
 
     results: list[dict] = []
     for fpath in candidates:
@@ -1741,7 +1783,10 @@ def _format_output(results: list[dict], fmt: str, *, record_type: Optional[str])
 # unfiltered SUPERSET with exit 0, which reads as healthy and is worse than
 # the hard failure (2026-07-22 claude-central-em silent-param-drop memo).
 _KNOWN_PARAM_KEYS = frozenset(
-    {"type", "where", "since", "older_than", "sort", "format", "limit", "unattached"}
+    {
+        "type", "where", "since", "older_than", "sort", "format", "limit",
+        "unattached", "include_archived",
+    }
 )
 
 
@@ -1788,6 +1833,17 @@ def _handler(
                      the assembled union, not per type. When ``type`` is
                      present alongside ``unattached``, the predicate scopes to
                      that single type instead.
+        include_archived: bool (optional, default false) — OPT-IN archive
+                     coverage. When true and ``type`` has an archived
+                     counterpart (``handoff`` -> ``archive/handoffs/**/*.md``,
+                     ``plan`` -> ``archive/specs/**/*.md``, ``cross-repo-memo``
+                     -> ``cross-repo/archive/*.md`` — see
+                     ``_ARCHIVE_GLOB_FOR_TYPE``), archived records are
+                     additionally collected alongside the live set. Default
+                     OFF and scoped to the single-``type`` path only (does NOT
+                     extend the ``--unattached``-without-``type`` union lens)
+                     — every existing caller that omits this param sees
+                     EXACTLY today's result set, unchanged.
 
     Returns:
         ``format=paths``: ``{"records": <newline-joined repo-relative paths>}``
@@ -1845,6 +1901,7 @@ def _handler(
     fmt: str = params.get('format') or 'markdown-list'
     limit: int = int(params.get('limit', 50))
     unattached: bool = bool(params.get('unattached'))
+    include_archived: bool = bool(params.get('include_archived'))
 
     # ---- Multi-type --unattached union lens: type absent, unattached=true ---
     # Dispatch mirrors query-records.js's `opts.unattached && !opts.type` gate
@@ -1919,7 +1976,9 @@ def _handler(
     # `records` value (empty), but callers that check `incomplete`/`error` can
     # now tell "scan failed" apart from "zero records exist".
     try:
-        results = _collect_type_records(worktree_root, record_type)
+        results = _collect_type_records(
+            worktree_root, record_type, include_archived=include_archived,
+        )
     except _RecordsCollectError as exc:
         payload = _empty_payload(fmt)
         payload['incomplete'] = True

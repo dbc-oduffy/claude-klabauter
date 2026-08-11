@@ -77,6 +77,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
 
+from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session import liveness
 from coordinator_core.session import scope
@@ -635,6 +636,21 @@ def promote_claim_stage(
     return True
 
 
+class ClaimRelocationError(OSError):
+    """Raised by ``relocate_artifact_claim`` when the physical directory move
+    itself fails (permission denial, cross-volume ``EXDEV``, transient FS
+    error) — distinct from a ``False`` return, which is reserved for a
+    genuine destination-collision refusal (someone else already holds
+    ``new_basename``) or an unresolvable claim base. A caller catching only
+    the bool could not previously tell "someone else holds it" (retry is
+    wrong; resolve the collision first) apart from "the move broke" (retry
+    might just work) — this exception restores that distinction.
+
+    Review: code-reviewer — the two failure modes were both a bare `False`
+    return; separated so callers can discriminate collision from OS error.
+    """
+
+
 def relocate_artifact_claim(
     class_: str,
     old_basename: str,
@@ -696,6 +712,15 @@ def relocate_artifact_claim(
       - False on an unresolvable claim base (bad baton root, not a git repo).
       - True (no-op) when ``old_basename == new_basename`` — nothing to do.
 
+    Raises:
+      - ``ClaimRelocationError`` (an ``OSError`` subclass) when the physical
+        ``os.replace`` of the claim directory itself fails — permission
+        denial, cross-volume ``EXDEV``, a transient FS error. Kept distinct
+        from the ``False`` collision return: a collision needs the caller to
+        resolve a two-holder conflict before renaming, while this needs
+        either a retry or a surfaced failure — conflating the two under one
+        falsy return left a caller unable to tell them apart.
+
     NEGATIVE-SPEC — the already-orphaned case (see backlog item's "already-
     orphaned case" discussion). This function does NOT scan for, detect, or
     adopt a PRE-EXISTING orphan left by a rename that happened before this
@@ -737,6 +762,23 @@ def relocate_artifact_claim(
     if not old_claim_dir.is_dir():
         return True  # nothing claimed at the old name — nothing to relocate
 
+    # Review: code-reviewer — TOCTOU window, accepted and named rather than
+    # closed. Between this `exists()` check and the `os.replace` below, a
+    # peer's `claim_artifact` could create a claim dir at `new_basename`; on
+    # POSIX, `os.rename`/`os.replace` onto an existing EMPTY directory
+    # succeeds silently, so the peer's brand-new claim would be silently
+    # clobbered rather than refused. On Windows NTFS (this repo's first-class
+    # platform) `os.replace` raises `FileExistsError`/`PermissionError` when
+    # the destination directory already exists — `MoveFileExW` will not
+    # replace an existing directory — so the peer's claim wins there: the
+    # `except OSError` branch below fires and this call now raises
+    # `ClaimRelocationError` instead of silently winning the race. The
+    # platforms diverge in outcome (Windows: safe, raises; POSIX: unsafe,
+    # silent clobber) rather than diverging in whether the window exists —
+    # closing it fully would need an atomic "create-if-absent, else fail"
+    # primitive this claim dir's plain-`mkdir` shape does not have. Narrow
+    # window in practice: claim-dir creation is itself rare and
+    # basename-targeted.
     if new_claim_dir.exists():
         print(
             f"cs_relocate_claim: refusing to relocate {old_basename!r} -> "
@@ -755,7 +797,9 @@ def relocate_artifact_claim(
             f"{new_basename!r}: {exc}",
             file=sys.stderr,
         )
-        return False
+        raise ClaimRelocationError(
+            f"failed to relocate claim {old_basename!r} -> {new_basename!r}: {exc}"
+        ) from exc
     return True
 
 
@@ -911,6 +955,222 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
 # Release + clear
 # ---------------------------------------------------------------------------
 
+#: The generic class selecting the PATH-TOUCH claim plane
+#: (``coordinator_core.session.claim_index`` / each claimant's ``touched.txt``
+#: ``T``/``R`` event log) instead of the mkdir-based ARTIFACT-CLAIM RECORD
+#: STORE (``<class>-claims/<basename>/`` dirs) the ``handoff``/``memo``/
+#: ``plan`` classes below manage. This is the plane ``who-claims-path``
+#: answers over and ``ceremony.scoped_git_commit``'s commit gate
+#: (``coordinator_core/ops/ceremony/scoped_git_commit.py::
+#: _check_claim_conflicts``) fails closed on -- widened onto here per
+#: cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+#: artifact-has-no-clear-path.md: a dead session's claim on an arbitrary
+#: repo-relative path (e.g. a doctrine/code file the three classed forms
+#: were never meant to cover) had a query surface (``who-claims-path``) and
+#: a consuming gate (``scoped_git_commit``) but no release path. ``basename``
+#: under this class is a repo-relative PATH, not a claim-store basename.
+ARTIFACT_CLASS_PATH = "artifact"
+
+
+def _release_path_claim_everywhere(
+    path: str, sids: set, base: str, cwd: Optional[str] = None
+) -> None:
+    """Physically release *path*'s touch-claim (``T`` event) from every
+    claimant in *sids*'s own ``touched.txt`` AND every agent ``touched.txt``
+    back-pointed to one of them.
+
+    The write-side counterpart to ``coordinator_core.session.claim_index``'s
+    read-only reverse index -- that module's own docstring ("NO ``record()``
+    -- rebuild-only by design") is why the write lives HERE, in claims.py
+    (the module that already owns release/clear semantics), rather than
+    there. Shared by ``_release_path_claim_artifact`` (self-release,
+    identity-checked -- the ``release_artifact`` counterpart) and
+    ``_clear_path_claim_if_dead`` (dead-holder release, liveness-checked --
+    the ``clear_claim_if_dead`` counterpart): the two callers differ only in
+    HOW *sids* was decided, never in how the write is performed.
+
+    For each ``(touched_path, claimant_sid)`` pair ``claim_index.
+    _enumerate_touched_files`` reaches whose claimant is in *sids*: re-scans
+    that ONE file's own events for *path* (via ``scope.parse_touch_event``,
+    normalized the same way ``claim_index._normalize_key`` normalizes, so a
+    backslashed caller path matches a forward-slashed on-disk entry) and
+    appends an ``R`` event ONLY if that file's LAST recorded event for
+    *path* is currently ``T`` -- mirrors ``scope._release_from_touched_
+    file``'s own T-check, just keyed on one caller-supplied path instead of
+    a git-clean set. Append-only, one ``write()`` call per file (PIPE_BUF
+    discipline, see ``atomic_dedup_append``'s docstring).
+
+    Fail-safe RETAIN per file: an unreadable/unwritable ``touched.txt`` just
+    skips that file's release rather than raising -- a partial release
+    (some claimant files updated, others not) is always safe here because
+    every remaining ``T`` still shows up on the next ``who-claims-path`` /
+    commit-gate lookup rather than being silently lost.
+    """
+    if not sids:
+        return
+    normalized_target = claim_index._normalize_key(path)
+    pairs, _complete = claim_index._enumerate_touched_files(base)
+    for touched_path, claimant_sid in pairs:
+        if claimant_sid not in sids:
+            continue
+        try:
+            lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        last_raw: Optional[str] = None
+        last_verb: Optional[str] = None
+        for line in lines:
+            verb, _ts, raw_path = scope.parse_touch_event(line)
+            if claim_index._normalize_key(raw_path) == normalized_target:
+                last_verb = verb
+                last_raw = raw_path
+        if last_verb != "T" or last_raw is None:
+            continue
+        try:
+            with open(touched_path, "a", encoding="utf-8") as fh:
+                fh.write(scope.format_touch_event("R", last_raw) + "\n")
+        except OSError:
+            continue
+
+
+def _resolve_path_claim_base(
+    baton_repo_root: str, cwd: Optional[str]
+) -> Tuple[Optional[str], bool]:
+    """Resolve the ``<...>/coordinator-sessions`` base for a PATH-TOUCH claim
+    op -- the ``artifact``-class sibling of ``_claim_base`` (that helper's
+    ``<class>-claims`` subdir has no meaning on this plane, so this is a
+    separate, narrower resolver rather than a widened ``_claim_base``).
+
+    Returns ``(base, ok)``. ``ok`` is False only for a SUPPLIED-but-bad baton
+    root (fail loud, mirroring ``_claim_base``); an absent (non-baton) base
+    resolves to ``(None, True)`` -- "no sessions dir -> no claim can exist"
+    is the caller's idempotent-success case, not a failure.
+    """
+    if baton_repo_root:
+        if not (Path(baton_repo_root) / ".git").is_dir():
+            return None, False
+        return str(Path(baton_repo_root) / ".git" / "coordinator-sessions"), True
+    base = core.sessions_dir(cwd)
+    return base, True
+
+
+def _release_path_claim_artifact(
+    path: str, baton_repo_root: str = "", cwd: Optional[str] = None
+) -> bool:
+    """``class_ == "artifact"`` entrypoint for ``release_artifact`` --
+    self-release of THIS session's own touch-claim on *path* (the PATH-TOUCH
+    plane), mirroring ``release_artifact``'s existing identity-checked
+    contract for the three classed forms: releases only what THIS session
+    (or its own dispatched-agent fan-out) holds, never a peer's claim,
+    liveness never enters into it. Unlike ``release_committed_claims`` this
+    is NOT gated on the path being git-clean -- this is an explicit release
+    of one named path, not a post-commit sweep.
+
+    Always returns True (mirrors ``release_artifact``'s own "no-op paths are
+    successes, not errors" contract): a bad baton root, unresolvable
+    session id, or absent sessions dir is an idempotent no-op, same as the
+    classed forms.
+    """
+    base, ok = _resolve_path_claim_base(baton_repo_root, cwd)
+    if not ok or not base:
+        return True
+
+    my_sid = core.resolve_session_id(cwd)
+    if not my_sid:
+        return True
+
+    _release_path_claim_everywhere(path, {my_sid}, base, cwd)
+    return True
+
+
+def _clear_path_claim_if_dead(
+    path: str, baton_repo_root: str = "", cwd: Optional[str] = None
+) -> bool:
+    """``class_ == "artifact"`` entrypoint for ``clear_claim_if_dead`` -- the
+    CLEAR-ONLY, liveness-gated counterpart to ``_release_path_claim_
+    artifact`` for the PATH-TOUCH claim plane. This is the release path
+    cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+    artifact-has-no-clear-path.md asks for: a claim ``who-claims-path``
+    reports and ``ceremony.scoped_git_commit`` fails closed on, whose
+    claimant is confirmed dead, had no sanctioned release path before this.
+
+    Fail-closed exactly like the classed forms: ANY live claimant on *path*
+    refuses the WHOLE clear (never a partial release) -- a path with two
+    claimants, one dead and one live, stays claimed by the live one for the
+    same reason ``scoped_git_commit`` already refuses it, so partially
+    clearing it would accomplish nothing. An UNANSWERABLE claim-index
+    verdict also refuses (never treated as "no claimant"). A DOUBLE
+    ``claim_index.lookup`` + liveness re-read brackets the write (matches
+    ``clear_claim_if_dead``'s own TOCTOU discipline for the mkdir plane): if
+    a peer takes a fresh live claim on *path* between reads, the second read
+    sees it and the whole clear aborts.
+
+    Returns True on a successful clear OR an idempotent no-op (no claimant,
+    absent sessions dir, bad baton root already ruled out by the caller).
+    Returns False on an UNANSWERABLE index, a live claimant, or a claimant
+    that became live on the TOCTOU re-read.
+    """
+    base, ok = _resolve_path_claim_base(baton_repo_root, cwd)
+    if not ok:
+        print(
+            f"cs_clear_claim_if_dead: baton repo root <{baton_repo_root}> "
+            f"is not a git repo",
+            file=sys.stderr,
+        )
+        return False
+    if not base:
+        return True  # no sessions dir -> no claim can exist -> idempotent
+
+    def _claimants() -> List[str]:
+        return claim_index.lookup([path], sessions_dir=base, cwd=cwd).get(path, [])
+
+    def _live_ones(sids: List[str]) -> List[str]:
+        return [sid for sid in sids if liveness.session_live(sid, cwd)]
+
+    claimants = _claimants()
+    if claim_index.UNANSWERABLE in claimants:
+        print(
+            f"cs_clear_claim_if_dead: claim ownership for {path!r} could not "
+            f"be verified (claim index unanswerable) -- refusing to clear",
+            file=sys.stderr,
+        )
+        return False
+    if not claimants:
+        return True  # nothing claims this path -- idempotent no-op
+
+    live = _live_ones(claimants)
+    if live:
+        print(
+            f"cs_clear_claim_if_dead: refusing to clear path claim {path!r} "
+            f"-- live claimant(s) {', '.join(sorted(live))}",
+            file=sys.stderr,
+        )
+        return False
+
+    # TOCTOU re-read — bracket the write, mirroring the mkdir-plane's own
+    # double claim_holder_live read around its rm.
+    claimants2 = _claimants()
+    if claim_index.UNANSWERABLE in claimants2:
+        print(
+            f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
+            f"-- claim index became unanswerable on re-read",
+            file=sys.stderr,
+        )
+        return False
+    live2 = _live_ones(claimants2)
+    if live2:
+        print(
+            f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
+            f"-- claimant became live after TOCTOU re-read "
+            f"({', '.join(sorted(live2))})",
+            file=sys.stderr,
+        )
+        return False
+
+    dead_sids = set(claimants) | set(claimants2)
+    _release_path_claim_everywhere(path, dead_sids, base, cwd)
+    return True
+
 
 def release_artifact(
     class_: str,
@@ -945,6 +1205,14 @@ def release_artifact(
     "open but claim-held" state; the reverse (claim freed, status still
     in_progress) would re-admit two sessions.
 
+    ``class_ == "artifact"`` (``ARTIFACT_CLASS_PATH``) is a FOURTH, additive
+    form: ``basename`` is then a repo-relative PATH into the PATH-TOUCH claim
+    plane (``coordinator_core.session.claim_index`` / ``touched.txt``), not a
+    basename in the mkdir-based artifact-claim record store the three classed
+    forms above manage — routes to ``_release_path_claim_artifact`` before any
+    of the ``<class>-claims`` lookup below runs. See ``ARTIFACT_CLASS_PATH``'s
+    own docstring for why this plane needed widening onto here.
+
     ALWAYS returns True (bash ``return 0`` on every path — the no-op paths are
     successes, not errors).
 
@@ -956,6 +1224,9 @@ def release_artifact(
         raise ValueError("artifact class required")
     if not basename:
         raise ValueError("basename required")
+
+    if class_ == ARTIFACT_CLASS_PATH:
+        return _release_path_claim_artifact(basename, baton_repo_root, cwd)
 
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
@@ -1059,9 +1330,19 @@ def clear_claim_if_dead(
       - False on an invalid class, a bad/absent baton root, or a refusal
         because the holder is (or became) live.
 
-    Class validation: restrict to ``{handoff, memo, plan}`` (invalid ->
-    False + stderr). Empty ``class_`` / ``basename`` raise ValueError first
+    Class validation: restrict to ``{handoff, memo, plan, artifact}`` (invalid
+    -> False + stderr). Empty ``class_`` / ``basename`` raise ValueError first
     (bash ``${1:?}`` / ``${2:?}``).
+
+    ``class_ == "artifact"`` (``ARTIFACT_CLASS_PATH``) routes to
+    ``_clear_path_claim_if_dead`` BEFORE class validation runs — a FOURTH,
+    additive form widening this function onto the PATH-TOUCH claim plane
+    (``coordinator_core.session.claim_index`` / ``touched.txt``) that
+    ``who-claims-path`` answers over and ``ceremony.scoped_git_commit``
+    fails closed on, distinct from the three classed forms' mkdir-based
+    artifact-claim record store. ``basename`` under this class is a
+    repo-relative PATH, not a claim-store basename. See
+    ``ARTIFACT_CLASS_PATH``'s own docstring for the incident this closes.
 
     Base resolution: a SUPPLIED-but-bad baton root FAILS LOUD (False + stderr,
     mirroring ``claim_artifact`` — this function is EM-callable and must
@@ -1088,10 +1369,13 @@ def clear_claim_if_dead(
     if not basename:
         raise ValueError("basename required")
 
+    if class_ == ARTIFACT_CLASS_PATH:
+        return _clear_path_claim_if_dead(basename, baton_repo_root, cwd)
+
     if class_ not in ("handoff", "memo", "plan"):
         print(
             f"cs_clear_claim_if_dead: invalid class '{class_}' "
-            f"(must be handoff, memo, or plan)",
+            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})",
             file=sys.stderr,
         )
         return False

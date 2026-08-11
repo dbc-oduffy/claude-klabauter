@@ -313,6 +313,86 @@ def test_ac2_changelog_only_dangling_link_no_longer_suppresses_row(repo, monkeyp
     assert "2026-03-10\t" in out
 
 
+# ---------------------------------------------------------------------------
+# Item 3 (2026-08-11 fix, cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-
+# changelog-cli-three-defects.md): a `backfill_gaps()`-synthesized raw-git-log
+# stub must NOT satisfy the changelog half of `_day_covered` -- its own
+# heading says a human never wrote it.
+# ---------------------------------------------------------------------------
+
+
+def _write_synthesized_stub(path, day: str, host: str = "some-machine") -> None:
+    path.write_text(
+        f"## {day} — {host} (synthesized backfill)\n"
+        "\n"
+        "**Commits:** 1 (oldest: abc1234, newest: abc1234)\n"
+        "**Scope:** (synthesized — daily ceremony skipped, no human-curated narrative)\n"
+        "\n"
+        "### Commit log\n"
+        "\n"
+        "```\n"
+        "abc1234 a commit\n"
+        "```\n"
+    )
+
+
+def test_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypatch, capsys):
+    """A live `state/week-changelog/<day>-<host>-backfill.md` synthesized stub
+    (the exact shape `changelog_ops._compose_backfill_block` writes) must NOT
+    be read as changelog coverage even though it matches the `<day>*.md` glob
+    -- the day must still be reported as a gap."""
+    _commit_on(repo, "2026-03-10", "day only covered by a synthesized stub")
+    (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
+    week_changelog_dir = repo / "state" / "week-changelog"
+    week_changelog_dir.mkdir(parents=True)
+    _write_synthesized_stub(week_changelog_dir / "2026-03-10-some-machine-backfill.md", "2026-03-10")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "2026-03-10\t" in captured.out
+    # Item 3's visibility requirement: the substitution must be reported, not silent.
+    assert "synthesized backfill stub" in captured.err
+    assert "2026-03-10-some-machine-backfill.md" in captured.err
+
+
+def test_archived_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypatch, capsys):
+    """The same synthesized-stub exclusion applies to the archived location --
+    a content marker survives the weekly archive sweep; a filename convention
+    would not have."""
+    _commit_on(repo, "2026-03-10", "day only covered by an archived synthesized stub")
+    (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
+    archived_week = repo / "archive" / "week-changelogs" / "2026-03-09"
+    archived_week.mkdir(parents=True)
+    _write_synthesized_stub(archived_week / "2026-03-10-some-machine-backfill.md", "2026-03-10")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "2026-03-10\t" in out
+
+
+def test_synthesized_backfill_stub_alongside_real_block_still_covers(repo, monkeypatch, capsys):
+    """A real, human-curated block for the same day (e.g. after a later
+    `/workday-complete --for-date` run lands one alongside a stale synthesized
+    stub) still counts as coverage -- the exclusion targets the stub content,
+    not the whole directory."""
+    _commit_on(repo, "2026-03-10", "day with both a stub and a real block")
+    (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
+    week_changelog_dir = repo / "state" / "week-changelog"
+    week_changelog_dir.mkdir(parents=True)
+    _write_synthesized_stub(week_changelog_dir / "2026-03-10-some-machine-backfill.md", "2026-03-10")
+    (week_changelog_dir / "2026-03-10.md").write_text("## 2026-03-10 — real curated narrative\n")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "2026-03-10\t" not in out
+
+
 def test_archived_week_changelog_block_still_counts_as_covered(repo, monkeypatch, capsys):
     """A closed week's changelog blocks are swept out of `state/week-changelog/`
     into `archive/week-changelogs/<week-start>/`; only the CURRENT week stays live.

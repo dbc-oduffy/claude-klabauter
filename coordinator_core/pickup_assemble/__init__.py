@@ -92,7 +92,7 @@ from coordinator_core.archive_stamp import (
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
 from coordinator_core.artifact_basename import md_fallback_candidates
-from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha as _shared_canonical_body_sha,
@@ -1818,6 +1818,17 @@ def _has_memo_shape(fm_text: str) -> bool:
     )
 
 
+#: The receiver-side memo terminal-status vocabulary — a memo whose frontmatter
+#: carries either value is a closed, terminal record (never pickup-able). Kept
+#: as ONE module-level frozenset so a fourth terminal status added later cannot
+#: drift across the three consumers below that each independently need this
+#: set (classify's memo-shape gate, the archive-fallback classification, and
+#: the M0 terminal short-circuit) — a literal `{"actioned", "superseded"}` at
+#: each of the three sites would be exactly the fork-not-share pattern this
+#: plan's Problem section names as the cost of leaving them hard-coded.
+_MEMO_TERMINAL_STATUS = frozenset({"actioned", "superseded"})
+
+
 def classify(path: Path, fm_text: str, repo_root: Path) -> str:
     """Path + frontmatter shape -> handoff | memo | spinoff | ambiguous.
 
@@ -1856,7 +1867,7 @@ def classify(path: Path, fm_text: str, repo_root: Path) -> str:
                 return "spinoff"
             return "handoff"
 
-    if in_inbox_dir or (_has_memo_shape(fm_text) and status in {"open", "actioned"}):
+    if in_inbox_dir or (_has_memo_shape(fm_text) and (status == "open" or status in _MEMO_TERMINAL_STATUS)):
         return "memo"
 
     return "ambiguous"
@@ -5730,8 +5741,8 @@ def _archived_open_memo_kind_dispatch(
     """Archived-memo-still-open kind-dispatch assembly (2026-07-27
     example-doctrine-repo-em memo defect fix, `brief()`'s `classification == "archived"`
     branch) — an archived MEMO whose terminal `status` frontmatter field is
-    NOT already a terminal disposition (`"actioned"`) was swept into the
-    archive without ever having a disposition stamped on it. Before this
+    NOT already a terminal disposition (in `_MEMO_TERMINAL_STATUS`) was
+    swept into the archive without ever having a disposition stamped on it. Before this
     fix `brief()` unconditionally emitted `directives: []` for every
     archived artifact, so there was no directive-driven path left to
     discharge it — an operator had to hand-run `archive-stamp-cli
@@ -5747,8 +5758,9 @@ def _archived_open_memo_kind_dispatch(
     once regardless of whether the memo currently lives at a live path or
     an archive-resident one.
 
-    Callers gate the `terminal_fields.get("status") != "actioned"` check
-    themselves before invoking this — it is unconditional once called.
+    Callers gate the `terminal_fields.get("status") not in
+    _MEMO_TERMINAL_STATUS` check themselves before invoking this — it is
+    unconditional once called.
     """
     kind_resolved, kind_unrecognized = resolve_memo_kind(terminal_fields)
     directives = build_memo_directives(artifact_path, kind_resolved, decisions)
@@ -6580,7 +6592,7 @@ def brief(
         # sibling concern, not this one).
         kind_directives: list[dict[str, Any]] = []
         kind_jps: list[dict[str, Any]] = []
-        if archived_class == "memo" and terminal_fields.get("status") != "actioned":
+        if archived_class == "memo" and terminal_fields.get("status") not in _MEMO_TERMINAL_STATUS:
             kind_directives, kind_jps = _archived_open_memo_kind_dispatch(
                 artifact["path"], terminal_fields, decisions
             )
@@ -6673,8 +6685,33 @@ def brief(
         # artifact" ledger-first, with the frontmatter mirror as fallback,
         # so a ledger-confirmed prior stamp still satisfies the idempotence
         # check even when the mirror has reverted.
+        #
+        # Ledger-stage gate (memo 2026-08-11-example-doctrine-repo-em-pickup-claim-never-
+        # reaches-frontmatter): `claim_state.holder is not None` alone is
+        # satisfied by the `brief`-stage reservation `acquire_brief_claim`
+        # just took a few lines above (same ledger dir `resolve_claim_state`
+        # reads) — a pre-work lock, not evidence `d2` (archive-stamp-cli's
+        # durable frontmatter mutation) ever landed. On a first-ever pickup
+        # of an unclaimed handoff this made `self_claimed_in_frontmatter`
+        # True from the reservation alone, skipping `d2` and leaving the
+        # claim stranded in the ledger with `status: open` still on the
+        # mirror. A ledger-sourced `claim_state.holder` therefore only counts
+        # as stamp evidence when that ledger claim is at `apply` stage —
+        # `brief` stage never satisfies it. A mirror-sourced holder (the
+        # branch-switch-revert fallback C11 row 35 exists for) still counts
+        # regardless of ledger stage, since it has no stage concept and is
+        # itself already-landed frontmatter.
         claim_state = resolve_claim_state(root / artifact["path"], repo_root=root)
-        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and claim_state.holder is not None
+        stamp_evidence = claim_state.mirror_holder is not None
+        if not stamp_evidence and claim_state.ledger_holder is not None:
+            try:
+                _common_dir_for_stage = lifecycle.git_common_dir(root)
+            except Exception:
+                _common_dir_for_stage = None
+            if _common_dir_for_stage is not None:
+                _handoff_claim_dir = handoff_claim_dir(_common_dir_for_stage, root / artifact["path"])
+                stamp_evidence = _claims.claim_stage(_handoff_claim_dir) == _claims.CLAIM_STAGE_APPLY
+        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and stamp_evidence
         directives = build_handoff_directives(
             artifact["path"], claim["holder"], basename, self_claimed_in_frontmatter=self_claimed_in_frontmatter
         )
@@ -6941,19 +6978,21 @@ def brief(
     # Defect 2 — M0 short-circuit: an already-`actioned` memo is a read-only
     # terminal artifact. Surface the terminal fields as context; emit no
     # claim directive; do not re-run M3 kind-dispatch on it.
-    if fm.get("status") == "actioned":
+    if fm.get("status") in _MEMO_TERMINAL_STATUS:
+        memo_status = fm.get("status")
         terminal_state = {
-            "status": "actioned",
+            "status": memo_status,
             "decision": fm.get("decision"),
             "decision_note": fm.get("decision_note"),
             "actioned_note": fm.get("actioned_note"),
             "realized_by": fm.get("realized_by"),
+            "superseded_by": fm.get("superseded_by"),
         }
         closure = compute_reply_closure(fm, artifact["path"], root)
         reply_jps, narration, next_move = _render_reply_closure(
             closure,
             artifact["path"],
-            f"{artifact['path']} is an actioned memo — a terminal record.",
+            f"{artifact['path']} is an {memo_status} memo — a terminal record.",
             "Nothing further to do — this memo already closed.",
             status=fm.get("status"),
         )

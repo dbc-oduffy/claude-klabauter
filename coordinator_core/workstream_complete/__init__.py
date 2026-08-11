@@ -756,9 +756,31 @@ def _build_legacy_coverage_and_trail_directives(
     gate: SessionShapeGate,
     decisions: dict[str, Any],
     plan_claim_directives: list[dict[str, Any]],
+    repo_root: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     """The pre-existing (Convert #2) `d-coverage-gate` / `d-write-trail`
-    pair. Neither carries a `depends_on` — 2026-08-10 audit
+    pair.
+
+    `repo_root` (C4, AC6, docs/plans/2026-08-10-commit-event-5s-cap-and-the-
+    silent-tail.md): when supplied, consults the gate verdict memo
+    (READ-ONLY, via `directives_review.gate_memo_hit`) keyed on
+    `("d-coverage-gate", gate.consumed_handoff)` and sets `already_satisfied
+    =True` on the emitted `d-coverage-gate` directive on a hit. This is the
+    LIVE chain-end coverage gate — `directives_review.
+    build_chain_coverage_gate_directive` is dead code, never called by
+    `build_directives` (verified: no call site anywhere in this module; see
+    that builder's own "DEAD CODE, VERIFIED" docstring paragraph) — so the
+    memo capability lives here, on the directive that actually dispatches,
+    rather than on the unwired duplicate-CLI builder. This function NEVER
+    WRITES the memo itself: the write happens exactly once, from
+    `apply.py::_execute_directives`'s `directives_review.
+    record_gate_verdict_if_passed`, after the gate CLI actually dispatched
+    and returned a confirmed-pass verdict this pass (`exit_code == 0` AND
+    stdout does not carry `VERDICT=WARN` — a WARN is an offer, never a
+    confirmed pass, and must not be memoized). Omitting `repo_root` (every
+    pre-C4 caller) reproduces today's byte-identical directive.
+
+    Neither directive carries a `depends_on` — 2026-08-10 audit
     (`state/audits/2026-08-10-...` sweep for the `depends_on`-repointed-
     but-never-gating pattern): `depends_on` naming a sibling DIRECTIVE id
     (as opposed to a judgment-point id) never gates in
@@ -784,29 +806,90 @@ def _build_legacy_coverage_and_trail_directives(
     directives: list[dict[str, Any]] = []
 
     if canonicalize(gate.disposition) == PREDECESSOR_CONSUMED and gate.consumed_handoff:
-        directives.append(
-            _directive(
-                "d-coverage-gate",
-                "wsc-coverage-gate-runner",
-                ["coverage-gate", "--from-handoff", gate.consumed_handoff],
-            )
+        coverage_directive = _directive(
+            "d-coverage-gate",
+            "wsc-coverage-gate-runner",
+            ["coverage-gate", "--from-handoff", gate.consumed_handoff],
         )
+        if repo_root is not None and directives_review.gate_memo_hit(
+            repo_root, coverage_directive["id"], gate.consumed_handoff
+        ):
+            coverage_directive["already_satisfied"] = True
+        directives.append(coverage_directive)
 
-    review = decisions.get("review") or {}
-    _REVIEW_REQUIRED = ("sha_range", "reviewer", "scope", "verdict", "diff_loc")
-    if all(review.get(k) not in (None, "") for k in _REVIEW_REQUIRED):
-        args = [
-            "write-trail",
-            "--sha-range", str(review["sha_range"]),
-            "--reviewer", str(review["reviewer"]),
-            "--scope", str(review["scope"]),
-            "--verdict", str(review["verdict"]),
-            "--diff-loc", str(review["diff_loc"]),
-        ]
-        if review.get("scope_kind"):
-            args += ["--scope-kind", str(review["scope_kind"])]
-        directives.append(_directive("d-write-trail", "wsc-coverage-gate-runner", args))
+    directives.extend(build_write_trail_directives(decisions.get("review")))
 
+    return directives
+
+
+_REVIEW_TRAIL_REQUIRED_FIELDS = ("sha_range", "reviewer", "scope", "verdict", "diff_loc")
+
+
+def _build_write_trail_args(review: dict[str, Any]) -> list[str]:
+    args = [
+        "write-trail",
+        "--sha-range", str(review["sha_range"]),
+        "--reviewer", str(review["reviewer"]),
+        "--scope", str(review["scope"]),
+        "--verdict", str(review["verdict"]),
+        "--diff-loc", str(review["diff_loc"]),
+    ]
+    if review.get("scope_kind"):
+        args += ["--scope-kind", str(review["scope_kind"])]
+    return args
+
+
+def build_write_trail_directives(review: Any) -> list[dict[str, Any]]:
+    """`decisions["review"]` -> zero, one, or many `d-write-trail*`
+    directives, each a mechanical `wsc-coverage-gate-runner.py write-trail`
+    call over `coordinator_core.ops.review_trail_write`'s single-record
+    write path (`review_trail.write` writes exactly ONE record per
+    invocation — see that module's own docstring; storage already supports
+    N records, one per call, so N directives is the whole fix).
+
+    Two accepted shapes, BOTH read from the SAME `decisions["review"]` key
+    (docs backlink: a per-slice, brightline-mandated review can produce N
+    distinct `(sha_range, reviewer, scope, verdict, diff_loc)` tuples that
+    the pre-existing single-object shape could not express — see this
+    module's own review-trail-partition fix):
+
+    - a single `dict` (the pre-existing, still-fully-supported shape):
+      identical to today, byte-for-byte — one `d-write-trail` directive
+      when all five required fields are present and non-empty, none
+      otherwise. Every existing caller/test that supplies a dict keeps
+      working unchanged.
+    - a `list[dict]` (additive): one `d-write-trail-<index>` directive per
+      list entry whose own five required fields are all present and
+      non-empty — `<index>` is the entry's position in the ORIGINAL list
+      (not a count of qualifying entries), so an incomplete entry never
+      shifts a later entry's id. An entry missing a required field
+      contributes NO directive (mirrors the single-dict "name it, don't
+      guess" convention) — it is silently dropped from `directives[]`,
+      never dispatched with a partial/guessed value. This is a build-time
+      decision only: at APPLY time each directive dispatches
+      independently through `_execute_directives`'s per-directive halt
+      contract, so one slice's dispatch failure (e.g. a foreign-session
+      range refusal) never blocks or poisons any sibling slice's own
+      write.
+
+    `None`/`{}`/`[]`/any other falsy value: no directives (today's
+    behavior for an absent/empty `review` key, preserved for both shapes).
+    """
+    if not review:
+        return []
+    if isinstance(review, dict):
+        if not all(review.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
+            return []
+        return [_directive("d-write-trail", "wsc-coverage-gate-runner", _build_write_trail_args(review))]
+    directives: list[dict[str, Any]] = []
+    for index, entry in enumerate(review):
+        if not isinstance(entry, dict):
+            continue
+        if not all(entry.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
+            continue
+        directives.append(
+            _directive(f"d-write-trail-{index}", "wsc-coverage-gate-runner", _build_write_trail_args(entry))
+        )
     return directives
 
 
@@ -925,7 +1008,9 @@ def build_directives(
         effective_decisions["prose"] = resolved_prose
 
     # -- Convert #2 original: d-coverage-gate / d-write-trail, repointed --
-    directives.extend(_build_legacy_coverage_and_trail_directives(gate, decisions, plan_claim_directives))
+    directives.extend(
+        _build_legacy_coverage_and_trail_directives(gate, decisions, plan_claim_directives, repo_root=repo_root)
+    )
 
     # -- Step 2.4b (C2a): deferral-harvest sweep --
     harvest_targets = [governing_plan] if governing_plan else []
@@ -988,10 +1073,14 @@ def build_directives(
         floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
         if floor_kwargs is not None:
             directives.append(
-                directives_review.build_review_brightline_gate_directive(gate.sid, **floor_kwargs)
+                directives_review.build_review_brightline_gate_directive(
+                    gate.sid, repo_root=repo_root, **floor_kwargs
+                )
             )
         else:
-            directives.append(directives_review.build_review_brightline_gate_directive(gate.sid))
+            directives.append(
+                directives_review.build_review_brightline_gate_directive(gate.sid, repo_root=repo_root)
+            )
     else:
         directives.append(directives_review.build_chain_plan_brightline_gate_directive(gate.consumed_handoff))
     review_partition = decisions.get("review_partition") or {}
@@ -1065,6 +1154,27 @@ def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[
     running the named directive; it is not trusted to guess the verdict)."""
     if not any(d["id"] == "d-coverage-gate" for d in directives):
         return None
+    # Every `d-write-trail*` directive this pass actually built —
+    # `build_write_trail_directives` may emit one `d-write-trail` (the
+    # pre-existing single-object shape) or several `d-write-trail-<index>`
+    # entries (a partitioned `decisions["review"]` list). Resolved
+    # dynamically off THIS pass's own `directives[]`, never hardcoded to
+    # the single literal id `"d-write-trail"` — a hardcoded id would leave
+    # every OTHER slice's directive with no resolving disposition at all,
+    # silently un-gateable by this judgment point.
+    write_trail_ids = [
+        d["id"] for d in directives
+        if d["id"] == "d-write-trail" or d["id"].startswith("d-write-trail-")
+    ]
+    if not write_trail_ids:
+        # Legacy default (pre-2026-08-11 fix): this judgment point named the
+        # literal `"d-write-trail"` id unconditionally, even on a pass that
+        # built no such directive at all (`decisions["review"]` absent) — a
+        # harmless dead reference `_disposition_resolves_directive` simply
+        # never matches. Preserved here, rather than resolving to `[]`, so
+        # every pre-existing test/caller that never supplies `review` at all
+        # keeps seeing the exact same disposition shape it always has.
+        write_trail_ids = ["d-write-trail"]
     # ADVISORY, not an enforced lock, by deliberate PM ruling (2026-07-27):
     # the commit tail (`d-run-wsc-tail`) carries no dependency edge on this
     # judgment point or on `d-coverage-gate`, and none of the dispositions
@@ -1084,8 +1194,8 @@ def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[
         id="jp-coverage-verdict",
         question="Has d-coverage-gate run, and if so did it return COVERED?",
         dispositions=[
-            build_disposition("covered", resolves=["d-write-trail"]),
-            build_disposition("uncovered-or-indeterminate-override", resolves=["d-write-trail"]),
+            build_disposition("covered", resolves=write_trail_ids),
+            build_disposition("uncovered-or-indeterminate-override", resolves=write_trail_ids),
             build_disposition("uncovered-or-indeterminate-proceed-with-warning", resolves=[]),
         ],
         evidence="directives[] entry with id == 'd-coverage-gate'",
@@ -2616,6 +2726,42 @@ def _git_is_ancestor(root: Path, ancestor_sha: str, descendant_sha: str) -> bool
     return proc.returncode == 0
 
 
+def _resolve_head_sha(root: Path) -> Optional[str]:
+    """Resolve `HEAD` to its current concrete full sha via `git rev-parse`,
+    for `_resolve_review_brightline_floor_kwargs`'s `chain_tip_sha` — see
+    that function's own docstring for why this call exists and what it
+    trades away. Mirrors `_git_is_ancestor`'s subprocess shape (same
+    timeout, same `CREATE_NO_WINDOW` Windows-popup guard) — duplicated
+    rather than composed into a shared helper, matching this module's own
+    `_run_git_read_only`/`_git_is_ancestor` precedent of small, independent
+    git-subprocess call sites rather than a shared abstraction.
+
+    Returns `None` on ANY failure (detached-HEAD edge case that still
+    resolves fine in practice, a missing git binary, a non-repo root, a
+    timeout, non-zero exit, or empty/malformed stdout) — never raises, and
+    never fabricates a sha. The caller degrades to the literal `"HEAD"`
+    string on a `None` here (a memo miss, not a build-path failure) — see
+    `_resolve_review_brightline_floor_kwargs`'s own docstring for that
+    contract."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=_REVIEW_SCALE_GIT_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        return None
+    return sha
+
+
 def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[str]:
     """This session's own `session_start_sha` fallback for `resolve_mid_
     chain_review_scope` — the same base-commit resolution idiom as
@@ -2770,12 +2916,51 @@ def _resolve_review_brightline_floor_kwargs(
     an omitted record and one re-keyed to `sha_range_head=None` are
     indistinguishable to that loop.
 
-    `chain_tip_sha="HEAD"` (the literal string, not a frozen sha) so the
-    emitted range stays live through the gate's own later read — freezing
-    an emit-time sha would shrink the range relative to today's default
-    (`merge-base(origin/main, HEAD)..HEAD`) and risks dropping this
-    session's own later commits, the review-LESS direction this whole
-    workstream exists to close."""
+    `chain_tip_sha` (mid-chain gate memo fix, 2026-08-11 — see
+    `directives_review.record_gate_verdict_if_passed`'s own KEY-STALENESS
+    restriction paragraph): FORMERLY the literal string `"HEAD"`,
+    unconditionally, on the reasoning that a live symbolic tip keeps the
+    emitted range current through the gate's own later read. That reasoning
+    is still correct for the RANGE the gate walks — but it also meant the
+    resolved argv's tip half was NEVER a concrete sha, so
+    `record_gate_verdict_if_passed`'s `_is_concrete_sha` check never passed
+    for the floor-resolved path, and the whole gate-verdict memo this
+    module's own "Gate verdict memo" machinery exists to serve NEVER HIT on
+    this path — the floor-resolution machinery ran, paid its own git-spawn
+    cost, and built a directive whose memo could never fire.
+
+    Now resolves `HEAD` to a CONCRETE, frozen sha via `_resolve_head_sha`
+    — LAZILY, only here, at the point the floor path is actually confirmed
+    taken (this session has own trail records AND a resolvable
+    `session_start_sha`) — never at this function's own entry, and never
+    unconditionally: `brief()` calls this on every mid-chain preview
+    (including every read-only `brief()` call a caller makes before ever
+    reaching `apply()`), so an unconditional git spawn here would tax the
+    read-only preview path this whole module's docstring holds to an
+    invocation budget. `_resolve_head_sha` failing (detached HEAD in a
+    shape that still errors, a git failure, a non-repo root) degrades to
+    the PRE-FIX literal `"HEAD"` string — never raises into the build path,
+    never fabricates a sha — which reproduces today's exact behavior for
+    that one resolution failure (a memo miss, not a build-path failure; see
+    that helper's own docstring).
+
+    Freezing the tip here is a DELIBERATE, DOCUMENTED behavior change, not
+    an accidental narrowing: the range the gate walks is now anchored to
+    whatever commit was HEAD at `brief()`/`build_directives()` BUILD time,
+    not whatever HEAD happens to be when the gate CLI itself later runs.
+    Those two differ whenever a commit lands between build and dispatch —
+    on this fleet's shared, highly concurrent branches that is a real,
+    not theoretical, gap. This is the INTENDED trade the mid-chain gate
+    memo needs to ever hit at all (a symbolic tip can never be memoized,
+    per `_is_concrete_sha`'s design) — a frozen anchor may omit a
+    just-landed commit from THIS pass's brightline walk, but that commit is
+    still covered by the SESSION's own trailer-scoped diff on the gate's
+    OWN default range if this floor path is never reached again, and by a
+    later close's own re-resolution otherwise. Not silently stumbled into:
+    flagged here, at the one call site that changed, for the next reader
+    who wonders why this differs from the read-at-gate-run-time default the
+    non-floored two-element argv shape (`["--session-id", sid]`) still
+    uses unchanged."""
     if session_start_time is None:
         return None
     paths = _list_review_trail_paths_for_root(root)
@@ -2801,9 +2986,15 @@ def _resolve_review_brightline_floor_kwargs(
         if tip is not None:
             trail_records.append({"sha_range_head": tip})
 
+    # Lazy, floor-path-only resolution (see this function's own
+    # `chain_tip_sha` docstring paragraph above) — reached only once every
+    # earlier bail-out (`session_start_time is None`, no own trail records,
+    # unresolvable `session_start_sha`) has already NOT fired.
+    chain_tip_sha = _resolve_head_sha(root) or "HEAD"
+
     return {
         "trail_records": trail_records,
-        "chain_tip_sha": "HEAD",
+        "chain_tip_sha": chain_tip_sha,
         "is_ancestor": lambda a, b: _git_is_ancestor(root, a, b),
         "session_start_sha": session_start_sha,
     }

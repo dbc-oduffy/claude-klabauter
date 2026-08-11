@@ -1182,4 +1182,272 @@ in_reply_to: "2026-07-28-claude-klabauter-em-sat-01-store-home-answer.md"
         assert fm["realized_by"] == self._NEW_SHA
         assert fm["decision"] == "accepted"
         assert self._OLD_SHA in fm["decision_note"]
+
+
+# ---------------------------------------------------------------------------
+# (X) Receiver tolerance for an off-enum `kind` — see
+# _demote_kind_enum_finding/_validate_memo_fm in memo_transition.py.
+#
+# Three real cross-repo/inbox/ memos carry kind: defect / kind: blocked-request-
+# correction, outside the four-value VALID_KINDS enum, and were undrainable
+# through claim/action/release/resolve. This demotes the field=='kind' finding
+# to a stderr warning at the RECEIVER only — authoring still hard-rejects.
+# ---------------------------------------------------------------------------
+
+class TestKindEnumReceiverTolerance:
+    """An off-enum `kind:` must not strand a memo at any transition verb."""
+
+    _OPEN_UNENUMERATED_KIND_FIXTURE = """\
+---
+kind: defect
+status: open
+from: sender-session
+summary: A test memo with an unenumerated kind.
+created: 2026-06-01
+---
+"""
+
+    def _setup_memo(self, tmp_path: Path, content: str | None = None) -> str:
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(content or self._OPEN_UNENUMERATED_KIND_FIXTURE, encoding="utf-8")
+        _git_track(repo, memo)
+        return str(memo)
+
+    def test_authoring_still_rejects_unenumerated_kind(self):
+        """Authoring-side gate is untouched: validate_memo_cross_fields still errors."""
+        errors = validate_memo_cross_fields({"kind": "defect"})
+        assert any(e.get("field") == "kind" for e in errors)
+
+    def test_memo_cf_kind_enum_still_rejects_directly(self):
+        """_memo_cf_kind_enum itself is untouched by the receiver-side demotion."""
+        from coordinator_core.frontmatter.schema_validate import _memo_cf_kind_enum
+        err = _memo_cf_kind_enum({"kind": "defect"})
+        assert err is not None
+        assert err["field"] == "kind"
+
+    def test_claim_succeeds_on_unenumerated_kind_and_warns(self, tmp_path, capsys):
+        """claim: an off-enum kind claims successfully, kind stays byte-identical, warns."""
+        memo = self._setup_memo(tmp_path)
+        before = Path(memo).read_text(encoding="utf-8")
+        assert "kind: defect" in before
+
+        result = _claim(memo, "sess-1", "2026-08-11T00:00:00Z")
+
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        after = Path(memo).read_text(encoding="utf-8")
+        assert "kind: defect" in after  # byte-identical kind: field
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "in_progress"
+        assert fm["picked_up_by"] == "sess-1"
+        assert fm["picked_up_at"] == "2026-08-11T00:00:00Z"
+        assert fm["kind"] == "defect"
+
+        captured = capsys.readouterr()
+        assert "kind" in captured.err
+        assert "unrecognized" in captured.err
+        assert "defaulted to 'ask'" in captured.err
+
+    def test_action_succeeds_on_unenumerated_kind(self, tmp_path):
+        """action: an in_progress memo with an off-enum kind can still be actioned."""
+        in_progress_fixture = """\
+---
+kind: blocked-request-correction
+status: in_progress
+picked_up_at: '2026-08-11T00:00:00Z'
+picked_up_by: sess-1
+from: sender-session
+summary: A test memo with an unenumerated kind.
+created: 2026-06-01
+---
+"""
+        memo = self._setup_memo(tmp_path, in_progress_fixture)
+        result = _action(memo, {"decision": "declined"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["kind"] == "blocked-request-correction"
+        assert fm["status"] == "actioned"
+
+    def test_release_succeeds_on_unenumerated_kind(self, tmp_path):
+        """release: an in_progress memo with an off-enum kind can still be released."""
+        in_progress_fixture = """\
+---
+kind: defect
+status: in_progress
+picked_up_at: '2026-08-11T00:00:00Z'
+picked_up_by: sess-1
+from: sender-session
+summary: A test memo with an unenumerated kind.
+created: 2026-06-01
+---
+"""
+        memo = self._setup_memo(tmp_path, in_progress_fixture)
+        result = _release(memo)
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["kind"] == "defect"
+        assert fm["status"] == "open"
+        assert "picked_up_by" not in fm
+
+    def test_resolve_succeeds_on_unenumerated_kind(self, tmp_path):
+        """resolve: an open memo with an off-enum kind can go straight to actioned."""
+        memo = self._setup_memo(tmp_path)
+        result = _resolve(
+            memo, "sess-1", "2026-08-11T00:00:00Z", {"decision": "declined"},
+        )
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["kind"] == "defect"
+        assert fm["status"] == "actioned"
+
+
+# ---------------------------------------------------------------------------
+# --superseded-by (receiver-side supersession pair)
+#
+# Spec: docs/plans/2026-08-11-receiver-side-supersession-pair-a-writab.md
+# C2, AC1/AC3/AC6.
+# ---------------------------------------------------------------------------
+
+class TestSupersededBy:
+    """_action's superseded_by branch — status: superseded, pointer validation,
+    idempotency, and byte-identical actioned-path regression (AC6)."""
+
+    _IN_PROGRESS_FIXTURE = """\
+---
+kind: fyi
+status: in_progress
+picked_up_at: '2026-01-02T10:00:00Z'
+picked_up_by: session-test
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def _setup_repo_with_memo(self, tmp_path: Path, content: str | None = None) -> tuple[Path, str]:
+        """Create a git repo + in-progress memo under cross-repo/inbox/, tracked
+        in HEAD. Returns (repo_root, memo_path)."""
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(content or self._IN_PROGRESS_FIXTURE, encoding="utf-8")
+        _git_track(repo, memo)
+        return repo, str(memo)
+
+    def _seed_pointer_target(self, repo: Path, name: str, in_archive: bool = False) -> None:
+        """Seed a memo the superseded_by pointer can resolve against, in either
+        cross-repo/inbox/ or cross-repo/archive/ (per AC3's two legal locations)."""
+        subdir = "archive" if in_archive else "inbox"
+        target_dir = repo / "cross-repo" / subdir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / name
+        target.write_text(
+            "---\nkind: fyi\nstatus: open\nfrom: peer\nsummary: pointer target.\ncreated: 2026-06-01\n---\n",
+            encoding="utf-8",
+        )
+        _git_track(repo, target)
+
+    def test_superseded_by_writes_pair_and_validates(self, tmp_path):
+        """AC1: writes status: superseded + superseded_by in one locked_rmw
+        closure; the result round-trips through the real schema validator."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        self._seed_pointer_target(repo, "successor.md")
+
+        result = _action(memo, {"superseded_by": "successor.md"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "superseded"
+        assert fm["superseded_by"] == "successor.md"
         assert validate_memo_cross_fields(fm) == []
+
+    def test_superseded_by_accepts_a_path_normalized_to_basename(self, tmp_path):
+        """AC3 shape: a path (not a bare basename) resolves the same way
+        memo_send._normalize_in_reply_to accepts either shape — the emitted
+        frontmatter value is always the basename."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        self._seed_pointer_target(repo, "successor.md", in_archive=True)
+
+        result = _action(memo, {"superseded_by": "cross-repo/archive/successor.md"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["superseded_by"] == "successor.md"
+
+    def test_superseded_by_nonexistent_pointer_fails_loud_no_write(self, tmp_path):
+        """AC3: a --superseded-by value naming a memo in neither inbox nor
+        archive fails loud (exit 1) before any write."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        before = Path(memo).read_bytes()
+
+        result = _action(memo, {"superseded_by": "typo-does-not-exist.md"})
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "does not match any memo" in result["error"]
+        assert Path(memo).read_bytes() == before
+
+    def test_superseded_by_rerun_same_pointer_idempotent(self, tmp_path):
+        """Re-running with the SAME pointer is idempotent — no-op, exit 0."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        self._seed_pointer_target(repo, "successor.md")
+
+        first = _action(memo, {"superseded_by": "successor.md"})
+        assert first["exit_code"] == 0
+        assert first["applied"] is True
+
+        second = _action(memo, {"superseded_by": "successor.md"})
+        assert second["exit_code"] == 0
+        assert second["applied"] is False
+
+    def test_superseded_by_rerun_different_pointer_fails_loud(self, tmp_path):
+        """Re-running with a DIFFERENT pointer fails loud, mirroring the
+        existing already-actioned-with-a-different-disposition raise."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        self._seed_pointer_target(repo, "successor.md")
+        self._seed_pointer_target(repo, "other-successor.md")
+
+        first = _action(memo, {"superseded_by": "successor.md"})
+        assert first["exit_code"] == 0
+
+        second = _action(memo, {"superseded_by": "other-successor.md"})
+        assert second["exit_code"] == 1
+        assert "cannot re-action" in second["error"]
+        fm = _fm_dict(memo)
+        assert fm["superseded_by"] == "successor.md"  # unchanged
+
+    def test_superseded_by_and_decision_mutually_exclusive(self, tmp_path):
+        """_validate_action_disposition refuses the combination at the op
+        boundary too (archive_stamp.py's CLI layer already refuses this
+        earlier — this is the same discipline applied here)."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        self._seed_pointer_target(repo, "successor.md")
+        before = Path(memo).read_bytes()
+
+        result = _action(memo, {"superseded_by": "successor.md", "decision": "accepted"})
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "mutually exclusive" in result["error"]
+        assert Path(memo).read_bytes() == before
+
+    def test_actioned_path_unaffected_by_superseded_by_addition(self, tmp_path):
+        """AC6 regression: an ordinary --decision action, with no superseded_by
+        param at all, is unaffected — still writes status: actioned."""
+        repo, memo = self._setup_repo_with_memo(tmp_path)
+        result = _action(memo, {"decision": "declined"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["status"] == "actioned"
+        assert "superseded_by" not in fm

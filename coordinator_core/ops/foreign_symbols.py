@@ -317,7 +317,15 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
 
         A diagnostic carrying a non-None ``file`` is additionally attributed
         onto that file's envelope entry as an ``"error"`` field, mirroring
-        ``cartography/symbols.py``'s existing per-file-failure convention.
+        ``cartography/symbols.py``'s existing per-file-failure convention —
+        EXCEPT a name-invariant drop (``_is_name_invariant_drop`` is True),
+        which is routed instead to a separate per-entry key
+        ``name_invariant_drops`` (a list of the drop diagnostics' messages,
+        created lazily only when such a drop occurs). A name-invariant drop
+        means one SYMBOL's name was rejected by upstream's
+        ``ExtractionResult.__post_init__`` validating choke point — the file
+        itself parsed cleanly, so marking its envelope entry ``"error"``
+        would be a defect: it would mark a healthy file as errored.
     """
     try:
         symbol_extract = _import_symbol_extract()
@@ -372,6 +380,16 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
                 "message": diag.message,
                 "file": diag.file,
                 "line": diag.line,
+                # `getattr(..., None)` is deliberate and NOT part of the two
+                # transitional fallbacks removed above: the pin declares a
+                # FLOOR, but an installed environment can still lag it (stale
+                # venv, editable install pointing elsewhere). `getattr`
+                # degrades that mismatch to `None` -> no attribution -> the
+                # `unattributed_diagnostic` arm, whereas direct attribute
+                # access would raise `AttributeError` mid-extraction. Do not
+                # "finish the cleanup" by converting these to direct access.
+                "language": getattr(diag, "language", None),
+                "code": getattr(diag, "code", None),
             }
         )
         if diag.file is None:
@@ -388,7 +406,12 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
         if entry is None:
             entry = {"path": rel}
             envelope_by_rel[rel] = entry
-        entry["error"] = diag.message
+        if _is_name_invariant_drop(
+            {"code": getattr(diag, "code", None), "message": diag.message}
+        ):
+            entry.setdefault("name_invariant_drops", []).append(diag.message)
+        else:
+            entry["error"] = diag.message
 
     ordered_files = [envelope_by_rel[rel] for rel in rel_by_resolved.values()]
 
@@ -426,6 +449,57 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
     }
 
 
+def _diagnostic_names_language(diagnostic: Dict[str, Any], language: Any) -> bool:
+    """Decide whether ``diagnostic`` names ``language`` — field-only, exact comparison.
+
+    Floor: ``ExtractionDiagnostic.language`` is guaranteed present by the
+    pinned ``example-retrieval-repo-symbol-extract`` wheel
+    (``60b109cc85b7f1fedc552c178214601040793111``, ``pyproject.toml``) —
+    the transitional prose-substring fallback this helper previously carried
+    is deleted now that its documented death condition (the pin move) has
+    occurred (memo reply 7e6559f1; debt record
+    ``state/debt-backlog/2026-08-11-foreign-symbols-substring-language-match-aw.yaml``).
+
+    This is now a pure EXACT comparison of ``diagnostic["language"]`` against
+    ``language`` — the prose ``message`` is never consulted. A diagnostic
+    whose ``language`` is ``None`` (attribution genuinely unavailable, or a
+    lagging/stale install) returns ``False`` for every candidate language —
+    intended, loud degradation: such a diagnostic is caught by arm 7's
+    ``unattributed_diagnostic`` finding rather than silently misattributed.
+    """
+    return diagnostic.get("language") == language
+
+
+_NAME_INVARIANT_DROP_CODE = "symbol_name_invariant"
+
+
+def _is_name_invariant_drop(diagnostic: Dict[str, Any]) -> bool:
+    """Decide whether ``diagnostic`` records a symbol-name-invariant drop.
+
+    Field-only discriminator for upstream's ``ExtractionResult.__post_init__``
+    validating choke point (disclosed by example-retrieval-repo-em, memo
+    ``cross-repo/inbox/2026-08-11-example-retrieval-repo-em-symbol-name-invariant-now-drops-rows.md``):
+    a ``Symbol`` whose ``name`` carries a line terminator or exceeds 1024
+    chars is DROPPED from ``symbols`` and an ``error``-level diagnostic is
+    appended recording the drop, carrying a non-None ``file``.
+
+    Floor: ``ExtractionDiagnostic.code`` is guaranteed present by the pinned
+    ``example-retrieval-repo-symbol-extract`` wheel
+    (``60b109cc85b7f1fedc552c178214601040793111``, ``pyproject.toml``), and
+    upstream's ``code`` vocabulary — ``grammar_unavailable``, ``parse_failure``,
+    ``unreadable_file``, ``symbol_name_invariant`` (their ``DIAGNOSTIC_CODE_*``
+    constants) — is declared closed and stable. This is now a pure EXACT
+    comparison of ``diagnostic["code"]`` against ``"symbol_name_invariant"`` —
+    the prose ``message`` is never consulted, and the transitional
+    case-insensitive prefix fallback this helper previously carried is
+    deleted now that its documented death condition (the pin move) has
+    occurred. An unrecognised ``code`` value (including ``None``) is simply
+    not a drop and falls through to ``parse_failure`` in the caller — it does
+    not vanish.
+    """
+    return diagnostic.get("code") == _NAME_INVARIANT_DROP_CODE
+
+
 def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, int]) -> List[Dict[str, Any]]:
     """Five-arm per-extension coverage discriminator.
 
@@ -437,8 +511,8 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
     Returns:
         A list of finding dicts, each
         ``{"state": "dependency_absent" | "missing_grammar" |
-        "partial_coverage" | "parse_failure" | "corpus_fact" | "covered" |
-        "unattributed_diagnostic",
+        "partial_coverage" | "parse_failure" | "name_invariant_drop" |
+        "corpus_fact" | "covered" | "unattributed_diagnostic",
         "extension": str | None, "language": str | None, "detail": str}``.
 
     Arms (never aggregated — a healthy extension never masks a dead one).
@@ -455,6 +529,8 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
       3. Per extension in ``census`` with at least one requested file:
          symbols == 0 and an ``error``-level diagnostic names that
          extension's language -> ``missing_grammar`` (the fail-loud arm).
+         "Names" is decided by ``_diagnostic_names_language``: field-
+         preferred, prose-fallback (see below).
       4. Per extension in ``census`` with at least one requested file:
          symbols > 0 and an ``error``-level language-level diagnostic
          (``file is None``) names that extension's language ->
@@ -462,20 +538,48 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
          with files silently dropped underneath it. The finding's
          ``detail`` carries both the symbol count and the diagnostic's own
          message text, so the skipped-file count survives into the
-         finding.
+         finding, unchanged in shape by the field-preferred migration below.
+
+      Arms 3, 4, and 7 all route "does this diagnostic name this language"
+      through the single module-level helper ``_diagnostic_names_language``,
+      so they can never diverge. That helper is now a pure, field-only EXACT
+      comparison of the diagnostic's carried ``"language"`` against the
+      candidate language — the prose ``message`` is never consulted. The
+      fields are guaranteed by the pinned ``example-retrieval-repo-symbol-extract`` wheel
+      (``60b109cc85b7f1fedc552c178214601040793111``, ``pyproject.toml``;
+      memo reply 7e6559f1; debt record
+      ``state/debt-backlog/2026-08-11-foreign-symbols-substring-language-match-aw.yaml``).
+      A diagnostic whose ``language`` is ``None`` matches no candidate
+      language and so falls to arm 7 (``unattributed_diagnostic``) rather
+      than being silently misattributed.
       5. Per extension in ``census`` with at least one requested file:
          symbols > 0 and no diagnostic names that extension's language ->
          ``covered`` — the ordinary successful-extraction case. Emitted
          explicitly rather than by silence, so "checked and healthy" is
          distinguishable from "never examined" (review dc659900, P1).
       6. Per diagnostic carrying a non-None ``file`` -> a ``parse_failure``
-         finding for that file, independent of the per-extension arms.
-      7. Per ``error``-level, file-less diagnostic whose message names NO
-         language present in ``census`` -> a single ``unattributed_diagnostic``
-         finding per such diagnostic, so a phrasing mismatch between this
-         seam's substring match and symbol_extract's diagnostic text can
-         never silently downgrade a real grammar failure to a clean bill of
-         health on the affected extension (review dc659900, P2).
+         finding for that file, independent of the per-extension arms —
+         UNLESS arm 6a below claims it first.
+      6a. Per diagnostic carrying a non-None ``file`` for which
+         ``_is_name_invariant_drop`` is True -> a ``name_invariant_drop``
+         finding for that file INSTEAD of ``parse_failure``. This arm takes
+         precedence over arm 6: a diagnostic recording a symbol-name-
+         invariant drop is corpus hygiene (one symbol NAME was rejected;
+         the file itself parsed cleanly), never both a drop and a parse
+         failure for the same diagnostic — the two states are mutually
+         exclusive by construction.
+      7. Per ``error``-level, file-less diagnostic that names NO language
+         present in ``census`` (per ``_diagnostic_names_language``, same
+         field-only exact-comparison contract as arms 3/4) -> a single
+         ``unattributed_diagnostic`` finding per such diagnostic, so a
+         phrasing mismatch between this seam's substring match and
+         symbol_extract's diagnostic text can never silently downgrade a
+         real grammar failure to a clean bill of health on the affected
+         extension (review dc659900, P2). Kept exactly consistent with arms
+         3/4 by construction: a diagnostic is "unattributed" iff
+         ``_diagnostic_names_language`` is False for EVERY language present
+         in ``census``, so a field-matched diagnostic can never be both
+         attributed (arm 3/4) and unattributed (arm 7).
 
     Exit status is never consulted — it is not evidence.
     """
@@ -500,8 +604,8 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
         if suffix in symbols_by_extension:
             symbols_by_extension[suffix] += _count_symbols(entry)
 
-    language_level_messages = [
-        diag.get("message", "")
+    language_level_diagnostics = [
+        diag
         for diag in diagnostics
         if diag.get("level") == "error" and diag.get("file") is None
     ]
@@ -532,7 +636,10 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
         language_flagged = (
             requested_count > 0
             and language is not None
-            and any(str(language).lower() in message.lower() for message in language_level_messages)
+            and any(
+                _diagnostic_names_language(diag, language)
+                for diag in language_level_diagnostics
+            )
         )
         if symbol_count == 0 and language_flagged:
             findings.append(
@@ -546,9 +653,9 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
             )
         elif symbol_count > 0 and language_flagged:
             matching_messages = [
-                message
-                for message in language_level_messages
-                if str(language).lower() in message.lower()
+                diag.get("message", "")
+                for diag in language_level_diagnostics
+                if _diagnostic_names_language(diag, language)
             ]
             findings.append(
                 {
@@ -591,7 +698,11 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
         if diag.get("file") is not None:
             findings.append(
                 {
-                    "state": "parse_failure",
+                    "state": (
+                        "name_invariant_drop"
+                        if _is_name_invariant_drop(diag)
+                        else "parse_failure"
+                    ),
                     "extension": Path(diag["file"]).suffix or None,
                     "language": None,
                     "detail": f"{diag['file']}: {diag.get('message', '')}",
@@ -604,19 +715,20 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
     # `corpus_fact`/`covered` with no signal at all that a diagnostic fired
     # (review dc659900, P2).
     census_languages = {
-        str(_resolve_language(extension)).lower()
+        _resolve_language(extension)
         for extension in census
         if _resolve_language(extension) is not None
     }
-    for message in language_level_messages:
-        lowered = message.lower()
-        if not any(language in lowered for language in census_languages):
+    for diag in language_level_diagnostics:
+        if not any(
+            _diagnostic_names_language(diag, language) for language in census_languages
+        ):
             findings.append(
                 {
                     "state": "unattributed_diagnostic",
                     "extension": None,
                     "language": None,
-                    "detail": message,
+                    "detail": diag.get("message", ""),
                 }
             )
 

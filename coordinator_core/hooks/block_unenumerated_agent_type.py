@@ -87,6 +87,23 @@ Two entrypoints:
         matcher (example-doctrine-repo-side wiring; out of scope for this chunk).
 
 Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C1 / AC1-AC4 / AC10
+
+COMPOSITION WITH `enforce_agent_model_pin` (2026-08-11). Once this module's
+own enumeration verdict comes back clean (roster resolved AND `subagent_type`
+enumerated), `check()` delegates to `coordinator_core.hooks.
+enforce_agent_model_pin.check(payload)` and relays its return value verbatim.
+Order matters: an unenumerated type must still deny with THIS module's
+enumeration reason, never the pin module's reason -- the delegation only
+happens on the enumerated-pass leg, never on a deny leg. This module's own
+`COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE:` marker short-circuits BEFORE
+the pin leg is ever reached (one hatch, one meaning) -- it already returns
+`None` earlier in `check()`, before the roster lookup that gates the
+delegation. WHY compose into this seam rather than register a second one:
+registration is example-doctrine-repo-side (`coordinator/hooks/hooks.json`), and reusing the
+one already-registered `PreToolUse(Agent)` entry lands the pin guard live
+with no cross-repo registration ask. The import is function-local inside
+`check()` -- `enforce_agent_model_pin` imports `resolve_model_pins` from
+this module, so a module-level import here would be circular.
 """
 
 from __future__ import annotations
@@ -125,6 +142,18 @@ _OVERRIDE_MARKER_RE = re.compile(
 #: `coordinator/agents/*.md` enumerates them, because coordinator does not
 #: own or ship them. Denying a dispatch of any of these is precisely the
 #: self-inflicted fleet outage this plan exists to avoid (AC3).
+#: `fork` is a harness DISPATCH SHAPE, not an agent definition -- the Agent
+#: tool's own `subagent_type` schema documents it: "`fork` forks yourself
+#: (the fork inherits your full conversation context and always runs on
+#: your model -- a `model` override is ignored); any other type -- or
+#: omitting it -- starts a fresh agent." Confirmed by live measurement, not
+#: only by reading the schema: example-doctrine-repo-em measured a real fork dispatch
+#: reaching `PreToolUse(Agent)` with `subagent_type` as the literal string
+#: `"fork"`. It never materializes as a file under any of the three
+#: filesystem legs ((a) policy map keys, (b) coordinator/agents/*.md, (c)
+#: plugin agents/*.md) -- there is no agent definition to discover, only a
+#: harness-level fork-yourself instruction -- so it is unreachable by
+#: roster discovery by construction and must be hardcoded here.
 _HARNESS_BUILTIN_TYPES: FrozenSet[str] = frozenset({
     "claude",
     "claude-code-guide",
@@ -132,6 +161,7 @@ _HARNESS_BUILTIN_TYPES: FrozenSet[str] = frozenset({
     "Explore",
     "Plan",
     "statusline-setup",
+    "fork",
 })
 
 #: (c), plugin leg -- the ONLY top-level `~/.claude/plugins/<entry>`
@@ -238,11 +268,11 @@ def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
     return frozenset(keys)
 
 
-def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
-    """Roster source (b) -- `coordinator:<name>` for every `coordinator/
-    agents/*.md` frontmatter `name:` field, keyed as the policy file itself
-    keys them (confirmed at HEAD: `name: executor` in the frontmatter,
-    `coordinator:executor` as the policy map key).
+def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
+    """Shared scan behind BOTH roster source (b) (`_load_agents_roster`) and
+    `resolve_model_pins()` (`coordinator_core.hooks.enforce_agent_model_pin`)
+    -- one walk of `coordinator/agents/*.md`, not two frontmatter readers.
+    Returns `{"coordinator:<name>": (full_frontmatter_dict, md_path)}`.
 
     Fail-CLOSED (raises `_RosterError`, self-describing per AC10) on: the
     directory missing entirely, or an OSError listing it. An individual
@@ -263,7 +293,7 @@ def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
             f"flight?): {agents_dir} -- OSError: {exc}"
         ) from exc
 
-    names: set = set()
+    entries: Dict[str, Tuple[dict, Path]] = {}
     for md_path in files:
         try:
             text = md_path.read_text(encoding="utf-8")
@@ -274,11 +304,23 @@ def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
             continue
         name = fm.get("name")
         if isinstance(name, str) and name.strip():
-            names.add("coordinator:" + name.strip())
-    return frozenset(names)
+            entries["coordinator:" + name.strip()] = (fm, md_path)
+    return entries
 
 
-def _repo_style_plugin_roster(plugins_root: Path) -> "set":
+def _load_agents_roster(doe_root: str) -> FrozenSet[str]:
+    """Roster source (b) -- `coordinator:<name>` for every `coordinator/
+    agents/*.md` frontmatter `name:` field, keyed as the policy file itself
+    keys them (confirmed at HEAD: `name: executor` in the frontmatter,
+    `coordinator:executor` as the policy map key).
+
+    Thin wrapper over `_scan_agents_frontmatter` -- see that function for
+    the fail-closed contract this inherits unchanged.
+    """
+    return frozenset(_scan_agents_frontmatter(doe_root).keys())
+
+
+def _repo_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
     """Leg 1 -- `~/.claude/plugins/<repo>/<namespace>/agents/*.md`, namespace
     = the directory directly containing the matched `agents/` folder (e.g.
     `game-dev:staff-game-dev`). Walks every top-level entry EXCEPT `cache/`
@@ -286,12 +328,17 @@ def _repo_style_plugin_roster(plugins_root: Path) -> "set":
     below -- a generic recursive sweep over them would read their *version*
     or *marketplace* path segment as the namespace, which is wrong) and
     `_pre-refresh-snapshots` (see `_PLUGIN_ROSTER_EXCLUDED_TOP_DIRS`).
+
+    Returns `(key, md_path)` pairs, not a set of keys -- `_repo_style_
+    plugin_roster` (roster leg (c)) and `resolve_model_pins()`'s plugin half
+    (this module's own pin leg) both need the path; the former derives its
+    key-only set from this, the latter reads frontmatter off the path.
     """
-    names: set = set()
+    pairs: "list[Tuple[str, Path]]" = []
     try:
         top_entries = sorted(plugins_root.iterdir())
     except OSError:
-        return names
+        return pairs
     for top in top_entries:
         if (
             top.name in _PLUGIN_ROSTER_EXCLUDED_TOP_DIRS
@@ -311,11 +358,18 @@ def _repo_style_plugin_roster(plugins_root: Path) -> "set":
             if len(rel_parts) < 2 or rel_parts[-2] != "agents":
                 continue
             namespace = top.name if len(rel_parts) == 2 else rel_parts[-3]
-            names.add(f"{namespace}:{md_path.stem}")
-    return names
+            pairs.append((f"{namespace}:{md_path.stem}", md_path))
+    return pairs
 
 
-def _cache_style_plugin_roster(plugins_root: Path) -> "set":
+def _repo_style_plugin_roster(plugins_root: Path) -> "set":
+    """Thin key-only wrapper over `_repo_style_plugin_pairs` -- see that
+    function's docstring for the walk itself.
+    """
+    return {key for key, _ in _repo_style_plugin_pairs(plugins_root)}
+
+
+def _cache_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
     """Leg 2 -- `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/
     agents/*.md`, namespace = `<plugin>` (NOT `<version>` -- a plain
     top-relative sweep would read the version hash/tag as the namespace,
@@ -327,15 +381,18 @@ def _cache_style_plugin_roster(plugins_root: Path) -> "set":
     `<plugin>` namespace -- a stale extra version's agent set is harmless
     (union, not overwrite), a missing one is the outage this leg exists to
     close.
+
+    Returns `(key, md_path)` pairs -- see `_repo_style_plugin_pairs`'s
+    docstring for why.
     """
-    names: set = set()
+    pairs: "list[Tuple[str, Path]]" = []
     cache_root = plugins_root / "cache"
     if not cache_root.is_dir():
-        return names
+        return pairs
     try:
         matches = list(cache_root.glob("*/*/*/agents/*.md"))
     except OSError:
-        return names
+        return pairs
     for md_path in matches:
         try:
             parts = md_path.relative_to(cache_root).parts
@@ -345,22 +402,28 @@ def _cache_style_plugin_roster(plugins_root: Path) -> "set":
         if len(parts) != 5 or parts[3] != "agents":
             continue
         namespace = parts[1]
-        names.add(f"{namespace}:{md_path.stem}")
-    return names
+        pairs.append((f"{namespace}:{md_path.stem}", md_path))
+    return pairs
 
 
-def _marketplace_style_plugin_roster(plugins_root: Path) -> "set":
+def _cache_style_plugin_roster(plugins_root: Path) -> "set":
+    """Thin key-only wrapper over `_cache_style_plugin_pairs`."""
+    return {key for key, _ in _cache_style_plugin_pairs(plugins_root)}
+
+
+def _marketplace_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
     """Leg 3 -- `~/.claude/plugins/marketplaces/<marketplace>/plugins/
-    <plugin>/agents/*.md`, namespace = `<plugin>`.
+    <plugin>/agents/*.md`, namespace = `<plugin>`. Returns `(key, md_path)`
+    pairs -- see `_repo_style_plugin_pairs`'s docstring for why.
     """
-    names: set = set()
+    pairs: "list[Tuple[str, Path]]" = []
     marketplaces_root = plugins_root / "marketplaces"
     if not marketplaces_root.is_dir():
-        return names
+        return pairs
     try:
         matches = list(marketplaces_root.glob("*/plugins/*/agents/*.md"))
     except OSError:
-        return names
+        return pairs
     for md_path in matches:
         try:
             parts = md_path.relative_to(marketplaces_root).parts
@@ -370,11 +433,16 @@ def _marketplace_style_plugin_roster(plugins_root: Path) -> "set":
         if len(parts) != 5 or parts[1] != "plugins" or parts[3] != "agents":
             continue
         namespace = parts[2]
-        names.add(f"{namespace}:{md_path.stem}")
-    return names
+        pairs.append((f"{namespace}:{md_path.stem}", md_path))
+    return pairs
 
 
-def _manifest_style_plugin_roster(plugins_root: Path) -> "set":
+def _marketplace_style_plugin_roster(plugins_root: Path) -> "set":
+    """Thin key-only wrapper over `_marketplace_style_plugin_pairs`."""
+    return {key for key, _ in _marketplace_style_plugin_pairs(plugins_root)}
+
+
+def _manifest_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
     """Leg 4 -- the authoritative `installed_plugins.json` manifest
     (`version: 2`): `plugins["<plugin>@<marketplace>"]` -> list of entries
     each carrying `installPath`, a plugin ROOT (not always the `agents/`
@@ -393,22 +461,25 @@ def _manifest_style_plugin_roster(plugins_root: Path) -> "set":
     filesystem legs above already cover every install this manifest could
     have named, so losing this one leg costs nothing but a possibly-stale
     extra key it would otherwise have deduplicated for free.
+
+    Returns `(key, md_path)` pairs -- see `_repo_style_plugin_pairs`'s
+    docstring for why.
     """
-    names: set = set()
+    pairs: "list[Tuple[str, Path]]" = []
     manifest_path = plugins_root / "installed_plugins.json"
     if not manifest_path.is_file():
-        return names
+        return pairs
     try:
         import json as _json
 
         manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return names
+        return pairs
     if not isinstance(manifest, dict):
-        return names
+        return pairs
     plugins_section = manifest.get("plugins")
     if not isinstance(plugins_section, dict):
-        return names
+        return pairs
 
     for manifest_key, entries in plugins_section.items():
         if not isinstance(manifest_key, str) or "@" not in manifest_key:
@@ -431,8 +502,58 @@ def _manifest_style_plugin_roster(plugins_root: Path) -> "set":
                 except OSError:
                     continue
                 for md_path in agent_files:
-                    names.add(f"{namespace}:{md_path.stem}")
-    return names
+                    pairs.append((f"{namespace}:{md_path.stem}", md_path))
+    return pairs
+
+
+def _manifest_style_plugin_roster(plugins_root: Path) -> "set":
+    """Thin key-only wrapper over `_manifest_style_plugin_pairs`."""
+    return {key for key, _ in _manifest_style_plugin_pairs(plugins_root)}
+
+
+def _scan_plugin_agents_frontmatter(home: Optional[str]) -> Dict[str, Tuple[dict, Path]]:
+    """Plugin half of roster source (c), frontmatter-carrying variant --
+    reuses the same four legs `_load_plugin_roster` unions (via each leg's
+    `_..._pairs` helper, not a fifth walk) but keeps the `md_path` per key
+    and parses its frontmatter, exactly as `_scan_agents_frontmatter` does
+    for leg (b). Feeds `resolve_model_pins()`'s plugin contribution -- see
+    that function's docstring for the `inherit`/unorderable-value handling
+    applied to what this returns.
+
+    NEVER raises -- matches `_load_plugin_roster`'s own local-install-state
+    posture (module docstring "FAIL CLOSED, but only on the two PEER-REPO
+    sources"): an absent/unreadable plugins tree, or an individual
+    unreadable/frontmatter-less agent file, degrades to a smaller (or
+    empty) contribution, never a roster-load failure.
+
+    Excludes `_PLUGIN_ROSTER_EXCLUDED_TOP_DIRS` identically to the roster
+    walk -- a pin read out of `_pre-refresh-snapshots` would be a pin for
+    an agent that may no longer exist, the same stale-cache hazard the
+    module docstring already forbids for the roster itself.
+    """
+    if not home:
+        return {}
+    plugins_root = Path(home) / ".claude" / "plugins"
+    if not plugins_root.is_dir():
+        return {}
+
+    pairs: "list[Tuple[str, Path]]" = []
+    pairs.extend(_repo_style_plugin_pairs(plugins_root))
+    pairs.extend(_cache_style_plugin_pairs(plugins_root))
+    pairs.extend(_marketplace_style_plugin_pairs(plugins_root))
+    pairs.extend(_manifest_style_plugin_pairs(plugins_root))
+
+    entries: Dict[str, Tuple[dict, Path]] = {}
+    for key, md_path in pairs:
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _extract_frontmatter(text)
+        if not fm:
+            continue
+        entries[key] = (fm, md_path)
+    return entries
 
 
 def _load_plugin_roster(home: Optional[str]) -> FrozenSet[str]:
@@ -547,6 +668,148 @@ def resolve_roster(
     return roster, None
 
 
+def _declared_pin_value(raw: Any, order: Dict[str, int]) -> Optional[str]:
+    """Return the declared frontmatter value if -- and only if -- it is a
+    genuine pin (NEGATIVE SPEC, see `resolve_model_pins()`'s own docstring
+    "`model: inherit` is not a pin" and "Unrecognized declared pin
+    values"):
+
+        - absent / not a string / empty or whitespace-only -> None.
+        - `inherit` (case-insensitive) -> None. `inherit` means "take the
+          parent's model/effort" -- it asserts no cost invariant, so it
+          must never reach the comparator as a value to rank ANY passed
+          override against.
+        - not a member of `order` (this axis's recognized cost ordering,
+          e.g. a third-party agent's `model: gpt4`) -> None. A DECLARED
+          value this guard cannot rank is not the same case as a PASSED
+          override it cannot rank (that leg still denies, unchanged, in
+          `enforce_agent_model_pin._axis_verdict`) -- a guard cannot defend
+          an invariant it cannot read.
+        - otherwise -> the stripped value, a genuine pin.
+
+    Do NOT special-case `inherit`/unorderable values at the comparison site
+    -- omitting them here, before they ever reach the returned mapping, is
+    the whole point: it lets them flow into the already-correct "no pin
+    for that axis -> pass" leg with no second code path to keep in sync.
+    """
+    value = raw.strip() if isinstance(raw, str) else ""
+    if not value:
+        return None
+    if value.lower() == "inherit":
+        return None
+    if value not in order:
+        return None
+    return value
+
+
+def resolve_model_pins(
+    *, doe_root: Any = _UNSET, home: Any = _UNSET
+) -> Tuple[Optional[Dict[str, Dict[str, str]]], Optional[str]]:
+    """Resolve `model`/`effort` pins declared in agent frontmatter across
+    BOTH roster source (b) (`coordinator/agents/*.md`, keyed `coordinator:
+    <name>`) and the plugin half of roster source (c) (`~/.claude/
+    plugins/**/agents/*.md`, keyed by the same namespace:stem convention
+    `_load_plugin_roster` uses). Consumed by `coordinator_core.hooks.
+    enforce_agent_model_pin`.
+
+    FAIL-CLOSED ASYMMETRY, INHERITED FROM `resolve_roster()` (module
+    docstring "FAIL CLOSED, but only on the two PEER-REPO sources"): leg
+    (b) reuses `_scan_agents_frontmatter`'s fail-closed contract unchanged
+    -- an unreadable/missing `coordinator/agents/` denies here too (AC10
+    self-describing reason, override hint included). The plugin leg is
+    local install state, not a live peer-repo checkout: it is read via
+    `_scan_plugin_agents_frontmatter`, which NEVER raises, so an absent or
+    unreadable `~/.claude/plugins/` degrades this leg to an EMPTY
+    contribution -- fewer pins, never a roster-load failure and never a
+    deny on that account alone.
+
+    NEGATIVE SPEC -- `model: inherit` IS NOT A PIN. 81 `model: inherit`
+    declarations exist across the installed plugin trees at last
+    measurement. `inherit` asserts no cost invariant (it means "take the
+    parent's model"), so ANY passed `model` against an `inherit`
+    declaration is legitimate and must pass silently. This is handled by
+    OMITTING the axis from the returned mapping (see `_declared_pin_value`)
+    -- a future reader must not "complete" `_MODEL_ORDER`/`_EFFORT_ORDER` by
+    ranking `inherit` into them; there is no rank that would be correct.
+
+    NEGATIVE SPEC -- AN UNRECOGNIZED DECLARED VALUE IS NOT THE SAME CASE AS
+    AN UNRECOGNIZED PASSED VALUE. Plugin agents are third-party and their
+    frontmatter is not coordinator-governed (at least one carries `model:
+    gpt4`, author-marked invalid in its own comment). A passed override
+    this guard cannot rank still denies unconditionally (unchanged, in
+    `enforce_agent_model_pin`'s comparator) -- that is the conservative,
+    cost-protective direction. A DECLARED pin value this guard cannot rank
+    is the opposite risk direction: denying every dispatch of a
+    third-party agent because its author typed a non-Claude model name
+    would be a fleet outage caused by someone else's typo, not a
+    dispatcher's cost-escalating override. So this leg omits the axis
+    (`_declared_pin_value` returns None) rather than denying -- same
+    treatment as `inherit`, deliberately asymmetric with the passed-value
+    leg.
+
+    Each returned entry carries the pinned axis value(s) present
+    (`"model"`/`"effort"`, only the keys actually a genuine pin per
+    `_declared_pin_value`) plus `"_source_path"` -- the resolved agent
+    definition path, POSIX-slashed, for the deny message's `<resolved
+    from: ...>` line (INPUT TRUST note in `enforce_agent_model_pin`: never
+    a hardcoded drive-lettered path). An agent definition with no genuine
+    pin on either axis contributes no entry at all. On a key collision
+    between the two legs (should not occur -- `coordinator:` is reserved
+    to leg (b) and no plugin namespace is named `coordinator`) leg (b)
+    wins, resolved last.
+
+    `doe_root`/`home` are injectable (default: real resolution via
+    `read_doe_root_pointer()` / `_home_dir()`) purely for test isolation --
+    production callers never pass them.
+    """
+    if doe_root is _UNSET:
+        doe_root = read_doe_root_pointer()
+    if home is _UNSET:
+        home = _home_dir()
+
+    if not doe_root:
+        return None, _with_override_hint(
+            "roster source MISSING ENTIRELY (path/install defect): the "
+            "example-doctrine-repo root pointer is unresolved -- checked registry "
+            "repos.example_doctrine_repo, <settings-home>/machine-local/.doe-root, "
+            "${CLAUDE_HOME:-$HOME}/.claude/.doe-root. Source (b) "
+            "coordinator/agents/*.md cannot be read without it."
+        )
+
+    try:
+        scanned = _scan_agents_frontmatter(doe_root)
+    except _RosterError as exc:
+        return None, _with_override_hint(exc.reason)
+
+    plugin_scanned = _scan_plugin_agents_frontmatter(home)
+
+    # `_MODEL_ORDER`/`_EFFORT_ORDER` live on the sibling module -- function-
+    # local import (not module-level) because that sibling module imports
+    # `resolve_model_pins` back from THIS module; a module-level import
+    # here would be circular. See this module's own docstring "COMPOSITION
+    # WITH `enforce_agent_model_pin`" for the identical pattern already in
+    # use at `check()`.
+    from coordinator_core.hooks.enforce_agent_model_pin import (
+        _EFFORT_ORDER,
+        _MODEL_ORDER,
+    )
+
+    pins: Dict[str, Dict[str, str]] = {}
+    for source in (plugin_scanned, scanned):
+        for key, (fm, md_path) in source.items():
+            entry: Dict[str, str] = {}
+            model = _declared_pin_value(fm.get("model"), _MODEL_ORDER)
+            if model is not None:
+                entry["model"] = model
+            effort = _declared_pin_value(fm.get("effort"), _EFFORT_ORDER)
+            if effort is not None:
+                entry["effort"] = effort
+            if entry:
+                entry["_source_path"] = md_path.as_posix()
+                pins[key] = entry
+    return pins, None
+
+
 def _has_override_marker(prompt_text: str) -> bool:
     for match in _OVERRIDE_MARKER_RE.finditer(prompt_text):
         reason = match.group(1)
@@ -605,7 +868,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return deny("PreToolUse", error_reason or "roster unresolved")
 
     if subagent_type in roster:
-        return None
+        from coordinator_core.hooks.enforce_agent_model_pin import (
+            check as _enforce_model_pin_check,
+        )
+
+        return _enforce_model_pin_check(payload)
 
     return deny(
         "PreToolUse",

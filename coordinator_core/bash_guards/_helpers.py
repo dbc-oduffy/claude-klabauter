@@ -135,12 +135,25 @@ from coordinator_core.subagent_sandbox.engine import (  # noqa: F401
     _read_backpointer_subagent_type,
 )
 
+# AC5 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md, C2):
+# a plain re-use of C1's dispatch-seam roster resolver, NOT a second roster
+# implementation. `resolve_roster()` is the one function that already unions
+# the three legitimate-dispatch sources (example-doctrine-repo policy map keys, coordinator
+# agents, harness built-ins + plugin agents) and fails CLOSED on an
+# unreadable roster -- see that module's own docstring. This bash-guard
+# package borrows it for the SAME reason it borrows `resolve_effective_types`
+# above: one resolver, not a parallel one.
+from coordinator_core.hooks.block_unenumerated_agent_type import (  # noqa: F401
+    resolve_roster,
+)
+
 __all__ = [
     "resolve_git_root",
     "resolve_effective_types",
     "_canonical_agent_id",
     "_read_backpointer_subagent_type",
     "is_confined_findings_agent",
+    "is_confined_by_roster_absence",
     "csn_check",
     "prefix_denies",
     "scan_tokens_until_separator",
@@ -346,19 +359,22 @@ def operator_override_note(
     """Render the ONE short pointer every guard message that names an escape
     hatch appends -- the SSOT this whole function exists for.
 
-    ``reason_placeholder`` (2026-07-30 P1 fix, this dispatch): renders
-    ``env_var`` as a REASON-shaped assignment (``VAR="<placeholder>"``)
-    instead of the default flag-shaped ``VAR=1``. Two callers
-    (``COORDINATOR_QUEUE_PUNT``, ``COORDINATOR_BATON_BODY_PUNT``) are
-    reason-shaped, not flag-shaped: their own ``_is_trivial_reason`` guard
-    denylists the literal string ``"1"``, so the default ``VAR=1`` render is
-    a remediation their OWN acceptance path would refuse -- confirmed live
-    (``COORDINATOR_QUEUE_PUNT=1 (pre-launch only)`` printed by this very
-    function, rejected by the guard printing it). Default (``None``) keeps
-    the original ``VAR=1`` shape unchanged for the ~40 flag-shaped callers --
-    this is an additive parameter, not a behavior change for existing call
-    sites. One builder, one SSOT: a reason-shaped call site renders through
-    this parameter, never by hand-writing its own pointer text.
+    ``reason_placeholder`` (2026-07-30 P1 fix; reshaped again 2026-08-11,
+    see NEGATIVE SPEC 4): originally rendered ``env_var`` as a REASON-shaped
+    assignment (``VAR="<placeholder>"``) instead of the default flag-shaped
+    ``VAR=1``, because two callers (``COORDINATOR_QUEUE_PUNT``,
+    ``COORDINATOR_BATON_BODY_PUNT``) are reason-shaped, not flag-shaped:
+    their own ``_is_trivial_reason`` guard denylists the literal string
+    ``"1"``, so a flag-shaped render was a remediation their OWN acceptance
+    path would refuse. As of the 2026-08-11 reshape below, NEITHER branch
+    renders an assignment at all -- the parameter now only selects which
+    parenthetical describes the key's shape (a bare flag vs. a one-sentence
+    reason), never a pasteable ``VAR=1``/``VAR="..."`` literal. Default
+    (``None``) renders the flag-shaped parenthetical; passing
+    ``reason_placeholder`` (any non-``None`` value -- the placeholder text
+    itself is no longer interpolated) renders the reason-shaped one. This is
+    still an additive parameter, not a second builder: one builder, one
+    SSOT, per NEGATIVE SPEC 3 below.
 
     Cut a second time (2026-07-30, same day as H12) from a ~50-word inline
     note to a single-line pointer, per PM ruling: the note fired in FULL on
@@ -379,6 +395,34 @@ def operator_override_note(
     ``tests/test_override_unreachability_boundary.py`` and this function's
     git history, not restated here.
 
+    RESHAPED 2026-08-11 (PM-raised, break-class; cross-repo memo from
+    example-market-data-repo-em plus two prior siblings): the previous render --
+    ``"Bypass options for a human operator, not this agent: VAR=1
+    (pre-launch only) -- full list: ..."`` -- carried two independent
+    injection tells. (1) A pasteable ``KEY=1`` assignment sitting inside
+    tool output reads as an INSTRUCTION, not a fact, to a model scanning for
+    actionable text. (2) The ``"...not this agent:"`` disclaimer is exactly
+    the deniability-preserving phrasing an attacker writes to make an agent
+    feel authorised while covering itself -- a tell, not a safeguard. Two
+    independently-dispatched agents (a code-reviewer, a review-integrator,
+    no shared context) classified this line as prompt injection and
+    declined to act; a prior incident hit the same defect four more times
+    (see ``session.guard_unlock_sentinel.annotate_deny``'s own docstring,
+    items 1-2, for the sibling banner's parallel history). The fix removes
+    the assignment form entirely (the key is now named BARE, never
+    ``KEY=1``/``KEY="..."``) and replaces the disclaimer with the load-
+    bearing fact that was doing the disclaimer's job badly: this env var is
+    read once at hook-process spawn, so it is STRUCTURALLY unusable from
+    inside a running session, independent of who is asking. Stating that
+    plainly is what stops an agent burning a turn on it -- no disclaimer
+    needed to carry that weight. Rendered shape, e.g.: ``"Override key
+    (flag), unsettable from inside this session -- read only at
+    hook-process spawn: COORDINATOR_ALLOW_X -- key list: claude-klabauter
+    docs/reference/guard-override-keys.md"`` -- kept terse (this reshape
+    stayed inside the pre-existing byte/word budgets in
+    ``test_operator_override_note_retains_affordances.py``, not a new,
+    looser one).
+
     NEGATIVE SPEC -- do not re-add an ``export ... =1`` instruction (the
     exact hand-written shape ``test_no_handwritten_override_clauses.py``
     exists to catch), and do not re-inline the two relayable routes or the
@@ -393,17 +437,31 @@ def operator_override_note(
     liveness gate (found by that gate on this function's first draft).
 
     NEGATIVE SPEC 3 -- do not fork a second builder for the reason-shaped
-    case. A call site needing ``VAR="<reason>"`` text passes
-    ``reason_placeholder=``; it does not hand-write its own pointer sentence
-    (the exact "guard names a remediation that cannot run" defect class this
-    function exists to close, reproduced a second time if call sites start
-    forking their own render).
+    case. A call site needing the reason-shaped parenthetical passes
+    ``reason_placeholder=`` (any non-``None`` value); it does not hand-write
+    its own pointer sentence (the exact "guard names a remediation that
+    cannot run" defect class this function exists to close, reproduced a
+    second time if call sites start forking their own render).
+
+    NEGATIVE SPEC 4 (2026-08-11, this reshape) -- no assignment form, ever.
+    Neither branch may render ``env_var`` concatenated with ``=``, ``"``, or
+    any other character that makes the key plus a value look pasteable and
+    runnable. The key is named bare; the parenthetical describes its SHAPE
+    in prose ("a bare flag" / "a one-sentence reason") instead of showing a
+    literal value. This is the invariant the whole reshape exists to
+    enforce, and it is checked by construction in
+    ``test_operator_override_note_no_assignment_form.py`` -- do not weaken
+    that test to re-permit a ``KEY=`` substring in this function's output.
     """
-    value = '%s="%s"' % (env_var, reason_placeholder) if reason_placeholder is not None else "%s=1" % env_var
+    shape = (
+        'reason, e.g. "%s"' % reason_placeholder
+        if reason_placeholder is not None
+        else "flag"
+    )
     return (
-        "Bypass options for a human operator, not this agent: %s "
-        "(pre-launch only) -- full list: %s"
-        % (value, _resolve_override_keys_doc_display())
+        "Override key (%s), unsettable from inside this session -- read "
+        "only at hook-process spawn: %s -- key list: %s"
+        % (shape, env_var, _resolve_override_keys_doc_display())
     )
 
 
@@ -460,6 +518,67 @@ def is_confined_findings_agent(effective_type: str) -> bool:
     single-argument contract.
     """
     return (effective_type or "") in _CONFINED_FINDINGS_AGENTS
+
+
+def is_confined_by_roster_absence(effective_type: str) -> bool:
+    """AC5 (2026-08-10, C2 of
+    ``docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md``):
+    an ``effective_type`` that is not on C1's dispatch-seam roster is
+    UNTRUSTED -- confined -- by default, not exempt.
+
+    Before this function existed, ``block_reviewer_bash_outside_allowlist.
+    _is_confined_type`` treated non-membership in
+    ``_CONFINED_FINDINGS_AGENTS`` (this module's OWN hardcoded set, above) as
+    "not confined" -- i.e. UNRESTRICTED Bash. That default is correct for a
+    known, enumerated type this project deliberately chose not to confine
+    (``coordinator:enricher``, ``coordinator:executor``'s non-destructive
+    siblings, etc. -- confinement per Amendment 2 in that guard's own module
+    docstring is reserved for destructive-capable surfaces, not applied
+    uniformly). It is WRONG for a type nobody enumerated at all: an invented
+    ``subagent_type`` got a WIDER Bash surface than
+    ``coordinator:code-reviewer``, this project's own findings agent --
+    exactly the "less governed than any agent in the stable" defect this
+    plan's Problem section names.
+
+    This predicate distinguishes the two cases the membership check alone
+    cannot: it is ``True`` (confine) only when ``effective_type`` is
+    non-empty AND absent from ``resolve_roster()``'s union-of-three roster --
+    an enumerated-but-not-explicitly-confined type (on the roster, not in
+    ``_CONFINED_FINDINGS_AGENTS``) still returns ``False`` here, preserving
+    its existing unrestricted Bash surface exactly as before this predicate
+    existed.
+
+    An empty/falsy ``effective_type`` returns ``False`` -- same convention as
+    ``is_confined_findings_agent`` above: the caller resolves TWO legs
+    (``agent_type``, back-pointer ``subagent_type``) and ORs the results, so
+    an empty leg must contribute nothing to either direction, not force a
+    confinement verdict off the OTHER leg's absence.
+
+    A roster-load FAILURE (``resolve_roster()`` returning ``(None, reason)``
+    -- an unreadable/unparseable peer-repo source) fails CLOSED, i.e. this
+    returns ``True``: an unreadable roster degrades to "cannot confirm this
+    type is legitimate", never to "assume it is fine and leave it
+    unconfined" -- the same fail-closed direction C1's own roster-load-
+    failure deny already takes, and the opposite of every OTHER roster-keyed
+    lookup-miss this plan's census found.
+
+    Called ONLY as a fallback, after the caller has already checked the
+    cheaper ``bash_policy:`` key and ``is_confined_findings_agent`` legs --
+    those two checks resolve the common case (a known confined type) without
+    ever reaching this function's ``resolve_roster()`` call, which walks
+    example-doctrine-repo's policy YAML, ``coordinator/agents/*.md``, and the plugin discovery
+    tree -- real disk I/O, unlike the two cheap membership checks it
+    supplements. This function does not itself defer that call further; the
+    call-site ordering in ``block_reviewer_bash_outside_allowlist.
+    _is_confined_type`` is what keeps the roster walk off the hot path for
+    every already-confined or already-exempt-and-enumerated type.
+    """
+    if not effective_type:
+        return False
+    roster, error = resolve_roster()
+    if roster is None:
+        return True
+    return effective_type not in roster
 
 
 # ---------------------------------------------------------------------------

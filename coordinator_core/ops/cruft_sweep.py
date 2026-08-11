@@ -87,6 +87,10 @@ Net-new phase — sweep_harness_scratchpads (class "scratchpad"): a thin
   shares. `apply` maps directly to `sweep_scratchpads(reclaim=apply)`.
   No bash-oracle counterpart; same golden-diff exclusion rationale as
   `sweep_empty_toplevel_dirs` above.
+  Archive-shaped surfacing (2026-08-11, additive): this phase surfaces, but
+  never decides, `scratchpad_sweep`'s size-cut archive exemption — see that
+  module's own "Archive-shaped exemption" docstring note and this function's
+  own docstring below.
 
 Each accepts an optional `emit_fn: Callable[[dict], None]` — defaults to
 `print(json.dumps(rec))` on stdout (bash-parity), but a caller (golden-diff
@@ -258,20 +262,58 @@ def _dir_size_bytes(path: Path, budget_secs: float = 5.0) -> int:
     (an under-count on a huge/slow subtree, same direction as the pre-existing
     unreadable-subtree under-count below); it never changes a prune/skip decision,
     since those are driven by mtime, not size.
+
+    Windows st_blocks-absence fix (2026-08-11): the prior implementation
+    started `have_st_blocks = True` and only flipped it False the moment a
+    stat lacking `st_blocks` was seen — on a platform where `st_blocks` is
+    absent from every `os.stat_result` (Windows has no such field at all),
+    that flip happened only after bytes had already been mis-accumulated
+    into `total_512blocks` from the top-level `path.stat()` probe (0 there,
+    since `hasattr` gated the add — but any per-entry bytes seen before the
+    first non-st_blocks entry landed in `total_512blocks`, not
+    `total_size_fallback`, and were then discarded wholesale by the final
+    `if have_st_blocks` branch). On Windows this always resolved to
+    `have_st_blocks=False` with `total_size_fallback` sitting at 0 for any
+    walk where the FIRST entry happened to still report `hasattr(st,
+    "st_blocks")` True in some odd stat-shim case, or more simply: the
+    per-entry flip-and-continue design has no path back to reconcile bytes
+    already on the wrong side of the split. Fixed with a single up-front
+    platform probe — `hasattr(os.stat_result, "st_blocks")` — checked once
+    before the walk, deciding for the whole call which accumulator every
+    single entry (including the top-level `path.stat()`) feeds. This is
+    simpler than a per-entry flag (no split-then-reconcile step is possible
+    or needed) and matches the documented contract: platforms with
+    `st_blocks` get byte-for-byte unchanged `du -sk`-style allocated-size
+    behavior, platforms without it (Windows) get an accurate `st_size`-based
+    apparent-size total instead of a silent 0.
+
+    Same fix, KB-floor half: the final `kb = total // 1024; return kb *
+    1024` step replicates `du -sk`'s own KB-granularity rounding, which only
+    makes sense against `st_blocks`-derived allocated size (every real file
+    or dir consumes at least one whole block, so a nonempty tree's allocated
+    total is never sub-1024 once more than one or two entries exist). Applied
+    to the `st_size` fallback's raw apparent-byte sum, that same floor
+    divides away any small-but-nonempty tree (e.g. one short text file) down
+    to a reported 0 — silently reproducing the exact under-report this fix
+    exists to eliminate, just moved one line later. The fallback total is
+    therefore returned as the raw apparent-byte sum, with no KB-floor
+    rounding applied — still documented as a divergence from `du -sk`
+    (Q8), just no longer a divergence that reads as "zero bytes used."
     """
+    have_st_blocks = hasattr(os.stat_result, "st_blocks")
+
     total_512blocks = 0
-    have_st_blocks = True
+    total_size_fallback = 0
     try:
         st = path.stat()
-        if hasattr(st, "st_blocks"):
+        if have_st_blocks:
             total_512blocks += st.st_blocks
         else:
-            have_st_blocks = False
+            total_size_fallback += st.st_size
     except OSError:
         print(f"_dir_size_bytes: stat failed for {path}: {sys.exc_info()[1]}", file=sys.stderr)
         pass
 
-    total_size_fallback = 0
     deadline = time.monotonic() + budget_secs
     # NOTE: bare os.walk(), no onerror= -- an unreadable nested subtree
     # silently drops out of the total (same idiom this session's fixes
@@ -289,21 +331,20 @@ def _dir_size_bytes(path: Path, budget_secs: float = 5.0) -> int:
             except OSError:
                 print(f"_dir_size_bytes: lstat failed for {p}: {sys.exc_info()[1]}", file=sys.stderr)
                 continue
-            if have_st_blocks and hasattr(st, "st_blocks"):
+            if have_st_blocks:
                 total_512blocks += st.st_blocks
             else:
-                have_st_blocks = False
                 total_size_fallback += st.st_size
 
     if have_st_blocks:
         total_bytes = total_512blocks * 512
-    else:
-        # Fallback path (Windows / no st_blocks): apparent-size sum. Documented
-        # divergence from `du -sk` — not a golden-diff parity target off-POSIX.
-        total_bytes = total_size_fallback
+        kb = total_bytes // 1024
+        return kb * 1024
 
-    kb = total_bytes // 1024
-    return kb * 1024
+    # Fallback path (Windows / no st_blocks): raw apparent-size sum, NOT
+    # KB-floored (see docstring's "KB-floor half" note) — documented
+    # divergence from `du -sk` — not a golden-diff parity target off-POSIX.
+    return total_size_fallback
 
 
 # ---------------------------------------------------------------------------
@@ -1679,6 +1720,18 @@ def sweep_harness_scratchpads(
     `project_slugs`, `self_session_id`, `slug_to_root_map`,
     `size_cut_target_bytes`, `size_cut_floor_days`) pass straight through —
     this adapter owns none of that policy.
+
+    Archive-shaped surfacing (2026-08-11, additive — see
+    `scratchpad_sweep`'s own "Archive-shaped exemption" module-docstring
+    note): this adapter does not decide the exemption, only surfaces it —
+    an entry's `evidence` string gets an archive clause appended whenever
+    `archive_count > 0`, on every disposition (auto-prune, skip, or
+    prune-failed alike), so a `--json` reader sees which reclaimed/exempted
+    directory actually carried the archive-shaped file without cross-
+    referencing `scratchpad_sweep`'s own report. The banner line gains a
+    second, size-cut-exempt-specific clause when `size_cut.archive_exempt_entries
+    > 0`, so both the `/workday-start` dry-run advisory and the
+    `/workday-complete` apply pass show it even with `quiet=False, json_mode=False`.
     """
     from coordinator_core.ops.scratchpad_sweep import sweep_scratchpads
 
@@ -1713,6 +1766,20 @@ def sweep_harness_scratchpads(
             else _get_mtime(Path(path))
         )
 
+        # Archive-shaped clause, appended to whatever evidence string a
+        # branch below builds — surfaced regardless of disposition (a
+        # reclaimed archive and a size-cut-exempted one both matter to a
+        # reader), never decided here (see docstring's "Archive-shaped
+        # surfacing" note — the exemption itself is scratchpad_sweep's call).
+        archive_count = entry.get("archive_count") or 0
+        archive_clause = (
+            f"; {archive_count} archive-shaped file(s), {entry.get('archive_bytes') or 0} bytes"
+            if archive_count > 0
+            else ""
+        )
+        if entry.get("size_cut_exempt"):
+            archive_clause += "; size-cut-exempt (archive-shaped, TTL gate still applies)"
+
         if verdict in _RECLAIM_VERDICTS:
             total_bytes += size_bytes
             total_items += 1
@@ -1723,22 +1790,30 @@ def sweep_harness_scratchpads(
                     if is_size_cut and age_days is not None
                     else (f"age {age_days:.2f}d > ttl {report['ttl_days']}d" if age_days is not None else "dead scratchpad")
                 )
-                emit_jsonl("scratchpad", path, name, size_bytes, mtime, "auto-prune", evidence, emit_fn=emit_fn)
+                emit_jsonl("scratchpad", path, name, size_bytes, mtime, "auto-prune", evidence + archive_clause, emit_fn=emit_fn)
         elif verdict == "error":
             if json_mode:
                 emit_jsonl("scratchpad", path, name, size_bytes, mtime, "prune-failed",
-                           entry.get("error") or "scratchpad sweep entry error", emit_fn=emit_fn)
+                           (entry.get("error") or "scratchpad sweep entry error") + archive_clause, emit_fn=emit_fn)
         else:
             if json_mode:
                 emit_jsonl("scratchpad", path, name, size_bytes, mtime, "skip",
-                           f"verdict={verdict}", emit_fn=emit_fn)
+                           f"verdict={verdict}" + archive_clause, emit_fn=emit_fn)
 
     total_mb = total_bytes // 1048576
     if not json_mode and not quiet:
         mode_label = "APPLY" if apply else "DRY-RUN"
+        archive_exempt_entries = report.get("size_cut", {}).get("archive_exempt_entries") or 0
+        archive_exempt_bytes = report.get("size_cut", {}).get("archive_exempt_bytes") or 0
+        exempt_suffix = (
+            f", {archive_exempt_entries} archive-shaped item(s) "
+            f"(~{archive_exempt_bytes // 1048576} MB) size-cut-exempt"
+            if archive_exempt_entries
+            else ""
+        )
         _banner(
             f"[cruft-sweep] scratchpad ({mode_label}, harness temp-root): "
-            f"{total_items} items, ~{total_mb} MB reclaimable",
+            f"{total_items} items, ~{total_mb} MB reclaimable{exempt_suffix}",
             quiet=False,
         )
 

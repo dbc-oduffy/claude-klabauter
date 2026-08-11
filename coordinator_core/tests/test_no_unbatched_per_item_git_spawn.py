@@ -1002,9 +1002,27 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("coordinator_core/ops/distill_apply_disposal.py", "apply_disposal_manifest", "_is_tracked"),
         ("coordinator_core/ops/emit/envelope.py", "main", "_commit_age_label"),
         ("coordinator_core/ops/emit/envelope.py", "main", "resolve_ref"),
-        ("coordinator_core/ops/fleet/_common.py", "archive_and_commit", "_ls_tree_head_cacheinfo"),
         ("coordinator_core/ops/fleet/_common.py", "archive_and_commit", "create_subprocess_exec"),
         ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec"),
+        # RE-KEYED 2026-08-11 (docs/plans/2026-08-11-resync-leaves-a-bare-staged-deletion-whe.md,
+        # chunks C2/C4a). Not new sites: the two post-commit main-index resyncs moved OUT of
+        # archive_and_commit / rm_and_commit into their own module-level functions, and this
+        # inventory keys on the ENCLOSING function, so the same code re-entered under new keys.
+        # `run_git` is the extracted injectable seam, defaulting to _update_index_with_retry.
+        #
+        # These stay per-item DELIBERATELY and must not be "fixed" by batching every path into
+        # one call: the resync annotates `index_resync_failed` onto the individual acted[] /
+        # reaped[] item that failed, which is a hard acceptance criterion (AC6) of that plan and
+        # the thing that closed the 2026-08-01/02 "log line nobody read" incident. One batched
+        # call cannot say WHICH path failed. Batching here would trade a visible defect for an
+        # invisible one — the exact swap that plan's Anti-scope forbids.
+        #
+        # Retired in the same edit: (_common.py, archive_and_commit, _ls_tree_head_cacheinfo).
+        # C2 replaced the ls-tree + update-index --add --cacheinfo pair with a single
+        # `git restore --staged`, so that call site no longer exists — a genuine burn-down, not
+        # a re-key. The helper's definition survives with no caller.
+        ("coordinator_core/ops/fleet/_common.py", "_resync_main_index_for_moves", "run_git"),
+        ("coordinator_core/ops/fleet/_common.py", "_resync_main_index_for_reaps", "run_git"),
         ("coordinator_core/ops/fleet/_findings_reap.py", "reap_findings", "_is_tracked"),
         ("coordinator_core/ops/fleet/archive_plans.py", "_handle_act", "_plan_worktree_dirty"),
         ("coordinator_core/ops/fleet/archive_plans.py", "_handle_preview", "_plan_worktree_dirty"),
@@ -1054,11 +1072,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ),
         ("coordinator_core/session/scope.py", "compute_scope", "_dirty_files_under_batch"),
         ("coordinator_core/session_attribution.py", "detect_foreign_commits", "_git_run"),
-        (
-            "coordinator_core/workstream_complete/directives_commit_tail.py",
-            "_peer_committed_paths",
-            "_run_git_ok",
-        ),
         (
             "coordinator_core/write_guards/block_consumed_handoff_edit.py",
             "check",

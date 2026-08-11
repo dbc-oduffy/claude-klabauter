@@ -122,6 +122,25 @@ def test_plugin_dir_value_none_when_absent():
     assert _plugin_dir_value("claude --dangerously-skip-permissions") is None
 
 
+def test_plugin_dir_value_handles_trailing_backslash_before_closing_quote():
+    # Windows CRT argv parsing treats a `\"` immediately before the intended
+    # closing quote as an escaped literal quote, not a terminator -- the
+    # value keeps its trailing backslash and the regex must not stop short
+    # at that embedded `\"` (Review: coordinatorcode-reviewer-ad7b843b P2).
+    command_line = 'claude --plugin-dir "P:\\fixture\\coordinator\\" --x'  # abs-path-ok: fixture-only placeholder command line, not a real host path
+    assert _plugin_dir_value(command_line) == "P:\\fixture\\coordinator\\"  # abs-path-ok: fixture-only placeholder command line, not a real host path
+
+
+def test_plugin_dir_value_last_wins_on_repeated_flag():
+    # Ordinary CLI-argument semantics for a repeated flag is last-wins, not
+    # first-match (Review: coordinatorcode-reviewer-ad7b843b P3).
+    command_line = (
+        'claude --plugin-dir "P:\\first\\coordinator" '  # abs-path-ok: fixture-only placeholder command line, not a real host path
+        '--plugin-dir "P:\\second\\coordinator"'  # abs-path-ok: fixture-only placeholder command line, not a real host path
+    )
+    assert _plugin_dir_value(command_line) == "P:\\second\\coordinator"  # abs-path-ok: fixture-only placeholder command line, not a real host path
+
+
 def test_parse_probe_output_empty_string_is_zero_processes():
     assert _parse_probe_output("") == []
 

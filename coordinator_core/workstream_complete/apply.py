@@ -252,8 +252,10 @@ from coordinator_core.ceremony_common.apply_halt import (
     build_ceremony_halt_exit_codes,
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
+from coordinator_core.pickup_assemble import resolve_repo_root  # zero-spawn `.git` read-model
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
 from coordinator_core.workstream_complete import directives_lessons_plan
+from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import judgments as _judgments
 
 # ---------------------------------------------------------------------------
@@ -705,6 +707,7 @@ def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
     decisions: dict[str, Any],
+    repo_root: Optional[Path] = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -756,7 +759,29 @@ def _execute_directives(
     established: refusing to dispatch with an unresolved token, rather
     than letting the literal token string reach the CLI as a live
     argument.
-    """
+
+    Gate verdict memo (C4, AC6, docs/plans/2026-08-10-commit-event-5s-cap-
+    and-the-silent-tail.md, retry #3): EXECUTION-TIME is the only place this
+    module records the gate verdict memo `directives_review.
+    build_review_brightline_gate_directive`/`__init__.py`'s `d-coverage-gate`
+    builder consult (read-only) at build time. After a directive lands this
+    pass (dispatched, exit 0), `directives_review.
+    record_gate_verdict_if_passed(repo_root, directive, exit_code, stdout)`
+    is called — a no-op for every directive id other than the two live
+    gates it knows about, and itself verdict-aware for the coverage gate
+    (a `VERDICT=WARN` exit-0 is not a confirmed pass). `repo_root` is
+    resolved once, lazily, via `resolve_repo_root()` (the same zero-spawn
+    `.git` read-model `brief()` itself uses) the first time a landed
+    directive actually needs it, when the caller did not supply one — never
+    up front, so a caller exercising directives that never touch a gate
+    pays no resolution cost. The memo write is wrapped in a bare
+    `try/except OSError` here (never inside `directives_review.
+    record_gate_verdict_if_passed`, which stays fail-loud per `record_gate_
+    memo`'s own contract): a memo I/O failure degrades this pass to "the
+    next pass re-walks the gate," never to a reported apply failure —
+    memoisation is a performance optimization, and a miss is always the
+    safe direction (see the module-level "Gate verdict memo" docstring in
+    `directives_review.py`)."""
     jp_by_id = _judgment_points_by_id(judgment_points)
     directive_ids = {d["id"] for d in directives}
     # `depends_on` is a UNION namespace (judgment-point id OR sibling
@@ -778,6 +803,19 @@ def _execute_directives(
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
+    _resolved_repo_root: list[Optional[Path]] = [repo_root]
+    _repo_root_resolved: list[bool] = [repo_root is not None]
+
+    def _lazy_repo_root() -> Optional[Path]:
+        # Resolved at most once per `_execute_directives` call, only when a
+        # directive that actually landed needs it for the gate verdict
+        # memo — see this function's own "Gate verdict memo" docstring
+        # paragraph. A `list` cell (not a plain local) so this nested
+        # function can both read and write it under Python's closure rules.
+        if not _repo_root_resolved[0]:
+            _resolved_repo_root[0] = resolve_repo_root()
+            _repo_root_resolved[0] = True
+        return _resolved_repo_root[0]
 
     for directive in directives:
         if directive.get("already_satisfied"):
@@ -835,6 +873,18 @@ def _execute_directives(
         results.append(result)
         landed.append(directive["id"])
         stdout_by_id[directive["id"]] = result.get("stdout", "")
+
+        gate_root = _lazy_repo_root()
+        if gate_root is not None:
+            try:
+                directives_review.record_gate_verdict_if_passed(
+                    gate_root, directive, result.get("exit_code", 0), result.get("stdout", "")
+                )
+            except OSError:
+                # Memo write is best-effort — see this function's own "Gate
+                # verdict memo" docstring paragraph. A failure here degrades
+                # to "the next pass re-walks," never to a reported failure.
+                pass
 
     report = {
         "landed": landed,

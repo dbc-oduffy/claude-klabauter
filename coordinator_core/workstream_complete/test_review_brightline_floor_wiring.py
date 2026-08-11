@@ -112,6 +112,13 @@ def _brightline_directive(directives: list[dict]) -> dict:
     return next(d for d in directives if d["id"] == "d-run-review-brightline-gate")
 
 
+def _head_sha(cwd: Path) -> str:
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(cwd), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    )
+    return out.stdout.strip()
+
+
 # ---------------------------------------------------------------------------
 # AC2 — the no-prior-record path (nearly every close) must stay byte-
 # identical. Written first per the dispatch brief's own instruction.
@@ -171,15 +178,21 @@ def test_unresolvable_session_start_sha_falls_back_to_todays_call(monkeypatch, t
 
 
 def test_prior_own_record_floors_the_range(monkeypatch, tmp_path):
+    """2026-08-11: `chain_tip_sha` is now resolved to a CONCRETE sha
+    (`_resolve_head_sha`), not the literal `"HEAD"` string — see
+    `_resolve_review_brightline_floor_kwargs`'s own `chain_tip_sha`
+    docstring paragraph. The tip half of the emitted range is this repo's
+    real current HEAD sha at build time."""
     _init_repo(tmp_path)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
-    _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
+    second_sha = _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
+    assert second_sha == _head_sha(tmp_path)
 
     _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
 
     directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
-    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..HEAD"]
+    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..{second_sha}"]
 
 
 def test_two_trail_records_floors_at_the_last_not_the_first(monkeypatch, tmp_path):
@@ -191,13 +204,14 @@ def test_two_trail_records_floors_at_the_last_not_the_first(monkeypatch, tmp_pat
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     close1_sha = _commit(tmp_path, "close 1 commit", filename="a1.py", content="a=1\n")
     close2_sha = _commit(tmp_path, "close 2 commit", filename="a2.py", content="a=2\n")
-    _commit(tmp_path, "close 3 commit (under test)", filename="a3.py", content="a=3\n")
+    close3_sha = _commit(tmp_path, "close 3 commit (under test)", filename="a3.py", content="a=3\n")
+    assert close3_sha == _head_sha(tmp_path)
 
     _write_trail_record(tmp_path, "2026-08-08-000001-rec1.json", _SID, f"{close1_sha}^..{close1_sha}")
     _write_trail_record(tmp_path, "2026-08-08-000002-rec2.json", _SID, f"{close2_sha}^..{close2_sha}")
 
     directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
-    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{close2_sha}..HEAD"]
+    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{close2_sha}..{close3_sha}"]
 
 
 def test_untrustworthy_record_tip_omitted_falls_back_to_session_start_sha(monkeypatch, tmp_path):
@@ -240,8 +254,9 @@ def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
     _write_trail_record(other_cwd, "2026-08-08-000001-decoy.json", _SID, "deadbee^..deadbee")
     monkeypatch.chdir(other_cwd)
 
+    repo_head_sha = _head_sha(repo)
     directives = wsc.build_directives(_gate(), {}, repo, session_start_time=session_start_time)
-    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..HEAD"]
+    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..{repo_head_sha}"]
 
 
 def test_own_records_present_zero_commits_since_start_falls_back_to_todays_call(tmp_path):
@@ -291,6 +306,85 @@ def test_caller_floor_with_zero_trailer_matches_still_retries_session_floor(monk
     assert rc == 0
     assert "recovered via session-aware floor" in captured.err
     assert "VERDICT=indeterminate" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-11 fix — `chain_tip_sha` is now a concrete, frozen sha (not the
+# literal "HEAD"), resolved LAZILY only once the floor path is confirmed
+# taken, falling back to "HEAD" on any resolution failure. See
+# `_resolve_review_brightline_floor_kwargs`'s own docstring and
+# `directives_review.record_gate_verdict_if_passed`'s KEY-STALENESS section.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_head_sha_returns_concrete_sha_for_a_real_repo(tmp_path):
+    _init_repo(tmp_path)
+    sha = _commit(tmp_path, "a commit", filename="a1.py", content="a=1\n")
+    assert wsc._resolve_head_sha(tmp_path) == sha
+
+
+def test_resolve_head_sha_degrades_to_none_on_a_non_repo(tmp_path):
+    """No `.git` here at all — `git rev-parse HEAD` fails; must return
+    `None`, never raise, never fabricate a sha."""
+    assert wsc._resolve_head_sha(tmp_path) is None
+
+
+def test_resolve_head_sha_degrades_to_none_on_subprocess_failure(monkeypatch, tmp_path):
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(
+        wsc.subprocess, "run", lambda *a, **k: _FakeCompletedProcess()
+    )
+    assert wsc._resolve_head_sha(tmp_path) is None
+
+
+def test_floor_path_falls_back_to_literal_head_when_tip_resolution_fails(monkeypatch, tmp_path):
+    """A resolvable floor (own trail record + resolvable session_start_sha)
+    but a `_resolve_head_sha` failure must still degrade to the pre-fix
+    literal `"HEAD"` tip — never raise into the build path, never fabricate
+    a sha. This is the documented "memo miss, not a build-path failure"
+    contract."""
+    _init_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
+    _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
+    _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
+
+    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: None)
+    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..HEAD"]
+
+
+def test_floor_resolved_concrete_tip_hits_the_gate_memo_on_a_second_pass(tmp_path):
+    """The whole point of the fix: a concrete tip lets
+    `directives_review.record_gate_verdict_if_passed` actually memoize the
+    mid-chain brightline gate (its own `_is_concrete_sha` check on BOTH
+    halves of the range now passes), so a second identical `brief()` call
+    against the same resolved argv reports `already_satisfied=True`."""
+    from coordinator_core.workstream_complete import directives_review
+
+    _init_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
+    second_sha = _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
+    _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
+
+    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directive = _brightline_directive(directives)
+    assert directive["args"] == ["--session-id", _SID, f"{first_sha}..{second_sha}"]
+    assert directive["already_satisfied"] is False
+
+    # Simulate `apply.py::_execute_directives` recording the memo after this
+    # directive actually dispatched and returned exit 0 this pass.
+    directives_review.record_gate_verdict_if_passed(tmp_path, directive, exit_code=0, stdout="")
+
+    # A second, identical brief() pass now hits the memo.
+    directives_2 = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directive_2 = _brightline_directive(directives_2)
+    assert directive_2["args"] == directive["args"]
+    assert directive_2["already_satisfied"] is True
 
 
 def test_genuinely_no_commits_still_resolves_indeterminate(monkeypatch, tmp_path, capsys):

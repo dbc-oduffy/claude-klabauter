@@ -22,6 +22,7 @@ Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +30,7 @@ import pytest
 
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
+from coordinator_core.ops.emit.sections import handoff_columns
 
 
 def _make_ctx(tmp_path: Path, repo_name: str = "test-org/test-repo") -> EmitContext:
@@ -361,3 +363,98 @@ def test_unrecognized_value_quarantines_only_the_bad_record(mock_qr, tmp_path: P
     assert len(malformed) == 1
     assert malformed[0]["path"] == "state/handoffs/bad.md"
     assert "record" in malformed[0]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# C1: the four-column computation, extracted to handoff_columns.py, is
+# callable directly on frontmatter — no EmitContext, no envelope required.
+# ---------------------------------------------------------------------------
+
+def _run_git_or_raise(repo_root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _init_columns_test_repo(repo_root: Path) -> None:
+    """Init a throwaway git repo with a local identity (no reliance on global git config)."""
+    _run_git_or_raise(repo_root, "init", "-q")
+    _run_git_or_raise(repo_root, "config", "user.email", "test@example.com")
+    _run_git_or_raise(repo_root, "config", "user.name", "Test User")
+    _run_git_or_raise(repo_root, "config", "commit.gpgsign", "false")
+
+
+def test_compute_handoff_columns_takes_bare_frontmatter_and_repo_root(tmp_path: Path) -> None:
+    """Direct call — no EmitContext, no envelope. Proves AC1's decoupling: the helper
+    only ever needed a repo-root path, not the whole EmitContext/envelope machinery."""
+    columns = handoff_columns.compute_handoff_columns(
+        {"status": "open", "deployment_state": "ready_to_fire"}, tmp_path,
+    )
+
+    assert columns == {
+        "status": "open",
+        "deployment_state": "ready_to_fire",
+        "predecessor": "none",
+        "shipped_in": None,
+    }
+
+
+def test_compute_handoff_columns_predecessor_passthrough_when_present(tmp_path: Path) -> None:
+    columns = handoff_columns.compute_handoff_columns(
+        {"status": "open", "deployment_state": "ready_to_fire", "predecessor": "hnd-foo-abc123"},
+        tmp_path,
+    )
+
+    assert columns["predecessor"] == "hnd-foo-abc123"
+
+
+def test_compute_handoff_columns_coerces_legacy_abandoned_without_successor(tmp_path: Path) -> None:
+    columns = handoff_columns.compute_handoff_columns(
+        {"status": "consumed", "deployment_state": "abandoned"}, tmp_path,
+    )
+
+    assert columns["deployment_state"] == "closed"
+
+
+def test_compute_handoff_columns_coerces_legacy_abandoned_with_successor(tmp_path: Path) -> None:
+    columns = handoff_columns.compute_handoff_columns(
+        {
+            "status": "consumed",
+            "deployment_state": "abandoned",
+            "continued_into": "state/handoffs/successor.md",
+        },
+        tmp_path,
+    )
+
+    assert columns["deployment_state"] == "continued"
+
+
+def test_compute_handoff_columns_resolves_shipped_in_via_git(tmp_path: Path) -> None:
+    """``shipped_in`` resolution is a real ``git log`` call against the repo-root path — no
+    EmitContext needed to drive it, only the raw path this test passes directly."""
+    _init_columns_test_repo(tmp_path)
+    (tmp_path / "file.txt").write_text("v1")
+    _run_git_or_raise(tmp_path, "add", "-A")
+    _run_git_or_raise(tmp_path, "commit", "-q", "-m", "first commit")
+    sha = _run_git_or_raise(tmp_path, "rev-parse", "HEAD")
+
+    columns = handoff_columns.compute_handoff_columns(
+        {"status": "claimed", "deployment_state": "shipped", "shipped_in": sha}, tmp_path,
+    )
+
+    assert columns["shipped_in"]["sha"] == sha
+    assert columns["shipped_in"]["date"]
+
+
+def test_compute_handoff_columns_shipped_in_null_when_sha_unresolvable(tmp_path: Path) -> None:
+    _init_columns_test_repo(tmp_path)
+
+    columns = handoff_columns.compute_handoff_columns(
+        {"status": "claimed", "deployment_state": "shipped", "shipped_in": "0" * 40}, tmp_path,
+    )
+
+    assert columns["shipped_in"] is None

@@ -140,6 +140,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.frontmatter.body_blocks import _compile_heading_re
 from coordinator_core.frontmatter.primitives import insert_fm_field, serialize_yaml_scalar
 from coordinator_core.handoff_creation_guard import (
     HandoffArchivedTwinError,
@@ -168,6 +169,7 @@ from coordinator_core.ops.queue_family import (
     normalize_family,
 )
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.session_ledger import SESSION_LEDGER_BLOCK_LINES
 
 _LOG = logging.getLogger(__name__)
 
@@ -472,6 +474,12 @@ async def _handler(
     class_context = await asyncio.to_thread(_class_context_for_items, items, worktree_root)
     source_body = _render_source_entries_body(items, class_context)
     body = source_body + ("\n" + extra_body.lstrip("\n") if extra_body else "")
+    # C2 (ledger-owing handoff kinds): this op assembles its body from a caller
+    # param rather than through coordinator-doc-new, so it does not inherit
+    # C1's scaffolder-side emission. Append the canonical block when the
+    # composed body doesn't already carry one — never duplicate it.
+    if not _compile_heading_re("Session Ledger").search(body):
+        body = body.rstrip("\n") + "\n\n" + "\n".join(SESSION_LEDGER_BLOCK_LINES)
 
     created_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     filename = _fork_handoff_filename(title)

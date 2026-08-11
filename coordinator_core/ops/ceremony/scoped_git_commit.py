@@ -106,10 +106,16 @@ index, never `compute_scope`/`compute_offer`/`assert_paths_in_session_
 scope`) plus `coordinator_core.session.liveness.session_live()` (C3, already
 O(1) per matched claimant -- no new entrypoint was needed). For each path in
 the caller's own pathspec: a claimant other than the calling session, who is
-live, refuses THAT path, named individually (AC4) -- never a whole-pathspec
-refusal. Cost is a function of `len(paths)` plus 0-2 liveness checks, not of
-how busy the tree is -- the negative spec below is what this gate now
-satisfies, not what it still owes.
+live, AND whose path is currently DIRTY (C5, `_paths_dirty_status()` --
+see that function's own docstring), refuses THAT path, named individually
+(AC4) -- never a whole-pathspec refusal. Cost is a function of `len(paths)`
+plus 0-2 liveness checks, plus (C5) at most one pathspec-scoped `git status
+--porcelain` call -- lazily invoked, only once a live other-session claimant
+is actually found on some path, never eagerly -- and, only for tracked
+paths reported unstaged, one further batched `git diff --name-only` call
+resolving EOL-phantom candidates (see `_paths_dirty_status()`). Still a
+function of `len(paths)`, never of how busy the tree is -- the negative
+spec below is what this gate now satisfies, not what it still owes.
 
 Caller-identity requirement (AC10a): `session_core.session_dir()` never
 verifies a `session_id` ever named a real session. A caller whose resolved
@@ -307,16 +313,30 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
 #: reads the SAME plane this gate does, and is named explicitly so a
 #: reader of the refusal has a way to inspect it rather than being told
 #: only that a refusal happened.
+#:
+#: Negative-spec: this text must NOT offer "ask an EM to re-issue" as an
+#: escape. `_check_claim_conflicts` takes no override parameter and no
+#: caller rank enters it, so an EM re-running the identical pathspec meets
+#: the identical refusal -- the same correction `_UNANSWERABLE_CLAIM_
+#: REMEDY` already carries in words. A named escape that does not exist is
+#: worse than no escape under this repo's north star, not better: it sends
+#: the reader hunting for a mechanism, and what they find instead is the
+#: bypass.
 _CLAIM_CONFLICT_REMEDY = (
     "this is a path-touch claim (a session recorded touching this file), not "
     "an artifact claim -- inspect it with `session-claim-cli who-claims-path "
     "<path>` (list-claims-by-session reads a different store and will not "
-    "show it); re-run this commit once the conflicting claim clears, or ask "
-    "an EM to re-issue it for the affected path(s)"
+    "show it); the claim clears when that session ends, so either re-run this "
+    "commit then, or drop the affected path(s) from the pathspec and commit "
+    "the rest now -- there is no rank-based override, an EM re-running the "
+    "same pathspec meets this same refusal"
 )
 _UNANSWERABLE_CLAIM_REMEDY = (
-    "re-run once the claim index rebuild is unblocked, or ask an EM to "
-    "re-issue the commit for the affected path(s) once claims are readable"
+    "re-run once the claim index rebuild is unblocked; if `session-claim-cli "
+    "who-claims-path <path>` shows the claimant reads dead, clear it first "
+    "via `session-claim-cli clear-claim-if-dead artifact <path> <root>` and re-run this "
+    "commit -- \"ask an EM to re-issue\" is not a distinct remedy, any EM "
+    "hits this same refusal"
 )
 
 
@@ -341,6 +361,140 @@ def _caller_identity_verified(caller_sid: str, worktree_root: str) -> bool:
     return bool(sdir) and Path(sdir).is_dir()
 
 
+#: `_paths_dirty_status()` per-path verdicts.
+_DIRTY_STATUS_CLEAN = "clean"
+_DIRTY_STATUS_DIRTY = "dirty"
+_DIRTY_STATUS_UNANSWERABLE = "unanswerable"
+
+
+def _paths_dirty_status(worktree_root: str, paths: List[str]) -> Dict[str, str]:
+    """Classify each of *paths* as `_DIRTY_STATUS_CLEAN`,
+    `_DIRTY_STATUS_DIRTY`, or `_DIRTY_STATUS_UNANSWERABLE` (C5, A6/A7).
+
+    ONE pathspec-scoped `git status --porcelain -- <paths>` (never
+    whole-tree -- see this module's NEGATIVE SPEC section and
+    `test_commit_gate_budget.py`), plus the same batched EOL-phantom filter
+    `commit_gates.py::dirty_tree_gate` already runs (see
+    `commit_gates._diff_name_only_worktree`'s own docstring for why this is
+    the correct inversion of "diff --quiet per path"): every TRACKED,
+    UNSTAGED porcelain line (X==' ') is a phantom candidate, resolved by one
+    batched `git diff --name-only -- <candidates>`; a candidate ABSENT from
+    that output is a Git-for-Windows stat-staleness artifact (worktree
+    content already equals the index) and is reported CLEAN, not dirty.
+    Untracked files (`??`) are never phantoms -- there is no index entry to
+    diff against -- and are always DIRTY. Deliberately no `git
+    update-index --refresh`: it can never CLEAR phantom-dirty state (see
+    `commit_gates.py`'s own comment) and would leave every phantom
+    permanently dirty.
+
+    A path present in `paths` but absent from the porcelain output (nothing
+    reported for it at all) is CLEAN -- porcelain only ever reports rows for
+    paths that differ from HEAD.
+
+    Fails closed PER PATH, never per pathspec (matches
+    `_check_claim_conflicts`'s own UNANSWERABLE policy): when the initial
+    `git status` call itself fails, every path in *paths* is
+    UNANSWERABLE. When the call succeeds but a reported line for a given
+    path cannot be parsed, that ONE path is UNANSWERABLE and its siblings
+    are still classified normally.
+
+    Known, unclosable residual (not tested here, by design -- see this
+    module's own C5 spec): between this read and the commit landing, a live
+    peer can dirty a path in the committer's own pathspec; the subsequent
+    `git add` absorbs it before this check would see it again. Not closable
+    without a lock, and `ceremony_lock` was deliberately deleted 2026-08-07
+    (docs/plans/2026-08-07-excise-the-ceremony-lock.md, C10) -- do not
+    reintroduce one to close this window.
+    """
+    if not paths:
+        return {}
+
+    status_result = git_native._git(
+        ["-c", "core.quotepath=false", "status", "--porcelain", "--", *paths],
+        cwd=worktree_root,
+    )
+    if not status_result.ok:
+        return {p: _DIRTY_STATUS_UNANSWERABLE for p in paths}
+
+    status: Dict[str, str] = {p: _DIRTY_STATUS_CLEAN for p in paths}
+    path_set = set(paths)
+    phantom_candidates: List[str] = []
+    tracked_unstaged: List[str] = []
+
+    for line in status_result.stdout.splitlines():
+        if len(line) < 4:
+            # An unparseable line names no path this function can attribute
+            # to a specific caller path -- there is nothing to mark
+            # UNANSWERABLE against, since we don't know which path it was
+            # for. Skip it; it cannot silently mark a real path CLEAN,
+            # because every path's default above is CLEAN only when nothing
+            # in the output names it at all -- an actually-dirty path with a
+            # malformed line would still be under-detected, but that is the
+            # same shape `dirty_tree_gate` already accepts (see its own
+            # `parsed_lines` loop, which likewise `continue`s on `len(line)
+            # < 4`... note: this module's own line format uses a fixed XY +
+            # space prefix, so a short line here means git itself emitted
+            # something this parser does not recognize).
+            continue
+        xy = line[:2]
+        path = _porcelain_status_path(line)
+        if path not in path_set:
+            continue
+        x_char = xy[0] if xy else " "
+        y_char = xy[1] if len(xy) > 1 else " "
+
+        if xy == "??":
+            status[path] = _DIRTY_STATUS_DIRTY
+            continue
+
+        if x_char == " " and y_char != " ":
+            # Tracked, unstaged modification -- EOL-phantom candidate.
+            phantom_candidates.append(path)
+            tracked_unstaged.append(path)
+            continue
+
+        # Anything else with a non-blank status char (staged, or a mix of
+        # staged+unstaged such as `MM`/`AM`) is DIRTY outright -- see this
+        # function's docstring and the brief's own note: porcelain's Y
+        # column already carries the worktree-vs-index signal C5 needs, and
+        # a mixed state still means SOMETHING under this path is
+        # uncommitted right now, whoever authored which part of it.
+        if x_char != " " or y_char != " ":
+            status[path] = _DIRTY_STATUS_DIRTY
+
+    if phantom_candidates:
+        diff_result = git_native._git(
+            ["diff", "--name-only", "--", *phantom_candidates],
+            cwd=worktree_root,
+        )
+        if not diff_result.ok:
+            # The status call answered; the follow-up diff call did not --
+            # fail closed for exactly the paths this second call was
+            # supposed to resolve, not the whole pathspec.
+            for p in phantom_candidates:
+                status[p] = _DIRTY_STATUS_UNANSWERABLE
+        else:
+            real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
+            for p in tracked_unstaged:
+                status[p] = (
+                    _DIRTY_STATUS_DIRTY if p in real_diff_paths else _DIRTY_STATUS_CLEAN
+                )
+
+    return status
+
+
+def _porcelain_status_path(line: str) -> str:
+    """Extract the (destination) path from one `git status --porcelain`
+    line, matching `commit_gates.py::_porcelain_path`'s rename handling
+    (` -> ` separator) without importing across that module boundary for a
+    one-line helper.
+    """
+    path = line[3:]
+    if " -> " in path:
+        path = path.rsplit(" -> ", 1)[-1]
+    return path
+
+
 def _check_claim_conflicts(
     worktree_root: str, paths: List[str], caller_sid: str
 ) -> Optional[Dict[str, Any]]:
@@ -352,16 +506,60 @@ def _check_claim_conflicts(
     structurally different and was not reused). For each path: a claimant
     other than *caller_sid* who is live (via `liveness.session_live()`,
     called only for claimants `lookup()` actually returned -- typically
-    0-2 calls, never enumerated for all sessions) refuses THAT path, named
-    individually (AC4) -- never a whole-pathspec refusal.
+    0-2 calls, never enumerated for all sessions) AND whose path is
+    currently DIRTY (C5, A6/A7 -- see `_paths_dirty_status()`) refuses THAT
+    path, named individually (AC4) -- never a whole-pathspec refusal.
+
+    C5 narrows this gate's refusal condition from "a live peer claims the
+    path" to the CONJUNCTION "a live peer claims the path AND the path is
+    currently dirty". This is a strict narrowing, never a new false
+    negative: the live-peer-claim conjunct is retained unchanged, and the
+    dead-session-left-a-dirty-file case was already permitted before this
+    change (`live_others` is empty when the claimant is not live) and stays
+    permitted identically now. It closes the rescue-commit class: a session
+    that died mid-work leaves a claim `release_committed_claims` is
+    structurally incapable of retiring for a DIFFERENT rescuing session
+    (`release_committed_claims` only ever accepts the claimant's own sid --
+    see `session/tests/test_scope.py`), so once a peer rescues and commits
+    that work, the path is CLEAN and must be committable again despite the
+    stale claim still existing; before C5 the mere existence of that claim
+    refused it forever.
+
+    Known, unclosable residual: this reads dirtiness once, before staging;
+    a live peer can dirty the path again between this read and the commit
+    landing, and the subsequent `git add` absorbs it before this check
+    would see it a second time. Not closable without a lock (see
+    `_paths_dirty_status()`'s own docstring) -- accepted, not tested for.
 
     UNANSWERABLE-PATH POLICY -- fail closed PER PATH, never per pathspec. A
     path `claim_index.lookup()` could not resolve (aborted/unresolvable
-    rebuild) is refused with a message naming the remedy; a sibling path it
-    COULD resolve proceeds normally. Whole-pathspec fail-closed would make
-    commit success a function of the WHOLE tree's index health rather than
-    the caller's own pathspec -- exactly the O(dirty tree) coupling this
-    plan's binding negative spec forbids.
+    rebuild), OR whose dirtiness this function's own porcelain call could
+    not resolve, is refused with a message naming the remedy; a sibling
+    path either call COULD resolve proceeds normally. Whole-pathspec
+    fail-closed would make commit success a function of the WHOLE tree's
+    index health rather than the caller's own pathspec -- exactly the
+    O(dirty tree) coupling this plan's binding negative spec forbids.
+
+    C10 -- CALLER-ONLY POSITIVE UNDER AN INCOMPLETE WALK is ALSO
+    unanswerable, narrowly. `claim_index.lookup()` returns a positive
+    claimant list verbatim regardless of `state.complete` (see its
+    docstring's ordering), so a walk that aborted (wall-clock cap or an
+    unreadable claim source) after reading only the caller's own claim on a
+    path, before it could have reached a live peer's, previously resolved
+    `others = claimants - {caller_sid}` to empty and allowed -- a commit
+    landing over a peer's uncommitted work on nothing but partial evidence.
+    Fixed by reading `claim_index.lookup()`'s own `.complete` attribute (a
+    `_LookupResult`, a dict subclass -- see that module): when the overall
+    walk was incomplete AND a path's positive claimant set contains nothing
+    but the caller, that path is now unanswerable too. Deliberately NARROW,
+    not "any positive result under an incomplete walk becomes
+    unanswerable": a path whose claimant set already contains a live OTHER
+    session refuses through the existing conflict path regardless of walk
+    completeness (that path already found the thing that matters), so this
+    added conjunct never flips an already-correct refusal into anything
+    else, and never touches the `claimants == [dead peer]` allow -- only
+    the caller-only-positive-under-incomplete-walk case, which is the one
+    still capable of masking an unseen peer.
 
     AC10a: a path with a conflicting OTHER claimant, evaluated while the
     caller's own identity does NOT verify (`_caller_identity_verified` is
@@ -373,10 +571,17 @@ def _check_claim_conflicts(
     error), or `None` when every path clears.
     """
     claimants_by_path = claim_index.lookup(paths, cwd=worktree_root)
+    walk_complete = claimants_by_path.complete
     identity_verified = _caller_identity_verified(caller_sid, worktree_root)
 
     unanswerable: List[str] = []
     conflicted: List[tuple] = []
+
+    # C5: only computed when at least one path has an other-live claimant to
+    # narrow against -- a pathspec with no conflicting claimant at all never
+    # pays this extra spawn (see the "AND dirty" gate below, evaluated only
+    # inside the `if live_others:` branch).
+    dirty_status: Optional[Dict[str, str]] = None
 
     for path in paths:
         claimants = claimants_by_path.get(path, [])
@@ -385,13 +590,33 @@ def _check_claim_conflicts(
             continue
         others = [c for c in claimants if c != caller_sid]
         if not others:
+            if claimants and not walk_complete:
+                # C10: the walk that produced this positive, caller-only
+                # answer aborted before it could have reached a live
+                # peer's claim on this SAME path -- treat it the same as
+                # any other partial-evidence answer, never as "no
+                # conflict". A claimant list already containing a live
+                # OTHER session skips this branch entirely (`others` is
+                # non-empty) and refuses below regardless of completeness.
+                unanswerable.append(path)
             continue
         if not identity_verified:
             unanswerable.append(path)
             continue
         live_others = [c for c in others if session_liveness.session_live(c, worktree_root)]
-        if live_others:
+        if not live_others:
+            continue
+
+        if dirty_status is None:
+            dirty_status = _paths_dirty_status(worktree_root, paths)
+        verdict = dirty_status.get(path, _DIRTY_STATUS_UNANSWERABLE)
+        if verdict == _DIRTY_STATUS_UNANSWERABLE:
+            unanswerable.append(path)
+        elif verdict == _DIRTY_STATUS_DIRTY:
             conflicted.append((path, live_others))
+        # _DIRTY_STATUS_CLEAN: a live peer claims it, but nothing is
+        # currently uncommitted under it (the rescue-commit case, A7) --
+        # proceeds.
 
     if not unanswerable and not conflicted:
         return None
@@ -940,14 +1165,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # dry-run/preview path -- gated the same as `release_committed_
         # claims` above, inside `if response["committed"]`), and its own
         # implementation (`session.scope.release_phantom_claims`) issues at
-        # most ONE extra `git ls-tree` subprocess, and only when this
-        # session's own touched.txt names a claimed path currently absent
-        # from disk -- the common case (every claimed path still exists, or
-        # was already retired by `release_committed_claims` above) costs
-        # zero subprocesses: it returns after the in-memory `claimed`/
-        # `candidates` scan finds nothing absent. A phantom claim is the
-        # rare, bug-residue case this exists to clean up, not a per-commit
-        # steady-state cost.
+        # most TWO extra subprocesses -- `_tracked_at_head`'s `git ls-tree`
+        # and `_staged_in_index`'s `git ls-files --stage` (added 2026-08-06)
+        # -- and only when this session's own touched.txt names a claimed
+        # path currently absent from disk -- the common case (every claimed
+        # path still exists, or was already retired by `release_committed_
+        # claims` above) costs zero subprocesses: it returns after the
+        # in-memory `claimed`/`candidates` scan finds nothing absent. A
+        # phantom claim is the rare, bug-residue case this exists to clean
+        # up, not a per-commit steady-state cost.
         try:
             session_scope.release_phantom_claims(owner_session_id, cwd=worktree_root)
         except Exception:
@@ -1046,16 +1272,38 @@ def _declined_paths(result: PipelineResult) -> List[Dict[str, str]]:
     stage = getattr(result, "stage", None)
     if stage is None:
         return []
+    # 2026-08-10 fix (P1 live incident: a decline reason asserted "not found
+    # in the worktree or index" for 54 paths `git status --porcelain`
+    # immediately confirmed WERE tracked, modified, and on disk): a path
+    # only earns that reason when `explicit_stage()` actually TESTED for it
+    # -- see `StageOutcome.unverifiable_missing_caller_paths`'s own
+    # docstring. A path in that set was classified "genuinely absent" only
+    # because one of the two rename/deletion probes it depends on returned a
+    # non-ok `GitResult` and silently degraded to "found nothing" -- the
+    # absence was never verified, so the reason says exactly that instead of
+    # asserting a fact this call could not confirm.
+    unverifiable = set(getattr(stage, "unverifiable_missing_caller_paths", ()) or ())
     declined: List[Dict[str, str]] = []
     for p in stage.missing_caller_paths:
-        declined.append({
-            "path": p,
-            "reason": (
-                "not found in the worktree or index, and not attributable "
-                "to a deletion (never existed, or already removed by "
-                "something other than a tracked deletion)"
-            ),
-        })
+        if p in unverifiable:
+            declined.append({
+                "path": p,
+                "reason": (
+                    "could not be classified -- the rename/deletion probe(s) "
+                    "this decision depends on did not answer, so absence was "
+                    "assumed, not confirmed; re-run once git can be queried "
+                    "reliably"
+                ),
+            })
+        else:
+            declined.append({
+                "path": p,
+                "reason": (
+                    "not found in the worktree or index, and not attributable "
+                    "to a deletion (never existed, or already removed by "
+                    "something other than a tracked deletion)"
+                ),
+            })
     for p in stage.ignored_caller_paths:
         declined.append({"path": p, "reason": "excluded by .gitignore"})
     return declined

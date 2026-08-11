@@ -66,6 +66,20 @@ matter -- none of them required staying advisory:
      removed confinement never had -- a second, independent clear path
      beyond the marker `touch` below.
 
+THE HARD-DENY CLASS IS A NAMED ONE-OFF RULING UNDER DR-277, NOT A CARVE-OUT
+(ruled 2026-08-11, example-doctrine-repo, PM-delegated). DR-277
+(`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`) makes
+guards advisory by default and reserves hard-deny for three named carve-outs;
+this guard clears NONE of them, and the parity argument below is explicitly
+NOT one -- see that record's § "Not a carve-out: cross-surface parity",
+which states: "A sibling guard's hardness on another tool surface is not an
+argument for hardness here." This guard is ruled hard anyway, by name, and
+"is not a precedent". Do not cite this module as authority for hardening any
+other guard by surface parity: DR-277's answer to the next such proposal is
+to soften the Bash legs instead. The gated record of this classification
+lives in `write_guards/tests/test_guard_classification.py`, which carries the
+ruling in full; keep that file, DR-277, and this paragraph in agreement.
+
 CLASS/MATCHERS/PRIORITY are pinned explicitly (the Director of Engineering finding 3), not left to
 copy a neighbour or default ordering:
   - `CLASS = "hard-deny"` (changed from `"advisory"` by the bug fix cited
@@ -88,31 +102,58 @@ copy a neighbour or default ordering:
     `PRIORITY = 100` default so a future sibling addition has a real number
     to sequence against.
 
-TWO UNLOCK MARKERS, TWO SCOPES, BOTH DELIBERATE -- NOT UNIFIED BY THIS FIX.
-This module's marker lives at the SESSION'S OWN gitdir (see "MARKER
-LOCATION" below); `bump_foreign_repo_write.py`'s marker lives at the
-TARGET's own gitdir (narrowed per-(session, target), chunk C3 of
-`docs/plans/2026-08-03-narrow-write-confinement-bump.md`). The two do NOT
-authorize the same thing and are not made to: this module's marker clears
-EVERY foreign target for the Write/Edit/MultiEdit/NotebookEdit surface, for
-the rest of the session, in one `touch` -- broad-by-target, narrow-by-
-surface. The Bash marker clears ONE target for the Bash surface only --
-narrow-by-target, and (because Bash commands can target any repo a `git -C`
-or write-sink can reach, with no single "the session's own tool surface" to
-scope against) there is no broader location to narrow FROM. An operator (or
-an EM clearing on a dispatched subagent's behalf) who wants both surfaces
-stood down for one foreign repo therefore still needs two `touch` commands
-today -- one per surface -- and this fix does not change that. Unifying the
-two into one marker location was considered and rejected for this fix:
-doing so would mean either (a) this module's marker also narrows to
-per-target, losing the "one clear covers every target" property AC6 of the
-governing plan explicitly wanted for the tool surface, or (b) the Bash
-guard's marker widens to session-own-gitdir, a change to a sibling module
-this fix's declared surface does not include and a sibling session may be
-concurrently touching (see `bump_foreign_repo_write.py`'s own "PARITY"
-section for a live example of exactly that concurrent-edit hazard). Both
-markers remain ordinary, unforgeable-by-design files per `_write_bump_
-marker.py`'s own doctrine -- this fix does not add gating to either.
+TWO UNLOCK MARKERS, ONE SCOPE -- NARROWED TO PER-(SESSION, TARGET) IN LINE
+WITH THE BASH LEG (chunk C3 of `docs/plans/2026-08-03-narrow-write-
+confinement-bump.md`; parity landed 2026-08-10). This module's marker now
+lives at the TARGET's own gitdir whenever the target resolves to a git repo,
+exactly like `bump_foreign_repo_write.py`'s. One `touch` clears ONE target
+for this surface, not every target for the rest of the session. An operator
+(or an EM clearing on a dispatched subagent's behalf) who wants both
+surfaces stood down for one foreign repo still needs two `touch` commands,
+one per surface; that has not changed.
+
+AC6 DOES NOT FORBID THIS, AND THE CLAIM THAT IT DID WAS A MISREADING THIS
+DOCSTRING ITSELF ORIGINATED -- restated here because the misreading survived
+two downstream citations before it was caught. Three different plans define
+an "AC6" that this module's prose has cited:
+  - `docs/plans/2026-08-02-write-confinement-guards.md` (the parent plan,
+    this module's own spec backlink) AC6: "With the marker present, none of
+    the three surfaces bump for the rest of the session." Its own
+    § "Marker liveness -- session-scoped, not time-scoped" states what that
+    criterion is load-bearing FOR: the TIME axis. It exists to forbid a
+    wall-clock expiry window (the Director of Engineering finding 2), so that a marker is honoured
+    for a whole session however long that session runs. It was never an
+    argument about how many TARGETS one clear covers, and the successor plan
+    superseded its breadth reading on the target axis for the Bash leg
+    already -- AC4 there ("clearing the bump for target A leaves it firing
+    for target B") is the direct contradiction, shipped and ratified, and
+    that plan's AC2 names the non-monotonicity explicitly rather than
+    leaving it implied.
+  - `docs/plans/2026-08-03-narrow-write-confinement-bump.md` (the governing
+    plan for marker SCOPE) AC6: "No marker expiry, no identity gating, no
+    `fail_closed=True`, no `CONFINEMENT_DENY` -- `XREPO_MARKER_IS_ORDINARY_
+    FILE` re-asserted post-change." A pure absence-of-hardening criterion.
+    Per-target siting is none of those four things, and the tripwire it
+    re-asserts permits scope narrowing in terms.
+  - `docs/plans/2026-08-07-guard-posix-path-rerooting.md` AC6, cited by
+    `_verdict_bumps` below on an unrelated axis (native path resolution).
+Whichever of the three is meant, none forbids per-target siting. Cite the
+plan filename alongside the AC id in this package from here on; a bare "AC6"
+is ambiguous across at least three governing documents.
+
+LIVE MARKERS ARE NOT INVALIDATED BY THE NARROWING -- the read path honours
+BOTH locations, the message advertises only the narrow one. Nine sessions
+share this worktree and at least one held an anchor-sited marker when the
+narrowing landed; a marker that stops clearing mid-session is a hard deny
+appearing under an agent that already did the assented-to thing to clear it.
+So `check()` treats an anchor-sited (`own_gitdir`) marker as clearing, in
+addition to the target-sited one, and never prints the anchor-sited path.
+That grandfathered read is in the ALLOW direction only -- it can never cause
+a bump -- and needs no removal date: it grants nothing an anyone-can-`touch`
+ordinary file does not already grant by design (see `_write_bump_marker.py`,
+"NO CREATION GUARD"), so leaving it costs nothing that this bump's own
+posture has not already conceded. Both markers remain ordinary,
+forgeable-by-design files -- this change adds gating to neither.
 
 VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
 `check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
@@ -166,8 +207,8 @@ real repo, so a target resolving to no git repo at all can never match
 it), `DESTINATION_FOREIGN` otherwise -- without gaining a second
 classification module of its own; `check()` calls the same
 `_write_bump_applicability` classifier the Bash guards import. Marker
-LOCATION is UNCHANGED by this chunk (see "MARKER LOCATION" below) -- only
-the message's destination axis is added here.
+LOCATION was unchanged by *that* chunk; the separate 2026-08-10 parity pass
+is what narrowed it (see "MARKER LOCATION" below).
 
 VERDICT LOGIC -- one question, answered against the session's OWN resolved
 git-dir (via C2's `resolve_launch_anchor` + C3's `resolve_gitdir`, NEVER the
@@ -300,19 +341,32 @@ applies for the identical reason (this fleet's primary filesystem, APFS, is
 case-insensitive). Resolving only one operand would false-bump a session
 whose own root is reached through a symlink.
 
-MARKER LOCATION -- SESSION'S OWN GIT-DIR, WITH A NAMED FALLBACK. The marker
-this module checks/prints lives at the session's own resolved git-dir
-(`own_gitdir`) whenever one exists -- this is what gives AC6 its "one clear
-stands down every surface, every target, for the rest of the session"
-property: the marker's location does not vary per foreign target, so a
-single `touch` covers writes into ANY number of different foreign repos
-later in the same session. The one case with no session git-dir to put a
-marker in at all is the outside-any-repo-anchor-but-registered-target branch
-above (`own_gitdir is None`); there this module falls back to the TARGET's
-own resolved git-dir, since a session with no home repo has no other place
-for the marker to live, and the alternative (never being clearable in that
-one shape) would leave the bump permanently un-passable for that specific
-case -- a fail-open choice, not a hardening one.
+MARKER LOCATION -- TARGET'S OWN GIT-DIR, WITH A NAMED FALLBACK. The marker
+this module prints lives at the TARGET's own resolved git-dir
+(`target_gitdir`) whenever the target resolves to a git repo at all, so one
+`touch` stands this surface down for THAT target and leaves it firing for
+every other -- per-(session, target), identical to the Bash leg's C3 siting
+and to `_write_bump_marker.py`'s own "MARKER SCOPE" section. See "TWO UNLOCK
+MARKERS, ONE SCOPE" above for why the parent plan's AC6 does not forbid
+this and for the live-marker migration story.
+
+The one case with no target git-dir to site a marker in is a write landing
+in no repo at all (`target_gitdir is None`, reachable only when the session
+DOES own a repo -- the both-`None` shape never bumps); there this module
+falls back to the SESSION's own resolved git-dir. That is the same
+structural no-op the Bash leg's OUTSIDE_ANY_REPO class has: there is no
+target gitdir to narrow into, and the alternative (never being clearable in
+that shape) would leave the bump permanently un-passable -- a fail-open
+choice, not a hardening one. Note this fallback is the exact INVERSE of the
+one that stood here before the narrowing, which fell back to the target when
+the SESSION owned no repo; both shapes are still covered, and the
+`own_gitdir is None and target_gitdir is not None` case resolves to the
+target's git-dir under either rule, so that branch's behaviour is unchanged.
+
+Marker siting is deliberately NOT keyed on `destination_class` -- a PUBLISH
+mirror is a real repo with a real git-dir, so it narrows on the same rule as
+a FOREIGN one, matching how the Bash leg's `marker_probe = probe_dir`
+assignment sits above (not inside) its own destination-class branch.
 
 AGENT-CLASS AND SANDBOX ROOT -- delegated to `_write_bump_message`'s own
 `resolve_agent_class()` (the shared `subagent_sandbox.engine.
@@ -351,7 +405,21 @@ Negative-spec:
     (`git rev-parse --git-dir`, resolved).
   - Does NOT add a creation guard, a paired write-guard, or identity gating
     around the marker this module reads -- see C3's own docstring; that
-    decision is shared, not re-litigated per surface.
+    decision is shared, not re-litigated per surface. The 2026-08-10
+    per-target narrowing changed the marker's LOCATION only; expiry,
+    identity gating, `fail_closed`, and `GuardBand.CONFINEMENT_DENY` all
+    remain absent, which is what the 2026-08-03 plan's AC6 actually asks.
+  - Does NOT stop honouring an anchor-sited (`own_gitdir`) marker created
+    before the narrowing -- see "LIVE MARKERS ARE NOT INVALIDATED". The
+    grandfathered read is allow-direction-only and is never printed as the
+    clear path; do not "tidy" it away without first establishing that no
+    live session holds one.
+  - Does NOT resolve the marker's session id against the TARGET repo. The
+    EM back-pointer `effective_session_id` reads lives in the SESSION's own
+    `.git/coordinator-sessions/`, so `own_git_root` stays its `git_root`
+    argument even though the marker's DIRECTORY moved to the target --
+    conflating the two would break the parent plan's AC7 (a dispatched
+    subagent inherits its EM's marker without a second one).
   - DOES return `permissionDecision: "deny"` (changed by the bug fix cited
     above, "THIS MODULE REBUILDS...") -- `CLASS = "hard-deny"` now, matching
     what `bump_foreign_repo_write.py` actually does on the Bash surface. Do
@@ -825,6 +893,46 @@ def _verdict_bumps(
     return not _same_gitdir(own_gitdir, target_gitdir)
 
 
+def _marker_locations(
+    own_gitdir: Optional[Path], target_gitdir: Optional[Path]
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Split the marker's ADVERTISED location from the grandfathered
+    read-only one -- see module docstring, "MARKER LOCATION" and "LIVE
+    MARKERS ARE NOT INVALIDATED".
+
+    Returns `(marker_gitdir, legacy_marker_gitdir)`:
+      - `marker_gitdir` is the target's own git-dir whenever the target
+        resolves to a repo (per-(session, target) scope, Bash-leg parity),
+        else the session anchor's. This is the ONLY location `clear_line`/
+        the deny message ever names, and the only one a writability check
+        is taken against.
+      - `legacy_marker_gitdir` is the pre-2026-08-10 session-anchor
+        location, returned ONLY when the narrowing actually moved the
+        marker (both git-dirs resolved and distinct) -- `None` otherwise,
+        including in the fallback shapes where the two coincide, so callers
+        never stat the same directory twice.
+
+    Callers must treat the second value as read-only: a marker there
+    CLEARS, and nothing else. Widening the deny path to it would re-broaden
+    the very scope this split exists to narrow.
+
+    Comparison is by `_same_gitdir` (realpath + case-fold on both operands,
+    the same helper the bump/no-bump verdict uses) rather than `==` on
+    `Path`: `resolve_gitdir` returns whatever `git rev-parse --git-dir`
+    printed, joined against its probe cwd, so the same git-dir reached
+    through a symlinked worktree or a differently-cased Windows drive
+    spelling is a distinct `Path` object with an equal identity.
+
+    Total and non-raising: `_same_gitdir` already returns `False` for any
+    `None` operand or unresolvable path.
+    """
+    if target_gitdir is None:
+        return own_gitdir, None
+    if own_gitdir is None or _same_gitdir(own_gitdir, target_gitdir):
+        return target_gitdir, None
+    return target_gitdir, own_gitdir
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the tool-surface out-of-repo bump against a PreToolUse
     payload. Returns `None` (allow) or a `permissionDecision: "deny"` /
@@ -911,9 +1019,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ):
             return None
 
-        # Marker location -- session's own gitdir when one exists, else the
-        # target's (see module docstring, "MARKER LOCATION").
-        marker_gitdir = own_gitdir if own_gitdir is not None else target_gitdir
+        # Marker location -- the TARGET's own gitdir when the target
+        # resolves to a repo, else the session's (see module docstring,
+        # "MARKER LOCATION"). `legacy_marker_gitdir` is the pre-narrowing
+        # location, honoured on the read path only so a marker a live
+        # session already holds keeps clearing (see "LIVE MARKERS ARE NOT
+        # INVALIDATED"); it is never advertised and never printed.
+        marker_gitdir, legacy_marker_gitdir = _marker_locations(
+            own_gitdir, target_gitdir
+        )
 
         own_git_root = _resolve_git_root(anchor)
         raw_agent_id = payload.get("agent_id") or ""
@@ -924,7 +1038,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         effective_sid = effective_session_id(
             session_id, own_git_root, canonical_agent_id or raw_agent_id
         )
-        if effective_sid and marker_present(marker_gitdir, effective_sid):
+        if effective_sid and (
+            marker_present(marker_gitdir, effective_sid)
+            or marker_present(legacy_marker_gitdir, effective_sid)
+        ):
             return None
 
         agent_class = resolve_agent_class(payload, own_git_root)

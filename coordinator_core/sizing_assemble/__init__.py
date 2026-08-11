@@ -260,6 +260,20 @@ DETENT_ENUM = (
     # guard-flags.md; same append discipline as the XXL notch's widen).
     "boundary_counted_in_notch",
     "scout_evidence_mention_count",
+    # Same append-at-the-end discipline as the two above (2026-08-11
+    # routine-ask-sized-XL incident). Order is load-bearing against example-doctrine-repo's
+    # EQUAL_VERSION_SHAPE_DRIFT gate — never re-sort.
+    "intent_em_elaborated",
+    "precedent_shipped_before",
+    "probe_raise_on_substrate_condition",
+    # Appended by example-doctrine-repo-em's counter (cross-repo memo 2026-08-11-doe-
+    # claude-em-sizing-intent-landed-1-11-0-and-one-counter.md), stamped
+    # 1.12.0. Closes an honesty gradient the three above opened:
+    # `substrate-condition` costs the EM the raise while `ask-scope` cost
+    # nothing and was recorded nowhere queryable, making the notch-preserving
+    # answer the free, unmarked one. Now both answers leave a mark and only
+    # one moves the size.
+    "probe_raise_ask_scope_asserted",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -276,6 +290,34 @@ BOUNDARY_IN_NOTCH_ENUM = ("yes", "no")
 # with no downstream net (see the sizing skill's § Tentativeness is not the
 # safe direction).
 SCOUT_EVIDENCE_KIND_ENUM = ("mention-count", "change-set", "site-count")
+
+# Is the recorded `intent` the PM's own words, or the EM's restatement of them?
+# The skill has always required verbatim ("populating `intent` (the PM's ask,
+# verbatim)"), but nothing checked it, because until now this module never
+# received the intent at all — it sized a t-shirt letter with the ask nowhere in
+# frame. An EM restatement is where silent scope growth lands: the motivating
+# incident sized "commit it and push it" as a three-clause intent naming a
+# per-item publish review and a structural-gap fix the PM never asked for.
+INTENT_SOURCE_ENUM = ("pm-verbatim", "em-elaborated")
+
+# Has this operation shipped in this repo before? The single strongest available
+# collapse signal, and the one the lobby had no input for: a repeat of an
+# operation whose runbook already exists and has landed is dispatch-shaped
+# almost by construction. `shipped-before` is ADVISORY, never an auto-collapse —
+# a repeat can genuinely be larger this time (a migration rides along, the
+# contract changed), and this module cannot see which, so auto-collapsing would
+# resize on an unread discriminator exactly as the boundary_in_notch
+# negative-spec forbids.
+PRECEDENT_ENUM = ("shipped-before", "novel")
+
+# What a `--probe-signal raise` is actually based on: the ASK's scope, or the
+# SUBSTRATE's condition. These are different claims and only the first is a
+# size signal. Finding problems in the area you are about to touch does not make
+# the requested work bigger — in the motivating incident every one of four
+# scout_evidence items described the mirror's health (orphaned tests, a stray
+# allowlist row, an uncommitted backlog) and none described the ask, which
+# remained "commit and push".
+PROBE_RAISE_BASIS_ENUM = ("ask-scope", "substrate-condition")
 
 # Appetite budget ceiling, expressed as the heaviest tshirt weight the
 # budget comfortably absorbs without the estimate being flagged as
@@ -457,19 +499,70 @@ def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
         )
 
 
-def _apply_symmetric_resize(tshirt: str, probe_signal: Optional[str]) -> tuple[str, bool]:
+def _validate_intent_source(intent_source: Optional[str]) -> None:
+    """Same unconditional-validation property as every sibling validator here."""
+    if intent_source is not None and intent_source not in INTENT_SOURCE_ENUM:
+        raise SizingAssembleError(
+            f"intent_source must be one of (None, {INTENT_SOURCE_ENUM}), got {intent_source!r}"
+        )
+
+
+def _validate_precedent(precedent: Optional[str]) -> None:
+    """Same unconditional-validation property as every sibling validator here."""
+    if precedent is not None and precedent not in PRECEDENT_ENUM:
+        raise SizingAssembleError(
+            f"precedent must be one of (None, {PRECEDENT_ENUM}), got {precedent!r}"
+        )
+
+
+def _validate_probe_raise_basis(probe_raise_basis: Optional[str]) -> None:
+    """Same unconditional-validation property as every sibling validator here."""
+    if probe_raise_basis is not None and probe_raise_basis not in PROBE_RAISE_BASIS_ENUM:
+        raise SizingAssembleError(
+            f"probe_raise_basis must be one of (None, {PROBE_RAISE_BASIS_ENUM}), "
+            f"got {probe_raise_basis!r}"
+        )
+
+
+def _apply_symmetric_resize(
+    tshirt: str,
+    probe_signal: Optional[str],
+    probe_raise_basis: Optional[str] = None,
+) -> tuple[str, bool, bool]:
     """Applies the Finding-2-mandated symmetric resize. Returns (resized_tshirt,
-    changed). `probe_signal` is None (no probe ran / gut-read stands),
-    "collapse" (over-read, move one band down), or "raise" (under-read, move
-    one band up) — supplied by the caller's on-demand substrate probe.
-    Assumes `probe_signal` was already validated by `_validate_probe_signal`."""
+    changed, raise_suppressed). `probe_signal` is None (no probe ran / gut-read
+    stands), "collapse" (over-read, move one band down), or "raise" (under-read,
+    move one band up) — supplied by the caller's on-demand substrate probe.
+    Assumes `probe_signal` was already validated by `_validate_probe_signal`.
+
+    A `raise` declared as `probe_raise_basis="substrate-condition"` is NOT
+    applied, and the third return element reports the suppression so the caller
+    can fire `probe_raise_on_substrate_condition`.
+
+    Why this one auto-suppresses when `boundary_in_notch="yes"` deliberately
+    does NOT (module docstring's negative-spec): that negative-spec turns on
+    the engine being unable to see the discriminator — a counted boundary is
+    collapsible only when no co-design is involved, and `yes` does not say
+    which, so collapsing would resize on an UNREAD discriminator. Here the
+    caller has already applied the discriminator by choosing the value:
+    `substrate-condition` states, as a typed claim, that the raise rests on
+    the area's condition rather than the ask's scope, and the area's condition
+    is not a size signal by definition. Suppressing therefore resizes on a
+    READ discriminator, which is the sanctioned `_apply_symmetric_resize`
+    correction mechanism working as designed, not a Hard Gate violation — the
+    SIZE changes and the route re-resolves from the table, exactly as
+    § Hard Gate prescribes. An EM whose ask genuinely did grow says
+    `ask-scope` and keeps the raise; that assertion is recorded and
+    falsifiable, which is the point."""
     if probe_signal is None:
-        return tshirt, False
+        return tshirt, False, False
     if probe_signal == "collapse":
         resized = _step_tshirt(tshirt, -1)
-    else:
-        resized = _step_tshirt(tshirt, +1)
-    return resized, resized != tshirt
+        return resized, resized != tshirt, False
+    if probe_raise_basis == "substrate-condition":
+        return tshirt, False, True
+    resized = _step_tshirt(tshirt, +1)
+    return resized, resized != tshirt, False
 
 
 def route(
@@ -484,6 +577,10 @@ def route(
     premise_provenance: Optional[str] = None,
     boundary_in_notch: Optional[str] = None,
     scout_evidence_kind: Optional[str] = None,
+    intent: Optional[str] = None,
+    intent_source: Optional[str] = None,
+    precedent: Optional[str] = None,
+    probe_raise_basis: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -534,6 +631,9 @@ def route(
     _validate_premise_provenance(premise_provenance)
     _validate_boundary_in_notch(boundary_in_notch)
     _validate_scout_evidence_kind(scout_evidence_kind)
+    _validate_intent_source(intent_source)
+    _validate_precedent(precedent)
+    _validate_probe_raise_basis(probe_raise_basis)
     scout_evidence = list(scout_evidence or [])
 
     if express_lane:
@@ -542,13 +642,16 @@ def route(
             "detents": [],
             "fork": None,
             "xl_exit": None,
+            "intent": intent,
             "resolved_estimate": {"tshirt": tshirt, "provisional": True},
             "scout_evidence": scout_evidence,
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
         }
 
-    resized_tshirt, resize_changed = _apply_symmetric_resize(tshirt, probe_signal)
+    resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
+        tshirt, probe_signal, probe_raise_basis
+    )
 
     detents: list[str] = []
 
@@ -639,6 +742,35 @@ def route(
     # they are the answers that describe evidence already qualified.
     if scout_evidence_kind == "mention-count":
         detents.append("scout_evidence_mention_count")
+
+    # Intent-source detent (advisory). Not size-gated, for the same reason
+    # `boundary_counted_in_notch` is not: the size is what an elaborated intent
+    # is suspected of having inflated, so gating on it would exempt the reads
+    # this exists to catch.
+    if intent_source == "em-elaborated":
+        detents.append("intent_em_elaborated")
+
+    # Precedent detent (advisory). Fires at every size — a shipped-before
+    # operation reading M is as much worth a second look as one reading XL.
+    if precedent == "shipped-before":
+        detents.append("precedent_shipped_before")
+
+    # Raise-suppressed detent. Unlike every other advisory in this module, the
+    # substrate-condition answer DID change the size (the raise was not
+    # applied) — see `_apply_symmetric_resize` for why that is a read
+    # discriminator rather than an unread one. The route still comes from the
+    # table, so § Hard Gate holds.
+    if raise_suppressed:
+        detents.append("probe_raise_on_substrate_condition")
+
+    # The symmetric mark on the OTHER answer. Advisory, and unlike its
+    # counterpart it changes nothing — the raise it names has already been
+    # applied. Its whole job is to make the assertion findable: an EM claiming
+    # the ask itself grew is making a falsifiable claim, and falsifiable needs
+    # someone able to go looking. Without this, the answer that preserves the
+    # notch was the free and invisible one.
+    if probe_signal == "raise" and probe_raise_basis == "ask-scope":
+        detents.append("probe_raise_ask_scope_asserted")
 
     if resolved_route not in ROUTE_ENUM:  # pragma: no cover - defensive, table-driven
         raise SizingAssembleError(f"internal: resolved route {resolved_route!r} not in {ROUTE_ENUM}")
@@ -832,11 +964,63 @@ def route(
             "Discharge by citing the change-set, or collapse the estimate."
         )
 
+    # Raise-suppressed statement. Stated FIRST of the new appends because,
+    # unlike its neighbours, it reports a size that already changed rather than
+    # a caution about one that did not.
+    if "probe_raise_on_substrate_condition" in detents:
+        next_move += (
+            f" NOTE (this one DID change the size): the probe raise was NOT applied — "
+            f"you declared it based on the substrate's condition, not the ask's scope, "
+            f"so the estimate stands at {resized_tshirt}. Problems found in the area you are "
+            "about to touch do not make the requested work bigger; they are their own "
+            "items. If the ASK itself genuinely grew, re-run with "
+            "--probe-raise-basis ask-scope and name what the PM asked for that the "
+            "original notch missed."
+        )
+
+    if "probe_raise_ask_scope_asserted" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "this raise was declared ASK-SCOPE — you have asserted the ask "
+            "itself is bigger than the original notch, not that the substrate "
+            "is untidy. That is a falsifiable claim and this detent is what "
+            "makes it findable later. Name, in scout_evidence, what the PM "
+            "asked for that the first read missed."
+        )
+
+    if "precedent_shipped_before" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "this operation has SHIPPED IN THIS REPO BEFORE. A repeat of an "
+            "operation whose runbook already exists and has landed is "
+            "dispatch-shaped by default — the prior run is the evidence. "
+            "Discharge by naming what is specifically different this time "
+            "(a migration riding along, a changed contract, a first-time "
+            "surface), or collapse the estimate to match the precedent."
+        )
+
+    if "intent_em_elaborated" in detents:
+        next_move += (
+            " ADVISORY (warn, never block; does not alter the route above): "
+            "the recorded intent is the EM's restatement, not the PM's own "
+            "words. The sizing skill requires intent verbatim precisely "
+            "because restatement is where scope silently grows — clauses the "
+            "PM never said get sized as though they had. Re-read the ask as "
+            "typed and confirm the size is against THAT, not against the "
+            "elaboration."
+        )
+
     return {
         "route": resolved_route,
         "detents": detents,
         "fork": fork,
         "xl_exit": xl_exit,
+        # Echoed, never parsed (same passthrough contract as `scout_evidence`).
+        # The point is purely that the ask and the size now appear in ONE frame:
+        # an `intent` of "commit it and push it" sitting beside a resolved XL is
+        # self-evidently wrong to any reader, and before this field existed
+        # there was no frame in which those two facts met.
+        "intent": intent,
         "resolved_estimate": {"tshirt": resized_tshirt, "provisional": True},
         "scout_evidence": scout_evidence,
         "narration": narration,
@@ -859,7 +1043,10 @@ def _usage(prog: str) -> int:
         "[--premise-provenance executed|read|not-applicable|unrecorded] "
         "[--boundary-in-notch yes|no] "
         "[--scout-evidence-kind mention-count|change-set|site-count] "
-        "[--scout-evidence <str> ...]",
+        "[--scout-evidence <str> ...] "
+        "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
+        "[--precedent shipped-before|novel] "
+        "[--probe-raise-basis ask-scope|substrate-condition]",
         file=__import__("sys").stderr,
     )
     return EXIT_USAGE
@@ -879,6 +1066,10 @@ def main(argv: list[str]) -> int:
     premise_provenance = None
     boundary_in_notch = None
     scout_evidence_kind = None
+    intent = None
+    intent_source = None
+    precedent = None
+    probe_raise_basis = None
     scout_evidence: list[str] = []
 
     i = 0
@@ -914,6 +1105,18 @@ def main(argv: list[str]) -> int:
         elif tok == "--scout-evidence" and i + 1 < len(argv):
             scout_evidence.append(argv[i + 1])
             i += 2
+        elif tok == "--intent" and i + 1 < len(argv):
+            intent = argv[i + 1]
+            i += 2
+        elif tok == "--intent-source" and i + 1 < len(argv):
+            intent_source = argv[i + 1]
+            i += 2
+        elif tok == "--precedent" and i + 1 < len(argv):
+            precedent = argv[i + 1]
+            i += 2
+        elif tok == "--probe-raise-basis" and i + 1 < len(argv):
+            probe_raise_basis = argv[i + 1]
+            i += 2
         elif tok == "--json":
             i += 1
         else:
@@ -935,6 +1138,10 @@ def main(argv: list[str]) -> int:
             premise_provenance=premise_provenance,
             boundary_in_notch=boundary_in_notch,
             scout_evidence_kind=scout_evidence_kind,
+            intent=intent,
+            intent_source=intent_source,
+            precedent=precedent,
+            probe_raise_basis=probe_raise_basis,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)

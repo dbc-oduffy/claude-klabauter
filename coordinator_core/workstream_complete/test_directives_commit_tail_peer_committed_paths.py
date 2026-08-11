@@ -1,33 +1,31 @@
 """test_directives_commit_tail_peer_committed_paths — path-scoped regression
-suite for `directives_commit_tail._peer_committed_paths`.
+suite for `directives_commit_tail._committed_paths_for_sids`, the sole
+peer-attribution entry point production calls (via `resolve_known_
+concurrent_paths`).
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-
-amplification-gate.md, `## Tasks` row `id: C18` ("`_peer_committed_paths`
-migrates onto `bulk_trailer_session_map`"). No path-scoped test for this
-function existed at HEAD; this file is that test, authored per the chunk's
-own instruction to "verify, then write it".
+Spec backlink: docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-
+tail.md, chunk C1. Originally authored against `docs/plans/2026-08-07-n-
+plus-one-git-spawn-class-and-amplification-gate.md`'s C18 ("`_peer_committed_
+paths` migrates onto `bulk_trailer_session_map`"), which was REVERTED —
+`bulk_trailer_session_map` hardcoded `--no-merges`, silently dropping a
+peer's merge-commit contribution (UNDER-exclusion; see
+`test_merge_commit_authored_by_peer_is_included` below). C1 lands the fix
+that C18 could not: `_committed_paths_for_sids` now calls
+`bulk_trailer_session_map(..., include_merges=True)` — a parameterized
+merge filter, default unchanged for every OTHER caller — so this file's
+merge-inclusion pin still holds while the N+1 spawn shape it originally
+also covered is now gone. `test_spawn_count_does_not_scale_with_commit_
+count` is the new pin for that half.
 
-**Finding this file backs (see C18's dispatch report, not restated here):**
-the proposed migration onto `session_attribution.bulk_trailer_session_map`
-does NOT hold as a byte-identical swap at this call site. Unlike C4's
-`trailer_foreign_shas` -> `bulk_trailer_session_map` migration (an exact P1
-equivalence — same `--no-merges` `git log`, same format string, same
-`if sha and trailer` filter), `_peer_committed_paths` walks its window with
-a bare `git log --since=<t> --format=%H` that includes MERGE commits, and
-feeds each candidate sha through `archive_stamp._commit_session_id`'s
-UUID-shape-validated single-commit trailer read before folding in that
-commit's touched paths. `bulk_trailer_session_map` is `--no-merges` (§
-Anti-scope 5/6 of the plan doc: "the looser semantics" — dropping it here
-would convert a peer's merge-commit contribution into a silent miss, i.e.
-UNDER-exclusion of a live peer's touched paths from `resolve_known_
-concurrent_paths`'s exclusion set — the wrong direction for a function whose
-own docstring states its correctness bar is "biased toward OVER-exclusion,
-never under-exclusion"). `test_merge_commit_authored_by_peer_is_included`
-below is the concrete pin for that divergence: it fails immediately if
-`_peer_committed_paths` is ever rewritten to walk `--no-merges` history
-(e.g. by delegating to `bulk_trailer_session_map`) without first solving the
-merge-visibility gap that primitive does not have an answer for at this call
-site.
+Repointed off the former `_peer_committed_paths` single-sid convenience
+wrapper (deleted — no production caller; see
+state/debt-backlog/2026-08-11-peer-committed-paths-is-a-second-peer-at-
+c596b80fa5db.yaml) onto `_committed_paths_for_sids` directly, so the tested
+path and the shipped path (`resolve_known_concurrent_paths`'s own call) are
+the same function. The single-sid convenience is reproduced in this file's
+own `_peer_committed_paths` test helper below, which resolves `sid`'s start
+time and unwraps the one-sid result — same call shape every test in this
+file already used, no assertion intent changed.
 
 Run: python3 -m pytest coordinator_core/workstream_complete/test_directives_commit_tail_peer_committed_paths.py -q
 """
@@ -86,16 +84,21 @@ def repo(tmp_path):
 
 
 def _peer_committed_paths(repo_root, sid: str, monkeypatch, since_before) -> set:
-    """Calls `_peer_committed_paths` with `resolve_session_start_time`
-    monkeypatched to a fixed instant before every fixture commit, so the
-    `--since=` window covers the whole fixture history regardless of wall-
-    clock skew between fixture setup and the git-log call."""
+    """Calls `_committed_paths_for_sids` for a single sid — the shipped
+    entry point `resolve_known_concurrent_paths` itself calls — with
+    `resolve_session_start_time` monkeypatched to a fixed instant before
+    every fixture commit, so the `--since=` window covers the whole fixture
+    history regardless of wall-clock skew between fixture setup and the
+    git-log call. Mirrors the former `_peer_committed_paths` single-sid
+    convenience wrapper's own two steps (resolve start time, unwrap the
+    one-sid result) so every existing assertion keeps its intent."""
     monkeypatch.setattr(
         directives_commit_tail._memo_lifecycle,
         "resolve_session_start_time",
         lambda _repo_root, _sid: since_before,
     )
-    return directives_commit_tail._peer_committed_paths(repo_root, sid)
+    start = directives_commit_tail._memo_lifecycle.resolve_session_start_time(repo_root, sid)
+    return directives_commit_tail._committed_paths_for_sids(repo_root, {sid: start}).get(sid, set())
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +177,7 @@ def test_shape_invalid_trailer_is_excluded_despite_textual_match(repo, monkeypat
 # ---------------------------------------------------------------------------
 # THE key divergence test — a MERGE commit trailered to sid, with a real
 # combined-diff-visible touched path (a resolved merge conflict), must be
-# included under `_peer_committed_paths`'s current (`git log --since=...`,
+# included under `_committed_paths_for_sids`'s current (`git log --since=...`,
 # no `--no-merges`) behavior. `bulk_trailer_session_map` walks `--no-merges`
 # and would silently drop this commit's contribution entirely — the finding
 # this whole file backs. See the module docstring above.
@@ -209,3 +212,101 @@ def test_merge_commit_authored_by_peer_is_included(repo, monkeypatch):
     result = _peer_committed_paths(root, sid, monkeypatch, since_before)
 
     assert "shared.txt" in result
+
+
+# ---------------------------------------------------------------------------
+# AC1 — the git-spawn count is bounded, independent of commit count. The
+# pre-fix implementation spawned up to 2N processes (one `archive_stamp.
+# _commit_session_id` per candidate sha, one `git show --name-only` per
+# attributed sha) for a peer's own `--since=` window. This pins the fix:
+# regardless of how many trailered commits sid authored, the number of real
+# `subprocess.run` calls this module's own code makes must not grow with
+# commit count.
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_count_does_not_scale_with_commit_count(repo, monkeypatch):
+    root, _branch = repo
+    sid = "66666666-6666-6666-6666-666666666666"
+    since_before = datetime.now(timezone.utc) - timedelta(hours=1)
+    for i in range(12):
+        _commit(root, f"mine{i}.txt", f"mine{i}\n", f"peer work {i}\n\nSession-Id: {sid}\n")
+
+    spawn_calls = []
+    real_run = subprocess.run
+
+    def _counting_run(*args, **kwargs):
+        spawn_calls.append(args)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting_run)
+
+    result = _peer_committed_paths(root, sid, monkeypatch, since_before)
+
+    assert all(f"mine{i}.txt" in result for i in range(12))
+    # Exactly two real `git` spawns for this call regardless of the 12
+    # trailered commits above (one bulk trailer walk, one batched touched-
+    # paths walk) — never one spawn per candidate/attributed sha.
+    assert len(spawn_calls) == 2, [c[0] for c in spawn_calls]
+
+
+# ---------------------------------------------------------------------------
+# Overflow — a sha count ABOVE the chunking threshold still returns the
+# COMPLETE union, split across multiple chunked spawns rather than one
+# unchunked call or a per-sha spawn. Chunk size is monkeypatched down to a
+# small value so the test does not need to build hundreds of real fixture
+# commits to cross the threshold; the spawn-count assertion is what proves
+# chunking actually happened (would fail if chunking were removed and the
+# call collapsed back onto a single unchunked spawn).
+# ---------------------------------------------------------------------------
+
+
+def test_overflow_sha_count_returns_complete_union_via_chunked_spawns(repo, monkeypatch):
+    root, _branch = repo
+    sid = "77777777-7777-7777-7777-777777777777"
+    since_before = datetime.now(timezone.utc) - timedelta(hours=1)
+    monkeypatch.setattr(directives_commit_tail, "_COMMITTED_PATHS_CHUNK", 2)
+    commit_count = 5
+    for i in range(commit_count):
+        _commit(root, f"overflow{i}.txt", f"overflow{i}\n", f"peer work {i}\n\nSession-Id: {sid}\n")
+
+    spawn_calls = []
+    real_run = subprocess.run
+
+    def _counting_run(*args, **kwargs):
+        spawn_calls.append(args)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting_run)
+
+    result = _peer_committed_paths(root, sid, monkeypatch, since_before)
+
+    assert all(f"overflow{i}.txt" in result for i in range(commit_count))
+    # 1 bulk trailer spawn + ceil(5 commits / chunk-of-2) == 3 chunked
+    # touched-paths spawns == 4 total. A regression that removed chunking
+    # (reverting to one unchunked spawn-2 call) would collapse this to 2.
+    assert len(spawn_calls) == 4, [c[0] for c in spawn_calls]
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed — a git failure on the batched touched-paths walk must NOT
+# silently degrade to an empty peer-exclusion set (the pre-fix per-sha loop's
+# fail-open posture). It must raise, surfacing the failure to the caller
+# rather than reading as "confirmed no peer owns anything here".
+# ---------------------------------------------------------------------------
+
+
+def test_git_failure_on_touched_paths_walk_raises_not_empty(repo, monkeypatch):
+    root, _branch = repo
+    sid = "88888888-8888-8888-8888-888888888888"
+    since_before = datetime.now(timezone.utc) - timedelta(hours=1)
+    _commit(root, "willfail.txt", "x\n", f"peer work\n\nSession-Id: {sid}\n")
+
+    # `_chunked_committed_paths` now calls `_run_git_ok_retrying`, not
+    # `_run_git_ok` directly (bounded retry wrapper added for routine lock
+    # contention — see that function's own docstring). Patched at that
+    # layer so this fail-closed pin exercises the actual call site.
+    monkeypatch.setattr(directives_commit_tail, "_run_git_ok_retrying", lambda *_a, **_k: None)
+
+    with pytest.raises(directives_commit_tail.PeerAttributionUnavailable):
+        _peer_committed_paths(root, sid, monkeypatch, since_before)

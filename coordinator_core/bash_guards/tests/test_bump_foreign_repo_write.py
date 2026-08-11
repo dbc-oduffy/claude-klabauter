@@ -1396,3 +1396,97 @@ def test_c2_p2_consecutive_backslashes_before_quote_pair_left_to_right():
         assert tokens[1] not in (remove, force_recursive, "/" + danger), (
             f"flag-{label} must not surface {remove!r} as its own command-position token"
         )
+
+
+# ---------------------------------------------------------------------------
+# AC7 (docs/plans/2026-08-02-write-confinement-guards.md) -- a dispatched
+# subagent inherits its EM's marker without a second one, on the Bash leg.
+#
+# Regression for bug
+# `2026-08-11-a-dispatched-coordinator-executor-is-den-28df23d727ea`: C3 of
+# docs/plans/2026-08-03-narrow-write-confinement-bump.md sited the marker at
+# the TARGET's own gitdir, and `_evaluate_foreign_repo_candidate` started
+# resolving `marker_probe_root = resolve_git_root(marker_probe)` (the TARGET
+# root) into `bump_is_cleared`'s `git_root=` and both `effective_session_id`
+# calls. `resolve_em_session_id` reads the EM back-pointer from
+# `<git_root>/.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`,
+# which only ever exists in the SESSION's own gitdir -- resolved against the
+# target root that lookup silently misses, `effective_session_id` falls back
+# to the subagent's own `session_id`, and a dispatched subagent re-bumps
+# despite its EM having cleared the target. Fixed by threading `anchor_root`
+# (`resolve_git_root(anchor)`, the session's own root) through to
+# `_evaluate_foreign_repo_candidate` and using it for the EM-inheritance
+# lookup, while the marker's own SITING (`marker_probe`/`marker_gitdir`,
+# still the target's gitdir) is untouched.
+#
+# Keeps the same control pair the reproducing probe used: a fixture-validity
+# control (the hand-written back-pointer actually resolves the way the
+# module docstring says it does) and a no-marker non-vacuity control
+# (the identical payload DOES bump absent the EM's marker) alongside the
+# AC7 assertion itself -- a regression test with only the AC7 assertion is
+# how this defect went unnoticed after C3 landed.
+# ---------------------------------------------------------------------------
+
+EM_SID = "11111111-2222-3333-4444-555555555555"
+SUB_SID = "99999999-8888-7777-6666-555555555555"
+AC7_AGENT_ID = "coordinatorexecutor-deadbeef"
+
+
+def _write_em_backpointer(session_root: Path, agent_id: str, em_sid: str) -> None:
+    """The EM back-pointer as `subagent_sandbox.engine` writes it: in the
+    SESSION repo's own gitdir, never the target's -- see
+    `_write_bump_marker.resolve_em_session_id`'s own docstring for the exact
+    path shape this mirrors."""
+    d = session_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
+
+
+def test_ac7_fixture_validity_backpointer_resolves_against_session_root_only(repos):
+    """Control 1 -- fixture validity: the back-pointer this test relies on
+    resolves when read against the SESSION root, and does NOT resolve
+    against the (unrelated) target root, matching `_write_bump_marker`'s own
+    "SUBAGENTS" docstring section."""
+    from coordinator_core.bash_guards._write_bump_marker import effective_session_id
+
+    _write_em_backpointer(repos["anchor"], AC7_AGENT_ID, EM_SID)
+    assert effective_session_id(SUB_SID, str(repos["anchor"]), AC7_AGENT_ID) == EM_SID
+    assert effective_session_id(SUB_SID, str(repos["foreign"]), AC7_AGENT_ID) == SUB_SID
+
+
+def test_ac7_subagent_inherits_em_marker_on_bash_leg(repos, monkeypatch):
+    """The AC7 assertion. EM cleared the foreign target (marker sited at the
+    TARGET gitdir, per C3); the subagent's own EM back-pointer sits in the
+    SESSION repo, per `_write_bump_marker`'s own "SUBAGENTS" docstring
+    section. The dispatched subagent must inherit that clear, not re-bump."""
+    _set_anchor(monkeypatch, repos, SUB_SID)
+    _write_em_backpointer(repos["anchor"], AC7_AGENT_ID, EM_SID)
+
+    foreign_gitdir = resolve_gitdir(str(repos["foreign"]))
+    assert foreign_gitdir is not None
+    (foreign_gitdir / marker_basename(EM_SID)).touch()
+
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+    payload = {"agent_id": AC7_AGENT_ID, "cwd": str(repos["anchor"])}
+
+    result = guard.check_bump_foreign_repo_write(cmd, SUB_SID, str(repos["anchor"]), payload)
+
+    assert result is None, (
+        "AC7 BROKEN: subagent re-bumped despite its EM's marker being present "
+        "at the target gitdir. Envelope: %r" % (result,)
+    )
+
+
+def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeypatch):
+    """Control 2 -- non-vacuity: the identical payload, minus the EM's
+    marker, DOES bump -- proving the AC7 assertion above is testing a real
+    clear, not a payload shape this guard never fires on regardless."""
+    _set_anchor(monkeypatch, repos, SUB_SID)
+    _write_em_backpointer(repos["anchor"], AC7_AGENT_ID, EM_SID)
+
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+    payload = {"agent_id": AC7_AGENT_ID, "cwd": str(repos["anchor"])}
+
+    result = guard.check_bump_foreign_repo_write(cmd, SUB_SID, str(repos["anchor"]), payload)
+
+    assert result is not None

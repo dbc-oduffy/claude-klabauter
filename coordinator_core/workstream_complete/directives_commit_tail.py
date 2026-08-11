@@ -100,15 +100,30 @@ Negative-spec:
       `describe_wsc_tail_outcome`'s `"timeout"` entry names RECONCILE
       (check actual repo state before deciding anything failed) as the
       required next move, never a blind retry — see its own docstring.
+    - DOES retry, narrowly: `_chunked_committed_paths`' per-chunk git spawn
+      (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is the ONE exception
+      to the no-retry posture above, and it is not a contradiction of it —
+      that entry is about not blind-retrying an ALREADY-REPORTED-SUCCESS
+      client-side timeout; this one is a bounded retry of a git SPAWN that
+      has not yet succeeded, absorbing routine lock contention this
+      machine's load norm makes common. Fail-closed is preserved either
+      way: exhausting the retry budget still raises
+      `PeerAttributionUnavailable`, never degrades to an empty/partial
+      result. Do not "simplify" this retry away, and do not widen it into a
+      general-purpose retry wrapper reused elsewhere in this module — it is
+      scoped to this one call site's known failure mode.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
-from datetime import timezone
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, NamedTuple, Optional
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Set, Union
 
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
@@ -166,11 +181,23 @@ def accumulate_session_paths(
 # ---------------------------------------------------------------------------
 
 
-def _run_git_ok(repo_root: Path, args: list[str]) -> Optional[str]:
-    """Runs a read-only git subcommand from `repo_root`; returns stdout on a
-    clean (rc==0) run, `None` on any failure (missing git, non-repo, spawn
-    error, timeout) — mirrors this module's other subprocess call sites
-    (`compute_push_landed_gate`), never raises."""
+def _spawn_git(repo_root: "Union[Path, str, None]", args: list[str]) -> "tuple[int, str, str]":
+    """The one `subprocess.run` body every read-only git spawn in this
+    module funnels through — `timeout=30`/`**_NO_CONSOLE` (the Windows
+    no-console-window flag) set in exactly one place rather than once per
+    call site. Never raises: a spawn failure (missing git, non-repo,
+    `OSError`, timeout) collapses to `(1, "", "spawn failed")`, the same
+    shape a bare nonzero-exit git failure already produces — callers that
+    need a different failure shape (`_run_git_ok`'s `None`) adapt this
+    return value themselves; this helper does not pick a contract for
+    them.
+
+    `repo_root` widens to `str`/`None` only because the `GitRunner` callback
+    shape `bulk_trailer_session_map` invokes passes its `cwd` as
+    `Optional[str]`. A `None` stringifies to a bogus path and the spawn
+    fails closed into `(1, "", "spawn failed")` — pre-existing behaviour of
+    the call site this consolidated, preserved deliberately rather than
+    tightened here, where a new raise would change a caller's contract."""
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), *args],
@@ -180,10 +207,19 @@ def _run_git_ok(repo_root: Path, args: list[str]) -> Optional[str]:
             **_NO_CONSOLE,
         )
     except (OSError, subprocess.SubprocessError):
+        return 1, "", "spawn failed"
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _run_git_ok(repo_root: Path, args: list[str]) -> Optional[str]:
+    """Runs a read-only git subcommand from `repo_root`; returns stdout on a
+    clean (rc==0) run, `None` on any failure (missing git, non-repo, spawn
+    error, timeout) — mirrors this module's other subprocess call sites
+    (`compute_push_landed_gate`), never raises."""
+    rc, stdout, _stderr = _spawn_git(repo_root, args)
+    if rc != 0:
         return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
+    return stdout
 
 
 def _peer_subagent_share_paths(repo_root: Path, sid: str) -> set[str]:
@@ -210,51 +246,335 @@ def _peer_subagent_share_paths(repo_root: Path, sid: str) -> set[str]:
     return paths
 
 
-def _peer_committed_paths(repo_root: Path, sid: str) -> set[str]:
-    """Paths touched by `sid`'s own commits since ITS session start —
-    `resolve_session_start_time(repo_root, sid)` is reused verbatim (never
-    re-derived) to bound the `git log` window, then each candidate commit's
-    Session-Id trailer is checked via `archive_stamp._commit_session_id`
-    (the same UUID-shape-validated trailer reader `commit_reality.py`'s
-    `_sha_attributed_to_session` already relies on for positive-provenance
-    attribution) before its touched paths are folded in. Deferred import of
-    `archive_stamp`, mirroring `commit_reality.py`'s own module-scope NOTE:
-    `archive_stamp` pulls in `coordinator_core.ops`, and `coordinator_core.
-    ops` eager-imports every op module — some of which import THIS package
-    at module scope — so a top-level import here risks the identical
-    partially-initialized-module cycle `commit_reality.py` already
-    documented and worked around; call-time import sidesteps it without a
-    third copy of the trailer-extraction logic.
+#: Mirrors `archive_stamp._SESSION_ID_UUID_RE` verbatim (deliberately NOT
+#: imported from there — `archive_stamp` pulls in `coordinator_core.ops`,
+#: and `coordinator_core.ops` eager-imports every op module, some of which
+#: import THIS package at module scope; a top-level import of `archive_stamp`
+#: here risks the identical partially-initialized-module cycle
+#: `commit_reality.py` already documented and worked around. `archive_stamp`
+#: itself replicates this SAME regex rather than importing coverage.py's copy
+#: — see its own "Ownership guard" comment — so this is the same small,
+#: well-tested mechanism replicated a third time, not reinvented).
+_SESSION_ID_UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 
-    A commit whose trailer cannot be read/validated (missing, malformed,
-    git failure) is simply not attributed to `sid` — never guessed at,
-    per `_commit_session_id`'s own fail-closed contract."""
-    from coordinator_core.archive_stamp import _commit_session_id  # deferred: see docstring above
+#: Header line marker for `_committed_paths_for_sids`'s batched
+#: `git log --no-walk --name-only` output — mirrors coverage.py's own
+#: `_COMMIT_HEADER_SENTINEL`, a control byte that cannot appear in a
+#: legitimate path or SHA.
+_COMMIT_HEADER_SENTINEL = "\x02"
 
-    start = _memo_lifecycle.resolve_session_start_time(repo_root, sid)
-    if start is None:
-        return set()
-    since = start.astimezone(timezone.utc).isoformat()
-    log_out = _run_git_ok(repo_root, ["log", f"--since={since}", "--format=%H"])
-    if not log_out:
-        return set()
+#: Chunk size for `_committed_paths_for_sids`'s Spawn-2 batched
+#: `git log --no-walk -c --name-only <shas>` call — mirrors coverage.py's
+#: `_TRAILER_LOOKUP_CHUNK = 300` idiom (coverage.py:1611, "keeps each
+#: spawn's argv comfortably under Windows' ~32K command-line length
+#: ceiling"). At ~41 bytes/sha (40-hex + separator), 300 shas is ~12.3KB —
+#: well under the ~32767-char Windows `CreateProcess` ceiling with ample
+#: headroom for the rest of this call's argv. Review: code-reviewer P1 —
+#: an unchunked union of `all_shas` overflows around 790-800 shas, which
+#: this machine's stated load norm (50-70 concurrent sessions, ~958
+#: commits/24h) reaches in ordinary operation, not as a contrived edge
+#: case.
+_COMMITTED_PATHS_CHUNK = 300
 
-    paths: set[str] = set()
-    for sha in log_out.split():
-        try:
-            candidate_sid = _commit_session_id(repo_root, sha)
-        except Exception:
-            continue
-        if candidate_sid != sid:
-            continue
-        touched_out = _run_git_ok(repo_root, ["show", "--name-only", "--pretty=format:", sha])
-        if not touched_out:
-            continue
+#: Whether `build_close_tail_args_directive` may emit `--review-slice` flags for
+#: a list-shaped `decisions["review"]`.
+#:
+#: TRUE since the consuming half landed alongside it: `wsc_tail.
+#: _run_precommit_tail` branches dict-vs-list and routes a list to `tail_ops.
+#: write_review_trail_many`, so `--review-slice` now reaches an op that
+#: understands it.
+#:
+#: The constant is retained rather than inlined because it names the coupling
+#: this emission has: without a consuming `wsc_tail.py`, the plumbing below is a
+#: TRAP rather than dead code — the directive path already accepts a list
+#: (`build_write_trail_directives`, a3d90f24dc16), so a list-shaped review emits
+#: `--review-slice`, reaches `bin/wsc-tail.py`, and hands the op a list where
+#: `tail_ops.write_review_trail` expects a dict. Flipping it back off, or landing
+#: either half without the other, re-opens exactly that.
+_COMMIT_TAIL_ACCEPTS_REVIEW_SLICES = True
+
+#: Bounded retry budget for a single `_chunked_committed_paths` chunk spawn.
+#: `_run_git_ok`/`_spawn_git` themselves carry NO retry of any kind (verified
+#: by reading both bodies — `_spawn_git` maps a spawn error straight to
+#: `(1, "", "spawn failed")` and `_run_git_ok` maps any nonzero rc straight to
+#: `None`, one layer, no loop); the fail-closed conversion (85a36676a) added
+#: none either, so a single momentary lock collision now aborts the whole
+#: `/workstream-complete` commit tail. This constant is the ONE retry layer
+#: for this call site — do not add a second one lower in the stack, and do
+#: not remove this one and call the git call "flaky, just fail closed" -
+#: fail-closed on a STRUCTURAL failure is correct; failing closed on routine
+#: lock contention is not.
+#:
+#: 3 total attempts (1 original + 2 retries), 0.25s/0.5s backoff — the
+#: 0.75s figure is the backoff-SLEEP total only, NOT this layer's total
+#: added latency (see `_GIT_RETRY_DEADLINE_SECONDS` below for the number
+#: that actually bounds it). `_spawn_git`'s `timeout=30` is PER ATTEMPT,
+#: not per call site: a chunk whose `git log` hangs (filesystem
+#: contention slow enough to approach the timeout, rather than an
+#: instant nonzero-rc rejection — a realistic shape on this machine's
+#: documented load norm, `docs/wiki/machine-load-norm.md`: 50-70
+#: concurrent LLM sessions, a dozen-plus EMs sharing one checkout) could,
+#: absent a deadline, burn up to 3x30s = 90s for a SINGLE chunk before
+#: this layer gives up, with `ceil(all_shas/300)` such chunks running
+#: sequentially. Review: code-reviewer P2 — the prior comment here
+#: claimed "~0.75s worst-case added latency per chunk" and called that
+#: "small relative to _spawn_git's existing 30s per-call timeout", which
+#: conflated the backoff-sleep total with the retry layer's actual worst
+#: case and understated it by two orders of magnitude in the hang case.
+#: `_GIT_RETRY_DEADLINE_SECONDS` below is what now bounds the true
+#: worst case; do not restate a "small" latency claim here without also
+#: naming the deadline.
+_GIT_RETRY_ATTEMPTS = 3
+_GIT_RETRY_BACKOFF_SECONDS = (0.25, 0.5)
+
+#: Overall wall-clock budget across `_run_git_ok_retrying`'s attempts,
+#: sized against `docs/wiki/machine-load-norm.md` (50-70 concurrent
+#: sessions, routine transient `index.lock`/pack-refs contention) rather
+#: than an idle box: large enough to absorb a one-off lock collision (the
+#: 0.25s/0.5s backoff pair plus a couple of fast-failing spawns fits
+#: comfortably inside it), small enough that a slow-spawn hang cannot
+#: stack multiple full 30s `_spawn_git` timeouts behind one chunk. Once
+#: the deadline has passed, `_run_git_ok_retrying` does not start another
+#: attempt — a retry whose remaining budget cannot fit another attempt
+#: must not begin one. This does NOT cap an attempt already in flight
+#: (Python has no thread-cancellation primitive to abort a running
+#: `subprocess.run`, and `_spawn_git`'s own `timeout=30` is what bounds
+#: that): true worst case per chunk is therefore
+#: `_GIT_RETRY_DEADLINE_SECONDS` (spent on attempts that fail fast/retry)
+#: PLUS one final in-flight attempt's own `_spawn_git` timeout (30s) —
+#: i.e. ~40s per chunk, not the un-bounded ~90s the retry layer would
+#: otherwise risk, and nowhere near the previously-claimed 0.75s.
+_GIT_RETRY_DEADLINE_SECONDS = 10.0
+
+#: NOT a stderr-shape classifier that skips retries for "obviously
+#: structural" failures — considered and deliberately rejected. Git's
+#: lock-contention stderr shape (`index.lock`/`unable to create`/`cannot
+#: lock ref`) is not perfectly disjoint from every structural message across
+#: git versions/locales, and a classifier that guesses wrong in the
+#: skip-retry direction would silently shorten the retry budget for a
+#: genuinely transient failure — reintroducing, one layer down, the exact
+#: fail-open-shaped risk this retry exists to close. Retrying a confirmed-
+#: structural failure instead wastes at most `_GIT_RETRY_ATTEMPTS - 1`
+#: cheap, bounded spawns before `PeerAttributionUnavailable` still raises —
+#: harmless per this task's own stated weighting ("retrying a structural
+#: failure is wasted time but harmless; not retrying a transient one wedges
+#: a close"). So every failure, recognized or not, gets the same uniform
+#: bounded budget below.
+
+
+def _run_git_ok_retrying(
+    repo_root: Path,
+    args: list[str],
+    *,
+    now_fn: "Any" = time.monotonic,
+) -> Optional[str]:
+    """`_run_git_ok`, called in a loop under `_GIT_RETRY_ATTEMPTS`'s bounded,
+    uniform retry budget — see that constant's own docstring for why this
+    layer exists, why it is the only one, and why it does not classify
+    failures. Loops over `_run_git_ok` itself (not a second inline rc==0
+    check against `_spawn_git`) so a future change to `_run_git_ok`
+    (logging, stderr capture, a stdout transform) reaches this path
+    automatically rather than needing a second edit.
+
+    `_GIT_RETRY_DEADLINE_SECONDS` bounds the overall wall-clock spent
+    STARTING attempts — checked before every attempt after the first, so a
+    retry whose remaining budget cannot fit another attempt never starts
+    one; see that constant's own docstring for why an attempt already in
+    flight is not itself cut short. `now_fn` is injectable (defaults to
+    `time.monotonic`) so the deadline is testable without a real wait.
+
+    Returns `None` (same contract as `_run_git_ok`) once the attempt budget
+    or the deadline is exhausted, whichever comes first — the caller's
+    existing fail-closed `raise PeerAttributionUnavailable` on a `None`
+    result is unchanged."""
+    deadline = now_fn() + _GIT_RETRY_DEADLINE_SECONDS
+    for attempt in range(_GIT_RETRY_ATTEMPTS):
+        if attempt > 0 and now_fn() >= deadline:
+            break
+        result = _run_git_ok(repo_root, args)
+        if result is not None:
+            return result
+        if attempt < _GIT_RETRY_ATTEMPTS - 1:
+            time.sleep(_GIT_RETRY_BACKOFF_SECONDS[attempt])
+    return None
+
+
+class PeerAttributionUnavailable(RuntimeError):
+    """Raised by `_committed_paths_for_sids` when EITHER backing git spawn
+    (the bulk trailer walk, or any chunk of the batched touched-paths walk)
+    fails. Deliberately NOT swallowed to an empty-set result the way the
+    pre-batching per-sha loop degraded — an empty peer-exclusion set reads
+    to every caller as "no peer owns any of these paths", which is exactly
+    the worst-outcome class `resolve_known_concurrent_paths` exists to
+    prevent (a peer's uncommitted work silently swept into this session's
+    commit). Same fail-closed precedent as `session_attribution.
+    GitLogFailed` (which this wraps for the trailer-walk case) and
+    `coverage.py`'s `_bulk_trailer_lookup`'s "never a partial map" contract
+    (which this mirrors for the chunked touched-paths case: ANY chunk
+    failure invalidates the whole union rather than returning a partial
+    one). Left uncaught, this propagates out of `resolve_known_concurrent_
+    paths` through `directives_commit_tail`'s callers in `__init__.py`
+    (none of which currently wrap this call in a try/except) — a loud
+    failure of the whole ceremony pass is the correct fail-closed outcome
+    here, not a quiet empty exclusion set that lets the commit proceed
+    wrong.
+    """
+
+
+def _chunked_committed_paths(
+    repo_root: Path, all_shas: "list[str]"
+) -> "Dict[str, Set[str]]":
+    """Spawn 2 of `_committed_paths_for_sids`, chunked at
+    `_COMMITTED_PATHS_CHUNK` shas per `git log --no-walk -c --name-only`
+    call (never one call per sha — see
+    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`, the
+    standing guard this must not re-trip). Returns {sha: touched_paths},
+    the union across every chunk. Raises `PeerAttributionUnavailable` on
+    the FIRST chunk that STILL fails after `_run_git_ok_retrying`'s bounded
+    retry budget is exhausted — matches `coverage.py`'s `_bulk_trailer_
+    lookup`'s "never a partial map" posture; a partial union here would
+    silently under-report a peer's touched paths for whichever shas fell in
+    the failed chunk, which is the exact fail-open outcome this function
+    exists to close. The retry layer (see `_GIT_RETRY_ATTEMPTS`'s own
+    docstring) absorbs routine transient lock contention from a concurrent
+    peer's git operation before this fail-closed raise ever fires — it does
+    not weaken the raise itself.
+    """
+    touched_by_sha: "Dict[str, Set[str]]" = {}
+    for i in range(0, len(all_shas), _COMMITTED_PATHS_CHUNK):
+        chunk = all_shas[i : i + _COMMITTED_PATHS_CHUNK]
+        touched_out = _run_git_ok_retrying(
+            repo_root,
+            ["log", "--no-walk", "-c", f"--format={_COMMIT_HEADER_SENTINEL}%H", "--name-only", *chunk],
+        )
+        if touched_out is None:
+            raise PeerAttributionUnavailable(
+                f"git log --no-walk -c --name-only failed for a {len(chunk)}-sha chunk "
+                f"({i}:{i + len(chunk)} of {len(all_shas)} total) while resolving peer-"
+                "committed paths — refusing to return a partial/empty union."
+            )
+        current_sha: Optional[str] = None
         for line in touched_out.splitlines():
-            line = line.strip()
-            if line:
-                paths.add(line)
-    return paths
+            if line.startswith(_COMMIT_HEADER_SENTINEL):
+                current_sha = line[len(_COMMIT_HEADER_SENTINEL):].strip()
+                touched_by_sha.setdefault(current_sha, set())
+            elif current_sha is not None and line.strip():
+                touched_by_sha[current_sha].add(line.strip())
+    return touched_by_sha
+
+
+def _committed_paths_for_sids(
+    repo_root: Path, sid_to_start: "Dict[str, datetime]"
+) -> "Dict[str, Set[str]]":
+    """The batched replacement for the former per-sha loop: for EVERY sid in
+    `sid_to_start`, returns the set of paths touched by ITS OWN commits since
+    ITS OWN session start — computed with exactly TWO `git` spawns TOTAL,
+    independent of both peer count and commit count (AC1,
+    docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-tail.md).
+
+    Union-window-once idiom (`bulk_trailer_session_map`'s own docstring):
+    rather than deriving one `--since=` window per sid, this walks the
+    window since the EARLIEST sid's start ONCE, then attributes per sid
+    afterward by in-memory set math — the windows overlap almost completely
+    between peers, so re-deriving per sid was most of the original waste.
+
+    Spawn 1 — `session_attribution.bulk_trailer_session_map(...,
+    include_merges=True)`: one `git log --format=%H%x1f<trailer>` walk over
+    `--since=<earliest>`, WITH merge commits included. `include_merges=True`
+    is load-bearing here, not cosmetic — the default (`False`, `--no-merges`)
+    is what C18 shipped and got reverted for (docs/plans/2026-08-07-n-plus-
+    one-git-spawn-class-and-amplification-gate.md): a peer's merge commit's
+    touched paths must still be attributed (AC2), and `--no-merges` would
+    silently drop them, converting a peer's real contribution into a UNDER-
+    exclusion of `resolve_known_concurrent_paths`'s own exclusion set — the
+    opposite of that function's own stated correctness bar. Each returned
+    trailer value is additionally UUID-shape-validated against
+    `_SESSION_ID_UUID_RE` — `bulk_trailer_session_map` itself does not do
+    this (it is a plain `git log` trailer scan; the shape guard is this call
+    site's own responsibility, same fail-closed posture the former per-sha
+    `archive_stamp._commit_session_id` call provided).
+
+    Spawn 2 — one or more (never per-sha) `git log --no-walk -c --name-only
+    <shas>` calls, CHUNKED at `_COMMITTED_PATHS_CHUNK` shas per call (see
+    `_chunked_committed_paths`) over the UNION of every sha attributed to
+    any requested sid, results unioned across chunks.
+
+    A sid with no resolvable start time is simply absent from `sid_to_start`
+    (callers filter it out before calling — see `resolve_known_concurrent_
+    paths`'s own `sid_to_start` build loop); a sid present here but with
+    zero attributed commits maps to an empty set, never omitted from the
+    returned dict.
+
+    FAIL-CLOSED, not fail-open (Review: code-reviewer P1/P2 — this
+    deliberately reverses the former per-sha loop's fail-open posture): a
+    `GitLogFailed` from the bulk trailer walk, or any chunk failure in the
+    batched touched-paths walk, raises `PeerAttributionUnavailable` rather
+    than degrading to an empty result. An empty peer-exclusion set is
+    indistinguishable, to every caller, from "confirmed no peer owns
+    anything here" — the exact over-optimistic read `resolve_known_
+    concurrent_paths`'s own CORRECTNESS BAR forbids. See `session_
+    attribution.GitLogFailed`'s own docstring for the precedent this
+    mirrors one layer down.
+    """
+    result: "Dict[str, Set[str]]" = {sid: set() for sid in sid_to_start}
+    if not sid_to_start:
+        return result
+
+    from coordinator_core.session_attribution import GitLogFailed, bulk_trailer_session_map
+
+    earliest = min(sid_to_start.values()).astimezone(timezone.utc).isoformat()
+
+    def _run(args: list, cwd: Optional[str]):
+        # `args` always arrives as `["git", <subcommand>, ...]` — the
+        # `GitRunner` shape `bulk_trailer_session_map` calls with. Re-spliced
+        # through `-C <cwd>` (via `_spawn_git`) to match this module's other
+        # subprocess call sites (`_run_git_ok`) rather than relying on `cwd=`
+        # kwarg placement.
+        return _spawn_git(cwd, args[1:])
+
+    try:
+        trailer_map = bulk_trailer_session_map(
+            f"--since={earliest}", str(repo_root), _run, include_merges=True
+        )
+    except GitLogFailed as exc:
+        raise PeerAttributionUnavailable(
+            f"bulk_trailer_session_map failed while resolving peer-committed paths "
+            f"for {len(sid_to_start)} sid(s): {exc}"
+        ) from exc
+
+    wanted_sids = set(sid_to_start)
+    shas_by_sid: "Dict[str, list]" = {}
+    for sha, trailer in trailer_map.items():
+        if trailer not in wanted_sids:
+            continue
+        if not _SESSION_ID_UUID_RE.match(trailer):
+            continue
+        shas_by_sid.setdefault(trailer, []).append(sha)
+
+    all_shas = [sha for shas in shas_by_sid.values() for sha in shas]
+    if not all_shas:
+        return result
+
+    # `-c` (combined diff) is load-bearing for a MERGE sha: plain `git log
+    # --name-only` prints NOTHING for a merge commit by default (verified
+    # empirically — a bare `--name-only` walk silently drops every merge's
+    # touched paths, which for THIS function would reproduce the exact
+    # under-exclusion C18 was reverted for one layer down). `-c` reproduces
+    # `git show`'s own default combined-diff behaviour (the former per-sha
+    # call this replaces), listing paths that differ from every parent — the
+    # same set `git show --name-only` reported for a single sha. A non-merge
+    # sha's `-c` output is identical to its plain `--name-only` output.
+    #
+    # CHUNKED (never one call per sha, never a single unchunked argv) — see
+    # `_chunked_committed_paths` and `_COMMITTED_PATHS_CHUNK`.
+    touched_by_sha = _chunked_committed_paths(repo_root, all_shas)
+
+    for sid, shas in shas_by_sid.items():
+        paths: Set[str] = set()
+        for sha in shas:
+            paths.update(touched_by_sha.get(sha, set()))
+        result[sid] = paths
+    return result
 
 
 def _enumerate_peer_session_ids(
@@ -359,7 +679,7 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
     expanded-per-file `git status --porcelain` shapes — see
     `_peer_subagent_share_paths`), and (2) every path touched by a commit
     carrying THAT peer's `Session-Id` trailer, landed since that peer's own
-    session start (see `_peer_committed_paths`).
+    session start (see `_committed_paths_for_sids`).
 
     CORRECTNESS BAR (this function's whole point — read before changing):
       - `this_session_id` is NEVER treated as a peer. If it is falsy, this
@@ -397,6 +717,17 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
         case and returns `frozenset()` unchanged — session dirs are
         created eagerly at session start, so a clean empty walk really
         does mean "no peers right now", not "I couldn't tell".
+      - Fails LOUD, never empty-and-confident, when the commit-attribution
+        half specifically cannot be resolved: `_committed_paths_for_sids`
+        (via `_committed_paths_for_sids`'s union call below) raises
+        `PeerAttributionUnavailable` on a git failure rather than degrading
+        to an empty per-peer set, and this function does NOT catch it —
+        the exception propagates to the caller uncaught. A peer-exclusion
+        set this function could not actually compute must not be reported
+        as "confirmed empty"; every current caller in `__init__.py` has no
+        try/except around this call, so an unresolvable commit-attribution
+        read fails the whole ceremony pass loudly rather than silently
+        committing over a live peer's work.
     """
     if not this_session_id:
         return frozenset()
@@ -409,11 +740,24 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
             result.update(_peer_subagent_share_paths(repo_root, sid))
         return frozenset(result)
 
-    for sid in peer_sids:
-        if not _session_live_conservative(repo_root, sid):
-            continue
+    live_sids = [sid for sid in peer_sids if _session_live_conservative(repo_root, sid)]
+    for sid in live_sids:
         result.update(_peer_subagent_share_paths(repo_root, sid))
-        result.update(_peer_committed_paths(repo_root, sid))
+
+    # Union-window-once: resolve every live peer's own start time (no git
+    # spawn scaling concern here — resolve_session_start_time is already
+    # called once per peer, unchanged from before this fix), then hand the
+    # WHOLE set to _committed_paths_for_sids in a single call rather than
+    # calling it once per peer — see that function's own docstring for why
+    # this is not the same cost.
+    sid_to_start: "dict[str, Any]" = {}
+    for sid in live_sids:
+        start = _memo_lifecycle.resolve_session_start_time(repo_root, sid)
+        if start is not None:
+            sid_to_start[sid] = start
+    for paths in _committed_paths_for_sids(repo_root, sid_to_start).values():
+        result.update(paths)
+
     return frozenset(result)
 
 
@@ -448,7 +792,25 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
 )
 
 
-def _review_fields_present(review: dict[str, Any]) -> bool:
+def _review_fields_present(review: Any) -> bool:
+    """Whether a SINGLE `review` dict carries all five required fields,
+    non-empty. Used two ways: (1) directly, on `decisions["review"]` when it
+    is the pre-existing single-`dict` shape (`build_close_tail_args_
+    directive`'s scalar `--review-*` branch, byte-identical to today); (2)
+    per-ENTRY, when `decisions["review"]` is the additive `list[dict]`
+    shape (partitioned-review fix, `workstream_complete.build_write_trail_
+    directives`) — `build_close_tail_args_directive`'s list branch calls
+    this once per list entry to decide which entries qualify for a
+    `--review-slice` token, mirroring `build_write_trail_directives`'s own
+    "an incomplete entry contributes nothing, silently" convention rather
+    than forwarding a partial slice for `wsc-tail.py` to reject.
+
+    Returns `False` for any non-`dict` input (a bare falsy `review`, or a
+    list entry that is itself not a dict) — this function only ever judges
+    ONE candidate dict at a time; a caller holding a `list` must iterate
+    and call this per element, never pass the list itself."""
+    if not isinstance(review, dict):
+        return False
     return all(review.get(k) not in (None, "") for k in _REVIEW_REQUIRED_FIELDS)
 
 
@@ -526,6 +888,24 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     diagnostic via `_warn_unrecognized_review_keys` rather than a silent
     drop — a genuinely absent `review` dict stays quiet, per that helper's
     own docstring.
+
+    `decisions["review"]` may be a single `dict` (unchanged: the scalar
+    `--review-*` flags above, byte-identical to before the partitioned-
+    review fix) OR a `list[dict]` (additive — same shape `build_write_
+    trail_directives` reads for the standalone directive path): one
+    `--review-slice <json>` token per list entry that passes `_review_
+    fields_present`, in original list order, via `wsc-tail.py`'s
+    repeatable `--review-slice` flag (`docs/plans/...` — see that CLI's
+    own module docstring for the JSON shape and per-slice foreign-session
+    isolation this now carries through the commit-tail path). An entry
+    failing `_review_fields_present` contributes NO token — silently
+    dropped, mirroring `build_write_trail_directives`'s "an incomplete
+    entry contributes nothing" convention rather than forwarding a partial
+    slice for `wsc-tail.py` to reject. The scalar five-flag form and the
+    repeatable `--review-slice` form are mutually exclusive at every layer
+    downstream (`wsc-close.py tail-args`, `wsc-tail.py`) — `decisions["review"]`
+    being a `dict` XOR a `list` at this call site is what keeps that
+    exclusivity automatic; this function never emits both.
     """
     _warn_unrecognized_review_keys(decisions)
     args: list[str] = ["tail-args"]
@@ -534,7 +914,15 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     if decisions.get(_KEY_KEPT_ENTRIES):
         args += ["--kept-entries", *[str(p) for p in decisions[_KEY_KEPT_ENTRIES]]]
     review = decisions.get(_KEY_REVIEW) or {}
-    if _review_fields_present(review):
+    if isinstance(review, list) and _COMMIT_TAIL_ACCEPTS_REVIEW_SLICES:
+        for entry in review:
+            if not _review_fields_present(entry):
+                continue
+            payload = {k: str(entry[k]) for k in _REVIEW_REQUIRED_FIELDS}
+            if entry.get("scope_kind"):
+                payload["scope_kind"] = str(entry["scope_kind"])
+            args += ["--review-slice", json.dumps(payload, sort_keys=True)]
+    elif _review_fields_present(review):
         args += [
             "--review-sha-range", str(review["sha_range"]),
             "--review-reviewer", str(review["reviewer"]),

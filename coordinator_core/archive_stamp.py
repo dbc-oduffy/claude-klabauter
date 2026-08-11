@@ -1753,6 +1753,7 @@ _DISPOSITION_FLAGS = {
     "--actioned-note": "actioned_note",
     "--distill-fate": "distill_fate",
     "--in-repo-capture": "in_repo_capture",
+    "--superseded-by": "superseded_by",
 }
 
 # Boolean (no-value) disposition flags — distinct from _DISPOSITION_FLAGS above,
@@ -1869,6 +1870,28 @@ def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool =
     # (non-git memo dir -> no claim infrastructure possible -> PROCEED)
 
     disposition_params = _parse_disposition_args(disposition_args)
+
+    # --superseded-by and --decision/--actioned-note are alternative terminal
+    # shapes (status: superseded vs status: actioned) — accepting two
+    # reintroduces the ambiguity the dedicated pair removes. Refused here,
+    # BEFORE any op call, the same discipline memo_transition.py's own
+    # "--decision and --actioned-note are mutually exclusive" check applies
+    # to its own pair (_validate_action_disposition) — no write occurs.
+    if disposition_params.get("superseded_by") and (
+        disposition_params.get("decision") or disposition_params.get("actioned_note")
+    ):
+        print(
+            "cs_action_memo: --superseded-by and --decision/--actioned-note are "
+            "mutually exclusive — alternative terminal shapes, not combinable",
+            file=sys.stderr,
+        )
+        refuse_result = {
+            "exit_code": 1,
+            "applied": False,
+            "error": "--superseded-by and --decision/--actioned-note are mutually exclusive",
+        }
+        return refuse_result if return_result else refuse_result["exit_code"]
+
     result = _call_memo_transition(memo_path, {"verb": "action", **disposition_params})
     rc = int(result.get("exit_code", 1))
     if rc != 0:

@@ -573,6 +573,230 @@ def test_stamp_superseded_refuses_terminal_source_status(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
+# stamp-implemented — AC-table-open-rows advisory warning (cross-repo memo
+# 2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-reading-
+# the-ac-table.md)
+# ---------------------------------------------------------------------------
+
+_AC_OPEN_TABLE = (
+    "## Acceptance Criteria\n\n"
+    "| ID | Criterion | Status |\n"
+    "| --- | --- | --- |\n"
+    "| AC-1 | Thing one works | done |\n"
+    "| AC-2 | Thing two works | pending |\n"
+)
+
+_AC_RESOLVED_TABLE = (
+    "## Acceptance Criteria\n\n"
+    "| ID | Criterion | Status |\n"
+    "| --- | --- | --- |\n"
+    "| AC-1 | Thing one works | done |\n"
+    "| AC-2 | Thing two works | ✅ |\n"
+)
+
+
+def test_stamp_implemented_warns_on_open_ac_rows(tmp_path, capsys):
+    body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "AC-2" in err
+    assert "AC-1" not in err.split("WARNING")[1].split("\n")[0].replace("AC-2", "")
+
+
+def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path, capsys):
+    body = f"---\nstatus: draft\n---\n\n{_AC_RESOLVED_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" not in err
+
+
+def test_stamp_implemented_silent_when_no_ac_heading(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" not in err
+
+
+def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path, capsys):
+    body = "---\nstatus: draft\n---\n\n## Acceptance Criteria\n\nJust prose, no table.\n"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" not in err
+
+
+def test_stamp_implemented_ac_warning_never_changes_exit_code_or_write(tmp_path, capsys):
+    body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "status \"draft\" → implemented" in captured.out
+    split = split_frontmatter(p.read_text(encoding="utf-8"))
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "status") == "implemented"
+
+
+def test_stamp_implemented_no_ac_warning_on_terminal_no_op(tmp_path, capsys):
+    body = f"---\nstatus: implemented\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" not in err
+
+
+# ---------------------------------------------------------------------------
+# main() — --by rejected on stamp-implemented
+# ---------------------------------------------------------------------------
+
+
+def test_stamp_implemented_rejects_by_flag(tmp_path, capsys):
+    original = "---\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-implemented", "--plan", str(p), "--by", "some-session-id"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "does not accept --by" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_superseded_by_flag_still_works(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
+    successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
+    rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f'status "draft" → superseded (by {successor})' in out
+
+
+# ---------------------------------------------------------------------------
+# stamp-implemented — --override-reason (completeness-verdict override,
+# cross-repo memo 2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-
+# without-reading-the-ac-table.md)
+# ---------------------------------------------------------------------------
+
+
+def test_override_reason_writes_canonical_fields(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "override-sid")
+    body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(
+        ["stamp-implemented", "--plan", str(p), "--override-reason", "PM ratified partial close per memo X"]
+    )
+    assert rc == 0
+    text = p.read_text(encoding="utf-8")
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "status") == "implemented"
+    assert read_fm_field_unquoted(split.fm_text, "status_override_by") == "override-sid"
+    assert (
+        read_fm_field_unquoted(split.fm_text, "status_override_reason")
+        == "PM ratified partial close per memo X"
+    )
+    assert read_fm_field_unquoted(split.fm_text, "status_override_at") is not None
+    out = capsys.readouterr().out
+    assert "completeness verdict OVERRIDDEN" in out
+    assert "override-sid" in out
+    assert "PM ratified partial close per memo X" in out
+
+
+def test_override_reason_still_refused_against_live_foreign_holder(tmp_path, capsys, monkeypatch):
+    plan_body = (
+        '---\ntitle: "Peer plan"\nstatus: approved\n'
+        'deliverable_id: "dlv-override-peer-abc123"\n---\n\n## Body\n'
+    )
+    handoff_body = (
+        '---\ntitle: "Peer handoff"\nstatus: claimed\nkind: session-handoff\n'
+        "deployment_state: in_flight\nclaimed_by: peer-sid-live\n"
+        'deliverable_id: "dlv-override-peer-abc123"\n---\n\n## Body\n'
+    )
+    (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    p = _write(tmp_path, "docs/plans/peer-plan.md", plan_body)
+    _write(tmp_path, "state/handoffs/peer-handoff.md", handoff_body)
+
+    monkeypatch.setattr(
+        "coordinator_core.session.liveness.session_live", lambda sid, cwd=None: sid == "peer-sid-live"
+    )
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+
+    rc = main(
+        ["stamp-implemented", "--plan", str(p), "--override-reason", "trying to force it anyway"]
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "refusing to stamp implemented" in err
+    text = p.read_text(encoding="utf-8")
+    assert "status: approved" in text
+    assert "status_override_by" not in text
+
+
+def test_override_reason_required_non_empty(tmp_path, capsys):
+    original = "---\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-implemented", "--plan", str(p), "--override-reason", "   "])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "non-empty reason" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_implemented_without_override_flag_unchanged(tmp_path, capsys):
+    body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "OVERRIDDEN" not in captured.out
+    text = p.read_text(encoding="utf-8")
+    assert "status_override_by" not in text
+    assert "status_override_reason" not in text
+    assert "status_override_at" not in text
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "status") == "implemented"
+
+
+def test_override_reason_ac_warning_still_fires(tmp_path, capsys):
+    body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(
+        ["stamp-implemented", "--plan", str(p), "--override-reason", "shipping partial on purpose"]
+    )
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "AC-2" in err
+
+
+def test_stamp_superseded_rejects_override_reason_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
+    successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
+    rc = main(
+        [
+            "stamp-superseded",
+            "--plan",
+            str(p),
+            "--by",
+            str(successor),
+            "--override-reason",
+            "n/a",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "does not accept --override-reason" in err
+
+
+# ---------------------------------------------------------------------------
 # Production-caller coverage for the terminal-state cascade (this session,
 # 2026-08-10): `EndToEndSizingCascadeClosesTest` in coordinator/bin/tests/
 # test_coordinator_doc_new_sizing_object_gate.py proves the cascade

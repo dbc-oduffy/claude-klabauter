@@ -195,6 +195,25 @@ class TestTailSubtractionByIdentity:
         assert matched.tail_bytes == len(tail.encode("utf-8"))
 
 
+class TestDiscoverableEnvVarsStaysDerived:
+    """Regression for the 2026-08-11 incident where `_OVERRIDE_ENV_VAR_RE`
+    was an independent, hand-transcribed `KEY=1` pattern that silently
+    decoupled from `operator_override_note`'s reshape (commit ba3bf8a98,
+    which removed the assignment form entirely). Asserts recovery works
+    off a LIVE render of the builder on both branches -- if the regex is
+    ever reverted to transcribing the builder's shape by hand instead of
+    deriving it, this must fail.
+    """
+
+    def test_recovers_env_var_from_flag_shaped_render(self):
+        tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
+        assert msz._discoverable_env_vars(tail) == ["COORDINATOR_ALLOW_TEST_GUARD"]
+
+    def test_recovers_env_var_from_reason_placeholder_shaped_render(self):
+        tail = operator_override_note("COORDINATOR_QUEUE_PUNT", reason_placeholder="not now, doing X")
+        assert msz._discoverable_env_vars(tail) == ["COORDINATOR_QUEUE_PUNT"]
+
+
 class TestBandResolution:
     def test_guard_band_enum_resolves_to_its_value(self):
         result = msz.measure_envelope(None, band=GuardBand.ADVISORY_REWRITE)

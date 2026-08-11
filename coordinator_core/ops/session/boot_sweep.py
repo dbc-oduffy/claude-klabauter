@@ -222,6 +222,9 @@ from coordinator_core.ops.handoff_archive_transition import (
 )
 from coordinator_core.ops.priority_drain import drain as _drain_priority_intents
 from coordinator_core.ops.tracker.fold_observed_set import run_fold_observed_set
+from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
+from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
 
@@ -815,6 +818,35 @@ def _append_warn_marker(
         )
 
 
+async def _release_claims_after_commit(worktree_root: Path, paths: List[str]) -> None:
+    """Post-commit claim release (C3, AC1) for a boot_sweep commit site.
+
+    Offloaded via `asyncio.to_thread` — `release_committed_claims` is
+    synchronous and spawns a `git status --porcelain` subprocess; this
+    function's callers all run on `boot_sweep`'s single shared event loop
+    alongside other session-boot async work, so a naive blocking call here
+    is not the "already-serialized, nothing else in flight" shape that
+    justifies calling synchronously in place (contrast `_common.py`'s
+    archive_and_commit/rm_and_commit, which ARE that shape). Fail-safe:
+    any exception here must never fail a commit that already landed.
+    """
+    if not paths:
+        return
+    try:
+        sid = session_core.resolve_session_id(str(worktree_root))
+        rel_paths = [rel_id(Path(p), worktree_root) for p in paths]
+        await asyncio.to_thread(
+            session_scope.release_committed_claims,
+            sid, rel_paths, str(worktree_root),
+        )
+    except Exception:
+        _LOG.debug(
+            "boot_sweep: release_committed_claims failed post-commit; "
+            "claim(s) retained",
+            exc_info=True,
+        )
+
+
 async def _commit_consumed_metadata(
     state_worktree: Path,
     git_root_worktree: Path,
@@ -825,10 +857,13 @@ async def _commit_consumed_metadata(
     """Commit deployment_state / shipped_in modifications and orphan-sweep-notes.md.
 
     After _handle_act_handoffs commits the git-mv via the private index,
-    archive_and_commit's main-index resync stages the CURRENT DISK CONTENT of
-    each archive-destination file in the main index
-    (git update-index --add -- dst reads from disk, which has the modifications
-    we applied before the git-mv).  This function:
+    archive_and_commit's main-index resync stages each archive-destination file
+    from its HEAD blob (`git update-index --add --cacheinfo <mode> <sha> dst`,
+    2026-08-05 — it no longer reads the worktree; the pre-cacheinfo form did,
+    and this docstring described that older shape).  This function does NOT
+    depend on which of the two the resync used: step 2's explicit-pathspec
+    commit picks up any unstaged working-tree change to dst regardless, which is
+    why the modifications applied before the git-mv still land.  This function:
       1. Stages tasks/orphan-sweep-notes.md in GIT_ROOT (written after the act result).
       2. Commits the already-staged archive modifications and notes.
 
@@ -971,6 +1006,8 @@ async def _commit_consumed_metadata(
                     "(may be nothing staged, or git error): %s",
                     err,
                 )
+            else:
+                await _release_claims_after_commit(git_root_worktree, commit_paths)
         except OSError as exc:
             _LOG.debug("boot_sweep: metadata commit failed: %s", exc)
 
@@ -999,6 +1036,8 @@ async def _commit_consumed_metadata(
                         "(may be nothing staged, or git error): %s",
                         err,
                     )
+                else:
+                    await _release_claims_after_commit(state_worktree, list(dst_paths))
             except OSError as exc:
                 _LOG.debug("boot_sweep: STATE-repo metadata commit failed: %s", exc)
 
@@ -1024,6 +1063,10 @@ async def _commit_consumed_metadata(
                         "boot_sweep: GIT_ROOT orphan-notes commit returned non-zero "
                         "(notes remain as dirty working-tree file, non-catastrophic): %s",
                         err,
+                    )
+                else:
+                    await _release_claims_after_commit(
+                        git_root_worktree, [str(notes_path)]
                     )
             except OSError as exc:
                 _LOG.debug(

@@ -68,6 +68,54 @@ session_id, or unexpected exception yields no sidecar path -- this module
 must never brick a spawn. Mirrors provision_report.py's fail-open contract
 verbatim.
 
+AC7 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md
+§ C4) -- `subagent-sandbox-policy.yaml` carries FOUR exact-string catering
+maps keyed on `subagent_type`, all sharing this same fail-open lookup-miss
+posture. This module closes the miss for exactly the one map with a
+Claude-klabauter-side engine consumer it can reach directly:
+  - `report_sidecar` (used above) -- a miss's SILENCE is closed by
+    `_log_unenumerated_sidecar_miss`: an unenumerated-type miss now logs a
+    stderr diagnostic (never flips the fail-open verdict), while an
+    on-roster-but-not-opted-in miss (e.g. `Explore`) stays silent exactly as
+    before.
+  - `report_type_map` -- additive on top of `report_sidecar`; selects which
+    `provision_report --type` template an eligible type gets. Moot for an
+    unenumerated type once `report_sidecar` itself misses (no sidecar to
+    template) -- no separate fix needed here.
+  - `contract_blocks` -- resolves which snippet blocks (`do-not-commit`,
+    `guard-encounter-preamble`, `quota-self-detect-preamble`) get injected
+    into a dispatch prompt; a miss means NO injection at all, the sharpest
+    instance of "less governed AND less instructed" this plan names. This
+    map lives in example-doctrine-repo-owned `coordinator/subagent-sandbox-policy.yaml` and is
+    read by a example-doctrine-repo-side doctrine hook on the Agent-tool spawn path -- outside
+    this module's write surface. C1's `PreToolUse(Agent)` deny already
+    blocks the spawn before this lookup runs, so with C1 in place this miss
+    is unreachable in practice; the actual fix (closing the miss so an
+    unenumerated type gets SOME contract-block set, or is denied before
+    injection is consulted) stays example-doctrine-repo's to make.
+    RULED 2026-08-10 (example-doctrine-repo `DR-151`, commit `8592f0592`): the fail-open miss
+    STAYS -- these maps are catering, not governance, so failing closed
+    would either veto an EM's dispatch or force catering nobody chose. The
+    governance half closes at C1's roster deny guard instead. The same pass
+    fixed a real example-doctrine-repo-side defect: `enforce-agent-dispatch-mode.py` resolved
+    `contract_blocks` INSIDE its `report_sidecar`-eligibility branch,
+    collapsing a decoupling their own policy header mandates -- so
+    `coordinator:atlassian-worker` / `coordinator:drive-worker` silently got
+    no blocks. This module's half already honours the split (see
+    provision_report.py's independent `if`s + per-leg try/except); no
+    claude-klabauter-side change is owed.
+  - `dispatch_tier` -- classifies `exploration` vs `review-execution` tier.
+    CORRECTED 2026-08-10 (example-doctrine-repo reply to the C6 memo): this map has NO runtime
+    consumer at all -- not a documented-fallback gap, and not downstream of
+    anything. Its only readers are `coordinator/tests/test_dispatch_tier.py`
+    and prose, and those tests already enforce total coverage of every
+    declared agent. There is no runtime lookup, so there is no runtime miss;
+    it is out of the fail-open question entirely. Note also:
+    `coordinator/agents/agent-effort-registry.yaml` (model/effort policy)
+    has NO runtime consumer at all as of this plan, so there is no
+    model/effort policy for an invented agent type by construction -- this
+    bounds what this plan can fix.
+
 Negative-spec: this module does NOT duplicate the harness's raw JSONL
 transcript (AC-10) -- the container it writes is the CURATED decision-object
 record (completion_status + divergence_from_plan + tell_the_EM), never a
@@ -96,6 +144,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.session import scope as session_scope
 from coordinator_core.subagent_sandbox.engine import (
     load_policy,
@@ -115,6 +164,44 @@ def _yaml_quote(value: str) -> str:
     """
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _log_unenumerated_sidecar_miss(agent_type: str, subagent_type: str) -> None:
+    """AC7 -- close the `report_sidecar` lookup-miss's SILENCE, not its
+    fail-open verdict (defence in depth per C1: an unenumerated type cannot
+    reach this spawn-time call at all once C1's `PreToolUse(Agent)` deny is
+    wired, so this is a diagnostic net for the gap before that wiring lands
+    / any bypass path, never a new decision branch). Distinguishes the two
+    reasons a type can fail `report_sidecar` membership:
+
+      - on the union-of-three roster (``resolve_roster``, C1) but simply not
+        opted into ``report_sidecar`` -- an ordinary, EXPECTED miss (e.g.
+        ``Explore``/``Plan`` are legitimate dispatch kinds with no sidecar
+        need) -- stays silent, unchanged from before this chunk.
+      - NOT on the roster at all -- the "less governed AND less instructed"
+        shape this plan's Problem section names -- gets a stderr note so the
+        miss is observable instead of indistinguishable from the expected
+        case. Never flips the fail-open return value above; matches this
+        module's "must never brick a spawn" contract verbatim.
+
+    A `resolve_roster` load failure (peer-repo hiccup) degrades to today's
+    silence, same posture C3 already took for the plan-body guards -- this
+    diagnostic is not important enough to newly fail loud on a roster read
+    error.
+    """
+    roster, roster_error = resolve_roster()
+    if roster is None:
+        return
+    if agent_type in roster or subagent_type in roster:
+        return
+    print(
+        "provision: subagent_sidecar miss for unenumerated type "
+        f"agent_type={agent_type!r} subagent_type={subagent_type!r} -- not on "
+        "the roster (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-"
+        "dispatch.md); C1's PreToolUse(Agent) deny is the primary fix, this "
+        "is defence-in-depth visibility only, no sidecar provisioned",
+        file=sys.stderr,
+    )
 
 
 def _build_sidecar_text(
@@ -197,6 +284,7 @@ def provision_subagent_sidecar(
 
     is_eligible = agent_type in policy.report_sidecar or subagent_type in policy.report_sidecar
     if not is_eligible:
+        _log_unenumerated_sidecar_miss(agent_type, subagent_type)
         return None
 
     effective_label = agent_type if agent_type in policy.report_sidecar else subagent_type

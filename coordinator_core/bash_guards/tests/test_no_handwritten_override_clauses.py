@@ -51,6 +51,49 @@ brief named explicitly ("a hardcoded list of twelve known-good files is
 not it"). The whole file set is re-derived by `_discover_guard_files()`
 on every run.
 
+SCAN ROOTS (2026-08-10 widening, cross-repo memo
+``2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-reading-
+the-ac-table.md`` item 2) -- this originally scanned ONLY `bash_guards/`,
+so a hand-written unlock/bypass instruction in `write_guards` (this
+package's sibling, also `CLASS`-carrying, also PreToolUse-hook-registered)
+would never trip it -- precisely the drift `annotate_deny`'s one-seam
+design and this gate both exist to prevent. `_discover_guard_files()` now
+walks `bash_guards/` AND `write_guards/`, both non-recursively (each
+package is a flat `*.py` directory, no guard lives in a subpackage), both
+`tests/`/`__pycache__`/`__init__.py`-excluded identically. As of this
+widening, `write_guards/` contributes ZERO live (non-docstring) hits -- its
+~6 `COORDINATOR_OVERRIDE_*=1` mentions are all inside module docstrings
+(narrating an override's existence for a human reader), which the
+docstring-exemption below already covers; this widening is a coverage
+closure, not a fix for a live defect found in that package.
+
+``ops/`` is DELIBERATELY NOT scanned here, despite being named in the
+driving dispatch brief -- surfaced as a judgment call, not silently
+narrowed. Investigation found ~10 live (non-docstring)
+`COORDINATOR_OVERRIDE_*=1`/`COORDINATOR_DISABLE_*=1` sites there
+(`install_publish_repo_precommit_hook.py`, `sync_plugin_wiki.py`,
+`percolate_preflight_scratch_publish.py`, `updatedocs_gates.py`,
+`workweek_reverse_drift_gate.py`, plus two test files), and every one of
+them is a DIFFERENT domain than the one this gate polices: CLI `--help`
+text, an installer emitting another repo's pre-commit-hook SHELL SCRIPT
+body (not a PreToolUse guard message at all), and test assertions/mocks --
+none reachable through `bash_guards.dispatch`/`write_guards.engine`'s
+deny-annotation seam, none a candidate for routing through
+`operator_override_note`. Folding `ops/` in here would mean either (a)
+authoring ~10 individual `_ALLOWLIST` entries for a package this
+dispatch's file-scope does not grant edit access to (`coordinator_core/
+bash_guards/tests/` + `coordinator_core/write_guards/` only -- `ops/`
+itself is out of remit), decided without the deeper per-site read each one
+would need, or (b) leaving the gate permanently red for a class of hit it
+was never designed to police (module docstring's own "COORDINATOR
+substring gate" rationale: flooding the gate with unrelated matches buries
+the real findings). Both are worse than naming the gap. REVISIT: a
+follow-up dispatch WITH `ops/` edit scope should re-run the widened scan
+against `ops/`, and for each hit decide per-site whether it is a
+guard-message analog (route through `operator_override_note`) or a
+different-domain string (name an explicit, commented `_ALLOWLIST` entry) --
+see the executor run-report for this dispatch for the full hit list.
+
 ALLOWLIST -- explicit, named, and currently EMPTY. If a future site has a
 genuine reason to hand-write this pattern (none identified as of this
 dispatch), add a `(relative_path, matched_text)` tuple to `_ALLOWLIST`
@@ -120,6 +163,18 @@ import pytest
 
 _BASH_GUARDS_DIR = Path(__file__).resolve().parent.parent
 
+#: Sibling scan root added by the 2026-08-10 widening -- see module
+#: docstring "SCAN ROOTS". Derived from `_BASH_GUARDS_DIR` (both packages
+#: are siblings under `coordinator_core/`), not hardcoded independently, so
+#: a repo-relocation moves both together.
+_WRITE_GUARDS_DIR = _BASH_GUARDS_DIR.parent / "write_guards"
+
+#: Common ancestor used only to render a package-qualified relative path in
+#: violation reports (e.g. `write_guards/foo.py`) now that more than one
+#: root is scanned -- a bare `_BASH_GUARDS_DIR`-relative path would be
+#: wrong (or raise) for a `_WRITE_GUARDS_DIR` hit.
+_SCAN_ROOTS_BASE = _BASH_GUARDS_DIR.parent
+
 #: The actual fingerprint of a hand-written override clause: the env var
 #: NAME immediately followed by `=1` -- i.e. an instruction to literally set
 #: it, not merely a mention of its name. See module docstring for why a bare
@@ -127,10 +182,44 @@ _BASH_GUARDS_DIR = Path(__file__).resolve().parent.parent
 _VIOLATION_RE = re.compile(r"\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+=1\b")
 
 #: Explicit, named allowlist -- see module docstring "ALLOWLIST". Each entry
-#: is `(relative_path_from_bash_guards_dir, matched_text)`. EMPTY as of this
-#: dispatch: every site found was routed through `operator_override_note`
-#: rather than granted an exception.
-_ALLOWLIST: Set[tuple] = set()
+#: is `(relative_path_from_scan_roots_base, matched_text)` -- package-
+#: qualified as of the 2026-08-10 widening (e.g. `("write_guards/foo.py",
+#: "COORDINATOR_OVERRIDE_FOO=1")`), not bare-filename as when only
+#: `bash_guards/` was scanned. Path is forward-slash-normalized (see the
+#: `rel` computation this compares against) regardless of host OS.
+#:
+#: Two entries as of the 2026-08-10 write_guards widening -- both a
+#: SHADOWED-NAME-AMBIGUITY false positive (module docstring "SHADOWED-NAME
+#: AMBIGUITY"), not a hand-written override clause:
+#:   - `write_guards/nudge_improvement_queue_write.py`: a local `hint`
+#:     is assigned `""`, `_TRIVIAL_JUSTIFICATION_HINT`, or
+#:     `_TRIVIAL_PUNT_HINT` across three branches of `check()`. The last of
+#:     those legitimately narrates the operator-only env var's NAME in
+#:     prose ("[hook] COORDINATOR_QUEUE_PUNT was also set but its value was
+#:     trivial ...") -- a mention, never a `NAME=1` instruction, and the
+#:     three values genuinely differ, so the detector's coarse
+#:     COORDINATOR-substring gate (deliberately checked BEFORE the precise
+#:     `=1` regex, per its own docstring) flags the reused name as
+#:     ambiguous. Read in full: no instruction is present at either
+#:     resolution.
+#:   - `write_guards/nudge_prose_queue_append.py`: the identical shape --
+#:     `hint`/`reason` locals reused across branches of the same
+#:     content-escape codepath, one branch's `hint` built via
+#:     `_TRIVIAL_HINT.format(env_var=_ESCAPE_HATCH_ENV_VAR)`, same
+#:     "narrates the name, issues no instruction" verdict on inspection.
+#: Neither site is routed through `operator_override_note` for the SAME
+#: reason `is_trivial_reason`'s own docstring gives for
+#: `COORDINATOR_QUEUE_PUNT`/`COORDINATOR_BATON_BODY_PUNT`: these are
+#: reason-shaped, human-authored-content escape hatches, not the flag-
+#: shaped `VAR=1` pattern this whole gate exists to police -- renaming
+#: either `hint` or `reason` purely to silence this detector, with no
+#: functional change, was rejected as a worse fix than naming the
+#: exception here (module docstring NEGATIVE SPEC: "do not... widen
+#: `_VIOLATION_RE`" -- true in spirit for a rename-to-dodge too).
+_ALLOWLIST: Set[tuple] = {
+    ("write_guards/nudge_improvement_queue_write.py", "<ambiguous-shadowed-binding>"),
+    ("write_guards/nudge_prose_queue_append.py", "<ambiguous-shadowed-binding>"),
+}
 
 #: The substring that marks a bound string value as "plausibly an env-var-
 #: name constant" for the shadowed-name ambiguity check -- see module
@@ -490,14 +579,20 @@ _COMPOSITE_NODE_TYPES = (ast.JoinedStr, ast.BinOp, ast.Call, ast.Name)
 
 
 def _discover_guard_files() -> List[Path]:
-    """Every `*.py` file directly under `coordinator_core/bash_guards/`
-    (never `tests/`, never `__pycache__`) -- discovered by directory
-    listing, not a hardcoded name list, so a file added tomorrow is
-    included the next time this runs."""
-    return sorted(
-        p for p in _BASH_GUARDS_DIR.glob("*.py")
-        if p.name != "__init__.py"
-    )
+    """Every `*.py` file directly under each root in `_SCAN_ROOTS` (as of
+    the 2026-08-10 widening: `coordinator_core/bash_guards/` AND
+    `coordinator_core/write_guards/` -- never `tests/`, never
+    `__pycache__`, never `__init__.py`) -- discovered by directory listing,
+    not a hardcoded name list, so a file added tomorrow to either package is
+    included the next time this runs. `_SCAN_ROOTS` is read as module
+    globals at call time (not captured at import), matching the discovery
+    tests below that monkeypatch `_BASH_GUARDS_DIR`/`_WRITE_GUARDS_DIR`
+    directly rather than this tuple."""
+    roots = (_BASH_GUARDS_DIR, _WRITE_GUARDS_DIR)
+    files: List[Path] = []
+    for root in roots:
+        files.extend(p for p in root.glob("*.py") if p.name != "__init__.py")
+    return sorted(files)
 
 
 def find_handwritten_override_clauses(paths: List[Path]) -> List[Violation]:
@@ -546,7 +641,17 @@ def find_handwritten_override_clauses(paths: List[Path]) -> List[Violation]:
 
         exempt_ids = _docstring_node_ids(tree)
         bindings = _module_string_bindings(tree)
-        rel = str(path.relative_to(_BASH_GUARDS_DIR)) if path.is_relative_to(_BASH_GUARDS_DIR) else str(path)
+        # Package-qualified relative path (e.g. "write_guards/foo.py") now
+        # that more than one root is scanned -- `_BASH_GUARDS_DIR`-relative
+        # alone would raise for a `_WRITE_GUARDS_DIR` hit. Forward-slash
+        # normalized (`pathlib.relative_to` renders OS-native separators,
+        # i.e. backslashes on Windows) so `_ALLOWLIST` entries are one
+        # portable string, not a per-OS pair -- this repo is Windows-first-
+        # class (project CLAUDE.md), and a hardcoded backslash literal in an
+        # allowlist tuple would silently stop matching on macOS/Linux.
+        rel = (
+            str(path.relative_to(_SCAN_ROOTS_BASE)) if path.is_relative_to(_SCAN_ROOTS_BASE) else str(path)
+        ).replace("\\", "/")
 
         def _record(value: str, lineno: int) -> None:
             for m in _VIOLATION_RE.finditer(value):
@@ -563,6 +668,19 @@ def find_handwritten_override_clauses(paths: List[Path]) -> List[Violation]:
                 violations.append(Violation(path=rel, lineno=lineno, matched=matched, snippet=snippet))
 
         def _record_ambiguous(lineno: int) -> None:
+            # 2026-08-10 fix: an ambiguous-binding finding must be
+            # allowlist-able too -- prior to this, only `_record`'s
+            # regex-match path consulted `_ALLOWLIST`, so a genuine false
+            # positive from the shadowed-name-ambiguity check (see
+            # `nudge_improvement_queue_write.py`/`nudge_prose_queue_append.py`
+            # entries below, surfaced by the 2026-08-10 write_guards scan
+            # widening) had no sanctioned way to be named an exception --
+            # only a silent code change (renaming a working, unambiguous
+            # local variable purely to satisfy this test) would have closed
+            # it, which is worse than the allowlist path this module's own
+            # docstring already prescribes for a genuine exception.
+            if (rel, "<ambiguous-shadowed-binding>") in _ALLOWLIST:
+                return
             key = (rel, lineno, "<ambiguous-shadowed-binding>")
             if key in seen:
                 return
@@ -1037,7 +1155,14 @@ class TestDetectorSelfTest:
         )
         f = tmp_path / "fake_allowlisted_guard.py"
         f.write_text(src, encoding="utf-8")
-        rel = str(f.relative_to(_BASH_GUARDS_DIR)) if f.is_relative_to(_BASH_GUARDS_DIR) else str(f)
+        # Mirror `find_handwritten_override_clauses`'s own `rel` computation
+        # exactly (relative-to-`_SCAN_ROOTS_BASE`, forward-slash normalized)
+        # -- `f` lives under `tmp_path`, outside every real scan root, so
+        # this falls to the `str(path)` branch, same as the function under
+        # test.
+        rel = (
+            str(f.relative_to(_SCAN_ROOTS_BASE)) if f.is_relative_to(_SCAN_ROOTS_BASE) else str(f)
+        ).replace("\\", "/")
         import coordinator_core.bash_guards.tests.test_no_handwritten_override_clauses as this_module
 
         monkeypatch.setattr(
@@ -1056,9 +1181,20 @@ class TestDiscoveryCatchesANewFile:
     module, not just re-assert today's known set.'"""
 
     def test_a_brand_new_file_dropped_into_the_real_package_is_scanned(self, tmp_path, monkeypatch):
+        # Both scan roots are monkeypatched -- `_discover_guard_files()`
+        # reads `_BASH_GUARDS_DIR` AND `_WRITE_GUARDS_DIR` as module
+        # globals at call time (see that function's own docstring); leaving
+        # `_WRITE_GUARDS_DIR` pointed at the real package would fold ~40
+        # real files into `files_before`/`files_after`'s counts below.
+        other_root = tmp_path / "_other_root_unused"
+        other_root.mkdir()
         monkeypatch.setattr(
             "coordinator_core.bash_guards.tests.test_no_handwritten_override_clauses._BASH_GUARDS_DIR",
             tmp_path,
+        )
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.tests.test_no_handwritten_override_clauses._WRITE_GUARDS_DIR",
+            other_root,
         )
         (tmp_path / "existing_guard.py").write_text('"""doc."""\ndef check(p):\n    return None\n', encoding="utf-8")
         files_before = _discover_guard_files()

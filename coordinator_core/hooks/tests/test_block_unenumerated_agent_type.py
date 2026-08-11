@@ -359,6 +359,35 @@ def test_override_marker_with_empty_reason_does_not_suppress(monkeypatch: pytest
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_named_and_unnamed_fork_type_both_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_roster(monkeypatch, frozenset({"coordinator:executor"}) | mod._HARNESS_BUILTIN_TYPES)
+
+    unnamed = mod.check(_agent_payload("fork"))
+    named = mod.check(_agent_payload("fork", name="fork-named"))
+
+    assert unnamed is None
+    assert named is None
+
+
+def test_fork_is_harness_owned_not_filesystem_derivable(doe_root: Path, plugin_home: Path) -> None:
+    """Pins that `fork` is carried ONLY by `_HARNESS_BUILTIN_TYPES` and never
+    by any of the three filesystem-derived roster legs. A failure here means
+    someone assumed the filesystem legs (policy YAML, coordinator/agents/*.md,
+    or ~/.claude/plugins/**/agents/*.md) cover `fork` -- they cannot, because
+    `fork` is a harness dispatch shape with no agent-definition file anywhere
+    on disk, not an omission from any of those trees.
+    """
+    assert "fork" in mod._HARNESS_BUILTIN_TYPES
+
+    policy_roster = mod._load_policy_roster(str(doe_root))
+    agents_roster = mod._load_agents_roster(str(doe_root))
+    plugin_roster = mod._load_plugin_roster(str(plugin_home))
+
+    assert "fork" not in policy_roster
+    assert "fork" not in agents_roster
+    assert "fork" not in plugin_roster
+
+
 def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_roster(monkeypatch, frozenset())
     payload = {"tool_name": "Bash", "tool_input": {"subagent_type": "invented"}}

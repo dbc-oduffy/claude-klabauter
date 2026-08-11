@@ -131,6 +131,52 @@ class TestConsumeOneShotSemantics:
         assert p_peer.exists()
 
 
+class TestUnlockWikiPointerBranches:
+    """`_unlock_wiki_pointer()` is `functools.lru_cache(maxsize=1)`,
+    process-lifetime memoized -- clear the cache before AND after each test
+    so neither test order nor a resolved value from this module leaks into
+    another test in the same pytest process (Review: coordinator:code-reviewer
+    — untested branches on a module-scope cache is the exact ambient-state
+    cross-test-pollution class this session already fixed twice elsewhere)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_wiki_pointer_cache(self):
+        gus._unlock_wiki_pointer.cache_clear()
+        yield
+        gus._unlock_wiki_pointer.cache_clear()
+
+    def test_doe_checkout_present_renders_doe_source_pointer(self, tmp_path, monkeypatch):
+        doe_root = tmp_path / "example-doctrine-repo"
+        (doe_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
+        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: str(doe_root))
+        pointer, pending = gus._unlock_wiki_pointer()
+        assert pointer == gus._DOE_SOURCE_WIKI_POINTER
+        assert pending is False
+
+    def test_doe_checkout_absent_degrades_to_settings_root_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: "")
+        pointer, pending = gus._unlock_wiki_pointer()
+        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
+        assert pending is True
+
+    def test_doe_pointer_resolved_but_wiki_dir_missing_degrades_to_settings_root(self, tmp_path, monkeypatch):
+        doe_root = tmp_path / "example-doctrine-repo-no-wiki"
+        doe_root.mkdir()
+        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: str(doe_root))
+        pointer, pending = gus._unlock_wiki_pointer()
+        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
+        assert pending is True
+
+    def test_read_doe_root_pointer_raising_degrades_to_settings_root(self, monkeypatch):
+        def _raise():
+            raise RuntimeError("registry unresolved")
+
+        monkeypatch.setattr(gus, "read_doe_root_pointer", _raise)
+        pointer, pending = gus._unlock_wiki_pointer()
+        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
+        assert pending is True
+
+
 class TestConsumeNeverRaises:
     def test_vanished_file_between_check_and_unlink_does_not_raise(self, monkeypatch):
         from pathlib import Path

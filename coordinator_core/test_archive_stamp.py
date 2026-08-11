@@ -2595,6 +2595,53 @@ class TestMemoTransitionWrappers:
         assert rc == 0
         assert "status: actioned" in mp.read_text(encoding="utf-8")
 
+    # -- --superseded-by (receiver-side supersession pair, AC1/AC2) -----------
+
+    def test_action_superseded_by_writes_pair(self, tmp_path, monkeypatch):
+        """AC1: --superseded-by writes status: superseded + superseded_by in
+        one locked_rmw closure (through the memo.transition op this wrapper
+        calls)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m9.md", "in_progress")
+        # The pointer must resolve — seed the named memo in cross-repo/inbox/.
+        _seed_memo(repo, "successor.md", "open")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
+        rc = arstamp.cs_action_memo(str(mp), "--superseded-by", "successor.md")
+        assert rc == 0
+        text = mp.read_text(encoding="utf-8")
+        assert "status: superseded" in text
+        assert "superseded_by: successor.md" in text
+
+    def test_action_superseded_by_and_decision_mutually_exclusive(self, tmp_path, monkeypatch):
+        """AC2: --superseded-by and --decision together fail loud (exit 1),
+        memo byte-unchanged — no op call is even made."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m10.md", "in_progress")
+        _seed_memo(repo, "successor2.md", "open")
+        before = mp.read_bytes()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
+        rc = arstamp.cs_action_memo(
+            str(mp), "--superseded-by", "successor2.md", "--decision", "accepted",
+        )
+        assert rc == 1
+        assert mp.read_bytes() == before
+
+    def test_action_superseded_by_and_actioned_note_mutually_exclusive(self, tmp_path, monkeypatch):
+        """AC2 sibling: --superseded-by + --actioned-note also refused."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m11.md", "in_progress")
+        _seed_memo(repo, "successor3.md", "open")
+        before = mp.read_bytes()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
+        rc = arstamp.cs_action_memo(
+            str(mp), "--superseded-by", "successor3.md", "--actioned-note", "noted",
+        )
+        assert rc == 1
+        assert mp.read_bytes() == before
+
 
 # ---------------------------------------------------------------------------
 # cs_resolve_memo — memo.transition verb `resolve`, the CLI's own trampoline

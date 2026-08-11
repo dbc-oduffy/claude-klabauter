@@ -71,6 +71,7 @@ from pathlib import Path
 import psutil
 import pytest
 
+from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony import scoped_git_commit
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
@@ -192,87 +193,114 @@ def _build_dirty_tree_repo(tmp_path_factory, max_filler: int) -> Path:
 def _set_dirty_tree_size(repo: Path, n: int, max_filler: int) -> None:
     """Make exactly the first *n* filler files (plus `fixed.txt`, the
     pathspec target) dirty; reset every other filler file back to clean.
-    `_check_claim_conflicts` never calls `git status` -- see this module's
-    docstring -- so this axis exists to PROVE that, not because the gate
-    reads it."""
+    C5 gave `_check_claim_conflicts` its own pathspec-scoped `git status`
+    call (see `test_gate_reads_are_pathspec_scoped_not_tree_scoped` below
+    for why "never calls git status" stopped being the right assertion) --
+    this axis exists to prove the call it now makes stays pathspec-scoped,
+    not tree-scoped."""
     _git(["checkout", "-q", "--", "."], repo)
     (repo / "fixed.txt").write_text("v2\n", encoding="utf-8")
     for i in range(n):
         (repo / f"filler-{i}.txt").write_text("v2\n", encoding="utf-8")
 
 
-@pytest.mark.cadence
-def test_gate_cost_flat_against_dirty_tree_size(tmp_path_factory):
-    """AC2: gate leg time does not scale with dirty-tree size N, at a
-    pathspec fixed to ONE file, for N = 10 / 200 / 600.
+def _count_gate_git_calls(repo: Path, paths: list[str], caller_sid: str) -> int:
+    """Count `git_native._git` invocations made by ONE
+    `_check_claim_conflicts` call. `git_native._git` is this whole module's
+    sole native-git choke point (its own docstring: "the single choke point
+    every native git call ... routes through"), so wrapping it counts every
+    spawn the gate leg makes, however many call sites fire, without itself
+    spawning anything extra."""
+    calls = {"n": 0}
+    orig = git_native._git
 
-    Asserts a RATIO, never a wall-clock constant (a fixed-ms threshold on a
-    shared box is a flake generator). Guards against A/B run-order bias
-    per `state/lessons/2026-07-29-a-b-run-order-manufactures-the-speedup-
-    5d0dbca9a1b2.yaml`: the arm measured FIRST inherits none of the OS/FS
-    cache warmth the later arms get for free, which can manufacture an
-    apparent speedup trend across ascending N even when the true cost is
-    flat. Mitigated two ways: (1) one discarded warm-up call per N before
-    the timed samples, and (2) the whole sweep is run BOTH ascending and
-    descending across N, taking the pessimistic (larger) ratio from each
-    direction -- a truly flat cost holds in both directions; a real O(N)
-    regression would show ratio > 1 ascending and < 1 descending (or vice
-    versa), which is the asymmetry this test would catch.
+    def _wrapper(*a, **kw):
+        calls["n"] += 1
+        return orig(*a, **kw)
+
+    git_native._git = _wrapper
+    try:
+        scoped_git_commit._check_claim_conflicts(str(repo), paths, caller_sid)
+    finally:
+        git_native._git = orig
+    return calls["n"]
+
+
+@pytest.mark.cadence
+def test_gate_reads_are_pathspec_scoped_not_tree_scoped(tmp_path_factory):
+    """C8 (2026-08-11-claim-release-and-the-gate-that-cannot-clear.md) --
+    re-expresses what used to be `test_gate_cost_flat_against_dirty_tree_
+    size`'s "`_check_claim_conflicts` never calls `git status`" clause.
+
+    WHY THE OLD ASSERTION WAS RIGHT, ONCE: before chunk C5, this predicate
+    made genuinely ZERO git calls of its own -- every case fell through to
+    `session_liveness.session_live` alone, so "never calls git status" and
+    "cost is flat in dirty-tree size" were the same fact stated two ways.
+
+    WHY C5 MADE IT FALSE, BY DESIGN: C5 gave the predicate its own
+    pathspec-scoped `git status --porcelain -- <paths>` (plus a lazily-
+    invoked phantom-candidate `git diff --name-only -- <candidates>`, C5's
+    EOL-phantom filter) -- fired only when a live OTHER claimant actually
+    conflicts with a currently-dirty path in the caller's own pathspec (see
+    `_check_claim_conflicts`'s "only computed when at least one path has an
+    other-live claimant" comment). An unclaimed pathspec -- this test's
+    OLD fixture -- never triggers that call at all, which is why the old
+    assertion kept passing after C5 landed: it was vacuously true, not
+    actually exercising the property C5 changed.
+
+    WHY THIS DOES NOT VIOLATE THE BINDING NEGATIVE SPEC: the spec inherited
+    from archive/specs/2026-08/2026-08-08-claim-index-the-commit-gate-
+    never-had.md forbids O(dirty tree) / O(claims) cost, not "makes zero
+    git calls". A call that is pathspec-scoped -- costing a fixed spawn per
+    conflicting path in the caller's OWN pathspec, regardless of how dirty
+    the rest of the tree is -- remains flat. That is the property asserted
+    directly below, via a git-subprocess CALL COUNT (never a wall-clock
+    figure -- a timing assertion is noise on a 50-70-concurrent-session
+    box, per this repo's CLAUDE.md load norm), instead of the old, now-
+    impossible-to-satisfy "zero calls" proxy for it.
+
+    Fixture: a genuine live-claim conflict is constructed on the fixed
+    pathspec target (`sess-peer` claims `fixed.txt`, both sessions live),
+    so C5's lazy call fires on every sample -- a vacuous-green repeat with
+    an unclaimed path would prove nothing about this predicate's cost
+    class. The dirty tree is then grown from 10 to 600 filler files (60x)
+    around that FIXED one-file pathspec, per N = 10 / 200 / 600.
     """
     ns = [10, 200, 600]
     repo = _build_dirty_tree_repo(tmp_path_factory, max_filler=max(ns))
+    _write_touched(repo, "sess-peer", [_touch_line("T", "fixed.txt")])
+    _write_meta_live(repo, "sess-peer", live=True)
 
-    def _sweep(order: list[int]) -> dict:
-        times: dict = {}
-        for n in order:
-            _set_dirty_tree_size(repo, n, max_filler=max(ns))
-            _measure_gate(repo, ["fixed.txt"], "sess-caller")  # warm-up, discarded
-            samples = [
-                _measure_gate(repo, ["fixed.txt"], "sess-caller") for _ in range(5)
-            ]
-            times[n] = min(samples)
-        return times
+    counts: dict = {}
+    for n in ns:
+        _set_dirty_tree_size(repo, n, max_filler=max(ns))
+        counts[n] = _count_gate_git_calls(repo, ["fixed.txt"], "sess-caller")
 
-    ascending = _sweep(sorted(ns))
-    descending = _sweep(sorted(ns, reverse=True))
-
-    # Generous bound: a true O(N) regression across this 60x N range would
-    # produce a ratio in the tens; a flat cost sits near 1 modulo scheduler
-    # noise on a shared box. 8x leaves ample headroom above noise while
-    # still catching the regression class this test exists to catch.
-    _RATIO_BOUND = 8.0
-    floor = 1e-6  # avoid a divide-by-near-zero on a sub-microsecond sample
-    ratios = {
-        label: max(times[max(ns)], floor) / max(times[min(ns)], floor)
-        for label, times in (("ascending", ascending), ("descending", descending))
-    }
-    # Sign-disagreement note (free -- no extra samples, no extra pass/fail
-    # criterion, only enriches a failure message): if ascending shows growth
-    # (ratio > 1) and descending shows shrinkage (ratio < 1), or vice versa,
-    # that pattern is evidence of order-dependent measurement noise per
-    # state/lessons/2026-07-29-a-b-run-order-manufactures-the-speedup-
-    # 5d0dbca9a1b2.yaml ("if the two orders disagree in sign, the effect is
-    # cache, not code"), not a real O(N) scaling property. Kept as a
-    # diagnostic annotation rather than its own assertion because a
-    # dedicated sign assert on top of already-noisy min()-of-5 in-process
-    # samples would be a second, less generous threshold than _RATIO_BOUND
-    # and risks flaking on values close to 1.0 -- a flaky guard is worse
-    # than an absent one.
-    sign_disagree = (ratios["ascending"] - 1.0) * (ratios["descending"] - 1.0) < 0
-    for label, times in (("ascending", ascending), ("descending", descending)):
-        ratio = ratios[label]
-        note = (
-            " (ascending=%.2fx vs descending=%.2fx disagree in sign -- likely "
-            "order-dependent measurement noise, not a real scaling effect; see "
-            "this test's LESSON APPLICATION NOTICE)" % (ratios["ascending"], ratios["descending"])
-            if sign_disagree
-            else ""
-        )
-        assert ratio < _RATIO_BOUND, (
-            "%s sweep: gate time scaled %.2fx from N=%d to N=%d (times=%s) "
-            "-- gate cost must be flat in dirty-tree size, not O(N)%s"
-            % (label, ratio, min(ns), max(ns), times, note)
-        )
+    # The invariant: every sample's git-call count is IDENTICAL across N --
+    # never growing with the filler-file count that surrounds (but is never
+    # part of) the fixed one-file pathspec. A real O(N) regression would
+    # show the count climbing with N; a pathspec-scoped cost does not move.
+    distinct = set(counts.values())
+    assert len(distinct) == 1, (
+        "gate git-call count varied across dirty-tree size (counts=%s) -- "
+        "gate reads must be pathspec-scoped, not tree-scoped" % (counts,)
+    )
+    call_count = distinct.pop()
+    assert call_count > 0, (
+        "gate made 0 git calls under a constructed live-claim conflict -- "
+        "the fixture failed to trigger C5's lazy call at all, which would "
+        "make this test vacuous the same way the assertion it replaces was"
+    )
+    # Upper bound: at most 2 calls for a 1-path pathspec (the status probe,
+    # plus C5's worst case -- one phantom-candidate diff follow-up when the
+    # dirty state is a tracked, unstaged modification). Bounded by
+    # len(paths), never by N.
+    assert call_count <= 2 * len(["fixed.txt"]), (
+        "gate made %d git call(s) for a 1-path pathspec -- expected <= 2 "
+        "(status + at most one phantom-candidate diff); a higher count "
+        "would mean the gate's cost is no longer bounded by pathspec size"
+        % call_count
+    )
 
 
 # ---------------------------------------------------------------------------

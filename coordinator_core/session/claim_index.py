@@ -145,11 +145,11 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import posixpath
 import time
 from typing import Dict, List, Optional
 
 from coordinator_core.session import core
+from coordinator_core.session.path_dialect import canonicalize_relative_path
 
 #: Hard wall-clock cap on one rebuild() walk. Measured full rebuild on this
 #: tree (1012 touched.txt files, 9040 event lines): 37.9ms — ~13x inside
@@ -163,6 +163,24 @@ REBUILD_WALL_CLOCK_CAP_SECS = 0.5
 #: per-path fail-closed policy to this marker.
 UNANSWERABLE = "__UNANSWERABLE__"
 
+#: ABORT-CAUSE CARRIER (C1, docs/plans/2026-08-11-claim-index-abort-cause-and-
+#: cli-blindness.md). Plain string constants on ``_IndexState.abort_cause`` /
+#: ``_LookupResult.abort_cause``, not an ``enum.Enum``. Chosen over an enum
+#: because every existing consumer of this module treats ``_LookupResult``
+#: as ``UNANSWERABLE``-flavored dict-plus-``complete`` (a plain str/bool
+#: pair, per that class's own docstring) and a CLI (``session-claim-cli``)
+#: is the only other reader added by this plan chunk — it just needs a
+#: printable token, not a type to branch on. A plain module-level string
+#: constant is import-free for that CLI (no ``from claim_index import
+#: AbortCause`` enum dependency) and trivially ``==``-comparable in a test
+#: without an import of the enum member. ``None`` means "not aborted" —
+#: distinct from any of the three string causes below, so
+#: ``abort_cause is None`` doubles as the completeness check without
+#: re-reading ``.complete``.
+ABORT_CAUSE_EMPTY_BASE = "empty_base"
+ABORT_CAUSE_CAP_EXCEEDED = "cap_exceeded"
+ABORT_CAUSE_IO_ERROR = "io_error"
+
 _AGENTS_SUBDIR = ".agents"
 _TOUCHED_FILENAME = "touched.txt"
 
@@ -172,26 +190,63 @@ def _normalize_key(path: str) -> str:
     written in, so a key parsed from disk and a caller-supplied lookup path
     compare equal regardless of separator dialect.
 
-    No reusable, subprocess-free callable exists in
-    ``coordinator_core.session.scope`` to import here:
-    ``scope.normalize_touch_path`` shells out to ``git ls-files`` on its
-    absolute-path branch, and ``scope.classify_touch_entry`` /
-    ``scope.normalize_historical_touch_entry`` both call it in turn --
-    unacceptable on this module's pure-file-read performance premise (see
-    module docstring, NO GIT SUBPROCESS SPAWNS). This module's inputs are
-    already repo-relative (either written by ``scope.py``'s own writer, or
-    a caller-supplied relative pathspec), so only the separator-normalize +
-    ``posixpath.normpath`` step is needed -- the exact single canonical-value
-    expression ``scope.classify_touch_entry`` documents and uses inline
-    (``posixpath.normpath(entry.replace("\\\\", "/"))``, see that function's
-    docstring and its module docstring's SOURCE OF TRUTH framing): "the
-    comparison and the value are never separately computed". This is that
-    same expression, kept here rather than imported because no standalone,
-    subprocess-free function wrapping it exists to import -- see
-    ``coordinator_core/session/scope.py::classify_touch_entry`` as the
-    authority this must track if that expression ever changes there.
+    A thin call-through to
+    ``coordinator_core.session.path_dialect.canonicalize_relative_path`` —
+    the shared, subprocess-free canonicalizer both this module and
+    ``coordinator_core.session.scope`` (its ``normalize_touch_path`` relative
+    arm, and ``classify_touch_entry``'s inline copy) now import, closing the
+    two-dialect divergence a backslashed relative pathspec used to hit (C1,
+    docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-clear.md).
+    This module's inputs are already repo-relative (either written by
+    ``scope.py``'s own writer, or a caller-supplied relative pathspec), so no
+    absoluteness handling is needed here — that stays out of scope for this
+    call, matching ``path_dialect.canonicalize_relative_path``'s own
+    contract.
     """
-    return posixpath.normpath(path.replace("\\", "/"))
+    return canonicalize_relative_path(path)
+
+
+class _LookupResult(dict):
+    """``dict`` subclass returned by ``lookup()`` — identical in every
+    respect to a plain ``{path: [claimant, ...]}`` dict for every consumer
+    that predates C10 (equality via ``==`` against a bare dict, ``.get()``,
+    ``in``, iteration all behave exactly as a bare dict would, since
+    ``dict.__eq__`` compares contents regardless of subclass), plus one
+    extra attribute, ``complete``.
+
+    C10 (docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md, the
+    fail-OPEN closed alongside that plan): ``_check_claim_conflicts`` in
+    ``coordinator_core/ops/ceremony/scoped_git_commit.py`` needs to know
+    whether the walk behind THIS call's answers was complete, to refuse a
+    path whose only resolved claimant is the caller itself when the walk
+    that produced that positive answer aborted before it could have reached
+    a live peer's claim. A dict subclass carries that one extra bit without
+    changing ``lookup()``'s call signature or return shape — deliberately,
+    to keep the single pinned call site (``coordinator_core/hooks/tests/
+    test_c4_ownership_inherited_at_dispatch_tripwires.py``,
+    ``TestClaimIndexLookupCallSitesDoNotWiden``) matching the literal
+    ``claim_index.lookup(`` form it censuses, and to avoid a second
+    ``rebuild()`` pass (this module's binding cost-class negative spec —
+    see module docstring).
+
+    ``complete`` mirrors this call's own ``rebuild()``'s
+    ``_IndexState.complete`` — False iff the walk that produced this dict's
+    answers was aborted by the wall-clock cap or hit an unreadable claim
+    source (see module docstring's degradation-path section), or the
+    sessions dir itself could not be resolved. A caller that never reads
+    ``.complete`` (every consumer before C10) observes no behavior change.
+
+    ``abort_cause`` (C1) mirrors ``_IndexState.abort_cause`` — one of
+    ``ABORT_CAUSE_EMPTY_BASE`` / ``ABORT_CAUSE_CAP_EXCEEDED`` /
+    ``ABORT_CAUSE_IO_ERROR`` when ``complete`` is False, else ``None``. A
+    consumer that never reads it (every consumer before this chunk,
+    including C10) observes no behavior change — it is an additional
+    attribute, never a change to ``complete`` or to the ``claimants``
+    membership contract (``UNANSWERABLE in claimants`` is untouched).
+    """
+
+    complete: bool = True
+    abort_cause: Optional[str] = None
 
 
 @dataclasses.dataclass
@@ -205,13 +260,22 @@ class _IndexState:
     permission error, as opposed to that directory genuinely not existing)
     — callers must never treat an absent path in an incomplete snapshot as
     "unclaimed".
+
+    ``abort_cause`` (C1) is one of ``ABORT_CAUSE_EMPTY_BASE`` /
+    ``ABORT_CAUSE_CAP_EXCEEDED`` / ``ABORT_CAUSE_IO_ERROR`` when
+    ``complete`` is False, else ``None``. When more than one cause is
+    technically true of a single walk (e.g. an I/O error during enumeration
+    followed by the cap also expiring in the walk that follows), the FIRST
+    cause encountered in walk order wins — this module never overwrites an
+    already-set ``abort_cause``.
     """
 
     claims: Dict[str, List[str]]
     complete: bool
+    abort_cause: Optional[str] = None
 
 
-def _read_lines_discard_torn_tail(path: str) -> List[str]:
+def _read_lines_discard_torn_tail(path: str) -> tuple:
     """Read ``path`` as text and split it into complete lines, discarding a
     torn (no trailing newline) final fragment rather than parsing it.
 
@@ -220,18 +284,39 @@ def _read_lines_discard_torn_tail(path: str) -> List[str]:
     module docstring) may observe an incomplete last line. That fragment is
     silently dropped on THIS read, never repaired; a subsequent read after
     the writer finishes sees it whole.
+
+    Returns ``(lines, read_ok)`` rather than raising or silently returning
+    ``[]`` on failure — a bare ``[]`` return is indistinguishable from a
+    genuinely empty ``touched.txt`` to ``rebuild()``'s caller, which
+    previously made an unreadable claimant file resolve identically to "no
+    claims from this claimant" (bug backlog
+    ``2026-08-11-an-io-error-reading-a-touched-txt-body-i-18abf7c6f3be``,
+    P3). A tuple keeps this a plain, import-free return shape matching
+    ``_agent_owner_sid``'s and ``_enumerate_touched_files``'s own
+    ``(value, complete)`` convention in this module, so ``rebuild()`` reads
+    all three the same way rather than special-casing this one.
+
+    ``FileNotFoundError`` is NOT a read failure: a claimant directory whose
+    ``touched.txt`` has not been created yet (or was raced away between
+    ``_enumerate_touched_files``'s enumeration pass and this content read)
+    is the ordinary "no claims yet" state, not a substrate failure — this
+    needs its own branch because ``FileNotFoundError`` is an ``OSError``
+    subclass and would otherwise be swallowed by the broader ``except
+    OSError`` below.
     """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
+    except FileNotFoundError:
+        return [], True
     except OSError:
-        return []
+        return [], False
     if not raw:
-        return []
+        return [], True
     if not raw.endswith("\n"):
         cut = raw.rfind("\n")
         raw = raw[: cut + 1] if cut >= 0 else ""
-    return [line for line in raw.split("\n") if line != ""]
+    return [line for line in raw.split("\n") if line != ""], True
 
 
 def _last_verb_per_path(lines: List[str]) -> Dict[str, str]:
@@ -368,18 +453,27 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     """
     base = _resolve_base(sessions_dir, cwd)
     if not base:
-        state = _IndexState(claims={}, complete=False)
+        state = _IndexState(claims={}, complete=False, abort_cause=ABORT_CAUSE_EMPTY_BASE)
         return state
 
     deadline = time.monotonic() + REBUILD_WALL_CLOCK_CAP_SECS
     claims: Dict[str, set] = {}
     touched_pairs, complete = _enumerate_touched_files(base)
+    abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
 
     for touched_path, claimant_sid in touched_pairs:
         if time.monotonic() > deadline:
             complete = False
+            if abort_cause is None:
+                abort_cause = ABORT_CAUSE_CAP_EXCEEDED
             break
-        last_verb = _last_verb_per_path(_read_lines_discard_torn_tail(touched_path))
+        content_lines, content_read_ok = _read_lines_discard_torn_tail(touched_path)
+        if not content_read_ok:
+            complete = False
+            if abort_cause is None:
+                abort_cause = ABORT_CAUSE_IO_ERROR
+            continue
+        last_verb = _last_verb_per_path(content_lines)
         for path, verb in last_verb.items():
             if verb == "T":
                 claims.setdefault(path, set()).add(claimant_sid)
@@ -390,12 +484,12 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 claims.get(path, set()).discard(claimant_sid)
 
     result_claims = {path: sorted(sids) for path, sids in claims.items() if sids}
-    return _IndexState(claims=result_claims, complete=complete)
+    return _IndexState(claims=result_claims, complete=complete, abort_cause=abort_cause)
 
 
 def lookup(
     paths, sessions_dir: Optional[str] = None, cwd: Optional[str] = None
-) -> Dict[str, List[str]]:
+) -> "_LookupResult":
     """``{path: [claimant_session_id, ...]}`` for every path in ``paths``.
 
     Rebuilds the index UNCONDITIONALLY on every call — see module
@@ -425,14 +519,22 @@ def lookup(
     ``coordinator_core/ops/ceremony/scoped_git_commit.py``) still finds its
     key. Two distinct original strings that normalize to the same key both
     receive that key's claimant list.
+
+    Returns a ``_LookupResult`` — a ``dict`` subclass that also carries a
+    ``.complete`` bool mirroring this call's own rebuild's completeness
+    (C10; see that class's docstring). Every pre-C10 consumer that only
+    ever used this return value as a plain dict is unaffected.
     """
     base = _resolve_base(sessions_dir, cwd)
     if not base:
-        return {path: [UNANSWERABLE] for path in paths}
+        result = _LookupResult((path, [UNANSWERABLE]) for path in paths)
+        result.complete = False
+        result.abort_cause = ABORT_CAUSE_EMPTY_BASE
+        return result
 
     state = rebuild(sessions_dir=base)
 
-    result: Dict[str, List[str]] = {}
+    result = _LookupResult()
     for path in paths:
         normalized = _normalize_key(path)
         claimants = state.claims.get(normalized)
@@ -442,5 +544,7 @@ def lookup(
             result[path] = [UNANSWERABLE]
         else:
             result[path] = []
+    result.complete = state.complete
+    result.abort_cause = state.abort_cause
 
     return result

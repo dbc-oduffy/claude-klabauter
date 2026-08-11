@@ -106,6 +106,7 @@ import re
 import subprocess
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
@@ -281,6 +282,33 @@ def _dir_has_day_file(directory: str, day: str) -> bool:
     return bool(glob.glob(os.path.join(directory, f"{day}*.md")))
 
 
+# Content marker `backfill_gaps()` stamps into a synthesized changelog stub's
+# heading (`coordinator_core.ops.changelog_ops._compose_backfill_block`):
+# `## {date} — {host} (synthesized backfill)`. A content marker, not a
+# filename convention, on purpose — a rename or archive-sweep of the file
+# does not silently strip it (2026-08-11 fix, see
+# cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-changelog-cli-three-
+# defects.md item 3).
+_SYNTHESIZED_BACKFILL_MARKER = "(synthesized backfill)"
+
+
+def _is_synthesized_backfill_stub(path: str) -> bool:
+    """True iff the changelog block at `path` is a `backfill_gaps()`-synthesized
+    raw-`git log` stub rather than human-curated narrative.
+
+    Read failures (permissions, encoding) are treated as "not a stub" — fail
+    toward reporting the day as covered-by-a-real-file is the wrong direction
+    here, but an unreadable file is already a distinct, louder problem than
+    this predicate exists to catch; it must not silently swallow a read error
+    as a false negative on the day being uncovered.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _SYNTHESIZED_BACKFILL_MARKER in text
+
+
 def _has_changelog_block(root: str, state_root: Optional[str], day: str) -> bool:
     """True iff a week-changelog block exists for `day`, live OR archived.
 
@@ -298,11 +326,40 @@ def _has_changelog_block(root: str, state_root: Optional[str], day: str) -> bool
     `state_root` is unresolvable — an existing archived block is positive
     evidence of coverage, and suppressing it would manufacture a gap rather than
     fail safe.
+
+    A matched `<day>*.md` whose content carries the `_SYNTHESIZED_BACKFILL_MARKER`
+    (`backfill_gaps()`'s raw-`git log` stub, stamped "synthesized — daily
+    ceremony skipped, no human-curated narrative") is NOT positive evidence of
+    coverage — its own heading says a human never wrote it. Existence alone
+    used to satisfy this predicate (2026-08-11 fix, see cross-repo/inbox/
+    2026-08-11-example-retrieval-repo-em-backfill-changelog-cli-three-defects.md item 3);
+    that let the synthesized stub permanently occupy the slot the curated
+    block was meant to fill, with nothing reporting the substitution. A
+    matched synthesized stub is logged to stderr (loud, not silent) and the
+    day is still treated as needing the changelog half — same failure shape
+    `_day_covered`'s own docstring already names for the retired OR predicate:
+    a coverage check reading an artifact's existence as its adequacy. That
+    class is now closed for synthesized stubs too, not just for the
+    cross-artifact-type OR.
     """
-    if state_root and _dir_has_day_file(os.path.join(state_root, "week-changelog"), day):
-        return True
+    candidates: List[str] = []
+    if state_root:
+        candidates.extend(glob.glob(os.path.join(state_root, "week-changelog", f"{day}*.md")))
     archive_root = os.path.join(root, "archive", "week-changelogs")
-    return bool(glob.glob(os.path.join(archive_root, "*", f"{day}*.md")))
+    candidates.extend(glob.glob(os.path.join(archive_root, "*", f"{day}*.md")))
+
+    covered = False
+    for path in candidates:
+        if _is_synthesized_backfill_stub(path):
+            print(
+                f"workday_complete_backfill_scan: {day}: {path} is a synthesized "
+                f"backfill stub (no human-curated narrative) — NOT counted as "
+                f"changelog coverage for this day",
+                file=sys.stderr,
+            )
+            continue
+        covered = True
+    return covered
 
 
 def _day_covered(root: str, state_root: Optional[str], day: str) -> bool:
@@ -329,6 +386,13 @@ def _day_covered(root: str, state_root: Optional[str], day: str) -> bool:
     load-bearing for a reason nobody could see. Both are the same root bug: OR
     across artifact types papers over exactly the gap this scanner exists to
     catch. See the 2026-08-06 incident writeup this fix responds to.
+
+    Same shape, second instance (2026-08-11): `_has_changelog_block` itself
+    used to read a `<day>*.md` file's mere EXISTENCE as changelog coverage,
+    which let a `backfill_gaps()`-synthesized raw-`git log` stub — content, no
+    human narrative — silently satisfy the changelog half forever. Closed by
+    having `_has_changelog_block` read the stub's own content marker rather
+    than trust the glob match; see its docstring.
 
     Legitimately summary-less days (Step 7's `skip_no_new_work` disposition —
     see `coordinator_core/workday_complete/brief.py` `jp_step4b_analyst_dispatch`)

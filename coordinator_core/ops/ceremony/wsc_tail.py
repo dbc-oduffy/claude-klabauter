@@ -247,6 +247,26 @@ Negative-spec (hard-won):
     message-matched `git rev-list` result checked against the pre-commit
     sha, failing loud on ambiguity -- never a bare unqualified `rev-parse
     HEAD` that a racing peer commit could shift out from under this call.
+    A THIRD leg exists past those two -- `run_commit_pipeline`'s post-push
+    re-read, which fires once a push has landed (`push_status == PUSHED`)
+    and used to be exactly the bare unqualified `rev-parse HEAD` this
+    bullet warns against: a peer's push landing in the window between our
+    own commit completing and that re-read running was silently adopted as
+    ours (P1, 3 of 5 calls wrong in one traced session; fixed in
+    `8d2e3cf3e4ee`). It is not bare today, but it is also not ABSENT the
+    way the two legs above are -- it still re-reads, it just verifies the
+    re-read before adopting it: `commit_pipeline.resolve_post_push_sha`
+    checks ancestry first (our pre-push sha must remain an ancestor of the
+    re-read tip -- a rebase REWRITES our commit off history entirely, while
+    anything a peer or push machinery builds ON TOP of ours keeps it as an
+    ancestor), then tree identity (separates a genuine rebase -- same diff,
+    new parent, identical tree -- from an unrelated peer commit that
+    happens to match ancestry some other way). Every failure mode (null
+    input, a failed/blank re-read, an unresolvable tree, any mismatch)
+    falls back to the caller's own pre-push value rather than inventing a
+    sha. So the invariant this bullet states is true again, but for a
+    verify-then-adopt reason, not because the post-push leg stopped
+    re-reading.
   - Does NOT release a `governing_plan_slug` claim on a genuinely failed or
     integrity-breached commit -- see step 6 above.
   - Does NOT wire this op into `/workstream-complete` or any other
@@ -376,7 +396,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Union
 
 from coordinator_core.chain_ancestry_waivers import chain_waiver_dir
 from coordinator_core.git.divergence import diverging_paths
@@ -935,7 +955,7 @@ async def _run_precommit_tail(
     worktree_root: Path,
     sid: str,
     *,
-    review_trail: Optional[dict],
+    review_trail: "Optional[Union[dict, list]]",
     b_adjudication_present: bool,
     coverage_range: str,
     coverage_from_handoff: str,
@@ -1054,9 +1074,14 @@ async def _run_precommit_tail(
         )
 
     with timing.measure("precommit.review_trail"):
-        results[tail_ops.OP_REVIEW_TRAIL] = await tail_ops.write_review_trail(
-            common_dir, review_trail, b_adjudication_present=b_adjudication_present,
-        )
+        if isinstance(review_trail, list):
+            results[tail_ops.OP_REVIEW_TRAIL] = await tail_ops.write_review_trail_many(
+                common_dir, review_trail, b_adjudication_present=b_adjudication_present,
+            )
+        else:
+            results[tail_ops.OP_REVIEW_TRAIL] = await tail_ops.write_review_trail(
+                common_dir, review_trail, b_adjudication_present=b_adjudication_present,
+            )
 
     # Join (C6): every other pre-commit step above has now run; await the
     # task fired at the top of this function. `run_coverage_gate` never
@@ -1118,8 +1143,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                 is now owned by example-doctrine-repo's `workstream-complete`
                                 skill (Step 2.6 Action (a), `ba085887`), which
                                 invokes `coordinator-complete-entry.py` directly.
-        review_trail          (dict, optional) -- forwarded to `review_trail.write`
-                                (sha_range/reviewer/scope/verdict/diff_loc[/scope_kind/workstream]).
+        review_trail          (dict | list[dict], optional) -- forwarded to
+                                `review_trail.write` (sha_range/reviewer/scope/
+                                verdict/diff_loc[/scope_kind/workstream]). A
+                                `dict` is the pre-existing single-record shape
+                                (`tail_ops.write_review_trail`, unchanged); a
+                                `list[dict]` carries N partitioned-review
+                                records through this same call
+                                (`tail_ops.write_review_trail_many` -- see that
+                                function's own docstring for the per-slice
+                                isolation and `b_adjudication_present`
+                                semantics), via `wsc-tail.py`'s repeatable
+                                `--review-slice` flag.
         b_adjudication_present (bool, optional) -- see `tail_ops.write_review_trail`.
         coverage_range         (str, optional)  -- forwarded to `coverage.gate`.
         coverage_from_handoff  (str, optional)  -- forwarded to `coverage.gate`.
@@ -1249,7 +1284,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     #
     # --- Step 1: initial resolve (in-process, lightweight -- see module docstring) ---
     with timing.measure("step1_resolve"):
-        initial_consumed = find_all_consumed_handoffs(worktree_root, sid)
+        # AC5 discriminator (docs/plans/2026-08-10-commit-event-5s-cap-and-
+        # the-silent-tail.md § C3): `scan_errors` is wired through so an
+        # enumeration gap under state/handoffs/ or archive/handoffs/ is
+        # captured, never silently indistinguishable from "sid genuinely
+        # consumed nothing" (see this function's own docstring, "Scale
+        # note" / `scan_errors` paragraph). `a_scan_errors` non-empty means
+        # THIS resolve is degraded, not clean-empty.
+        a_scan_errors: list[str] = []
+        initial_consumed = find_all_consumed_handoffs(
+            worktree_root, sid, scan_errors=a_scan_errors
+        )
+        b_warnings: list[str] = []
         if not initial_consumed:
             # Detector B (git-provenance, cross-repo/inbox/2026-07-22-claude-central-em-
             # wsc-tail-cutover-contract.md Ask 2): the lightweight scan above found
@@ -1267,7 +1313,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if b_hits:
                 initial_consumed = b_hits
             diagnostics.extend(b_warnings)
+        diagnostics.extend(a_scan_errors)
         chain_terminal = bool(initial_consumed)
+        # AC5 discriminator, continued: a resolve that came back empty AND
+        # DEGRADED (Detector A hit an enumeration gap, or Detector B could
+        # not fully compute its hit-list -- both docstrings are explicit
+        # that this is never the same fact as "genuinely nothing consumed")
+        # must not be treated as a legitimate single-session close.
+        # `resolve_degraded` distinguishes that from the ordinary, silent,
+        # correctly-nothing-to-flip case below.
+        resolve_degraded = bool(a_scan_errors or b_warnings)
         disposition = WRITE_TOKEN if chain_terminal else SINGLE_SESSION
 
     with timing.measure("sentinel_read"):
@@ -1595,6 +1650,118 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     "that-actually-landed-the-work>` once you have confirmed "
                     "what that sha is."
                 )
+    elif not chain_terminal:
+        # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-example-doctrine-repo-em-wsc-
+        # tail-silent-noop-and-gate-rewalk.md finding 1): the block above
+        # only names a stamp outcome when `chain_terminal` is True --
+        # `post_commit_stamp_and_ship()` short-circuits to an untouched
+        # `StampOutcome()` (`empty_consumed_set=False`) whenever
+        # `chain_terminal` is False (see that function's own docstring), so
+        # this branch previously left NO trace anywhere in `diagnostics` or
+        # `tail_results` that no terminal flip was attempted this pass --
+        # exit_code=0 with an empty diagnostics list, indistinguishable from
+        # "there was nothing to flip AND we checked" vs "we never looked".
+        # Always name the disposition explicitly here (never gated on
+        # `exit_code`, unlike the `if exit_code == 2` timing dump below) so
+        # a caller reading `diagnostics` -- on ANY exit code -- can tell
+        # "chain_terminal=False, no flip due" from silence. Does NOT change
+        # `exit_code`: a step-1 resolve that genuinely finds no consumed
+        # handoffs for this sid is a legitimate single-session close, not a
+        # failure -- see `disposition`/`SINGLE_SESSION` above.
+        #
+        # AC5 (docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-
+        # tail.md § C3): the OUTER empty case ("step 1 resolved no consumed
+        # handoffs at all", this branch) is a DIFFERENT fact from the INNER
+        # empty case (`chain_terminal` was True but the post-commit re-
+        # derive came back empty, `stamp_outcome.empty_consumed_set` above --
+        # already reaches exit_code=2 unconditionally). This branch must
+        # only escalate when `resolve_degraded` is True (Detector A hit an
+        # enumeration gap, or Detector B could not fully compute its hit-
+        # list) -- that is the only in-op-observable signal that separates
+        # "should have flipped and didn't" from "correctly nothing to flip"
+        # (an ordinary single-session close, the overwhelmingly common
+        # case, must stay silent-exit-0 -- see plan Anti-scope). Appending
+        # to `tail_results["consumed_handoff_stamp"]["failed"]` (rather than
+        # only `diagnostics`) is what actually reaches `soft_failed` in the
+        # exit-code ladder below -- a bare `diagnostics.append` alone never
+        # changes `exit_code`, which was this branch's whole prior gap.
+        if resolve_degraded:
+            tail_results["consumed_handoff_stamp"]["failed"].append(
+                f"outer-empty-degraded:sid={sid}: step-1 resolve for a "
+                "chain-terminal flip did not complete cleanly (Detector A "
+                f"scan_errors={a_scan_errors!r} / Detector B "
+                f"warnings={b_warnings!r}), so an empty consumed-handoff set "
+                "here is NOT trustworthy as 'genuinely nothing to flip' -- "
+                "the commit landed but a predecessor handoff may still need "
+                "its deployment_state flipped by hand. Investigate the named "
+                "scan/warning above, then remediate via `archive-stamp-cli "
+                f"ship-handoff <predecessor-handoff-path> {committed_sha}` "
+                "once you have confirmed the real predecessor."
+            )
+        # Claim-store contradiction (cross-repo/inbox/2026-08-11-example-doctrine-repo-
+        # em-pickup-claim-never-reaches-frontmatter.md): a fully-clean resolve
+        # (neither Detector A's `consumed_by:` frontmatter scan nor Detector
+        # B's git-provenance scan hit anything, and `resolve_degraded` above
+        # is False -- both scans genuinely ran and found nothing) can still be
+        # WRONG when the closing session's OWN claim-record store disagrees.
+        # `session.claims.list_claims_by_session_checked` reads the
+        # branch-independent claim LEDGER directly (`session_id` file inside
+        # `<class>-claims/<basename>/`), never the frontmatter mirror both
+        # detectors above depend on -- so a claim that landed in the ledger
+        # but whose frontmatter mutation never fired (the memo's repro: a
+        # `pickup-assemble apply` `already_satisfied` skip that never wrote
+        # `claimed_by`/`in_flight` to the handoff) still shows up here even
+        # though Detector A/B see nothing. A held `handoff-claims` entry with
+        # a genuinely empty resolve is exactly that contradiction -- named
+        # loud, never silently folded into the ordinary single-session-close
+        # case. `errors` (unresolvable sessions_dir) is treated as "no
+        # evidence either way", not itself a contradiction -- this check adds
+        # a NEW fact only when it has one to add.
+        try:
+            # Local import (mirrors `session/claims.py`'s own local import of
+            # `_CLAIM_SUBDIRS` inside this same function, and the docstring's
+            # "Import discipline" note): `coordinator_core.ops` eager-imports
+            # every op module at package-init time, including `ops/session/
+            # reap.py`, which imports back from `session/claims.py` -- a
+            # module-level import here would risk the same cycle this
+            # module's own ops.* imports above already coexist with only
+            # because none of them touch `session.claims` at import time.
+            from coordinator_core.session.claims import list_claims_by_session_checked
+
+            claim_matches, claim_errors = list_claims_by_session_checked(
+                sid, cwd=str(worktree_root)
+            )
+        except Exception as exc:  # pragma: no cover -- defensive, see above
+            claim_matches, claim_errors = [], [
+                f"list_claims_by_session_checked raised {type(exc).__name__}: {exc}"
+            ]
+        held_handoff_claims = sorted(
+            basename for class_, basename in claim_matches if class_ == "handoff-claims"
+        )
+        if held_handoff_claims and not claim_errors:
+            tail_results["consumed_handoff_stamp"]["failed"].append(
+                f"outer-empty-claim-contradiction:sid={sid}: this session "
+                "still holds a live handoff claim in the claim-record ledger "
+                f"({', '.join(held_handoff_claims)}), yet a clean step-1 "
+                "resolve (Detector A consumed_by-frontmatter scan and "
+                "Detector B git-provenance scan both ran without error and "
+                "found nothing for this session) -- the predecessor "
+                "handoff's frontmatter mutation likely never landed (it may "
+                "still read `deployment_state: ready_to_fire` / "
+                "`pickup_ready: true`). Investigate via `pickup-assemble "
+                f"brief <handoff-path>` and, once confirmed, remediate via "
+                f"`archive-stamp-cli ship-handoff <predecessor-handoff-path> "
+                f"{committed_sha}`."
+            )
+        diagnostics.append(
+            f"consumed_handoff_stamp: chain_terminal=False for sid={sid} -- "
+            "step-1 resolve (find_all_consumed_handoffs + Detector B) found "
+            "no consumed handoff(s) this pass, so no terminal flip was due "
+            "and none was attempted (disposition="
+            f"{disposition!r}, resolve_degraded={resolve_degraded!r}). If a "
+            "chain-terminal flip was expected here, investigate why the "
+            "resolve came back empty -- this pass will not retry it."
+        )
     if committed_sha is None:
         # Labelled-skip fix (2026-08-04 memo): `origin_stub_result` never
         # left its empty default on this path -- same "vanished/empty node"

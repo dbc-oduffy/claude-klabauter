@@ -56,6 +56,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
+import halted_marker  # noqa: E402
 
 
 def legacy_emit() -> None:
@@ -132,6 +133,18 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    # The DR-287 halt marker sits beside the canonical artifact and stamps the
+    # `emitted_at` it was written against. An on-demand emission advances the
+    # artifact without touching the marker, so the stamp would lag the bytes
+    # until the next ceremony close in this repo happened to re-sync it —
+    # a consumer bridging on this entry point (example-cockpit-repo's pre-`store:build`
+    # invocation, DR-287 § Open direction) would read a stale stamp over fresh
+    # data. Re-stamp, never remove: the cadence is still halted, the artifact
+    # advanced because somebody asked. Skipped under `--out`, which writes
+    # somewhere the marker does not describe.
+    if "out" not in params:
+        halted_marker.sync_halted_marker(repo_root)
 
     # STDOUT PASSTHROUGH (parity with the bash oracle's cc_invoke stdout
     # pass-through): the bare native result is re-emitted on stdout.

@@ -113,7 +113,12 @@ Negative-spec:
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
@@ -458,6 +463,249 @@ def decide_review_scale(
 
 
 # ---------------------------------------------------------------------------
+# Gate verdict memo — C4 (docs/plans/2026-08-10-commit-event-5s-cap-and-the-
+# silent-tail.md, AC6). Multi-pass `apply` (the skill's own `next_move`:
+# "resolve a subset and re-run to pick up the rest") re-invokes both gate
+# builders with UNCHANGED inputs every pass, and until this memo existed
+# neither builder had any way to tell `apply` the verdict was already
+# walked — `already_satisfied` defaulted False and stayed False forever.
+#
+# Keyed on THE INPUTS EACH GATE WAS COMPUTED FROM, never on session id or
+# wall-clock: `build_chain_coverage_gate_directive`'s only input is
+# `consumed_handoff` (the sole value threaded into its
+# `coverage-gate --from-handoff <consumed_handoff>` argv);
+# `build_review_brightline_gate_directive`'s input is the FINAL resolved
+# argv (`session_id` plus the optional trailing `<git-range>` this module's
+# own `resolve_mid_chain_review_scope` derives from `trail_records`/
+# `chain_tip_sha`/`is_ancestor`/`session_start_sha`) — the range string is
+# what the underlying gate actually walks, so a caller supplying a
+# DIFFERENT floor (new trail record landed, chain tip moved) mints a new
+# key and misses, even with the same `session_id`. A key match means "this
+# exact argv was already resolved for this gate before" — nothing narrower,
+# nothing session-scoped, matching the stub's explicit instruction that a
+# stale-input memo must MISS rather than serve a wrong verdict.
+#
+# Storage shape only borrows from `chain_partition_verdict_store.py`
+# (per-record JSON file under `state/ceremony/`, atomic mkstemp+replace,
+# hashed filename) — that module's KEYING (session id) is explicitly the
+# wrong key for this correctness-bearing skip (its own module docstring:
+# "does NOT short-circuit gate execution"), so it is precedent for the
+# shape, not reused directly. This memo stores a presence marker only — it
+# never fabricates or reads back a verdict VALUE, it only tells `apply`
+# "this exact input set was already resolved once," which is what flips
+# `already_satisfied` so `_execute_directives` skips the re-walk.
+#
+# BUILD-TIME IS READ-ONLY; RECORDING IS EXECUTION-TIME ONLY (fix, C4 retry
+# #3, docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-tail.md AC6).
+# The first two attempts at this AC had the builders below call
+# `record_gate_memo` unconditionally, INSIDE the builder, at directive-BUILD
+# time — independent of whether the gate CLI ever actually dispatched, and
+# independent of the verdict it returned. `build_directives` is called from
+# `brief()`, which serves BOTH `apply()`'s mutating pass AND every read-only
+# preview caller — so build-time recording poisoned the memo on a plain
+# `brief()` preview before the gate ran even once, and cached a WARN/FAIL
+# result as done. Both builders below now perform ONLY a read-only
+# `gate_memo_hit` check (never a write) when `repo_root` is supplied; the
+# WRITE happens exactly once, from `apply.py::_execute_directives`, via
+# `record_gate_verdict_if_passed` below, called ONLY after the gate CLI
+# actually dispatched this pass, gated on its captured exit code (and, for
+# the coverage gate, its verdict line — a `VERDICT=WARN` exit is 0 but is
+# NOT a confirmed pass and must not be memoized).
+# ---------------------------------------------------------------------------
+
+GATE_VERDICT_MEMO_RELDIR = "state/ceremony/wsc-gate-verdict-memo"
+
+
+def _gate_memo_key(gate_id: str, *input_parts: str) -> str:
+    """Deterministic filename-safe key over `gate_id` plus every input
+    part, in order — order-sensitive by design (a range string and a
+    session id are not interchangeable inputs)."""
+    raw = "\x1f".join((gate_id, *input_parts))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _gate_memo_path(repo_root: Path, gate_id: str, *input_parts: str) -> Path:
+    return Path(repo_root) / GATE_VERDICT_MEMO_RELDIR / f"{_gate_memo_key(gate_id, *input_parts)}.json"
+
+
+def gate_memo_hit(repo_root: Path, gate_id: str, *input_parts: str) -> bool:
+    """True iff a memo record exists for this EXACT `(gate_id, input_parts)`
+    key — i.e. this gate was already resolved once for these exact inputs.
+    Never raises; an unstattable path degrades to a miss (fail-closed: a
+    miss costs a redundant walk, a false hit would skip a needed one)."""
+    try:
+        return _gate_memo_path(repo_root, gate_id, *input_parts).is_file()
+    except OSError:
+        return False
+
+
+def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
+    """Persist the "this exact input set was resolved" marker. Raises on
+    I/O failure (mkdir/mkstemp/replace) — mirrors `chain_partition_verdict_
+    store.write_verdict_record`'s fail-loud contract; a caller that wants
+    memoisation to be best-effort catches this itself."""
+    path = _gate_memo_path(repo_root, gate_id, *input_parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"gate_id": gate_id, "input_parts": list(input_parts)}
+    fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}.tmp.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp_str, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_str)
+        except OSError:
+            pass
+        raise
+
+
+#: The two live gate directive ids `record_gate_verdict_if_passed` knows how
+#: to record a memo for. `d-run-review-brightline-gate` is this module's own
+#: `build_review_brightline_gate_directive` id; `d-coverage-gate` is
+#: `__init__.py`'s LIVE inline chain-end coverage-gate directive id (see
+#: `build_chain_coverage_gate_directive`'s "DEAD CODE, VERIFIED" docstring
+#: paragraph for why the memo lives on this id and not
+#: `d-run-chain-coverage-gate`).
+_LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate", "d-coverage-gate"})
+
+#: The verdict token `wsc-coverage-gate-runner.py::cmd_coverage_gate` prints
+#: on its own `VERDICT=...` stdout line when the underlying gate resolved
+#: below the code-partition coverage-ratio threshold. `cmd_coverage_gate`
+#: exits 0 on THIS token too (C10: WARN is an offer, never a refusal) — so
+#: exit code alone cannot discriminate a confirmed COVERED pass from a WARN
+#: that still owes remediation. A WARN must never be memoized (stub's own
+#: correctness bar): the listed commits are still owed a real review, and a
+#: cached "already resolved" here would silently swallow that debt on the
+#: next pass.
+_COVERAGE_GATE_WARN_TOKEN = "VERDICT=WARN"
+
+#: Full-length git object id — 40 hex digits (sha1; this fleet has not
+#: migrated to sha256 object ids). Deliberately strict (fullmatch, not
+#: search): a bare ref name (`"HEAD"`, `"main"`, `"origin/main"`), an
+#: abbreviated sha, or a range annotation (`"<sha>^"`) all fail this check
+#: and correctly disqualify the range from being memoized — see
+#: `record_gate_verdict_if_passed`'s KEY-STALENESS restriction paragraph.
+_CONCRETE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def _is_concrete_sha(value: str) -> bool:
+    return bool(_CONCRETE_SHA_RE.fullmatch(value))
+
+
+def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any], exit_code: int, stdout: str) -> None:
+    """Execution-time-only counterpart to the build-time `gate_memo_hit`
+    read (C4 retry #3, docs/plans/2026-08-10-commit-event-5s-cap-and-the-
+    silent-tail.md AC6). Called from `apply.py::_execute_directives` — and
+    ONLY from there — exactly once per pass, after `directive` actually
+    dispatched this pass and `_execute_directives` captured its real exit
+    code and stdout. Never called at directive-build time; never called for
+    a directive that was blocked, failed to dispatch, or was already
+    `already_satisfied` (nothing ran this pass in that last case — there is
+    no new verdict to record).
+
+    Recording is CONFIRMED-PASS-ONLY, per directive id:
+      - `d-run-review-brightline-gate` (the mid-chain session-scoped
+        brightline gate): records on `exit_code == 0` alone. This gate's own
+        CLI contract (`review-brightline-gate.py`) has no separate
+        WARN/FAIL verdict shape distinct from its exit code — exit 0 means
+        "a VERDICT= line was printed" (either `PARTITION-MANDATORY` or
+        `single-reviewer-ok`, both fully-resolved answers), exit 1 is a
+        usage/die-silent failure. There is nothing further to parse out of
+        `stdout` to discriminate a "confirmed pass" from a partial one.
+
+        KEY-STALENESS restriction (settling the question this stub raised;
+        review-integrator finding P1, 2026-08-11, corrected the first
+        attempt at this predicate — see below): this function records ONLY
+        when `directive["args"]` carries the 3-element resolved-range shape
+        (`["--session-id", sid, "<floor>..<chain_tip_sha>"]`) AND both halves
+        of that range string are concrete, fully-resolved object ids —
+        `_is_concrete_sha` below, a 40-hex-digit fullmatch — never a bare
+        symbolic ref. The 2-element shape (`["--session-id", sid]`, "no
+        floor resolved", the ordinary single-close path per `build_review_
+        brightline_gate_directive`'s own docstring) is never recorded: the
+        underlying gate falls back to ITS OWN symbolic default range
+        (`merge-base(origin/main, HEAD)..HEAD`), which re-resolves against
+        whatever commit is HEAD at the NEXT invocation's call time.
+
+        The len-3 check ALONE is not a sound concreteness proxy: UNTIL
+        2026-08-11 the ONLY production caller that supplies the four floor
+        kwargs (`workstream_complete/__init__.py::_resolve_review_
+        brightline_floor_kwargs`) unconditionally passed `chain_tip_sha=
+        "HEAD"` — the literal string — so the real mid-chain argv was
+        `["--session-id", sid, "<floor-sha>..HEAD"]`: 3 elements, but its
+        tip half was exactly the moving-target symbolic ref the
+        2-element-shape reasoning above calls disqualifying. A memo keyed on
+        the literal string `"HEAD"` would have recorded "resolved" against
+        whatever commit HEAD happened to be at record time, then silently
+        served that same verdict as a hit against a LATER, different HEAD —
+        the identical stale-key hazard this restriction exists to prevent,
+        reopened one level down. Checking that both the floor and the tip
+        are concrete shas (never a bare ref name) is the layer of defense
+        that stayed correct regardless of what the caller did upstream.
+
+        FIXED 2026-08-11 (docs backlink: the mid-chain gate memo was
+        provably dead code on the floor-resolved path — this restriction's
+        own `_is_concrete_sha(tip)` check NEVER passed, because the tip was
+        never concrete): `_resolve_review_brightline_floor_kwargs` now
+        resolves `HEAD` to a CONCRETE, frozen sha (`_resolve_head_sha`),
+        LAZILY, only once the floor path is actually confirmed taken —
+        never at that function's entry, never on the read-only preview path
+        that never reaches the floor branch — falling back to the literal
+        `"HEAD"` string on any resolution failure (never raising into the
+        build path, never fabricating a sha). See that function's own
+        `chain_tip_sha` docstring paragraph for the full trade this makes
+        (a range anchored at BUILD time, not at gate-run time) and why it is
+        the intended fix, not an incidental narrowing. This restriction's
+        own behavior is UNCHANGED by that fix — it still requires both
+        halves concrete before recording — but the floor-resolved path's
+        memo can now actually hit: the mid-chain floor-resolved path pays
+        the git-spawn cost of a git rev-parse-backed floor AND (now) a
+        git-rev-parse-backed tip, and its memo records once both are
+        concrete, exactly as this restriction was always designed to permit.
+      - `d-coverage-gate` (the live chain-end coverage gate, keyed on
+        `consumed_handoff` — see `build_chain_coverage_gate_directive`'s
+        "DEAD CODE, VERIFIED" paragraph): records on `exit_code == 0` AND
+        `stdout` does NOT contain `VERDICT=WARN`. `cmd_coverage_gate` exits
+        0 on both `VERDICT=COVERED` and `VERDICT=WARN` (C10) — only the
+        stdout token discriminates a confirmed pass from an offer-only
+        WARN. `exit_code == 2` (INDETERMINATE) and any other non-zero exit
+        never reach this function at all (see `_execute_directives`: a
+        non-zero exit lands the directive in `failed`/`degraded`, not
+        `landed`, and this function is only ever called from the `landed`
+        branch).
+
+    Any other directive id is a no-op — this function is not a general
+    dispatch-result hook, only the two live gates named above ever carry a
+    memo. Best-effort from the CALLER's perspective (`apply.py` wraps this
+    in a try/except so a memo-write I/O failure degrades to "next pass
+    re-walks," never to a reported apply failure) — this function itself
+    still raises on I/O failure per `record_gate_memo`'s own fail-loud
+    contract; the try/except lives at the call site, not here, mirroring
+    the same division of responsibility `record_gate_memo` already
+    documents for its own callers."""
+    gate_id = directive.get("id")
+    if gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS or exit_code != 0:
+        return
+    args = list(directive.get("args") or [])
+    if gate_id == "d-run-review-brightline-gate":
+        if len(args) != 3:
+            return
+        floor, sep, tip = args[2].partition("..")
+        if not sep or not _is_concrete_sha(floor) or not _is_concrete_sha(tip):
+            return
+        record_gate_memo(repo_root, gate_id, *args)
+        return
+    # gate_id == "d-coverage-gate"
+    if _COVERAGE_GATE_WARN_TOKEN in (stdout or ""):
+        return
+    if len(args) < 3 or args[1] != "--from-handoff":
+        return
+    record_gate_memo(repo_root, gate_id, args[2])
+
+
+# ---------------------------------------------------------------------------
 # d-run-review-brightline-gate / d-run-chain-plan-brightline-gate
 # (SKILL.md:428-442) — mechanical CLI + verdict parse.
 # ---------------------------------------------------------------------------
@@ -473,6 +721,7 @@ def build_review_brightline_gate_directive(
     chain_tip_sha: Optional[str] = None,
     is_ancestor: Optional[Callable[[str, str], bool]] = None,
     session_start_sha: Optional[str] = None,
+    repo_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Mid-chain brightline gate (`WSC_DISPOSITION != chain-terminal`,
     SKILL.md:428-434). `--session-id` scopes the gate's diff to this
@@ -517,7 +766,21 @@ def build_review_brightline_gate_directive(
     key `resolve_mid_chain_review_scope` reads, so the caller re-keys each
     record's tip (via `resolve_trail_range_tip`) before handing the list
     over. Both the fetch and that adaptation stay caller-side by this
-    module's Negative-spec."""
+    module's Negative-spec.
+
+    `repo_root`, when supplied (C4, AC6), consults the gate verdict memo on
+    the FINAL resolved argv (`session_id` plus the optional trailing range)
+    — see the "Gate verdict memo" section above for the keying rationale —
+    via a READ-ONLY `gate_memo_hit` lookup. A prior recorded hit for the
+    identical resolved argv sets `already_satisfied=True` instead of
+    leaving `apply` to re-walk; a call whose resolved argv differs (a new
+    trail record moved the floor, a different session, a different chain
+    tip) mints a new key and misses. This builder NEVER WRITES the memo
+    itself (fixed, retry #3 — see the section-level docstring above): the
+    write happens exactly once, from `apply.py::_execute_directives`, after
+    the gate CLI actually dispatched and returned exit 0 this pass.
+    Omitting `repo_root` (every pre-C4 caller) reproduces today's
+    byte-identical directive."""
     args = ["--session-id", session_id]
     if (
         trail_records is not None
@@ -527,7 +790,10 @@ def build_review_brightline_gate_directive(
     ):
         floor = resolve_mid_chain_review_scope(trail_records, chain_tip_sha, is_ancestor, session_start_sha)
         args.append(f"{floor}..{chain_tip_sha}")
-    return _directive("d-run-review-brightline-gate", _REVIEW_BRIGHTLINE_CLI, args)
+    directive = _directive("d-run-review-brightline-gate", _REVIEW_BRIGHTLINE_CLI, args)
+    if repo_root is not None and gate_memo_hit(repo_root, directive["id"], *args):
+        directive["already_satisfied"] = True
+    return directive
 
 
 def build_chain_plan_brightline_gate_directive(consumed_handoff: str) -> dict[str, Any]:
@@ -633,18 +899,50 @@ def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 
 
-def build_chain_coverage_gate_directive(consumed_handoff: str) -> dict[str, Any]:
+def build_chain_coverage_gate_directive(
+    consumed_handoff: str, *, repo_root: Optional[Path] = None
+) -> dict[str, Any]:
     """Chain-end coverage gate, DAG mode, wrapped by
     `wsc-coverage-gate-runner.py coverage-gate --from-handoff`. C10: the
     gate this CLI wraps now resolves VERDICT=WARN (never VERDICT=UNCOVERED)
     below the code-partition coverage-ratio threshold. Re-running after WARN
     remediation is simply calling this builder again with the same
-    `consumed_handoff` — no separate directive id for the re-check."""
-    return _directive(
+    `consumed_handoff` — no separate directive id for the re-check.
+
+    DEAD CODE, VERIFIED (C4 retry #3, docs/plans/2026-08-10-commit-event-5s-
+    cap-and-the-silent-tail.md AC6): `workstream_complete/__init__.py`'s
+    `build_directives` never calls this builder — greped every call site.
+    The LIVE chain-end coverage gate is `__init__.py`'s own
+    `_build_legacy_coverage_and_trail_directives`, which builds an inline
+    `d-coverage-gate` directive with the byte-identical CLI/argv under a
+    DIFFERENT id (see that module's own Negative-spec: wiring this builder
+    too would double-dispatch the same call under two ids). The gate
+    verdict memo therefore lives on `d-coverage-gate` in `__init__.py`
+    (read-only hit check threaded through `_build_legacy_coverage_and_trail_
+    directives`'s own `repo_root` param; the write happens in
+    `apply.py::_execute_directives` via `record_gate_verdict_if_passed`
+    below, keyed the same way — `("d-coverage-gate", consumed_handoff)`).
+    This builder's own `repo_root` support below is kept only so its
+    exported shape stays self-consistent with its sibling
+    `build_review_brightline_gate_directive` and so the pre-existing regression
+    tests for it keep exercising the primitive; no production caller reaches
+    it with `repo_root` supplied.
+
+    `repo_root`, when supplied, consults the gate verdict memo (READ-ONLY,
+    via `gate_memo_hit`) keyed on `consumed_handoff` — this builder's sole
+    input, and the exact value threaded into the CLI argv above. A prior
+    recorded hit for the SAME `consumed_handoff` sets `already_satisfied=
+    True`; a different `consumed_handoff` mints a new key and misses. This
+    builder never writes the memo itself. Omitting `repo_root` (every
+    pre-C4 caller) reproduces today's byte-identical directive."""
+    directive = _directive(
         "d-run-chain-coverage-gate",
         _COVERAGE_GATE_RUNNER_CLI,
         ["coverage-gate", "--from-handoff", consumed_handoff],
     )
+    if repo_root is not None and gate_memo_hit(repo_root, directive["id"], consumed_handoff):
+        directive["already_satisfied"] = True
+    return directive
 
 
 # ---------------------------------------------------------------------------

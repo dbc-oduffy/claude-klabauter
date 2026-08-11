@@ -20,7 +20,13 @@ Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole
 Verb contracts (mirrored from the JS spec, plus the native-only addition):
   claim   — open → in_progress; writes picked_up_at + picked_up_by.
   action  — in_progress → actioned; writes decision/decision_note/realized_by
-              OR actioned_note (consult/fyi shape). Preserves picked_up_by/at.
+              OR actioned_note (consult/fyi shape) OR, when the receiving end
+              holds a confirmed supersession, ``superseded_by`` (status →
+              superseded rather than actioned — the receiver-side write half
+              of the memo schema's supersession pair; the pointer must name a
+              memo present in this repo's own cross-repo/inbox/ or
+              cross-repo/archive/, validated BEFORE any write, mirroring
+              memo_send._validate_in_reply_to_exists). Preserves picked_up_by/at.
               An already-actioned memo re-actioned with ``correct_realization``
               truthy AND an UNCHANGED ``decision:`` may move ``realized_by``/
               ``decision_note`` only (evidence correction, e.g. a cited commit
@@ -121,6 +127,7 @@ from coordinator_core.frontmatter.primitives import (
     unquote_yaml_scalar,
 )
 from coordinator_core.frontmatter.schema_validate import (
+    ErrorDict,
     format_validation_errors,
     validate_memo_cross_fields,
 )
@@ -434,7 +441,41 @@ def _count_status_keys(fm_text: str) -> int:
 # then cross-field rules. This matches memo-transition.js:175-187.
 # ---------------------------------------------------------------------------
 
-def _validate_memo_fm(fm_text: str) -> list[dict]:
+def _demote_kind_enum_finding(errors: list[ErrorDict], fm_dict: dict) -> list[ErrorDict]:
+    """Filter an off-enum ``kind`` finding out of ``errors``, warning to stderr instead.
+
+    Receiver tolerance ahead of a gate that itself stays strict — the same shape as
+    ``_normalize_oversize_summary`` (PM ruling 2026-07-22): the AUTHORING-side enum
+    (``_memo_cf_kind_enum``, both write guards, example-doctrine-repo's direct-file-path import of
+    ``validate_frontmatter_obj``) stays a hard gate; this only softens the RECEIVER's
+    post-mutation check so an already-landed memo with an unenumerated ``kind`` isn't
+    stranded at claim/action/release/resolve. Unlike ``_normalize_oversize_summary``,
+    this does NOT rewrite the field on disk — the memo's declared ``kind:`` value is
+    never the receiver's to correct, only its to tolerate.
+
+    Mirrors the wording ``pickup_assemble`` already applies at read time
+    (``build_judgment_point``'s ``kind {kind_raw!r} unrecognized — defaulted to 'ask'``),
+    so the stamp path and the assembler agree instead of disagreeing about the same memo.
+
+    Negative-spec: does NOT touch ``_memo_cf_kind_enum`` — that validator, and the
+    enum tuples ``coordinator/bin/test_pickup_kind_enum_parity.py`` gates, stay untouched.
+    Only demotes a ``field == 'kind'`` entry; any other cross-field error in ``errors``
+    passes through unchanged.
+    """
+    kept: list[ErrorDict] = []
+    for error in errors:
+        if error.get('field') == 'kind':
+            kind_raw = fm_dict.get('kind')
+            print(
+                f"memo.transition: WARNING — kind {kind_raw!r} unrecognized — defaulted to 'ask'",
+                file=sys.stderr,
+            )
+            continue
+        kept.append(error)
+    return kept
+
+
+def _validate_memo_fm(fm_text: str) -> list[ErrorDict]:
     """Validate post-mutation frontmatter text.
 
     Node ordering (memo-transition.js:175-187):
@@ -446,6 +487,12 @@ def _validate_memo_fm(fm_text: str) -> list[dict]:
 
     Negative-spec: this is the POST-MUTATION check, not the pre-mutation dup-key guard.
     The pre-mutation guard (≥2 keys → fail-loud) runs in each verb before mutations.
+
+    Receiver tolerance for an off-enum ``kind`` (see ``_demote_kind_enum_finding``): a
+    ``field == 'kind'`` enum finding is demoted to a stderr warning here ONLY — it never
+    reaches this function's caller as a fail-loud error, so a memo already on disk with
+    e.g. ``kind: defect`` remains claimable/actionable/releasable/resolvable instead of
+    stranded at every lifecycle step. ``validate_memo_cross_fields`` itself is untouched.
     """
     # Step 1: single-status-key postcondition (seam requirement, memo-transition.js:175-178).
     key_count = _count_status_keys(fm_text)
@@ -462,7 +509,8 @@ def _validate_memo_fm(fm_text: str) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         return [{"field": "(parse)", "error": f"YAML parse error in frontmatter: {exc}", "hint": ""}]
 
-    return validate_memo_cross_fields(fm_dict)
+    errors = validate_memo_cross_fields(fm_dict)
+    return _demote_kind_enum_finding(errors, fm_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +901,7 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
     actioned_note = params.get("actioned_note")
     realized_by = params.get("realized_by")
     decision_note = params.get("decision_note")
+    superseded_by = params.get("superseded_by")
 
     if decision_note and ("\n" in decision_note or "\r" in decision_note):
         return _err(
@@ -864,6 +913,20 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
             f"{verb}: --actioned-note must be single-line (no embedded \\n or \\r) — "
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
+
+    # superseded_by is a third, standalone terminal shape (status: superseded,
+    # not actioned) — mutually exclusive with decision/actioned_note (the
+    # archive_stamp.py CLI layer already refuses the combination before this
+    # op is ever called; this check is the same discipline applied at the op
+    # boundary itself, for any other caller of this op). Bypasses the
+    # decision-XOR-actioned_note requirement below entirely.
+    if superseded_by:
+        if decision or actioned_note:
+            return _err(
+                f"{verb}: --superseded-by and --decision/--actioned-note are "
+                "mutually exclusive"
+            )
+        return None
 
     if decision and actioned_note:
         return _err(f"{verb}: --decision and --actioned-note are mutually exclusive")
@@ -898,6 +961,11 @@ def _disposition_matches(fm_text: str, params: dict) -> bool:
     decision_note = params.get("decision_note")
     realized_by = params.get("realized_by")
     actioned_note = params.get("actioned_note")
+    superseded_by = params.get("superseded_by")
+
+    if superseded_by:
+        cur_superseded_by = unquote_yaml_scalar(read_fm_field(fm_text, "superseded_by"))
+        return cur_superseded_by == superseded_by
 
     if decision:
         cur_decision = read_fm_field_unquoted(fm_text, "decision")
@@ -1044,6 +1112,22 @@ def _apply_action_fields(fm_text: str, params: dict) -> str:
     realized_by = params.get("realized_by")
     distill_fate = params.get("distill_fate")
     in_repo_capture = params.get("in_repo_capture")
+    superseded_by = params.get("superseded_by")
+
+    # superseded_by shape: status → superseded (not actioned), superseded_by
+    # anchored right after status — same numeric_quoting=True discipline as
+    # every other field write in this function. Standalone terminal shape;
+    # _validate_action_disposition already refused this alongside
+    # decision/actioned_note, so no interleave with the branches below.
+    if superseded_by:
+        fm_text = replace_fm_field(fm_text, "status", "superseded", numeric_quoting=True)
+        if read_fm_field(fm_text, "superseded_by") is None:
+            fm_text = insert_fm_field(
+                fm_text, "superseded_by", superseded_by, "status", numeric_quoting=True
+            )
+        else:
+            fm_text = replace_fm_field(fm_text, "superseded_by", superseded_by, numeric_quoting=True)
+        return fm_text
 
     # status → actioned
     # numeric_quoting=True on every field write below: node's serializeYamlScalar
@@ -1120,6 +1204,44 @@ def _apply_action_fields(fm_text: str, params: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# superseded_by pointer validation — mirrors
+# memo_send._normalize_in_reply_to / _validate_in_reply_to_exists (that
+# module's exact resolution logic, not re-invented here): the pointer must
+# name a memo THIS repo actually holds, in its own cross-repo/inbox/ or
+# cross-repo/archive/ (searched recursively — archive is nested by date).
+# ---------------------------------------------------------------------------
+
+def _normalize_superseded_by(value: str) -> str:
+    """Normalize a caller-supplied ``superseded_by`` value to a bare basename —
+    same shape `_normalize_in_reply_to` produces (accepts a bare basename or a
+    path; the emitted frontmatter value is always just the basename)."""
+    return Path(value.strip()).name
+
+
+def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict | None:
+    """Fail-loud gate: ``superseded_by`` must name a memo THIS repo actually
+    holds (its own ``cross-repo/inbox/`` or ``cross-repo/archive/``, the
+    latter searched recursively). Runs BEFORE any write — a typo'd pointer is
+    worse than none. Returns None on pass, else an ``_err()`` envelope."""
+    inbox_dir = git_root / "cross-repo" / "inbox"
+    archive_dir = git_root / "cross-repo" / "archive"
+
+    if (inbox_dir / superseded_by).is_file():
+        return None
+    if archive_dir.is_dir():
+        for candidate in archive_dir.rglob(superseded_by):
+            if candidate.is_file():
+                return None
+
+    return _err(
+        f"action: superseded_by={superseded_by!r} does not match any memo in "
+        f"this repo's own {inbox_dir} or {archive_dir} (searched recursively) — "
+        f"superseded_by must name a memo present in cross-repo/inbox/ or "
+        f"cross-repo/archive/. Check for a typo."
+    )
+
+
+# ---------------------------------------------------------------------------
 # action verb (sync — dispatched via asyncio.to_thread)
 #
 # Port of action() from example-doctrine-repo coordinator/bin/memo-transition.js:311-438.
@@ -1170,6 +1292,18 @@ def _action(memo: str, params: dict) -> dict:
     if not memo_path.is_file():
         return _err(f"memo not found: {memo}")
 
+    # superseded_by pointer validation — BEFORE any write, no partial state
+    # (mirrors memo_send._validate_in_reply_to_exists). Normalizes to a bare
+    # basename so the frontmatter value and the idempotency comparison both
+    # see the same shape regardless of how the caller spelled it.
+    superseded_by = params.get("superseded_by")
+    if superseded_by:
+        normalized_superseded_by = _normalize_superseded_by(superseded_by)
+        pointer_error = _validate_superseded_by_exists(git_root, normalized_superseded_by)
+        if pointer_error is not None:
+            return pointer_error
+        params = {**params, "superseded_by": normalized_superseded_by}
+
     # Mutable container so the closure can signal an idempotent no-op without raising.
     _noop_result: list[dict | None] = [None]
 
@@ -1194,11 +1328,15 @@ def _action(memo: str, params: dict) -> dict:
         # only) applies a narrow evidence correction, or the pre-existing
         # re-action guard fires. Shared with resolve via _handle_already_actioned.
         # Return old_text unchanged on no-op; locked_rmw detects byte-identity
-        # and skips the write.
-        if status == "actioned":
+        # and skips the write. status == "superseded" takes the same branch as
+        # "actioned" — a memo already superseded, re-run with the SAME pointer,
+        # is idempotent; a DIFFERENT pointer fails loud via the same
+        # already-actioned-with-a-different-disposition raise (no
+        # --correct-realization escape — that flag is decision-shape only).
+        if status in ("actioned", "superseded"):
             corrected = _handle_already_actioned(split.fm_text, params, "action")
             if corrected is None:
-                _noop_result[0] = _ok(False, f"{memo} already actioned at target disposition — no-op")
+                _noop_result[0] = _ok(False, f"{memo} already {status} at target disposition — no-op")
                 return old_text
             fm_text = corrected
         else:
@@ -1271,6 +1409,13 @@ def _action(memo: str, params: dict) -> dict:
         if irc_count != 1:
             return _err(
                 f"INTERNAL ERROR — post-write in_repo_capture: key count {irc_count} (expected 1). "
+                f"Inspect {memo} immediately."
+            )
+    if params.get("superseded_by"):
+        sb_count = len(re.findall(r'^superseded_by:(?=[ \t]|\r?$)', written_split.fm_text, re.MULTILINE))
+        if sb_count != 1:
+            return _err(
+                f"INTERNAL ERROR — post-write superseded_by: key count {sb_count} (expected 1). "
                 f"Inspect {memo} immediately."
             )
 

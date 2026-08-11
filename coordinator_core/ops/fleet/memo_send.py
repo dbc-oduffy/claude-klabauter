@@ -1546,6 +1546,16 @@ async def _commit_delivered_memo(
 ) -> CommitOutcome:
     """Stage+commit ONLY the just-delivered memo file in the RECEIVER repo.
 
+    Claim-release ineligible (C3, docs/plans/2026-08-11-claim-release-and-
+    the-gate-that-cannot-clear.md): this commit lands in the RECEIVER's
+    repo, a foreign worktree relative to this session. `release_committed_
+    claims` releases the CALLING session's own claims against `cwd`'s own
+    ledger — releasing the local sid's claims against a peer worktree is
+    meaningless (there is no local claim ledger scoped to a repo this
+    session does not own), and `release_committed_claims` must never be
+    passed a peer sid (self/other boundary, pinned by test). No release
+    call is added here.
+
     Retires DR-211 D2 criterion 3 ("send is non-committing") per PM directive
     2026-07-21: a dirty delivered file previously relied on the receiver's
     session-init sweep noticing it in `git status` — a soft signal. This

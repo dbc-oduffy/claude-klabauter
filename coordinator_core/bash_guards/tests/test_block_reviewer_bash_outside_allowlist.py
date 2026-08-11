@@ -20,9 +20,33 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import pytest
+
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_roster_absence_leg(monkeypatch):
+    """Keep this suite hermetic against C2's new AC5 leg
+    (``_helpers.is_confined_by_roster_absence``, wired into
+    ``_is_confined_type`` this dispatch) -- that leg's non-trivial branch
+    calls ``resolve_roster()``, which does real disk I/O against a live
+    example-doctrine-repo checkout and this machine's plugin discovery tree. Every test
+    in THIS file predates AC5 and exercises only the two pre-existing legs
+    (``bash_policy:`` key, ``is_confined_findings_agent`` membership); none
+    of them intends to depend on this machine's roster state. Stubbed to
+    ``False`` (its pre-AC5 default: "not confined by roster absence") so
+    this file's existing assertions -- in particular
+    ``test_non_confined_agent_type_allows``, which relies on
+    ``coordinator:enricher`` resolving NOT-confined -- stay independent of
+    whether a real roster happens to be resolvable in this test environment.
+    The dedicated AC5 leg tests live in
+    ``test_block_reviewer_bash_outside_allowlist_roster_absence.py`` and
+    monkeypatch this same seam explicitly per-case.
+    """
+    monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda effective_type: False)
 
 # SSOT confined-findings-agent type string, per _helpers._CONFINED_FINDINGS_AGENTS.
 _CONFINED_TYPE = "coordinator:code-reviewer"
@@ -882,6 +906,24 @@ def test_git_no_pager_log_allows(monkeypatch):
     _allow("git --no-pager log", monkeypatch)
 
 
+def test_git_no_optional_locks_log_allows(monkeypatch):
+    # 2026-08-11 cross-guard conflict audit: --no-optional-locks is
+    # read-only-safe (suppresses index stat write-back only) and is the
+    # exact flag agents are briefed to type on read-only git invocations
+    # (docs/wiki/machine-load-norm.md); confirm it no longer denies.
+    _allow("git --no-optional-locks log --oneline -1", monkeypatch)
+
+
+def test_git_no_optional_locks_status_allows(monkeypatch):
+    _allow("git --no-optional-locks status", monkeypatch)
+
+
+def test_git_dash_c_config_injection_still_denies(monkeypatch):
+    # The allowlist widening above must stay scoped to the one added
+    # read-only-safe flag -- -c (arbitrary config injection) stays denied.
+    _deny("git -c core.pager=evil log", monkeypatch)
+
+
 def test_git_dir_equals_status_allows(monkeypatch):
     _allow("git --git-dir=/x/.git status", monkeypatch)
 
@@ -1517,3 +1559,270 @@ def test_unrecognised_tool_name_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("Get-ChildItem -Recurse", agent_type=_CONFINED_TYPE, tool_name="Zsh")
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# Divergence 18 (2026-08-11): python-family misspelling remedy. Still
+# denies -- these are message-only pins. `coordinator:code-reviewer` (this
+# file's `_CONFINED_TYPE`) already holds `interpreter_allowed_modules:
+# ("pytest",)` since Amendment 2, so a `python3 -m pytest` remedy allows for
+# this type too, exercising the branch end-to-end without needing the
+# executor's own stanza overrides.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_python_dash_m_pytest_gets_specific_remedy(monkeypatch):
+    result = _deny("python -m pytest -q", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+    assert "not coordinator-doc-new" not in reason
+
+
+def test_bare_python_dash_m_pytest_no_dont_retry_clause(monkeypatch):
+    # coordinator:code-reviewer's default closing stanza is already empty,
+    # so this pins the header/reason text directly rather than the
+    # (structurally absent) closing stanza -- the suppress_retry_advice
+    # plumbing itself is pinned end-to-end via _deny_reason below.
+    result = _deny("python -m pytest -q", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "report the blocker to the dispatching EM rather than retrying" not in reason
+
+
+def test_out_of_scope_command_keeps_generic_message_and_dont_retry_advice():
+    # Direct unit check on _deny_reason for the executor stanza (which DOES
+    # carry the "report the blocker" closing clause) -- an out-of-scope
+    # command must still get it.
+    reason = guard._deny_reason(
+        "coordinator:executor",
+        "curl https://evil.example/x",
+        "first command token is not coordinator-doc-new (got: curl)",
+        suppress_retry_advice=False,
+    )
+    assert "report the blocker to the dispatching EM rather than retrying it." in reason
+
+
+def test_python3_dash_c_inline_code_denial_untouched(monkeypatch):
+    # python3 -c must keep its own distinct inline-code denial -- a
+    # python-family misspelling remedy must never be suggested for a shape
+    # whose python3-corrected form would ALSO deny.
+    result = _deny('python3 -c "import os"', monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "-c" in reason
+    assert "python3 -m pytest" not in reason
+
+
+def test_python3_dash_m_pytest_still_allows_clean(monkeypatch):
+    _allow("python3 -m pytest -q", monkeypatch)
+
+
+def test_python_dash_c_remedy_would_also_deny_no_retry_suggested(monkeypatch):
+    # tokens[0] is a python-family spelling ("python"), but the corrected
+    # `python3 -c "..."` would itself deny (inline code) -- must NOT
+    # advertise a retry that also denies; falls through to the generic
+    # message.
+    result = _deny('python -c "import os"', monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "not coordinator-doc-new (got: python)" in reason
+    assert "Retry with" not in reason
+
+
+def test_py_dash_m_pytest_alias_gets_remedy(monkeypatch):
+    result = _deny("py -m pytest -q", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+
+
+def test_python_versioned_alias_gets_remedy(monkeypatch):
+    result = _deny("python3.11 -m pytest -q", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+
+
+def test_deny_reason_suppresses_retry_advice_for_executor_stanza():
+    # Direct unit pin on _deny_reason: the executor stanza's closing text
+    # (the only non-empty closing stanza today) must vanish when
+    # suppress_retry_advice=True, and nothing else in the message changes.
+    base = guard._deny_reason(
+        "coordinator:executor",
+        "python -m pytest -q",
+        "first command token is a python interpreter spelling other than "
+        "the accepted `python3` -- this command IS in scope, just "
+        "misspelled. Retry with: 'python3 -m pytest -q'",
+        suppress_retry_advice=True,
+    )
+    assert "report the blocker to the dispatching EM rather than retrying it." not in base
+    without_suppress = guard._deny_reason(
+        "coordinator:executor",
+        "python -m pytest -q",
+        "irrelevant reason",
+        suppress_retry_advice=False,
+    )
+    assert "report the blocker to the dispatching EM rather than retrying it." in without_suppress
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-11-pytest-grant-and-working-interpreter-disjoint.md):
+# route the interpreter identity check through the existing normalizer, so a
+# path-prefixed or .exe-suffixed python3 spelling reaches the SAME granted
+# `-m pytest` decision the bare `python3` spelling already reaches.
+#
+# SUBSTRATE NOTE (found during this dispatch, not assumed): the dispatch
+# brief for this chunk asked for coverage "for both _REVIEWER_TYPE and
+# _EXECUTOR_TYPE". As of DR-125 (docs/plans/2026-08-03-narrow-subagent-
+# commit-confinement-two-classes.md, chunk C2), `coordinator:executor` was
+# REMOVED from `_helpers._CONFINED_FINDINGS_AGENTS` and is confined by
+# NEITHER of `_is_confined_type`'s other two legs (no `bash_policy:` YAML key
+# in a bare test env; leg 3, `is_confined_by_roster_absence`, explicitly
+# excludes a genuinely enumerated type) -- see
+# `test_executor_bash_confinement.py`'s own module docstring, which pins this
+# exact history. `_EXECUTOR_TYPE`'s `_DEFAULT_RULESET_TYPE_OVERRIDES` entry
+# is therefore currently dead data from this guard's own confinement gate:
+# `guard.check()` returns allow (None) unconditionally for
+# `agent_type="coordinator:executor"` regardless of command, BEFORE any
+# Tier A/B/interpreter logic (including this chunk's fix) is ever reached --
+# confirmed empirically, not assumed (a `-c`/inline-code payload allows
+# vacuously). Parametrizing this chunk's AC1-AC3 tests over `_EXECUTOR_TYPE`
+# would therefore assert nothing about the fix under test. Coverage below is
+# scoped to `_REVIEWER_TYPE` (`coordinator:code-reviewer`), the one type this
+# guard actually confines and that holds the `interpreter_allowed_modules`
+# grant F1 is about.
+# ---------------------------------------------------------------------------
+
+_C1_PYTHON3_SPELLINGS = (
+    ".venv/Scripts/python3.exe",
+    "/repo/.venv/bin/python3.exe",
+)
+
+
+def _c1_check(cmd: str, monkeypatch):
+    _confine(monkeypatch)
+    payload = _payload(cmd, agent_type=_CONFINED_TYPE)
+    return guard.check(payload)
+
+
+@pytest.mark.parametrize("spelling", _C1_PYTHON3_SPELLINGS)
+def test_c1_normalized_python3_spelling_allows_pytest(spelling, monkeypatch):
+    # AC1: a path-prefixed/.exe-suffixed python3 spelling reaches the same
+    # granted -m pytest branch the bare `python3` spelling already reaches.
+    result = _c1_check(f"{spelling} -m pytest -q", monkeypatch)
+    assert result is None, f"expected allow for: {spelling!r}"
+
+
+@pytest.mark.parametrize("spelling", _C1_PYTHON3_SPELLINGS)
+def test_c1_normalized_python3_spelling_still_denies_inline_code(spelling, monkeypatch):
+    # AC2: the normalizer only changes which spellings REACH the decision --
+    # -c/-e stay unconditionally denied for every spelling it now resolves.
+    # This is the guard against C1 accidentally widening the bypass.
+    result = _c1_check(f'{spelling} -c "import os"', monkeypatch)
+    assert result is not None, f"expected deny for: {spelling!r} -c"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "-c" in reason
+    assert "inline code" in reason
+
+
+@pytest.mark.parametrize("spelling", _C1_PYTHON3_SPELLINGS)
+def test_c1_normalized_python3_spelling_denies_unallowlisted_module(spelling, monkeypatch):
+    # AC3: a non-allowlisted module still denies, naming the rejected module,
+    # for every normalized spelling.
+    result = _c1_check(f"{spelling} -m http.server", monkeypatch)
+    assert result is not None, f"expected deny for: {spelling!r} -m http.server"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "http.server" in reason
+
+
+# ---------------------------------------------------------------------------
+# C1b (same plan): C1 only routed the EXACT-`python3` identity through the
+# normalizer -- `.venv/Scripts/python.exe` (no `3`) still denied, which is
+# the plan's own F1 worked example and the sender's actual spelling, because
+# a Windows venv has no `python3.exe` sibling to retype to. C1b admits a
+# PATH-PREFIXED python-family basename (raw token contains `/` or `\` before
+# the basename) into the SAME interpreter decision the exact `python3`
+# spelling already enters -- a BARE python-family token (no path separator)
+# stays on the unchanged "retype as python3" remedy tier.
+# ---------------------------------------------------------------------------
+
+_C1B_PATH_PREFIXED_PYTHON_SPELLINGS = (
+    ".venv/Scripts/python.exe",
+    ".venv/bin/python",
+)
+
+
+@pytest.mark.parametrize("spelling", _C1B_PATH_PREFIXED_PYTHON_SPELLINGS)
+def test_c1b_path_prefixed_python_spelling_allows_pytest(spelling, monkeypatch):
+    # AC1: a path-prefixed python-family spelling (no `3`) reaches the same
+    # granted -m pytest branch the exact `python3` spelling already reaches.
+    result = _c1_check(f"{spelling} -m pytest -q", monkeypatch)
+    assert result is None, f"expected allow for: {spelling!r}"
+
+
+@pytest.mark.parametrize("spelling", _C1B_PATH_PREFIXED_PYTHON_SPELLINGS)
+def test_c1b_path_prefixed_python_spelling_still_denies_inline_code(spelling, monkeypatch):
+    # AC2: -c/-e stay unconditionally denied for every spelling C1b now
+    # admits -- the guard against this fix accidentally widening the bypass.
+    for flag in ("-c", "-e"):
+        result = _c1_check(f'{spelling} {flag} "import os"', monkeypatch)
+        assert result is not None, f"expected deny for: {spelling!r} {flag}"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert flag in reason
+        assert "inline code" in reason
+
+
+@pytest.mark.parametrize("spelling", _C1B_PATH_PREFIXED_PYTHON_SPELLINGS)
+def test_c1b_path_prefixed_python_spelling_denies_unallowlisted_module(spelling, monkeypatch):
+    # AC3: a non-allowlisted module still denies, naming the rejected module.
+    result = _c1_check(f"{spelling} -m http.server", monkeypatch)
+    assert result is not None, f"expected deny for: {spelling!r} -m http.server"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "http.server" in reason
+
+
+def test_c1b_bare_python_still_denies_with_unchanged_remedy(monkeypatch):
+    # CONTROL, not optional: a BARE python-family token (no path separator)
+    # is a NAME the caller got wrong, not a LOCATION -- it must stay on the
+    # existing "retype as python3" remedy tier, byte-identical to pre-C1b.
+    # This is what separates C1b's path-prefixed admission from a blanket
+    # widening of the python-family alias tier.
+    result = _c1_check("python -m pytest -q", monkeypatch)
+    assert result is not None, "expected deny for bare `python -m pytest -q`"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+    assert "misspelled" in reason
+
+
+def test_c1b_trailing_separator_no_directory_still_denies_as_bare(monkeypatch):
+    # (P3 fix, 2026-08-11) A bare trailing separator with no real directory
+    # component (e.g. `python/`) is a degenerate spelling, not a caller-
+    # chosen LOCATION -- it must NOT take the path-prefixed leg. Same
+    # basename, same downstream checks as bare `python`, so this stays on
+    # the unchanged "retype as python3" remedy tier exactly like the bare
+    # spelling above.
+    result = _c1_check("python/ -m pytest -q", monkeypatch)
+    assert result is not None, "expected deny for degenerate `python/ -m pytest -q`"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+    assert "misspelled" in reason
+
+
+@pytest.mark.parametrize(
+    "bare_spelling",
+    ("py", "python2", "python3.11"),
+)
+def test_c1b_bare_python_family_alias_still_denies_with_unchanged_remedy(bare_spelling, monkeypatch):
+    # (P3 fix, 2026-08-11) The bare-still-denies control above covers bare
+    # `python` only; `_PYTHON_FAMILY_ALIAS_RE` also matches `py`,
+    # `python2(.N)?`, and `python3.N`. All feed through the SAME
+    # `_PYTHON_FAMILY_ALIAS_RE.match(basename)` gate, so this is expected to
+    # pass immediately -- the value is that a future edit to the alias regex
+    # trips a red test here instead of silently widening an untested alias.
+    result = _c1_check(f"{bare_spelling} -m pytest -q", monkeypatch)
+    assert result is not None, f"expected deny for bare `{bare_spelling} -m pytest -q`"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "python3 -m pytest -q" in reason
+    assert "misspelled" in reason

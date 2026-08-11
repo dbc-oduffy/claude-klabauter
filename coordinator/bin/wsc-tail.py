@@ -47,6 +47,24 @@ CLI exposes discrete flags (`--review-sha-range`, `--review-reviewer`,
 the existing `coordinator-write-review-trail.py` flag-naming idiom, rather
 than asking the caller to hand-write a JSON blob on a command line.
 
+**N partitioned-review slices (partitioned-review fix, second half):**
+`decisions["review"]` upstream can be a `list[dict]` as well as a single
+`dict` (`workstream_complete.build_write_trail_directives`,
+`directives_commit_tail._review_fields_present`) — the repeatable
+`--review-slice <json>` flag carries that shape through THIS trampoline's
+single embedded `review_trail.write` call: one flag per slice, each value a
+compact JSON object with the same five required keys the discrete flags
+below carry plus optional `scope_kind` (`_REVIEW_SLICE_ALLOWED_KEYS`).
+Mutually exclusive with the discrete `--review-*` flags — supplying both is
+a hard error (`_review_slices_and_discrete_flags_both_supplied`), never a
+silent pick-one. Every slice is validated up front, same JSON-shape/
+required-field/closed-enum checks the discrete flags get
+(`_parse_review_slices`) — malformed input refuses the WHOLE dispatch,
+consistent with the discrete-flag partial-supply guard's own posture.
+Op-side (`tail_ops.write_review_trail_many`), each qualifying slice is
+written as its own independent `review_trail.write` record: one slice's
+foreign-session-range refusal never suppresses a sibling's write.
+
 **Partial-supply guard (wired 2026-07-22, same day as the wiring above):**
 if the caller supplies ANY `--review-*` flag but not all five required ones,
 this trampoline refuses to dispatch (exit 1, stderr names the missing
@@ -336,6 +354,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "reviewer_evidence design; state/bug-backlog/2026-08-10-coordinator-write-"
         "review-trail-accepts-a-295d3cd80d13.yaml).",
     )
+    parser.add_argument(
+        "--review-slice",
+        dest="review_slices",
+        action="append",
+        default=None,
+        help="review_trail: ONE partitioned-review slice as a compact JSON object "
+        "(keys: sha_range/reviewer/scope/verdict/diff_loc, required; scope_kind, "
+        "optional) -- repeatable, one flag per slice. Additive to the discrete "
+        "--review-* flags above (which stay the single-record shape, byte-identical); "
+        "mutually exclusive with them -- supplying both is a hard error. See module "
+        "docstring's 'N partitioned-review slices' section.",
+    )
     return parser
 
 
@@ -457,11 +487,105 @@ def _build_review_trail(args: argparse.Namespace) -> dict | None:
     return review_trail or None
 
 
+#: The subset of `_review_trail_fields`' keys a `--review-slice` JSON object
+#: may carry -- deliberately narrower than the discrete-flag surface (no
+#: `workstream`/`reviewer_evidence`): parity with `directives_commit_tail.
+#: build_close_tail_args_directive`'s own single-dict `--review-*` branch,
+#: which has never emitted those two either. Widen both surfaces together if
+#: that ever changes, not just this one.
+_REVIEW_SLICE_ALLOWED_KEYS = (*_REVIEW_TRAIL_REQUIRED_FIELDS, "scope_kind")
+
+
+def _parse_review_slices(args: argparse.Namespace) -> "tuple[list[dict], list[str]]":
+    """Parses every `--review-slice` JSON token into a dict, returning
+    `(slices, errors)`. `errors` is empty iff every supplied token is valid
+    JSON, an object (not a list/scalar), carries no key outside
+    `_REVIEW_SLICE_ALLOWED_KEYS`, has all five required fields present and
+    non-blank (`.strip()`-empty counts as missing, same divergence
+    `_missing_review_trail_fields` documents for the discrete-flag form), and
+    passes the same closed-enum checks `_invalid_review_trail_enum_fields`
+    applies to the discrete flags. A malformed `--review-slice` is
+    unambiguously a caller mistake (unlike an upstream-filtered incomplete
+    list entry, which never reaches this CLI as a token at all -- see
+    `tail_ops.write_review_trail_many`'s own docstring) so this refuses the
+    WHOLE dispatch rather than silently dropping the bad slice, mirroring the
+    discrete-flag partial-supply guard's own "fail loud, don't guess"
+    posture. Returns `([], [])` when `args.review_slices` is `None`.
+    """
+    if not args.review_slices:
+        return [], []
+    slices: "list[dict]" = []
+    errors: "list[str]" = []
+    for index, raw in enumerate(args.review_slices):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            errors.append(f"--review-slice[{index}]: invalid JSON ({exc})")
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(f"--review-slice[{index}]: must be a JSON object, got {type(parsed).__name__}")
+            continue
+        unknown = sorted(set(parsed) - set(_REVIEW_SLICE_ALLOWED_KEYS))
+        if unknown:
+            errors.append(f"--review-slice[{index}]: unrecognized key(s) {unknown}")
+            continue
+        missing = [
+            name
+            for name in _REVIEW_TRAIL_REQUIRED_FIELDS
+            if not isinstance(parsed.get(name), str) or not parsed[name].strip()
+        ]
+        if missing:
+            errors.append(f"--review-slice[{index}]: missing/blank required field(s): {', '.join(missing)}")
+            continue
+        if parsed["reviewer"] not in _VALID_REVIEWERS:
+            errors.append(
+                f"--review-slice[{index}]: reviewer {parsed['reviewer']!r} is invalid; "
+                f"allowed: {' | '.join(sorted(_VALID_REVIEWERS))}"
+            )
+        if parsed["scope"] not in _VALID_SCOPES:
+            errors.append(
+                f"--review-slice[{index}]: scope {parsed['scope']!r} is invalid; "
+                f"allowed: {' | '.join(sorted(_VALID_SCOPES))}"
+            )
+        if parsed["verdict"] not in _VALID_VERDICTS:
+            errors.append(
+                f"--review-slice[{index}]: verdict {parsed['verdict']!r} is invalid; "
+                f"allowed: {' | '.join(sorted(_VALID_VERDICTS))}"
+            )
+        scope_kind = parsed.get("scope_kind")
+        if scope_kind is not None and scope_kind not in _VALID_SCOPE_KINDS:
+            errors.append(
+                f"--review-slice[{index}]: scope_kind {scope_kind!r} is invalid; "
+                f"allowed: {' | '.join(sorted(_VALID_SCOPE_KINDS))}"
+            )
+        slices.append(parsed)
+    return slices, errors
+
+
+def _review_slices_and_discrete_flags_both_supplied(args: argparse.Namespace) -> bool:
+    """True when the caller supplied at least one `--review-slice` AND at
+    least one discrete `--review-*` flag -- an ambiguous mix `main()` refuses
+    outright rather than guessing which shape wins."""
+    if not args.review_slices:
+        return False
+    return any(v is not None for v in _review_trail_fields(args).values())
+
+
 def _build_params(args: argparse.Namespace, sid: str) -> dict:
     params: dict = {
         "sid": sid or None,
         "subject": args.subject,
     }
+    # `--review-slice` (list-of-dicts) and the discrete `--review-*` flags
+    # (single dict) are mutually exclusive (enforced in `main()` before this
+    # is called) -- at most one of the two ever contributes a value here.
+    review_trail: "dict | list[dict] | None"
+    if args.review_slices:
+        review_trail, _errors = _parse_review_slices(args)
+        # `main()` already refused to reach this point if `_errors` was
+        # non-empty -- see the mutual-exclusion/validation pre-flight below.
+    else:
+        review_trail = _build_review_trail(args)
     optional_map = {
         "completion_title": args.completion_title,
         "prose": args.prose,
@@ -471,7 +595,7 @@ def _build_params(args: argparse.Namespace, sid: str) -> dict:
         "deleted_paths": args.deleted_paths,
         "kept_entries": args.kept_entries,
         "swept_renames": args.swept_renames,
-        "review_trail": _build_review_trail(args),
+        "review_trail": review_trail,
     }
     for key, value in optional_map.items():
         if value is not None:
@@ -536,7 +660,34 @@ def main(argv: list[str]) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    missing_review_fields = _missing_review_trail_fields(args)
+    if _review_slices_and_discrete_flags_both_supplied(args):
+        print(
+            "wsc-tail.py: --review-slice and a discrete --review-* flag were both "
+            "supplied -- ambiguous. Use --review-slice (repeatable) for a "
+            "partitioned review, or the discrete --review-* flags for a single "
+            "record, never both in the same call.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.review_slices:
+        _slices, slice_errors = _parse_review_slices(args)
+        if slice_errors:
+            print(
+                "wsc-tail.py: invalid --review-slice supply:\n  " + "\n  ".join(slice_errors),
+                file=sys.stderr,
+            )
+            return 1
+        # Discrete-flag validation below is moot when slices were supplied
+        # (the mutual-exclusion check above already refused any mix, and
+        # `_missing_review_trail_fields`/`_invalid_review_trail_enum_fields`
+        # both no-op on an all-None discrete-flag Namespace regardless) --
+        # skip explicitly rather than relying on that no-op, for clarity.
+        missing_review_fields: list[str] = []
+        invalid_review_fields: list[str] = []
+    else:
+        missing_review_fields = _missing_review_trail_fields(args)
+        invalid_review_fields = _invalid_review_trail_enum_fields(args)
     if missing_review_fields:
         print(
             "wsc-tail.py: partial review_trail supply — missing/blank required "
@@ -552,8 +703,10 @@ def main(argv: list[str]) -> int:
     # pipeline ever runs, naming the allowed values, rather than letting the
     # op's own `_validate()` raise post-dispatch where the failure is only
     # visible in the receipt file (nothing committed yet at this point, so
-    # exit 1 -- no landed-commit disposition to preserve).
-    invalid_review_fields = _invalid_review_trail_enum_fields(args)
+    # exit 1 -- no landed-commit disposition to preserve). (`invalid_review_
+    # fields` was already computed above -- discrete-flag branch calls
+    # `_invalid_review_trail_enum_fields`, slice branch's own per-slice enum
+    # checks already ran inside `_parse_review_slices`.)
     if invalid_review_fields:
         print(
             "wsc-tail.py: invalid review_trail field value(s):\n  "

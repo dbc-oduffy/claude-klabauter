@@ -177,24 +177,39 @@ def _usage_error(msg: str) -> dict:
     }
 
 
-def _read_deployment_state(handoff_abs: Path) -> Optional[str]:
-    """Best-effort read of an on-disk handoff's `deployment_state:` value, or
-    None when the file is unreadable/unparseable. Mirrors
-    `handoff_archive_transition._current_fm_field`'s narrow single-field
-    reader (not imported — that helper is module-private to its own file)."""
+def _read_deployment_state(handoff_abs: Path) -> "tuple[Optional[str], Optional[str]]":
+    """Best-effort read of an on-disk handoff's `deployment_state:` value.
+    Mirrors `handoff_archive_transition._current_fm_field`'s narrow
+    single-field reader (not imported — that helper is module-private to
+    its own file).
+
+    Returns `(state, read_error)`:
+      - `read_error` is None on a clean read of the file itself (even when
+        `state` then resolves to None because the field/frontmatter is
+        absent) — the caller's "not terminal" message is accurate here,
+        the field genuinely wasn't found.
+      - `read_error` is a human-readable string when the FILE could not be
+        read at all — distinguishing "missing" (FileNotFoundError) from
+        "unreadable for another reason" (permission error, transient I/O
+        failure, etc. — any other OSError), so the caller can report a
+        truthful "could not be read" message instead of folding both into
+        a misleading `deployment_state: None → not terminal` (P3 fix: the
+        prior bare `except OSError` conflated the two)."""
     try:
         text = handoff_abs.read_text(encoding="utf-8")
-    except OSError:
+    except FileNotFoundError:
+        return None, "file does not exist"
+    except OSError as exc:
         print(
-            f"skip: _read_deployment_state: text = handoff_abs.read_text(encoding=\"utf-8\") failed: {sys.exc_info()[1]}",
+            f"skip: _read_deployment_state: text = handoff_abs.read_text(encoding=\"utf-8\") failed: {exc}",
             file=sys.stderr,
         )
-        return None
+        return None, f"unreadable: {exc}"
     split = split_frontmatter(text)
     if split is None:
-        return None
+        return None, None
     val = read_fm_field_unquoted(split.fm_text, "deployment_state")
-    return val if val not in (None, "null", "") else None
+    return (val if val not in (None, "null", "") else None), None
 
 
 @register_op("handoff.reconcile_close_terminal")
@@ -284,7 +299,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"handoff_path escapes state/handoffs/ and every known archive "
                 f"dir ({', '.join(ARCHIVE_ROOT_SUBDIRS)}): {handoff_path_raw!r}"
             )
-        state = _read_deployment_state(contained_archived)
+        state, read_error = _read_deployment_state(contained_archived)
+        if read_error is not None:
+            rel_id = _wire_rel_id(contained_archived, worktree)
+            return _err(
+                f"{rel_id} lives under an archive root but its on-disk "
+                f"deployment_state could not be read ({read_error}) — cannot "
+                "determine idempotent-replay terminality; refusing rather "
+                "than treating an unreadable file as a non-terminal state"
+            )
         if state in _TERMINAL_DEPLOYMENT_STATES:
             rel_id = _wire_rel_id(contained_archived, worktree)
             return {
@@ -398,7 +421,29 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     # --- Step 1: close (deployment_state -> closed; idempotent) ---
-    close_res = await asyncio.to_thread(_close, rel_id, reason, worktree, repo_root)
+    #
+    # P1 TOCTOU fix: the step-0 guard above ran unlocked, before any lock on
+    # this handoff's own file was acquired — a successor naming this baton
+    # as `predecessor:` could be created in the window between that read and
+    # `_close`'s own `locked_rmw` acquisition, and step 1 would then stamp
+    # closed_reason:displaced over what is now a live lineage edge (exactly
+    # the schema-forbidden state step 0 exists to prevent). `_close` accepts
+    # an optional `live_children_recheck` callback that it invokes INSIDE
+    # its own locked_rmw mutate closure, immediately before building the
+    # real write, so the guard is re-verified atomically with the write it
+    # gates rather than merely before it. `asyncio.run` is safe here: this
+    # closure only ever executes inside the `asyncio.to_thread(_close, ...)`
+    # worker thread below, which has no running event loop of its own.
+    def _live_children_recheck() -> dict:
+        return asyncio.run(
+            _handoff_has_live_children(
+                {"candidate": str(contained_live), "exclude": exclude}, repo_root
+            )
+        )
+
+    close_res = await asyncio.to_thread(
+        _close, rel_id, reason, worktree, repo_root, _live_children_recheck
+    )
     if close_res.get("exit_code") != 0:
         out = _err(f"close failed: {close_res.get('error', 'unknown error')}")
         return out

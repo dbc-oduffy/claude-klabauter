@@ -49,6 +49,11 @@
       "## Anti-scope",
       "",
       "<!-- This stub does NOT author the roadmap plan itself — roadmap-planning owns that. -->",
+      "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
       ""
     ]}
   ]

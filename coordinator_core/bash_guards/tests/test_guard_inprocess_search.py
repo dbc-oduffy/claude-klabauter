@@ -4,10 +4,35 @@ Covers the session latch on `_footer()`'s explanatory paragraph
 (2026-08-01, `docs/plans/2026-08-01-advisory-firing-shape-predicate.md` C3):
 the full ~45-word paragraph fires once per session, every subsequent
 answered call in that session still carries the one-line
-`[answered in-process]` invariant marker (never a bare deny with no
+`_ANSWERED_MARKER` invariant marker (never a bare deny with no
 already-handled signal), and every latch failure mode (no session id, no
 resolvable repo root, unwritable marker path) fails OPEN toward emitting
 the full paragraph rather than crashing the hook.
+
+Deny-versus-substitution contract (2026-08-11, `TestDenyVersusSubstitutionContract`
+below) -- driven by `cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-
+banner-still-reads-as-agent-instruction.md` Item 2: dispatched reviewers in a
+sibling repo met real, correct search results under what read as a bare
+denial and had to infer, from position in the text alone, whether "denied"
+meant refused or substituted. `guard_inprocess_search.py` now states the
+distinction explicitly ("Answered in-process, not a refusal") and composes
+`footer + rendered` so that statement leads the composed results, not just
+the paragraph in isolation. Modeled on `test_operator_only_disclaimer_leads.py`'s
+posture in the same package: a claim that the text says the right thing, or sits
+in the right place, is not evidence that it does -- these tests call the real
+`check()` and `_footer()` and assert on their real output, and are written to
+FAIL against the prior `rendered + footer` composition and bare
+`[answered in-process]` marker (see each test's docstring for how that was
+established from `git diff` on the guard module).
+
+Lead-word reframe (2026-08-11, this dispatch): the message used to lead with
+"Denied as written" -- correct in substance but distrusted in practice; three
+independently dispatched agents cross-verified genuine in-process results
+against direct `Read` calls rather than trust a message that opened with
+"Denied". The composed text now leads with "Answered in-process" and mentions
+the no-subprocess-ran fact second, not first -- the tests below assert both
+the new lead text and that the no-subprocess/not-a-refusal fact still
+precedes the rendered results.
 
 Pure Python -- no real shell spawns. `coordinator_core.search.answer.answer`
 is monkeypatched to a fixed non-None return so `check()` reaches `_footer()`
@@ -187,3 +212,70 @@ class TestPowerShellDialectStaysBashOnly:
             result = guard.check(payload)
         assert result is None
         assert _verdict.was_silent("guard_inprocess_search", silences)
+
+
+class TestDenyVersusSubstitutionContract:
+    """2026-08-11 -- `_footer()`'s full paragraph and `_ANSWERED_MARKER`'s
+    latched short form must each independently state the deny-versus-
+    substitution contract, and that statement must precede the rendered
+    search results in `check()`'s composed payload -- see module docstring.
+
+    Each test here is written to fail against the PRIOR text, established by
+    reading `git diff coordinator_core/bash_guards/guard_inprocess_search.py`:
+    the old `_ANSWERED_MARKER` was the bare string `"[answered in-process]"`
+    (no "not a refusal" framing at all), and `check()` used to compose
+    `"%s\\n\\n%s" % (rendered, _footer(cwd))` -- the caller's answer FIRST,
+    the already-handled framing LAST. Both old shapes fail the assertions
+    below; the new ones are calls into the real `check()`/`_footer()`, not
+    a re-read of the source.
+    """
+
+    def test_full_paragraph_contract_precedes_rendered_results(self, repo, monkeypatch):
+        """First-call composed payload: the explanatory paragraph's
+        deny-versus-substitution statement must appear BEFORE the rendered
+        search output. Fails against the old `rendered + footer` composition,
+        which would put "ANSWERED-TEXT" first."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full")
+        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        reason = _deny_reason(result)
+        assert "ANSWERED-TEXT" in reason
+        assert reason.index("not a refusal") < reason.index("ANSWERED-TEXT"), (
+            "the deny-versus-substitution contract must precede the "
+            "rendered results -- got: %r" % reason
+        )
+
+    def test_full_paragraph_states_the_contract_explicitly(self, repo, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full-text")
+        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        reason = _deny_reason(result)
+        assert "Answered in-process, not a refusal" in reason
+        assert "not a refusal" in reason
+        assert not reason.startswith("[Denied")
+
+    def test_latched_marker_states_the_contract_independently(self):
+        """The short latched form, taken alone (never composed with
+        `check()`), must carry the same distinction as the full paragraph --
+        this is the framing an agent gets on every call after the first in a
+        session. Fails against the old bare `"[answered in-process]"` marker,
+        which named the mechanism but not the deny-versus-substitution
+        contract at all."""
+        assert "Answered in-process, not a refusal" in guard._ANSWERED_MARKER
+        assert "not a refusal" in guard._ANSWERED_MARKER
+        assert guard._ANSWERED_MARKER != "[answered in-process]"
+        assert not guard._ANSWERED_MARKER.startswith("[Denied")
+
+    def test_latched_marker_contract_precedes_rendered_results(self, repo, monkeypatch):
+        """Second-call (latched) composed payload: the marker's contract
+        statement must precede the rendered results, mirroring the
+        first-call ordering requirement above. Fails against the old
+        `rendered + footer` composition regardless of marker wording."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-latched")
+        guard.check(_payload("grep foo bar.py", str(repo)))
+        second = guard.check(_payload("grep baz qux.py", str(repo)))
+        reason = _deny_reason(second)
+        assert guard._ANSWERED_MARKER in reason
+        assert "ANSWERED-TEXT" in reason
+        assert reason.index("not a refusal") < reason.index("ANSWERED-TEXT"), (
+            "the latched marker's contract must precede the rendered "
+            "results -- got: %r" % reason
+        )

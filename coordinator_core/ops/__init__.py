@@ -204,6 +204,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     (
+        "coordinator_core.ops.handoff_columns_query",
+        'registers "handoff.columns" (2026-08-11 pull-surface-four-columns C3 — '
+        "batch-computed status/deployment_state/predecessor/shipped_in over live "
+        "plus opt-in archived handoffs)",
+    ),
+    (
         "coordinator_core.ops.changelog_ops",
         'registers "changelog.append_day", "changelog.backfill_gaps", '
         '"changelog.compute_day_fields", "changelog.upsert_reviewed" (strang-10 A, DR-216)',

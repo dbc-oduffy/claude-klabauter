@@ -85,9 +85,24 @@ class _StubClaimIndex:
     (_cli._import_claim_index_module) -- who-claims-path coverage."""
 
     UNANSWERABLE = "__UNANSWERABLE__"
+    ABORT_CAUSE_EMPTY_BASE = "empty_base"
+    ABORT_CAUSE_CAP_EXCEEDED = "cap_exceeded"
+    ABORT_CAUSE_IO_ERROR = "io_error"
 
     def __init__(self, *, lookup=None):
         self.lookup = lookup or (lambda paths, cwd=None: {p: [] for p in paths})
+
+
+class _LookupResultStub(dict):
+    """A minimal stand-in for claim_index._LookupResult carrying the C1
+    ``abort_cause`` attribute alongside plain-dict membership (C2/C3,
+    docs/plans/2026-08-11-claim-index-abort-cause-and-cli-blindness.md) --
+    the real return type is a dict subclass too, so ``.get(path, [])`` in
+    the CLI works identically against this stub."""
+
+    def __init__(self, mapping, abort_cause):
+        super().__init__(mapping)
+        self.abort_cause = abort_cause
 
 
 class _StubHolderEvidence:
@@ -759,6 +774,63 @@ def test_who_claims_path_unanswerable_exits_nonzero_not_unclaimed(
     err = capsys.readouterr().err
     assert "could not be determined" in err
     assert "NOT a verdict that the path is unclaimed" in err
+
+
+@pytest.mark.parametrize(
+    "abort_cause",
+    [
+        _StubClaimIndex.ABORT_CAUSE_EMPTY_BASE,
+        _StubClaimIndex.ABORT_CAUSE_CAP_EXCEEDED,
+        _StubClaimIndex.ABORT_CAUSE_IO_ERROR,
+    ],
+)
+def test_who_claims_path_unanswerable_reports_which_abort_fired(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys, abort_cause
+):
+    """AC4/AC6: the cause is printed ADDITIVE to the existing refusal
+    sentence, which survives verbatim, and the exit code does not move
+    (still 1, per AC5) — the parametrization drives all three causes from
+    C1 through the same CLI arm."""
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("liveness must not be consulted for an unanswerable path")
+
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: [_StubClaimIndex.UNANSWERABLE] for p in paths}, abort_cause
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "could not be determined" in err
+    assert "NOT a verdict that the path is unclaimed" in err
+    assert f"abort cause: {abort_cause}" in err
+
+
+def test_who_claims_path_unanswerable_with_no_abort_cause_reports_unknown(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    """A lookup stand-in that carries no ``abort_cause`` at all (e.g. an
+    older or hand-rolled result object) degrades to printing "unknown"
+    rather than raising ``AttributeError`` — additive output must never
+    take down the existing refusal path."""
+    def _fail_if_called(*a, **k):
+        raise AssertionError("liveness must not be consulted for an unanswerable path")
+
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: {p: [_StubClaimIndex.UNANSWERABLE] for p in paths}
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "abort cause: unknown" in err
 
 
 def test_who_claims_path_lookup_raise_exits_transport_fail(

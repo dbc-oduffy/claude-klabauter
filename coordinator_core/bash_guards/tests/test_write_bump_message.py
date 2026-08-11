@@ -728,19 +728,97 @@ def test_surface_tool_states_the_session_wide_breadth_truthfully(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "render_fn,args",
+    "render_fn,args,is_subagent",
     [
-        (message.render_em_message, (_TARGET_REPO, _SESSION_REPO)),
-        (message.render_subagent_message, (_TARGET_REPO, _SESSION_REPO)),
+        (message.render_em_message, (_TARGET_REPO, _SESSION_REPO), False),
+        (message.render_subagent_message, (_TARGET_REPO, _SESSION_REPO), True),
+        # Review: coordinator:code-reviewer (P2) -- the PUBLISH-class
+        # renderers were entirely absent from this parametrize, despite
+        # being reachable under `surface=SURFACE_TOOL` from
+        # `bump_out_of_repo_tool_write.py`'s own real call site
+        # (`destination_class=DESTINATION_PUBLISH`, always `surface=
+        # SURFACE_TOOL`).
+        (message.render_publish_em_message, (_TARGET_REPO, _MIRROR_OWNER), False),
+        (message.render_publish_subagent_message, (_TARGET_REPO, _MIRROR_OWNER), True),
     ],
 )
-def test_surface_tool_variants_fit_the_prose_cap(tmp_path, render_fn, args):
+def test_surface_tool_variants_fit_the_prose_cap(tmp_path, render_fn, args, is_subagent):
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
-    if render_fn is message.render_subagent_message:
+    if is_subagent:
         text = render_fn(*args, gitdir, _SESSION_ID, _SANDBOX_ROOT, surface=message.SURFACE_TOOL)
     else:
         text = render_fn(*args, gitdir, _SESSION_ID, surface=message.SURFACE_TOOL)
+    envelope = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": text,
+        }
+    }
+    measurement = measure_envelope(envelope)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES, (
+        text,
+        measurement.prose_bytes,
+    )
+
+
+@pytest.mark.parametrize(
+    "render_fn,args,is_subagent",
+    [
+        (
+            message.render_em_message,
+            (_LONG_RESOLVED_NATIVE_PATH, _SESSION_REPO),
+            False,
+        ),
+        (
+            message.render_subagent_message,
+            (_LONG_RESOLVED_NATIVE_PATH, _SESSION_REPO),
+            True,
+        ),
+        (
+            message.render_publish_em_message,
+            (_LONG_RESOLVED_NATIVE_PATH, _MIRROR_OWNER),
+            False,
+        ),
+        (
+            message.render_publish_subagent_message,
+            (_LONG_RESOLVED_NATIVE_PATH, _MIRROR_OWNER),
+            True,
+        ),
+    ],
+)
+def test_surface_tool_variants_with_long_raw_target_fit_the_prose_cap(
+    tmp_path, render_fn, args, is_subagent
+):
+    """Review: coordinator:code-reviewer (P2) -- `SURFACE_TOOL`'s clear-offer
+    phrase ("stand the boundary down, session-wide", 39 bytes) is +21 bytes
+    over `SURFACE_BASH`'s ("clear this target", 18 bytes), and the pre-
+    existing `test_every_variant_fits_the_message_prose_cap_bytes` proves the
+    `raw_target`-populated variants are the ones that stress the 220-byte cap
+    hardest. Neither gap (PUBLISH renderers, nor a populated `raw_target`)
+    was exercised under `SURFACE_TOOL` before this test; both are reachable
+    together from `bump_out_of_repo_tool_write.py`'s real call site, which
+    always threads a real `raw_target=file_path`."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    if is_subagent:
+        text = render_fn(
+            *args,
+            gitdir,
+            _SESSION_ID,
+            _SANDBOX_ROOT,
+            raw_target=_LONG_RAW_MSYS_TOKEN,
+            surface=message.SURFACE_TOOL,
+        )
+    else:
+        text = render_fn(
+            *args,
+            gitdir,
+            _SESSION_ID,
+            raw_target=_LONG_RAW_MSYS_TOKEN,
+            surface=message.SURFACE_TOOL,
+        )
     envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -28,6 +28,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -39,6 +40,8 @@ from coordinator_core.dag import _read_meta, invalidate_git_history_cache
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle import main_worktree_root  # re-export — see note below
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
 from coordinator_core.wire_paths import rel_id  # re-export — see note below
 
 _LOG = logging.getLogger(__name__)
@@ -194,8 +197,9 @@ _INDEX_RETRY_BACKOFF_CAP_S = 1.0
 
 
 async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> Optional[str]:
-    """Run one `git update-index` subcommand with exponential-backoff retry
-    against transient `.git/index.lock` contention.
+    """Run one git index-mutating subcommand (e.g. `update-index`, or
+    `restore --staged`) with exponential-backoff retry against transient
+    `.git/index.lock` contention.
 
     Returns None on eventual success (rc==0 on some attempt), or the LAST
     attempt's decoded stderr (never empty — falls back to a generic message)
@@ -226,69 +230,6 @@ async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> 
             await asyncio.sleep(delay)
             delay = min(delay * 2, _INDEX_RETRY_BACKOFF_CAP_S)
     return last_err or "update-index-failed"
-
-
-async def _ls_tree_head_cacheinfo(
-    dst: Path, *, cwd: Path, env: dict,
-) -> Optional[Tuple[str, str]]:
-    """Read back the (mode, sha) HEAD recorded for `dst` via `git ls-tree HEAD -- dst`.
-
-    Feeds the post-commit main-index resync's `update-index --add --cacheinfo`
-    call (archive_and_commit) — see that block's comment for why the resync must
-    read what the archival commit RECORDED rather than dst's current on-disk
-    content.
-
-    `git ls-tree HEAD -- <path>` emits ``"<mode> <type> <sha>\\t<path>"`` — THREE
-    space-separated fields before the tab (mode, object type, sha), NOT
-    `git ls-files -s`'s two-space-then-stage shape
-    (``"<mode> <sha> <stage>\\t<path>"``). This is a DEDICATED parser for that
-    reason — reusing git_native.py's `_parse_ls_files_cacheinfo` against an
-    ls-tree line would silently misparse the type field as the sha. Follows
-    git_native.py's `commit_scoped` / `_CacheInfoEntry` only as the general
-    (mode, sha, path)-triple precedent, not as a shared parser.
-
-    Returns None (never raises) on: nonzero exit, empty stdout (no HEAD entry
-    for dst — e.g. the path was never actually committed), or a malformed row
-    that doesn't split into the expected three fields before the tab. Callers
-    MUST treat a None return as "this move's resync failed" and MUST NOT call
-    `update-index --cacheinfo` with an empty or derived sha — doing so returns
-    rc=128 (``error: cache entry has null sha1`` then ``fatal: Unable to write
-    new index file``) and aborts the whole index write for every remaining
-    move in this call, not just the one with the bad lookup.
-    """
-    import asyncio
-
-    proc = await asyncio.create_subprocess_exec(
-        "git", "ls-tree", "HEAD", "--", str(dst),
-        cwd=str(cwd),
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, _stderr = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-
-    stdout = out.decode(errors="replace")
-    # Review: code-reviewer F4 — splitlines() computed once, not twice.
-    lines = stdout.splitlines()
-    line = lines[0] if lines else ""
-    if not line:
-        return None
-
-    meta, tab, _path = line.partition("\t")
-    if not tab:
-        return None
-
-    fields = meta.split()
-    if len(fields) != 3:
-        return None
-
-    mode, _obj_type, sha = fields
-    if not mode or not sha:
-        return None
-
-    return (mode, sha)
 
 
 def _make_git_env(*, idx_path: Optional[str] = None) -> dict:
@@ -827,6 +768,321 @@ def _cleanup_created_dirs(created: List[Path]) -> None:
 # async archive_and_commit — DR-211 D3/D4 git helper (Key Decision 2)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Post-commit main-index resync — extracted seam (C4a, 2026-08-11)
+# ---------------------------------------------------------------------------
+#
+# Lifted out of archive_and_commit / rm_and_commit's post-commit tail so a
+# test can inject a fake `run_git` and assert on the argv sequence with no
+# subprocess at all. Roughly six inline asyncio.create_subprocess_exec calls
+# (git mv/rm, stage, commit, reset, commit-verify) run UPSTREAM of the resync
+# inside each caller, so the resync was not reachable from a test that only
+# fakes its own git calls without a brittle module-wide create_subprocess_exec
+# patch — see AC5 in docs/plans/2026-08-11-resync-leaves-a-bare-staged-deletion-whe.md.
+# Pure extraction: same git commands, same order, same arguments, same retry
+# semantics via _update_index_with_retry, same `index_resync_failed`
+# per-item annotation, same _LOG.error on persistent failure. `run_git` is
+# keyword-only and defaults to the real retry-wrapped runner, so every
+# existing caller is unchanged — only a test passes a fake.
+
+
+def _persist_index_resync_failure(
+    *,
+    worktree_root: Path,
+    candidate_id: str,
+    reason: str,
+    op_label: str,
+) -> None:
+    """Give the `index_resync_failed` annotation a durable, queryable sink.
+
+    2026-08-11 fix (tasks/2026-08-11-resync-annotation-sink/SPEC.md). Step 1
+    of that spec established BY EXECUTION (not a code read) that the
+    `index_resync_failed` annotation this function's two call sites already
+    set on the acted[]/reaped[] item is otherwise ephemeral: `build_act_result`
+    strips it from every fleet.* op's wire response before it reaches a caller
+    (WIRE-SAFETY comment above), and session.boot_sweep's own
+    `_index_resync_warnings` folding of it into `warnings[]` is itself only
+    ever returned over one JSON-RPC call, never written to disk anywhere in
+    the composite-sweep handler. Nothing in either path persists it — the
+    `_LOG.error` call immediately above each of this function's two callers
+    reaches, at best, THIS process's stderr (see this module's `_setup_error`
+    docstring for why that guarantee stops at the process boundary).
+
+    Sink choice: one `bug-backlog` record via
+    `coordinator_core.ops.queue_append.append_queue_entry`, called in-process
+    (no queue.append IPC round-trip, no schema-cli.js/Node subprocess —
+    `append_queue_entry` validates via the in-process
+    `coordinator_core.frontmatter.schema_validate` bridge and writes a plain
+    YAML file with no git shell-out of its own). Rejected alternatives, in
+    the order Step 1 surfaced them:
+      - `tasks/orphan-sweep-notes.md` (boot_sweep's own `_append_warn_marker` /
+        WARN-marker mechanism) — inspected directly
+        (`coordinator_core/ops/session/rotate_orphan_sweep_log.py` module
+        docstring: "does NOT preserve the tail anywhere on disk ... the
+        caller ... has already read/consumed them by contract"). Read-and-
+        rotate by design: `/workday-start` Step 0.8 consumes it once and
+        `session.rotate_orphan_sweep_log` truncates it back to a 4-line
+        header. Fails constraint 2 (queryable by a LATER reader) outright,
+        and is scoped to a different domain (consumed-handoff disposition,
+        not main-index resync).
+      - `review_trail_write.py` / `state/review-trail/` — wrong domain
+        entirely (reviewer verdicts against a sha_range); reusing it would
+        overload an unrelated schema's meaning.
+      - A brand-new bespoke append log (e.g. a fresh JSONL ledger under
+        `state/`) — exactly the shape constraint 3 names and forbids ("Not a
+        new log file ... If you find yourself adding a log, stop and
+        reconsider").
+      - `coordinator_core.tracker_store` (sovereign-tracker event log) —
+        opt-in-by-existence per repo (module docstring: "a library, not a
+        fleet-wide service"), and its module docstring's own negative-spec
+        explicitly says do not grow it into a general query surface (DEC-12)
+        or add readers/writers outside its sat-01/sat-01b sovereign-tracker
+        contract. A resync failure can happen in a repo with no sovereign
+        tracker at all, so it cannot be the sink unconditionally.
+    `bug-backlog` was chosen because it is the one artifact already carrying
+    a wide, existing reader ecosystem (`coordinator_core/ops/records_query.py`,
+    the `backlog_grind_assemble/readers_*.py` family, `workday_complete/brief.py`,
+    and others — grepped, not assumed) that already answers "what unresolved
+    anomalies exist" — the exact retrospective question this sink exists to
+    answer for "did a resync fail for path X". `append_queue_entry`'s
+    `created_by_agent` parameter is a first-class, schema-declared field
+    (`state/bug-backlog/*.yaml`'s optional-field set does NOT include it —
+    it lives in the `system:` provenance block instead), i.e. an
+    engine-authored bug-backlog record is an already-sanctioned shape, not a
+    misuse of a human-curated queue.
+
+    Constraint 6 (a sink-write failure must never fail the archival op, which
+    already committed and is authoritative): every exception this raises is
+    caught here and degraded to a single `_LOG.error` — this function never
+    propagates, by construction. Deferred (function-local) import of
+    `coordinator_core.ops.queue_append` — that module imports
+    `main_worktree_root` FROM this module (`_common.py`) at its own top
+    level, so a module-level import here would be circular.
+    """
+    try:
+        from coordinator_core.ops.queue_append import append_queue_entry
+
+        append_queue_entry(
+            "bug-backlog",
+            title=f"index-resync-failed: {op_label} {candidate_id}",
+            body=(
+                f"session.boot_sweep / fleet.* main-index resync exhausted its "
+                f"retry budget for candidate_id={candidate_id!r} during "
+                f"{op_label}. The archival commit is authoritative and already "
+                f"landed; only post-commit `git status` hygiene against the "
+                f"main index failed. Reason: {reason}"
+            ),
+            status="open",
+            surface="main-index-resync",
+            severity="P3",
+            tags=["index-resync-failed", "auto-filed"],
+            evidence=reason,
+            caller_worktree=worktree_root,
+            created_by_agent="coordinator_core.ops.fleet._common",
+        )
+    except Exception as exc:  # noqa: BLE001 — degrade-safe, never fail the op (constraint 6)
+        _LOG.error(
+            "_persist_index_resync_failure: could not persist bug-backlog "
+            "record for candidate_id=%r (%s) — index_resync_failed annotation "
+            "still set on the wire item, but no durable sink was written: %s",
+            candidate_id, op_label, exc,
+        )
+
+
+async def _resync_main_index_for_moves(
+    moves: List[Move],
+    acted_by_id: dict,
+    *,
+    worktree_root: Path,
+    env: dict,
+    run_git=_update_index_with_retry,
+) -> None:
+    """Resync the MAIN index (real .git/index) to the new HEAD for archive_and_commit's moved paths.
+
+    The private-index commit advanced HEAD but left the main index holding stale
+    entries at src paths.  git status --porcelain would therefore report orphaned
+    staged residue (AC4/AC10 clean-index requirement).
+
+    Path-scoped index-from-HEAD restore (2026-08-11, C2) — ONE call per moved file:
+
+        git restore --staged -- <src> <dst>
+
+    Both paths converge to what HEAD records: src (which the archival commit
+    removed from HEAD) loses its index entry, dst (which HEAD now holds) is
+    restored at the COMMITTED blob rather than whatever is currently on disk.
+
+    HISTORY, so the supersession is legible rather than re-derived: this replaced a
+    2026-08-05 three-step cacheinfo form (`ls-tree HEAD -- dst`, then
+    `update-index --remove -- src`, then `update-index --add --cacheinfo`), which
+    itself replaced a plain `--remove`/`--add` pair. The cacheinfo form's `--add`
+    half was skipped entirely when the ls-tree lookup returned None, and could fail
+    on its own after retries — leaving the index without dst while HEAD held it,
+    which reads as a staged deletion of a file present on disk. That is the residue
+    this single-call form exists to close. Do not reintroduce either older shape.
+
+    The peer-edit guarantee the cacheinfo form bought is PRESERVED, and for the same
+    reason: restoring from HEAD stages dst at the committed blob, not at disk
+    content, so a peer's UNCOMMITTED worktree edit at dst stays an unstaged
+    modification (git status " M dst") instead of being silently staged under this
+    function's commit subject (git status "M  dst"). The pre-2026-08-05 plain
+    `--add -- dst` form read disk at resync time and is exactly the gap that could
+    stage a peer's edit under our subject line.
+
+    Path-scoped is also why this is safe on a shared index: unrelated content
+    already staged in the main index is untouched, whereas a full `git read-tree
+    HEAD` would obliterate it — see DR-211 D3 isolation invariant and
+    test_archive_and_commit_private_index_isolation.
+
+    UNMEASURED: whether a peer's DELIBERATE pre-archival staging of dst (as opposed
+    to an uncommitted worktree edit) survives this resync is outside the spike's
+    evidence base — this docstring asserts no specific outcome for that case. Note
+    the question is inherited from the cacheinfo form and was not re-opened by the
+    move to `restore --staged`; both stage dst from HEAD, not from disk.
+
+    Origin: state/lessons/2026-08-03-an-interrupted-git-mv-leaves-the-shared-
+    907008cbcb3c.yaml prescribes an index-only, path-scoped restoration from HEAD
+    (`git restore --staged`) as the MANUAL remedy for exactly this residue shape;
+    this now converts that lesson into engine behaviour via the lesson's own
+    literal invocation — a single `git restore --staged -- <src> <dst>` covering
+    BOTH paths in one call, rather than the two-step `--remove` / `--cacheinfo`
+    approximation this comment used to describe. See also example-doctrine-repo coordinator/docs/wiki/
+    concurrent-em-hazards.md and coordinator/docs/wiki/scoped-safety-commits.md
+    for "staged = claimed, unstaged = contestable" on a shared tree — the framing
+    this resync's guarantee is built to preserve.
+
+    Runs WITHOUT GIT_INDEX_FILE so operations target the real .git/index.
+    The restore is retried with exponential backoff to ride out transient
+    index.lock contention — see _update_index_with_retry / _INDEX_RETRY_*
+    for the empirical sizing (Review: code-reviewer — F4: non-fatal but
+    loud on persistent failure, AC10). Non-fatal to the already-committed
+    archival (commit is authoritative) — but NOT silent: exhaustion is
+    annotated onto the acted[] item as `index_resync_failed` (additive
+    key — absent on the success path, so a consumer reading only
+    `{id, archived: true}` per the frozen contract shape is unaffected) in
+    addition to the daemon-side _LOG.error, closing the "log line nobody
+    reads" gap that let the 2026-08-01/02 incident's residue sit unnoticed
+    across two sweeps.
+
+    Mutates each acted_by_id[move.candidate_id] item in place, adding
+    `index_resync_failed` only on persistent failure. Does not return a value.
+    """
+    for move in moves:
+        if move.candidate_id not in acted_by_id:
+            continue
+        reasons: List[str] = []
+
+        # Review: code-reviewer F1 — see this function's docstring
+        # ("Path-scoped index-from-HEAD restore") for the full rationale on
+        # why a single `git restore --staged` over both paths preserves the
+        # unconditional-on-lookup guarantee atomically.
+        #
+        # `--staged` keeps this index-only: it must NOT touch the
+        # worktree. `boot_sweep._commit_consumed_metadata` makes a second,
+        # explicit-pathspec commit that reads worktree content for dst;
+        # a worktree-touching restore would destroy the stamps that
+        # commit is about to read. `git restore --staged -- <path>`
+        # resolves its pathspec against cwd like any other `-- <path>`
+        # form here, so (unlike `--cacheinfo`'s legacy 3-arg path slot)
+        # no relativization is needed.
+        restore_err = await run_git(
+            ["git", "restore", "--staged", "--", str(move.src), str(move.dst)],
+            cwd=worktree_root, env=env,
+        )
+        if restore_err is not None:
+            reasons.append(f"restore-staged-failed: {restore_err}")
+
+        if reasons:
+            reason = "; ".join(reasons)
+            _LOG.error(
+                "archive_and_commit: main-index resync FAILED after %d attempts"
+                " for %s -> %s: %s (main index may be dirty — AC10)",
+                _INDEX_RETRY_MAX_ATTEMPTS, move.src, move.dst, reason,
+            )
+            item = acted_by_id.get(move.candidate_id)
+            if item is not None:
+                item["index_resync_failed"] = reason
+            await asyncio.to_thread(
+                _persist_index_resync_failure,
+                worktree_root=worktree_root,
+                candidate_id=move.candidate_id,
+                reason=reason,
+                op_label="archive_and_commit",
+            )
+
+
+async def _resync_main_index_for_reaps(
+    paths: List[Path],
+    reaped_by_id: dict,
+    *,
+    worktree_root: Path,
+    env: dict,
+    run_git=_update_index_with_retry,
+) -> None:
+    """Resync the MAIN index for rm_and_commit's reaped paths — --remove only, no --add
+    counterpart (the file is deleted, there is nothing to re-add). Same
+    exponential-backoff retry pattern as _resync_main_index_for_moves (see
+    _update_index_with_retry / _INDEX_RETRY_* for empirical sizing); non-fatal
+    but loud on persistent failure, and — same as the moves resync — NOT
+    silent: exhaustion is annotated onto the reaped[] item as
+    `index_resync_failed` (additive key, absent on success) in addition to the
+    daemon-side _LOG.error.
+
+    See rm_and_commit's docstring INVARIANT note (2026-08-11, DR-211 residue
+    audit C3) for why this --remove-only shape cannot reproduce
+    archive_and_commit's D + ?? residue shape — that reasoning is about THIS
+    call site's safety and stays attached to rm_and_commit's own docstring,
+    not here. That borrowed argument depends on a precondition specific to
+    rm_and_commit: its pre-commit plain `git rm` has already deleted the
+    worktree file before this resync runs. A future second caller of this
+    function must hold that same precondition (or re-derive its own
+    residue-shape safety argument) — it does not carry over automatically
+    just because the call shape matches.
+
+    Mutates each reaped_by_id[candidate_id] item in place, adding
+    `index_resync_failed` only on persistent failure. Does not return a value.
+    """
+    for path in paths:
+        # rel_id raises ValueError for a path outside worktree_root. For
+        # rm_and_commit (the only current caller), this can't actually fire:
+        # `paths` was already reassigned to the pre-filtered `valid_paths`
+        # before this function is called, and out-of-root paths were routed
+        # into `pre_failed[]` upstream — see rm_and_commit's `_rel_id`
+        # closure (code-reviewer slice1 F1). The try/except here is
+        # defensive, not load-bearing, for that caller. It IS load-bearing
+        # for any FUTURE caller that skips an equivalent upstream filter: an
+        # uncaught raise would sink the whole batch, and — unlike
+        # rm_and_commit's pre_failed[] accounting — a path swallowed here
+        # gets no failed[]/reaped[] record at all. A new caller passing
+        # unfiltered paths must do its own upstream filtering; this guard
+        # alone does not provide that accounting.
+        try:
+            candidate_id = rel_id(path, worktree_root)
+        except ValueError:
+            continue
+        if candidate_id not in reaped_by_id:
+            continue
+        remove_err = await run_git(
+            ["git", "update-index", "--remove", "--", str(path)],
+            cwd=worktree_root, env=env,
+        )
+        if remove_err is not None:
+            _LOG.error(
+                "rm_and_commit: main-index resync remove FAILED after %d attempts"
+                " for %s: %s (main index may be dirty — AC10)",
+                _INDEX_RETRY_MAX_ATTEMPTS, path, remove_err,
+            )
+            item = reaped_by_id.get(candidate_id)
+            if item is not None:
+                item["index_resync_failed"] = f"remove-failed: {remove_err}"
+            await asyncio.to_thread(
+                _persist_index_resync_failure,
+                worktree_root=worktree_root,
+                candidate_id=candidate_id,
+                reason=f"remove-failed: {remove_err}",
+                op_label="rm_and_commit",
+            )
+
+
 async def archive_and_commit(
     worktree_root: Path,
     moves: List[Move],
@@ -1160,105 +1416,47 @@ async def archive_and_commit(
         # _EVER_TRACKED_CACHE.
         invalidate_git_history_cache()
 
-        # Resync the MAIN index (real .git/index) to the new HEAD for the moved paths.
-        #
-        # The private-index commit advanced HEAD but left the main index holding stale
-        # entries at src paths.  git status --porcelain would therefore report orphaned
-        # staged residue (AC4/AC10 clean-index requirement).
-        #
-        # Cacheinfo resync (2026-08-05, supersedes the plain --remove/--add pair): for
-        # each successfully moved file —
-        #   1. git ls-tree HEAD -- dst   (read back what the archival commit RECORDED
-        #      for dst — mode + blob sha)
-        #   2. git update-index --remove -- src            (drops the stale src entry)
-        #   3. git update-index --add --cacheinfo <mode> <sha> dst
-        #      (stages dst at the COMMITTED blob, not whatever is currently on disk)
-        # This guarantees the shared main index is set to what the archival commit
-        # RECORDED for dst, not to dst's current on-disk content — so if a peer session
-        # has an UNCOMMITTED worktree edit at dst, this resync leaves that edit as an
-        # UNSTAGED worktree modification (git status: " M dst") rather than silently
-        # staging it (git status: "M  dst") under this function's own commit subject.
-        # The prior plain `--add -- dst` form read dst's on-disk content at resync time,
-        # which is exactly the gap that could stage a peer's edit under our subject line.
-        # This leaves any unrelated content already staged in the main index untouched
-        # (a full git read-tree HEAD would obliterate it — see DR-211 D3 isolation invariant
-        # and test_archive_and_commit_private_index_isolation).
-        #
-        # UNMEASURED: whether a peer's DELIBERATE pre-archival staging of dst (as opposed
-        # to an uncommitted worktree edit) survives this resync is outside the spike's
-        # evidence base — this comment asserts no specific outcome for that case.
-        #
-        # Origin: state/lessons/2026-08-03-an-interrupted-git-mv-leaves-the-shared-
-        # 907008cbcb3c.yaml prescribes an index-only, path-scoped restoration from HEAD
-        # (`git restore --staged`) as the MANUAL remedy for exactly this residue shape;
-        # this converts that lesson into engine behaviour via `--cacheinfo` (reading
-        # HEAD's recorded blob directly) rather than the lesson's literal `restore
-        # --staged` invocation. See also example-doctrine-repo coordinator/docs/wiki/
-        # concurrent-em-hazards.md and coordinator/docs/wiki/scoped-safety-commits.md
-        # for "staged = claimed, unstaged = contestable" on a shared tree — the framing
-        # this resync's guarantee is built to preserve.
-        #
-        # Runs WITHOUT GIT_INDEX_FILE so operations target the real .git/index.
-        # `update-index` calls are retried with exponential backoff to ride out
-        # transient index.lock contention — see _update_index_with_retry /
-        # _INDEX_RETRY_* for the empirical sizing (Review: code-reviewer — F4:
-        # non-fatal but loud on persistent failure, AC10). Non-fatal to the
-        # already-committed archival (commit is authoritative) — but NOT silent:
-        # exhaustion is annotated onto the acted[] item as `index_resync_failed`
-        # (additive key — absent on the success path, so a consumer reading only
-        # `{id, archived: true}` per the frozen contract shape is unaffected) in
-        # addition to the daemon-side _LOG.error, closing the "log line nobody
-        # reads" gap that let the 2026-08-01/02 incident's residue sit unnoticed
-        # across two sweeps.
+        # Resync the MAIN index to the new HEAD for the moved paths — see
+        # _resync_main_index_for_moves (C4a, 2026-08-11) for the full
+        # rationale, moved there along with the code.
         main_env = _make_git_env()
         acted_by_id = {a["id"]: a for a in acted}
-        for move in moves:
-            if move.candidate_id not in acted_ids:
-                continue
-            reasons: List[str] = []
+        await _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env=main_env,
+        )
 
-            # Review: code-reviewer F1 — attempt --remove independently of the
-            # cacheinfo lookup outcome (as the pre-cacheinfo shape did), so a
-            # ls-tree-lookup failure doesn't leave the stale src entry stranded
-            # in the main index on top of the (already-annotated) missed --add.
-            remove_err = await _update_index_with_retry(
-                ["git", "update-index", "--remove", "--", str(move.src)],
-                cwd=worktree_root, env=main_env,
+        # Post-commit claim release (C3, AC1): same worktree, this session's
+        # own sid, and a bounded pathspec — even though the git commit ABOVE
+        # was deliberately issued with no trailing pathspec (FORWARD-B, see
+        # this function's own docstring), the set of paths it actually
+        # covered is fully known here: every acted Move's src (vacated) and
+        # dst (now tracked at dst). Released ONCE for the whole batch (not
+        # per-Move) — this loop already committed everything together, and
+        # `release_committed_claims` itself costs one `git status
+        # --porcelain` call regardless of how many paths are passed.
+        # Offloaded via `asyncio.to_thread`: this module's own NEGATIVE-SPEC
+        # ("NEVER uses blocking subprocess.run — all git calls are
+        # asyncio.create_subprocess_exec + await, DR-211 D4 async mandate")
+        # applies to this call too — `release_committed_claims` issues a
+        # synchronous `git status --porcelain` subprocess.
+        try:
+            release_paths = [
+                rel_id(p, worktree_root) for m in moves if m.candidate_id in acted_ids
+                for p in (m.src, m.dst)
+            ]
+            if release_paths:
+                await asyncio.to_thread(
+                    session_scope.release_committed_claims,
+                    session_core.resolve_session_id(str(worktree_root)),
+                    release_paths,
+                    str(worktree_root),
+                )
+        except Exception:
+            _LOG.debug(
+                "archive_and_commit: release_committed_claims failed "
+                "post-commit; claim(s) retained",
+                exc_info=True,
             )
-            if remove_err is not None:
-                reasons.append(f"remove-failed: {remove_err}")
-
-            cacheinfo = await _ls_tree_head_cacheinfo(move.dst, cwd=worktree_root, env=main_env)
-            if cacheinfo is None:
-                reasons.append(
-                    f"ls-tree-lookup-failed: could not resolve HEAD blob for {move.dst}"
-                )
-            else:
-                mode, sha = cacheinfo
-
-                # `--cacheinfo`'s legacy 3-arg path slot is NOT resolved against cwd
-                # the way `update-index --add -- <path>` is — an absolute path here
-                # fails with "error: Invalid path" / "cannot add" (rc=128). It wants
-                # a path relative to the worktree root, so unlike every other git
-                # call in this function, this one is deliberately relativized.
-                dst_rel = os.path.relpath(str(move.dst), str(worktree_root))
-                add_err = await _update_index_with_retry(
-                    ["git", "update-index", "--add", "--cacheinfo", mode, sha, dst_rel],
-                    cwd=worktree_root, env=main_env,
-                )
-                if add_err is not None:
-                    reasons.append(f"add-failed: {add_err}")
-
-            if reasons:
-                reason = "; ".join(reasons)
-                _LOG.error(
-                    "archive_and_commit: main-index resync FAILED after %d attempts"
-                    " for %s -> %s: %s (main index may be dirty — AC10)",
-                    _INDEX_RETRY_MAX_ATTEMPTS, move.src, move.dst, reason,
-                )
-                item = acted_by_id.get(move.candidate_id)
-                if item is not None:
-                    item["index_resync_failed"] = reason
 
         return acted, failed
 
@@ -1317,8 +1515,32 @@ async def rm_and_commit(
 
     After a successful commit: main-index resync via `git update-index --remove`
     for each reaped path (no --add counterpart — the file is gone), with the
-    same up-to-3-retries + 0.05s backoff pattern as archive_and_commit;
+    same exponential-backoff retry pattern as archive_and_commit (see
+    _update_index_with_retry / _INDEX_RETRY_* for the live constants — do not
+    restate the numbers here, they have drifted from prose once already);
     non-fatal but loud on persistent failure.
+
+    INVARIANT (2026-08-11, DR-211 residue audit C3): this --remove-only resync
+    cannot produce the archive_and_commit-style `D` (staged deletion) + `??`
+    (untracked file present on disk) residue shape. That shape arises there
+    because the resync's `--add` half is SKIPPED or FAILS while its `--remove`
+    half has already run — leaving the index without `dst` at a moment when HEAD
+    holds `dst` and the file is present on disk. It is a half-completed resync,
+    NOT a race and NOT a stat mismatch; describing it as either sends the next
+    reader hunting for a concurrency bug that is not there. This site has no
+    `--add` half to lose, so the shape has no way to form.
+
+    Benign BECAUSE the commit already succeeded and HEAD no longer holds the
+    path — not unconditionally: post-commit, HEAD has dropped the path AND the
+    worktree file is already gone (plain `git rm` deleted it before the commit
+    ran), so `--remove` only converges the main index toward a HEAD it already
+    matches. On commit FAILURE this resync block is never reached at all —
+    reversal there is `git checkout HEAD -- <path>` (see the failure branch
+    above), not this resync, and that branch carries its own residue analysis.
+
+    What a FAILED `--remove` here leaves is a different shape, not this one: the
+    index still recording a path that HEAD has dropped and disk no longer has.
+    That is what the `index_resync_failed` annotation below exists to surface.
 
     Private index is always cleaned up in the finally block.
 
@@ -1344,7 +1566,10 @@ async def rm_and_commit(
     - NEVER uses blocking subprocess.run — all git calls are
       asyncio.create_subprocess_exec + await (DR-211 D4 async mandate).
     - GIT_INDEX_FILE isolates staging; the main index is only touched in the
-      post-commit resync step, and only via --remove (no --add).
+      post-commit resync step, and only via --remove (no --add). See the
+      INVARIANT note above the resync code for why --remove-only cannot
+      reproduce archive_and_commit's D + ?? residue shape — conditional on
+      the commit-success path, not a blanket "--remove is always safe" claim.
     - stdout/stderr captured as bytes — decoded with errors="replace" on failure.
 
     Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4)
@@ -1533,33 +1758,43 @@ async def rm_and_commit(
         # comment above for the correctness rationale.
         invalidate_git_history_cache()
 
-        # Resync the MAIN index for reaped paths — --remove only, no --add
-        # counterpart (the file is deleted, there is nothing to re-add).
-        # Same exponential-backoff retry pattern as archive_and_commit (see
-        # _update_index_with_retry / _INDEX_RETRY_* for empirical sizing);
-        # non-fatal but loud on persistent failure, and — same as
-        # archive_and_commit — NOT silent: exhaustion is annotated onto the
-        # reaped[] item as `index_resync_failed` (additive key, absent on
-        # success) in addition to the daemon-side _LOG.error.
+        # Resync the MAIN index for reaped paths — see
+        # _resync_main_index_for_reaps (C4a, 2026-08-11) for the full
+        # rationale, moved there along with the code. See this function's
+        # own docstring INVARIANT note for why the --remove-only shape here
+        # is safe — that reasoning stays attached to THIS site's meaning.
         main_env = _make_git_env()
         reaped_by_id = {r["id"]: r for r in reaped}
-        for path in paths:
-            candidate_id = _rel_id(path)
-            if candidate_id not in reaped_ids:
-                continue
-            remove_err = await _update_index_with_retry(
-                ["git", "update-index", "--remove", "--", str(path)],
-                cwd=worktree_root, env=main_env,
-            )
-            if remove_err is not None:
-                _LOG.error(
-                    "rm_and_commit: main-index resync remove FAILED after %d attempts"
-                    " for %s: %s (main index may be dirty — AC10)",
-                    _INDEX_RETRY_MAX_ATTEMPTS, path, remove_err,
+        await _resync_main_index_for_reaps(
+            paths, reaped_by_id, worktree_root=worktree_root, env=main_env,
+        )
+
+        # Post-commit claim release (C3, AC1) — same worktree, this
+        # session's own sid, bounded scope (every genuinely reaped path,
+        # `reaped_ids`, not `paths`, which may still hold pre_failed
+        # entries). See archive_and_commit's identical block for the
+        # no-trailing-pathspec-but-bounded-scope rationale; offloaded via
+        # `asyncio.to_thread` for the same D4 (never-blocking-subprocess)
+        # reason given there.
+        try:
+            release_paths = [
+                rid for p in paths
+                for rid in [_rel_id(p)]
+                if rid in reaped_ids
+            ]
+            if release_paths:
+                await asyncio.to_thread(
+                    session_scope.release_committed_claims,
+                    session_core.resolve_session_id(str(worktree_root)),
+                    release_paths,
+                    str(worktree_root),
                 )
-                item = reaped_by_id.get(candidate_id)
-                if item is not None:
-                    item["index_resync_failed"] = f"remove-failed: {remove_err}"
+        except Exception:
+            _LOG.debug(
+                "rm_and_commit: release_committed_claims failed post-commit; "
+                "claim(s) retained",
+                exc_info=True,
+            )
 
         return reaped, failed
 

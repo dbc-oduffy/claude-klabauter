@@ -17,7 +17,28 @@ that justified retiring it (commit 5372260e) held only for claude-klabauter's OW
 also runs against consumer repos' `state/handoffs/` + `archive/handoffs/` trees (example-retrieval-repo,
 Example-cockpit-repo, etc.), which were verified un-migrated on 2026-07-23 (example-retrieval-repo: 100% old
 vocabulary; example-cockpit-repo: majority old vocabulary, including ``deployment_state: abandoned``
-records). A record still authored in OLD vocabulary (``status: active``/``consumed``,
+records).
+
+    MEASUREMENT SUPERSEDED IN PART, 2026-08-11 — do not cite the cockpit half above as current.
+    example-cockpit-repo-em re-measured their own corpus through the ``handoff.columns`` CLI and
+    compared every served value against the raw frontmatter it came from: 169 of 169 rows, all
+    four columns (``status``/``deployment_state``/``predecessor``/``shipped_in``), **zero
+    divergence and zero surviving old tokens**. Their corpus is uniformly NEW vocabulary today.
+    The "majority old vocabulary" description of cockpit is ~3 weeks stale and was cited from
+    this docstring, in good faith, to tell a sibling repo that this coercion was load-bearing
+    for them specifically — a claim their measurement then falsified. That is the cost of a
+    dated corpus census reading as a standing fact: annotate it here rather than let the next
+    reader repeat it.
+
+    **The shim STAYS, and the exit condition below is NOT met.** Two reasons, both live:
+    example-retrieval-repo's leg has NOT been re-measured since 2026-07-23 and its last known state is
+    100% old vocabulary — one repo migrating discharges one leg of an all-consumers condition,
+    not the condition. And cockpit themselves argued for keeping it: coercion that is a no-op
+    on a corpus today is exactly what stops being a no-op when an old archived record
+    resurfaces or the vocabulary moves again, and they would rather that logic live in this
+    producer than be forked into their ingest.
+
+A record still authored in OLD vocabulary (``status: active``/``consumed``,
 ``deployment_state: abandoned``, ``consumed_at``/``consumed_by``) is coerced up to the new
 tokens before it reaches the strict pydantic model; a record already authored in NEW vocabulary
 passes through untouched. ``status: superseded`` remains recognized on its own, separate,
@@ -104,7 +125,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -121,6 +141,12 @@ from coordinator_core.frontmatter.baton_class import (
     baton_class as _baton_class,
 )
 from ._shared import normalize_frontmatter
+from .handoff_columns import (
+    PREDECESSOR_DEFAULT,
+    _DEPLOYMENT_RECOGNIZED,
+    _coerce_legacy_abandoned,
+    _resolve_shipped_in_dates as _resolve_shipped_in_dates_batch,
+)
 
 # Required non-nullable fields; a record missing any (non-string) is quarantined (bash:245-249).
 _REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
@@ -141,10 +167,7 @@ _REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
 # old->new tolerance described above.
 _STATUS_OLD_TO_NEW = {"active": "open", "consumed": "claimed", "superseded": "claimed"}
 _STATUS_RECOGNIZED = {"active", "consumed", "superseded", "open", "claimed"}
-_DEPLOYMENT_RECOGNIZED = {
-    "in_flight", "shipped", "awaiting_gate", "ready_to_fire", "abandoned",
-    "continued", "closed",
-}
+# _DEPLOYMENT_RECOGNIZED moved to handoff_columns.py (C1) — imported above.
 
 # Acceptance-criteria checklist line matchers (bash awk regexes :402-403). [[:space:]] == \s.
 _AC_DONE_RE = re.compile(r"^[ \t\r\n\f\v]*- \[[xX]\]")
@@ -189,49 +212,11 @@ def _query_records(ctx: EmitContext, record_type: str) -> list[dict]:
 def _resolve_shipped_in_dates(ctx: EmitContext, raw_shas: list[str]) -> dict[str, str]:
     """Resolve distinct raw ``shipped_in`` SHAs to commit dates via ONE git log.
 
-    ``git log --no-walk=unsorted --ignore-missing --format='%H %ad' --date=format:%Y-%m-%d``
-    over the SHA batch; unresolvable SHAs are silently dropped (--ignore-missing → exit 0).
-    Each output ``%H`` is prefix-matched back to the first unmatched raw SHA (shipped_in.sha
-    must be the raw frontmatter value, not the 40-char expansion). Offline / git failure →
-    empty map (all shipped_in resolve to null; emit never aborts).
+    Thin ``EmitContext``-shaped wrapper over ``handoff_columns._resolve_shipped_in_dates``
+    (moved there at C1) — this section's callers already have a ``ctx``, so this keeps that
+    call shape rather than repointing every call site to pass ``ctx.repo_root`` directly.
     """
-    if not raw_shas:
-        return {}
-    # jq `unique` sorts ascending — replicate so the prefix-match tiebreak order matches bash.
-    ordered = sorted(set(raw_shas))
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [
-                "git", "-C", str(ctx.repo_root), "log",
-                "--no-walk=unsorted", "--ignore-missing",
-                "--format=%H %ad", "--date=format:%Y-%m-%d",
-                *ordered,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except (OSError, ValueError):
-        return {}
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return {}
-
-    sha_date: dict[str, str] = {}
-    matched: set[str] = set()
-    for line in proc.stdout.replace("\r", "").splitlines():
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        full, date = parts[0], parts[1]
-        for raw in ordered:
-            if raw not in matched and full[: len(raw)] == raw:
-                sha_date[raw] = date
-                matched.add(raw)
-                break
-    return sha_date
+    return _resolve_shipped_in_dates_batch(ctx.repo_root, raw_shas)
 
 
 def _acceptance_criteria(root: Path, path: Optional[str]) -> Optional[dict]:
@@ -286,33 +271,7 @@ def _origin_goal_id_triples(fm: dict) -> Optional[list[dict]]:
     ] or None
 
 
-def _coerce_legacy_abandoned(fm: dict) -> tuple[str, Optional[str], Optional[str]]:
-    """Split a legacy ``deployment_state: abandoned`` record into the new terminal it earns.
-
-    ``abandoned`` collapsed two epistemically distinct cases (contract ``DeploymentState``
-    docstring): a dead-holder node WITH a successor, and a deliberate stop WITHOUT one. Claude-klabauter's
-    own live corpus was already migrated at C5+C8 (``e2cf1a08`` — zero ``abandoned`` records
-    remain under this repo's ``state/handoffs/``, ``archive/handoffs/``, or
-    ``state/handoffs/.archive/``), but this path is NOT legacy tolerance for rare stragglers —
-    consumer repos this section also ingests from (example-retrieval-repo, example-cockpit-repo) carry
-    un-migrated ``abandoned`` records as their normal corpus state (verified 2026-07-23), so this
-    is a hot path there until the exit condition in the module docstring is met.
-
-    A ``continued`` verdict REQUIRES a positive successor proof — the plan's § Anti-scope
-    explicitly forbids inventing one ("the banned shape wearing a new label"), so this function
-    never guesses at succession via a cross-record join. It only honors a successor the record
-    ITSELF already names: a ``continued_into`` value already present in this record's own
-    frontmatter (the same field C5's writer cutover stamps on positive succession proof). Any
-    other legacy ``abandoned`` record — the overwhelming majority, with no successor reference
-    of its own — maps to ``closed`` + ``closed_reason: stale``, the same mapping C8's mechanical
-    archive migration used for successor-less records (example-doctrine-repo-blessed, plan § C8).
-
-    Returns ``(deployment_state, continued_into, closed_reason)``.
-    """
-    continued_into = fm.get("continued_into")
-    if isinstance(continued_into, str) and continued_into:
-        return "continued", continued_into, None
-    return "closed", None, "stale"
+# _coerce_legacy_abandoned moved to handoff_columns.py (C1) — imported above.
 
 
 _TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_\d{6})?_")
@@ -526,7 +485,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "baton_class": _cached_baton_class(emitted_kind),
             "deployment_state": deployment_state,
             "workstream": _jq_or(fm.get("workstream"), ""),
-            "predecessor": _jq_or(fm.get("predecessor"), "none"),
+            "predecessor": _jq_or(fm.get("predecessor"), PREDECESSOR_DEFAULT),
             "additional_predecessors": _jq_or(fm.get("additional_predecessors"), None),
             "forked_from": _jq_or(fm.get("forked_from"), None),
             "disposed_successors": _jq_or(fm.get("disposed_successors"), None),

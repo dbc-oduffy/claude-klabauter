@@ -123,6 +123,18 @@ from coordinator_core.ops.foreign_symbols import (
 # cartography/symbols.py's existing per-file resilience, and must not fail
 # the whole batch.
 #
+# `name_invariant_drop` is deliberately EXCLUDED from this set for the same
+# reason as `parse_failure`: it is corpus hygiene, not an infrastructure
+# fault. A drop diagnostic records that upstream's
+# `ExtractionResult.__post_init__` choke point rejected ONE symbol's NAME
+# (a line terminator or an over-length name) — the file itself parsed
+# cleanly, and the drop is already routed onto that file's own envelope
+# entry via `name_invariant_drops` (never `error`, by
+# `foreign_symbols.build_foreign_symbols`) rather than being surfaced here.
+# Including it in this set would fail the whole batch over a single
+# malformed heading/identifier, exactly the kind of quietly-thin-vs-loudly-
+# wrong tradeoff this set exists to draw a line under.
+#
 # `dependency_absent` is deliberately EXCLUDED from this set (chunk C4a — PM
 # ruling 2026-08-08: "fails gracefully if the user doesn't have access to
 # example-retrieval-repo"). `symbol_extract` ships from a private repo; a user without

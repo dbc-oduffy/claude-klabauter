@@ -107,6 +107,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from coordinator_core.frontmatter.body_blocks import _compile_heading_re
 from coordinator_core.frontmatter.primitives import (
     _is_nested_block_key,
     insert_fm_field,
@@ -142,6 +143,7 @@ from coordinator_core.ops.match_core import (
 )
 from coordinator_core.ops.plan_match import _collect_plans
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.session_ledger import SESSION_LEDGER_BLOCK_LINES
 
 _LOG = logging.getLogger(__name__)
 
@@ -860,6 +862,14 @@ async def _handler(
                 "(only [A-Za-z0-9_-] permitted)"
             )
     body: str = params.get("body") or ""
+    # C2 (ledger-owing handoff kinds): this op assembles frontmatter/body by
+    # string concatenation (_build_fork_frontmatter) rather than through
+    # coordinator-doc-new, so it does not inherit C1's scaffolder-side
+    # emission. Append the canonical block when the caller-supplied body
+    # doesn't already carry one — never duplicate it.
+    if not _compile_heading_re("Session Ledger").search(body):
+        ledger_block = "\n".join(SESSION_LEDGER_BLOCK_LINES)
+        body = body.rstrip("\n") + "\n\n" + ledger_block if body else ledger_block
 
     # ``origin_plan_id`` from params — sentinel None means "absent/auto-resolve".
     # Caller passes ``null`` (JSON null → Python None) to mean "explicitly no plan";

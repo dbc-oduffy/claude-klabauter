@@ -528,6 +528,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # _OP_KEY_SCOPE entry by a concurrent session, leaving the key-scope coverage gate RED on HEAD.
     # Reads main-worktree-rooted project records → common_dir (matches deliverable.rollup precedent).
     "records.query":                         "common_dir",
+    # handoff.columns — keyed on git_common_dir, matching records.query, whose collectors it
+    # reuses verbatim: the handler derives main_worktree_root(repo_root) and reads
+    # main-worktree-rooted state/handoffs/ plus (opt-in) archive/handoffs/. Without this entry
+    # dispatch resolves repo_root=None and the op returns an EMPTY payload rather than failing —
+    # the caller sees a working surface serving nothing, which is the exact shape this op exists
+    # to stop a cross-repo consumer from being handed.
+    # Spec: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3.
+    "handoff.columns":                       "common_dir",
     # memo.triage — keyed on git_common_dir: handler resolves the caller's worktree via
     # main_worktree_root(repo_root) and reads main-worktree-rooted cross-repo/archive/*.md +
     # docs/decisions/*.md + CLAUDE.md (deliverable.rollup / records.query precedent). Without

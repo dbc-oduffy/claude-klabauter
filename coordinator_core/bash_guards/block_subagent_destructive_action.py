@@ -1306,7 +1306,7 @@ _GIT_GLOBAL_OPT_WITH_ARG = frozenset({"-C", "-c"})
 #: unrecognized-flag fail-over below for why that enumeration is the wrong
 #: shape of fix).
 _GIT_GLOBAL_OPT_NO_ARG = frozenset(
-    {"--no-pager", "-P", "--bare", "--literal-pathspecs", "--paginate"}
+    {"--no-pager", "-P", "--bare", "--literal-pathspecs", "--paginate", "--no-optional-locks"}
 )
 
 #: `--git-dir`/`--work-tree` accept EITHER `--foo=value` (one token, handled
@@ -2715,7 +2715,10 @@ def _build_reason(
             "Use instead:\n"
             "    machine-local get/has/keys/path/dir\n\n"
             "Need to write a key? Surface it to the EM -- the main-loop is never\n"
-            "blocked by this guard. There is NO subagent-honored override."
+            "blocked by this guard. There is NO subagent-honored override -- but note\n"
+            "this is a speed bump at the shell surface, not a capability boundary: a\n"
+            "subagent that can run Python can still write the registry directly,\n"
+            "unseen by this guard. Fix forward, or surface a genuine need to the EM."
         )
     if deny_kind == "rm -r/-f (recursive or force)":
         return (
@@ -2741,13 +2744,27 @@ def _build_reason(
             "    destructive to a REPO? Surface it to the EM — the main-loop is never\n"
             "    blocked by this guard.\n\n"
             "There is NO subagent-honored override for this guard — the lock keys on\n"
-            "resolved caller-context, never on an env var, by design."
+            "resolved caller-context, never on an env var, by design -- but note this\n"
+            "is a speed bump at the shell surface, not a capability boundary: a\n"
+            "subagent that can run Python can still remove files directly, unseen by\n"
+            "this guard. Fix forward, or surface a genuine need to the EM."
         )
     return (
-        "BLOCKED: destructive git/rm/chmod-chown -R is EM-locked. Fix "
-        "forward, or ask the EM to run it. No subagent override.\n\n"
+        "BLOCKED: destructive git/rm/chmod-chown -R is blocked at the shell surface\n"
+        "for subagents.\n\n"
         f"  Denied: {deny_kind}\n"
-        f"  Cmd:    {cmd_safe}"
+        f"  Cmd:    {cmd_safe}\n\n"
+        "This is a deliberate speed bump on shell-invoked git, not a capability\n"
+        "boundary -- no shell-token matcher can constrain an interpreter, and a\n"
+        "subagent that can run Python (or any other interpreter) can still reach\n"
+        "git directly, unseen by this guard. It exists to make the destructive\n"
+        "path cost conscious effort instead of a reflexive shell command, not to\n"
+        "claim the action is unreachable.\n\n"
+        "Fix forward, or surface it to the EM to run -- the main-loop is never\n"
+        "blocked by this guard. This guard has no subagent-reachable override\n"
+        "flag; routing around it via another interpreter is not defeating a\n"
+        "real gate, so treat a genuine need for this exact operation as a\n"
+        "signal to ask, not a puzzle to solve."
     )
 
 

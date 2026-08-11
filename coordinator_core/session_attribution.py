@@ -152,22 +152,35 @@ def bulk_trailer_session_map(
     range_str: str,
     cwd: str,
     run: GitRunner,
+    include_merges: bool = False,
 ) -> Dict[str, str]:
     """Return {sha: session_id} for every commit within `range_str` that carries
-    its own Session-Id git trailer, via ONE `git log --no-merges` walk.
+    its own Session-Id git trailer, via ONE `git log` walk.
 
     Sibling of `trailer_foreign_shas`, not a replacement — same git invocation
-    shape (same `--no-merges` + trailers format string), but over a WHOLE
-    window rather than one caller-supplied sub-range, so a caller that needs
-    the foreign-set answer for MANY (sub-range, own_session_id) pairs drawn
-    from the same window can compute each answer by cheap in-memory set math
-    afterward instead of one `git log` per pair. See coverage.py's
+    shape (same trailers format string), but over a WHOLE window rather than
+    one caller-supplied sub-range, so a caller that needs the foreign-set
+    answer for MANY (sub-range, own_session_id) pairs drawn from the same
+    window can compute each answer by cheap in-memory set math afterward
+    instead of one `git log` per pair. See coverage.py's
     `_reviewed_via_graph_walk`, which primes `_narrow_foreign_session_scope`'s
     own `session_cache` from this map rather than calling `trailer_foreign_shas`
     once per distinct sha_range — the equivalence holds because every sha that
     can ever reach that function's `shas - foreign` computation is already
     known to lie within this same window (see that call site's own comment for
     the argument).
+
+    `include_merges` defaults to `False`, which walks `--no-merges` — BYTE-
+    IDENTICAL to this function's pre-existing behaviour, preserving every
+    existing caller (coverage.py's `_reviewed_via_graph_walk`,
+    `review_trail_readjudication_report.py`) unchanged. Pass `True` only when
+    a merge commit's own Session-Id trailer must also be visible — e.g.
+    `directives_commit_tail._committed_paths_for_sids`, which needs a peer's
+    merge commits attributed (docs/plans/2026-08-10-commit-event-5s-cap-and-
+    the-silent-tail.md, AC2 — the exact defect that reverted C18 of
+    docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-
+    gate.md: dropping merges here silently UNDER-excludes a live peer's
+    touched paths).
 
     A commit with no Session-Id trailer is simply absent from the returned map
     — same exclusion-based posture as `trailer_foreign_shas` (untrailered
@@ -180,14 +193,14 @@ def bulk_trailer_session_map(
     set — exactly the over-crediting defect the trailer classifier exists to
     close.
     """
-    rc, out, err = run(
-        [
-            "git", "log", "--no-merges",
-            "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
-            range_str,
-        ],
-        cwd,
-    )
+    args = ["git", "log"]
+    if not include_merges:
+        args.append("--no-merges")
+    args += [
+        "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+        range_str,
+    ]
+    rc, out, err = run(args, cwd)
     if rc != 0:
         raise GitLogFailed(
             f"git log failed while bulk-resolving Session-Id trailers for "

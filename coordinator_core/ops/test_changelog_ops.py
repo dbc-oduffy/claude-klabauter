@@ -97,15 +97,15 @@ def test_main_positive_backfills_gap(tmp_path: Path, monkeypatch, capsys) -> Non
     )
 
     monkeypatch.chdir(repo)
-    # Byte-parity: the retired oracle facade always resolved host via
-    # `hostname -s || hostname` and never consulted COORDINATOR_MACHINE — set
-    # it here to prove main() does NOT pick it up (see main()'s Host
-    # resolution note).
-    monkeypatch.setenv("COORDINATOR_MACHINE", "should-be-ignored")
+    # 2026-08-11 fix (cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-
+    # changelog-cli-three-defects.md item 2): main() now resolves host via
+    # compute_machine() — same machine slug the rest of the daily ceremony
+    # uses — which honours COORDINATOR_MACHINE as its own first-priority
+    # override. Prove main() DOES pick it up (the opposite of the retired
+    # byte-parity contract this test used to assert).
+    monkeypatch.setenv("COORDINATOR_MACHINE", "expected-slug")
 
-    from coordinator_core.ops.changelog_ops import _get_hostname
-
-    expected_host = _get_hostname()
+    expected_host = "expected-slug"
 
     rc = main([])
 
@@ -118,7 +118,6 @@ def test_main_positive_backfills_gap(tmp_path: Path, monkeypatch, capsys) -> Non
     content = out_path.read_text()
     assert f"## {today} — {expected_host} (synthesized backfill)" in content
     assert "init commit" in content
-    assert "should-be-ignored" not in content
 
 
 def test_main_ignores_repo_root_positional(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -134,6 +133,103 @@ def test_main_ignores_repo_root_positional(tmp_path: Path, monkeypatch, capsys) 
     # no HEADER.md in this repo -> advisory message, proving repo_root was
     # resolved from $PWD (the real repo), not the bogus positional argv[0]
     assert result.get("message") == "no HEADER.md"
+
+
+def test_main_help_does_not_run_backfill(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Item 1 (cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-changelog-
+    cli-three-defects.md): -h/--help must print usage and exit 0 WITHOUT
+    running the backfill, even when a real gap is present."""
+    repo = _init_repo(tmp_path)
+    week_changelog = repo / "state" / "week-changelog"
+    week_changelog.mkdir(parents=True)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
+    (repo / "README.md").write_text("hello\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    monkeypatch.chdir(repo)
+
+    rc = main(["--help"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Usage" in captured.out or "backfill-week-changelog-gaps" in captured.out
+    assert list(week_changelog.glob("*backfill.md")) == []
+
+
+def test_main_dry_run_reports_without_writing(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Item 1: --dry-run reports the same {backfilled, skipped} shape without
+    writing anything to disk."""
+    repo = _init_repo(tmp_path)
+    week_changelog = repo / "state" / "week-changelog"
+    week_changelog.mkdir(parents=True)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
+    (repo / "README.md").write_text("hello\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    monkeypatch.chdir(repo)
+
+    rc = main(["--dry-run"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert len(result["backfilled"]) == 1
+    would_be_path = Path(result["backfilled"][0])
+    assert not would_be_path.exists()
+    assert list(week_changelog.iterdir()) == [week_changelog / "HEADER.md"]
+    assert "would write" in captured.err
+
+
+def test_main_names_written_files_on_stderr(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Item 1: a real (non-dry-run) write must NAME the file it wrote on
+    stderr -- silent writes were half of why --help running the backfill went
+    unnoticed."""
+    repo = _init_repo(tmp_path)
+    week_changelog = repo / "state" / "week-changelog"
+    week_changelog.mkdir(parents=True)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
+    (repo / "README.md").write_text("hello\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    monkeypatch.chdir(repo)
+
+    rc = main([])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    out_path = result["backfilled"][0]
+    assert "wrote" in captured.err
+    assert out_path in captured.err
+
+
+def test_main_host_resolves_via_compute_machine(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Item 2: main() resolves host via compute_machine() (the ceremony-wide
+    lowercase machine slug), not the raw OS hostname -- and DOES honour
+    COORDINATOR_MACHINE, reversing the retired byte-parity contract."""
+    repo = _init_repo(tmp_path)
+    week_changelog = repo / "state" / "week-changelog"
+    week_changelog.mkdir(parents=True)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
+    (repo / "README.md").write_text("hello\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    monkeypatch.chdir(repo)
+    # compute_machine() lowercases via machine_slug() (coordinator_core.ops.emit._slug):
+    # "MixedCaseSlug" -> "mixedcaseslug".
+    monkeypatch.setenv("COORDINATOR_MACHINE", "MixedCaseSlug")
+
+    rc = main([])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    out_path = Path(result["backfilled"][0])
+    assert "-mixedcaseslug-backfill.md" in out_path.name
 
 
 class TestPerDayFilenameCollapse:

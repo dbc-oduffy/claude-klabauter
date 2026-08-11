@@ -538,7 +538,11 @@ class TestChainTerminalLoe:
         handoff.write_text("---\n---\n", encoding="utf-8")
 
         def _fake_agg_main(argv):
-            assert argv == ["--terminal-handoff", str(handoff), "--format", "yaml-frontmatter"]
+            # The fixed prefix is exact; any `--closing-*` tail is the
+            # chain-terminal session naming itself so the aggregate can
+            # attribute the row it has not appended yet (`_closing_session_argv`).
+            assert argv[:4] == ["--terminal-handoff", str(handoff), "--format", "yaml-frontmatter"]
+            assert all(a.startswith("--closing-") or not a.startswith("--") for a in argv[4:])
             print("loe:\n  agent_dispatches: 26\n  opus_dispatches: 4\n  em_tokens: null\n  tshirt: \"L\"")
             return 0
 

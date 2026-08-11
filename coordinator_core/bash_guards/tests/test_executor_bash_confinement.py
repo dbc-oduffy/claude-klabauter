@@ -88,6 +88,49 @@ def _payload(command: str, agent_id: str = "deadbeef0123", agent_type: str = _CO
     }
 
 
+#: 2026-08-11 order-dependency fix -- see this module's own docstring
+#: addendum below (`_FAKE_ENUMERATED_TYPES`) for the incident this closes.
+_FAKE_ENUMERATED_TYPES = frozenset({_CONFINED_TYPE, _REVIEWER_TYPE})
+
+
+def _fake_is_confined_by_roster_absence(effective_type: str) -> bool:
+    """Deterministic stand-in for ``_helpers.is_confined_by_roster_absence``.
+
+    2026-08-11 (order-dependency fix, this dispatch): every test in this
+    module previously left ``block_reviewer_bash_outside_allowlist``'s leg-3
+    roster check (``_is_confined_type`` -> ``is_confined_by_roster_absence``
+    -> the REAL, unmocked ``resolve_roster()``) unmocked, so the allow/deny
+    verdict this file pins depended on ambient process state this suite does
+    not control: whether ``resolve_roster()`` can actually resolve the example-doctrine-repo
+    root and read its roster sources from THIS process's environment.
+    ``coordinator_core/conftest.py``'s autouse ``_quarantine_real_home``
+    fixture repoints ``HOME``/``USERPROFILE`` at a throwaway tmp dir for
+    every test in the suite, which -- absent a ``COORDINATOR_SETTINGS_HOME``
+    override surviving that quarantine -- makes ``read_doe_root_pointer()``
+    resolve to ``""`` and ``resolve_roster()`` fail closed (``roster is
+    None``), which makes ``is_confined_by_roster_absence`` return ``True``
+    for EVERY non-empty ``effective_type`` -- including
+    ``coordinator:executor``, which this file exists to pin as UNconfined.
+    Reproduced deterministically (100% of runs, not merely "sometimes") on a
+    machine with no ``COORDINATOR_SETTINGS_HOME`` surviving the quarantine;
+    plausibly order/host-dependent on a machine where some earlier fixture
+    or test leaks a working override into a later test's process state.
+    Either way, a real-disk-dependent leg has no place deciding a pinned
+    allow/deny table -- this test module already monkeypatches the OTHER two
+    identity-resolution legs (``resolve_git_root``,
+    ``_read_backpointer_subagent_type``) for exactly this reason, and leg 3
+    was simply the one gap. Fixed by injecting a deterministic stand-in
+    keyed on the SAME two types (``coordinator:executor``,
+    ``coordinator:code-reviewer``) this file's own payloads ever construct --
+    both are genuinely enumerated on a healthy roster, so this mirrors what
+    ``resolve_roster()`` returns when it CAN resolve, without this test
+    suite depending on whether it actually can on any given host or run.
+    """
+    if not effective_type:
+        return False
+    return effective_type not in _FAKE_ENUMERATED_TYPES
+
+
 def _confine(monkeypatch, subagent_type: str = _CONFINED_TYPE) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
@@ -97,6 +140,9 @@ def _confine(monkeypatch, subagent_type: str = _CONFINED_TYPE) -> None:
         guard,
         "_read_backpointer_subagent_type",
         lambda git_root, agent_id: subagent_type,
+    )
+    monkeypatch.setattr(
+        guard, "is_confined_by_roster_absence", _fake_is_confined_by_roster_absence
     )
 
 

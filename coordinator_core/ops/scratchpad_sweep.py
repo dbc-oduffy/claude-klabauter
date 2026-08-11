@@ -84,6 +84,29 @@ a live directory is never eligible at any threshold, and its bytes (reported
 as ``0`` because it was never scanned, per the liveness-gated ``_scan_dir``
 call above) are never treated as "already accounted for" reclaimed space.
 
+Archive-shaped exemption (2026-08-11, EM-directed, size-cut-scoped only): a
+live dry-run surfaced the size-cut pass as already eligible to delete a peer
+repo's scratchpad at age 2.81 days (inside the default 7-day TTL, past the
+1-day size-cut floor) containing a versioned, release-shaped artifact
+(`pub58/engine-structural-ue5.8-v0.6.0.tar.zst`, 843 MB) — a sibling EM
+flagged the shape: a versioned archive under a scratchpad is what will
+eventually cost someone a rebuild, and the reclaim being *silent* about it is
+the actual defect, not the reclaim itself. The 1-day size-cut floor is far
+too short a window for a release-shaped artifact someone may still need.
+Fix: a directory carrying one or more archive-shaped files (``_ARCHIVE_SHAPE_RE``
+— ``*.tar``, ``*.tar.*`` incl. ``.tar.zst``/``.tar.gz``/``.tar.bz2``/``.tar.xz``,
+``*.tgz``, ``*.zip``, ``*.7z``, ``*.rar``, ``*.zst``; case-insensitive) is
+exempt from the SIZE-CUT pass only — it keeps verdict "too-recent" and is
+never selected into a pruned cohort, regardless of target/floor.
+NEGATIVE-SPEC: NEVER exempt an archive-shaped file from the TTL gate — the
+7-day TTL boundary is unchanged and still reclaims such a directory once it
+ages past ``ttl_days``; the exemption is size-cut-scoped BY DESIGN, not a
+general "never touch archives" rule. To keep TTL reclamation from silently
+repeating the same failure mode, the TTL gate prints a named stderr line
+(session id, archive count, byte total) whenever it reclaims or previews
+reclaiming a directory that carries an archive-shaped file — "no silent
+reclaim" is the property this fix exists to restore.
+
 Negative-spec:
     - NEVER descend into a non-``claude`` child of the temp root (pytest-of-*,
       tmp.*, repro, W, and any other OS/tool scratch sibling are out of scope
@@ -99,6 +122,8 @@ Negative-spec:
       failure against that directory's entry and continue.
     - NEVER delete anything when ``reclaim`` is not explicitly ``true`` —
       dry-run is the default, not an opt-out.
+    - NEVER exempt an archive-shaped file from the TTL gate — see
+      "Archive-shaped exemption" above; the exemption is size-cut-scoped only.
 """
 
 from __future__ import annotations
@@ -109,7 +134,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import discover_working_repos as _discover_working_repos
@@ -145,25 +170,68 @@ _DEFAULT_SIZE_CUT_FLOOR_DAYS = 1.0
 # directory (thousands of unreadable children) cannot blow up the report.
 _MAX_ERRORS_PER_DIR = 20
 
+#: Archive-shaped basename patterns — see module docstring's "Archive-shaped
+#: exemption" note. Matched against the basename only (never the full path),
+#: case-insensitive, via a single compiled regex rather than a loop of
+#: ``str.endswith`` calls. Covers ``*.tar``, ``*.tar.*`` (so ``.tar.zst``,
+#: ``.tar.gz``, ``.tar.bz2``, ``.tar.xz`` all hit through the same
+#: ``tar(\.\w+)?`` alternative — no need to enumerate every compression
+#: suffix), ``*.tgz``, ``*.zip``, ``*.7z``, ``*.rar``, and bare ``*.zst``
+#: (a zstd-compressed non-tar artifact, e.g. a lone data file). Deliberately
+#: a SHAPE check, not a content/magic-bytes check — this module already
+#: fails safe elsewhere (undeterminable liveness, dry-run default), and a
+#: basename-shape false positive costs nothing worse than an extra size-cut
+#: exemption, never a wrongful deletion.
+_ARCHIVE_SHAPE_RE = re.compile(
+    r"\.(tar(\.\w+)?|tgz|zip|7z|rar|zst)$", re.IGNORECASE
+)
+
+#: Sibling cap to ``_MAX_ERRORS_PER_DIR`` — the collected ``archives`` list
+#: per entry is capped so one directory containing thousands of archive-shaped
+#: files cannot blow up the report. ``archive_count``/``archive_bytes`` are
+#: NEVER capped — they must stay accurate even once the list itself is
+#: truncated, since a reader judges risk off the byte total, not the list.
+_MAX_ARCHIVES_PER_DIR = 20
+
+
+class _ScanResult(NamedTuple):
+    total_bytes: int
+    newest_mtime: Optional[float]
+    errors: List[str]
+    archives: List[dict]
+    archive_count: int
+    archive_bytes: int
+
 
 def _is_session_dirname(name: str) -> bool:
     return bool(_UUID_RE.match(name))
 
 
-def _scan_dir(path: Path) -> Tuple[int, Optional[float], List[str]]:
+def _scan_dir(path: Path) -> _ScanResult:
     """Recursively size *path* and find its newest-content mtime.
 
-    Returns (total_bytes, newest_mtime_epoch_or_None, errors). ``errors`` is a
-    capped list of human-readable per-entry failures (permission denied, a
-    file removed mid-walk, etc.) — never raises. ``newest_mtime`` falls back
-    to the directory's own mtime if it contains no readable regular files at
-    all (mirrors ``coordinator_core.session.liveness._dir_recency_fallback_epoch``'s
+    Returns a ``_ScanResult(total_bytes, newest_mtime_epoch_or_None, errors,
+    archives, archive_count, archive_bytes)``. ``errors`` is a capped list of
+    human-readable per-entry failures (permission denied, a file removed
+    mid-walk, etc.) — never raises. ``newest_mtime`` falls back to the
+    directory's own mtime if it contains no readable regular files at all
+    (mirrors ``coordinator_core.session.liveness._dir_recency_fallback_epoch``'s
     established pattern for "no content signal yet" — never reads as
     infinitely old or infinitely new).
+
+    ``archives`` is a capped list (``_MAX_ARCHIVES_PER_DIR``) of
+    ``{"path", "bytes", "mtime"}`` dicts for every archive-shaped file seen
+    (see ``_ARCHIVE_SHAPE_RE``); ``archive_count``/``archive_bytes`` are the
+    TRUE totals across every archive-shaped file this walk saw, accurate even
+    once ``archives`` itself has been truncated — a caller must never under-
+    report the byte total it judges risk off just because the list capped.
     """
     total_bytes = 0
     newest: Optional[float] = None
     errors: List[str] = []
+    archives: List[dict] = []
+    archive_count = 0
+    archive_bytes = 0
 
     def _record_error(msg: str) -> None:
         if len(errors) < _MAX_ERRORS_PER_DIR:
@@ -192,6 +260,13 @@ def _scan_dir(path: Path) -> Tuple[int, Optional[float], List[str]]:
             total_bytes += stat.st_size
             if newest is None or stat.st_mtime > newest:
                 newest = stat.st_mtime
+            if _ARCHIVE_SHAPE_RE.search(entry.name):
+                archive_count += 1
+                archive_bytes += stat.st_size
+                if len(archives) < _MAX_ARCHIVES_PER_DIR:
+                    archives.append(
+                        {"path": entry.path, "bytes": stat.st_size, "mtime": stat.st_mtime}
+                    )
 
     if not saw_file:
         try:
@@ -200,7 +275,7 @@ def _scan_dir(path: Path) -> Tuple[int, Optional[float], List[str]]:
             _record_error(f"stat failed for {path}: {exc}")
             newest = None
 
-    return total_bytes, newest, errors
+    return _ScanResult(total_bytes, newest, errors, archives, archive_count, archive_bytes)
 
 
 def _enumerate_session_dirs(slug_dir: Path) -> List[Path]:
@@ -300,7 +375,12 @@ def _apply_size_cut(
     the TTL gate, whose own "reclaimable"/"reclaimed" bytes are already
     excluded from the post-TTL remaining total below). Live / self /
     undeterminable / no-scratchpad entries are never eligible at any
-    threshold and are never mutated by this pass.
+    threshold and are never mutated by this pass. A "too-recent" entry
+    carrying one or more archive-shaped files (``archive_count > 0``) is ALSO
+    never an eligible candidate — see module docstring's "Archive-shaped
+    exemption" note — and instead gets ``size_cut_exempt: True`` plus a
+    ``size_cut_exempt_reason``; every other entry gets ``size_cut_exempt:
+    False`` so a reader never hits a missing key.
 
     Mutates matching ``entries`` in place (verdict/action/bytes-consumed
     bookkeeping identical in shape to the TTL loop's own reclaim branch) and
@@ -313,6 +393,7 @@ def _apply_size_cut(
           "shortfall_bytes": int,
           "shortfall_reason": str | None,
           "bytes_reclaimable": int, "bytes_reclaimed": int,
+          "archive_exempt_entries": int, "archive_exempt_bytes": int,
         }
     """
     import math
@@ -322,6 +403,13 @@ def _apply_size_cut(
         e["bytes"] for e in entries if e["verdict"] in ("reclaimable", "reclaimed")
     )
     remaining = total_bytes_all - bytes_removed_by_ttl
+
+    # Every entry gets these two keys, unconditionally — a reader must never
+    # hit a missing key regardless of whether this pass ever actually walks a
+    # cohort (e.g. the target-already-met early return below).
+    for e in entries:
+        e.setdefault("size_cut_exempt", False)
+        e.setdefault("size_cut_exempt_reason", None)
 
     # Live/undeterminable entries are never sized (``_scan_dir`` never runs
     # for them — the liveness gate short-circuits upstream), so their real
@@ -349,6 +437,8 @@ def _apply_size_cut(
         # These two fields measure only sized, non-live/undeterminable entries.
         "unsized_live_or_undeterminable_excluded": unsized_live_or_undeterminable_count > 0,
         "unsized_live_or_undeterminable_count": unsized_live_or_undeterminable_count,
+        "archive_exempt_entries": 0,
+        "archive_exempt_bytes": 0,
     }
 
     if remaining <= target_bytes:
@@ -362,10 +452,25 @@ def _apply_size_cut(
     # "nothing younger than size_cut_floor_days is ever eligible".
     floor_int = int(math.ceil(floor_days))
 
-    # Group eligible ("too-recent") entries by whole day-age cohort.
+    # Group eligible ("too-recent") entries by whole day-age cohort. An
+    # entry carrying an archive-shaped file is excluded from this grouping
+    # entirely — it is never an eligible size-cut candidate at any threshold
+    # (module docstring's "Archive-shaped exemption" note) — rather than
+    # excluded only when its cohort happens to be visited by the day-walk
+    # below, so it stays exempt even on a target/floor combination that would
+    # otherwise never reach its day.
     cohort_entries: dict = {}
     for e in entries:
         if e["verdict"] != "too-recent" or e["age_days"] is None:
+            continue
+        if e.get("archive_count", 0) > 0:
+            e["size_cut_exempt"] = True
+            e["size_cut_exempt_reason"] = (
+                f"{e['archive_count']} archive-shaped file(s), {e['archive_bytes']} "
+                "bytes — exempt from the size-cut pass (TTL gate still applies)"
+            )
+            report["archive_exempt_entries"] += 1
+            report["archive_exempt_bytes"] += e["bytes"]
             continue
         day = int(math.floor(e["age_days"]))
         cohort_entries.setdefault(day, []).append(e)
@@ -443,11 +548,36 @@ def _apply_size_cut(
                 "live/undeterminable directories were never sized and are "
                 "excluded from every byte total in this report"
             )
+        if report["archive_exempt_entries"] > 0:
+            plural = "y" if report["archive_exempt_entries"] == 1 else "ies"
+            reasons.append(
+                f"{report['archive_exempt_entries']} archive-shaped entr{plural} "
+                f"({report['archive_exempt_bytes']} bytes) exempted from the size-cut pass"
+            )
         if not reasons:
             reasons.append("target unmet; no further eligible cohorts")
         report["shortfall_reason"] = "; ".join(reasons)
 
     return report
+
+
+def _warn_if_archive_ttl_reclaim(sid: str, entry: dict, *, previewing: bool) -> None:
+    """"No silent reclaim" property for the TTL gate — see module docstring's
+    "Archive-shaped exemption" note. A no-op when ``entry`` carries no
+    archive-shaped file; otherwise prints a named stderr line (session id,
+    archive count, byte total) whichever of the TTL gate's two outcomes
+    (dry-run preview, or an actual reclaim attempt) is in play. The TTL gate
+    is deliberately NOT exempted from reclaiming an archive-shaped directory
+    once it ages past ``ttl_days`` — this only makes that reclaim loud."""
+    if entry.get("archive_count", 0) <= 0:
+        return
+    verb = "would reclaim" if previewing else "reclaiming"
+    print(
+        f"scratchpad_sweep: TTL gate {verb} session {sid} scratchpad "
+        f"containing {entry['archive_count']} archive-shaped file(s), "
+        f"{entry['archive_bytes']} bytes",
+        file=sys.stderr,
+    )
 
 
 def sweep_scratchpads(
@@ -483,10 +613,13 @@ def sweep_scratchpads(
           "reclaim": bool, "ttl_days": float, "temp_root": str,
           "self_session_id": str,
           "entries": [ {project_slug, session_id, path, verdict, live,
-                         age_days, bytes, action, error}, ... ],
+                         age_days, bytes, action, error, archives,
+                         archive_count, archive_bytes}, ... ],
           "counts": {verdict_name: count, ...},
           "bytes_reclaimable": int,  # sum over verdict == "reclaimable"
           "bytes_reclaimed": int,    # sum over verdict == "reclaimed"
+          "archives_seen": [ {project_slug, session_id, path, bytes, mtime,
+                               verdict}, ... ],  # flat, sorted by bytes desc
         }
 
     Verdict vocabulary (mutually exclusive per directory):
@@ -559,6 +692,9 @@ def sweep_scratchpads(
                 "bytes": 0,
                 "action": "skip",
                 "error": None,
+                "archives": [],
+                "archive_count": 0,
+                "archive_bytes": 0,
             }
 
             try:
@@ -607,10 +743,15 @@ def sweep_scratchpads(
                     _bump("live")
                     continue
 
-                size_bytes, newest_mtime, scan_errors = _scan_dir(scratchpad_path)
+                scan_result = _scan_dir(scratchpad_path)
+                size_bytes = scan_result.total_bytes
+                newest_mtime = scan_result.newest_mtime
                 entry["bytes"] = size_bytes
-                if scan_errors:
-                    entry["error"] = "; ".join(scan_errors)
+                entry["archives"] = scan_result.archives
+                entry["archive_count"] = scan_result.archive_count
+                entry["archive_bytes"] = scan_result.archive_bytes
+                if scan_result.errors:
+                    entry["error"] = "; ".join(scan_result.errors)
 
                 now = time.time()
                 age_days = (
@@ -630,9 +771,12 @@ def sweep_scratchpads(
                     entry["verdict"] = "reclaimable"
                     entry["action"] = "preview"
                     bytes_reclaimable += size_bytes
+                    _warn_if_archive_ttl_reclaim(sid, entry, previewing=True)
                     entries.append(entry)
                     _bump("reclaimable")
                     continue
+
+                _warn_if_archive_ttl_reclaim(sid, entry, previewing=False)
 
                 try:
                     shutil.rmtree(scratchpad_path)
@@ -670,6 +814,25 @@ def sweep_scratchpads(
     bytes_reclaimable += size_cut_report["bytes_reclaimable"]
     bytes_reclaimed += size_cut_report["bytes_reclaimed"]
 
+    # Flat, cross-entry view of every archive-shaped file this sweep saw —
+    # built from the (possibly size-cut-mutated) entries so "verdict" here
+    # reflects each directory's FINAL disposition, not its pre-size-cut one.
+    # Lets a caller print what is at risk without re-walking disk itself.
+    archives_seen: List[dict] = []
+    for e in entries:
+        for a in e.get("archives", []):
+            archives_seen.append(
+                {
+                    "project_slug": e["project_slug"],
+                    "session_id": e["session_id"],
+                    "path": a["path"],
+                    "bytes": a["bytes"],
+                    "mtime": a["mtime"],
+                    "verdict": e["verdict"],
+                }
+            )
+    archives_seen.sort(key=lambda a: a["bytes"], reverse=True)
+
     return {
         "reclaim": reclaim,
         "ttl_days": ttl_days,
@@ -680,6 +843,7 @@ def sweep_scratchpads(
         "bytes_reclaimable": bytes_reclaimable,
         "bytes_reclaimed": bytes_reclaimed,
         "size_cut": size_cut_report,
+        "archives_seen": archives_seen,
     }
 
 

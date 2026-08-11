@@ -167,7 +167,60 @@ def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "sandbox dir" not in reason
-    assert "ask the EM" in reason
+    assert "surface it to the EM" in reason
+
+
+def test_generic_branch_deny_message_states_shell_surface_not_capability_boundary():
+    # Regression for state/bug-backlog/2026-08-10-the-git-verb-bash-guard-
+    # does-not-stop-a-a1caf2991aa6.yaml: the generic fallback branch of
+    # `_build_reason` used to claim the destructive-git surface was
+    # "EM-locked" with "No subagent override" -- phrasing that reads as a
+    # capability boundary. It is not one: no shell-token matcher can
+    # constrain an interpreter, and a subagent that can run Python (or any
+    # other interpreter) reaches git regardless, unseen by this guard. The
+    # message must say so plainly, still deny the same way, and still tell
+    # the caller what to do instead.
+    payload = _payload("git gc --aggressive", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "shell surface" in reason
+    assert "not a capability" in reason
+    assert "interpreter" in reason
+    assert "EM-locked" not in reason
+    assert "No subagent override" not in reason
+    assert "surface it to the EM" in reason
+
+
+def test_rm_deny_message_states_shell_surface_not_capability_boundary():
+    # Review: coordinator:code-reviewer (S5) -- the rm branch (and the
+    # machine-local branch below) claimed enforcement stronger than the
+    # code holds ("denied OUTRIGHT ... no ... exception this guard will
+    # honor", "There is NO subagent-honored override") with no disclosure
+    # that this is a shell-token matcher, same bypass property as the
+    # generic git branch's own disclaimer two branches down. Assert the
+    # disclaimer landed here too, symmetrically, without weakening the
+    # existing hard-deny wording pinned above.
+    payload = _payload("rm -rf state/scratch/", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "shell surface" in reason
+    assert "not a capability boundary" in reason
+    assert "denied OUTRIGHT" in reason
+
+
+def test_machine_local_write_deny_message_states_shell_surface_not_capability_boundary():
+    payload = _payload(
+        "machine-local set repos.foo /tmp/evil", agent_type="coordinator:executor"
+    )
+    result = guard.check(payload)
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "shell surface" in reason
+    assert "not a capability boundary" in reason
+    assert "NO subagent-honored override" in reason
 
 
 def test_ambiguous_identity_denies_even_on_benign_looking_git(monkeypatch):
@@ -1075,6 +1128,52 @@ def test_git_merge_still_denies():
 def test_git_merge_ff_only_still_allows():
     payload = _payload("git merge --ff-only foo", agent_type="coordinator:executor")
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# `--no-optional-locks` enumeration (C2, docs/plans/2026-08-11-pytest-grant-
+# and-working-interpreter-disjoint.md). Before this fix, the flag was absent
+# from `_GIT_GLOBAL_OPT_NO_ARG`, so the anchored parser bailed on the
+# unrecognized flag and handed the segment to the legacy classifier, where
+# `_MERGE_WORD_RE` matched inside `merge-base`.
+# ---------------------------------------------------------------------------
+
+
+def test_git_no_optional_locks_merge_base_allows():
+    # AC4: the flag is now enumerated, so the anchored parser never bails
+    # and `merge-base` reaches its correct exact-token, read-only handling.
+    payload = _payload(
+        "git --no-optional-locks merge-base HEAD origin/main",
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
+def test_git_no_optional_locks_merge_no_ff_still_denies():
+    # AC5: the flag must not become a bypass for a real merge -- same deny
+    # reason as the unflagged form.
+    payload = _payload(
+        "git --no-optional-locks merge --no-ff feat", agent_type="coordinator:executor"
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_no_optional_locks_merge_ff_only_allows():
+    # AC5: the flagged --ff-only form behaves like the unflagged one.
+    payload = _payload(
+        "git --no-optional-locks merge --ff-only feat", agent_type="coordinator:executor"
+    )
+    assert guard.check(payload) is None
+
+
+def test_merge_word_re_pattern_unchanged():
+    # AC6: inert-probe guard against a future well-meaning narrowing of the
+    # legacy classifier's merge regex -- see the plan's "one real judgment
+    # call" section. This assertion must never be "fixed" by editing the
+    # regex; it exists to catch exactly that.
+    assert guard._MERGE_WORD_RE.pattern == r"\bmerge\b"
 
 
 def test_git_pull_still_denies():

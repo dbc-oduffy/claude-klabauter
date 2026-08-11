@@ -1043,6 +1043,25 @@ def _grouping_approval_fires(prospective_content: str) -> bool:
 
 
 def check(payload: dict) -> Optional[dict]:
+    """Evaluate the frontmatter-schema ADVISORY leg.
+
+    Cwd-vs-target defect: `repo_root` is resolved from the TARGET FILE's own
+    repo below, not the session's cwd — a session rooted at one repo writing
+    into a SIBLING repo's tree used to see `to_repo_relative` return `None`
+    before any schema step ran, so this leg silently produced nothing on
+    every cross-repo write (mirrors the identical fix and rationale in
+    ``validate_frontmatter_schema_deny._first_result``).
+
+    Advisory-only cross-repo rule (DR-277): this module's own outcomes are
+    already never a deny (every branch below either returns an
+    ``additionalContext`` advisory or stands down via ``_STOP_DENY``/``None``
+    for the deny sibling's unconditional territory), so fixing `repo_root`
+    here needs no further gating on its own — the cross-repo/in-repo split
+    for the sibling's four UNCONDITIONAL denies is handled entirely in
+    ``validate_frontmatter_schema_deny.check()`` (it converts them to an
+    advisory for a cross-repo target); this module keeps standing down for
+    those exactly as before, in both the cross-repo and in-repo case.
+    """
     tool_name = payload.get("tool_name")
     if tool_name not in _GUARDED_TOOLS:
         return None
@@ -1056,8 +1075,24 @@ def check(payload: dict) -> Optional[dict]:
     if not file_path:
         return None
 
-    repo_root = resolve_repo_root(cwd)
     abs_file_path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
+    # Cwd-vs-target defect (mirrors the deny sibling's identical fix): resolve
+    # repo_root from the TARGET FILE's own repo, not the session's cwd. A
+    # session rooted at one repo writing into a SIBLING repo's tree used to
+    # resolve repo_root from cwd, so `to_repo_relative` always returned None
+    # for the sibling's path and this guard silently produced nothing for
+    # every cross-repo write — no schema-shape advisory, ever. Advisory-only
+    # rule (DR-277): this module's own outcomes are already never a deny, so
+    # fixing repo_root here needs no further "advisory only" gating — the
+    # cross-repo/in-repo split for the sibling's UNCONDITIONAL denies is
+    # handled entirely in `validate_frontmatter_schema_deny.check()`; this
+    # module keeps standing down for those exactly as before (`_STOP_DENY`
+    # branches below), regardless of cross-repo/in-repo.
+    target_dir = os.path.dirname(abs_file_path) or cwd
+    try:
+        repo_root = _shared_resolve_repo_root(target_dir) or cwd
+    except Exception:  # noqa: BLE001 — mirrors resolve_repo_root's own catch-and-fall-back
+        repo_root = cwd
     repo_rel = to_repo_relative(abs_file_path, repo_root)
     if not repo_rel:
         return None

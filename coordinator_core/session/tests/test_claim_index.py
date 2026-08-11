@@ -132,12 +132,20 @@ def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
 def test_lookup_unresolvable_sessions_dir_is_unanswerable(tmp_path):
     result = claim_index.lookup(["foo.py"], sessions_dir="")
     assert result == {"foo.py": [claim_index.UNANSWERABLE]}
+    # C1 (docs/plans/2026-08-11-claim-index-abort-cause-and-cli-blindness.md,
+    # AC6) -- the empty-base cause is reported as structured data, not just
+    # membership. AC2 above still holds: membership alone is untouched.
+    assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
 
 
 def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_path):
     missing = os.path.join(str(tmp_path), "does-not-exist-yet")
     result = claim_index.lookup(["foo.py"], sessions_dir=missing)
     assert result == {"foo.py": []}
+    # A genuinely-absent directory is an honest empty, never an abort (C1
+    # AC6) -- must not be mislabelled with any of the three abort causes.
+    assert result.complete is True
+    assert result.abort_cause is None
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +174,7 @@ def test_lookup_permission_error_scanning_sessions_dir_is_unanswerable(
     result = claim_index.lookup(["foo.py"], sessions_dir=base)
 
     assert result == {"foo.py": [claim_index.UNANSWERABLE]}
+    assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
 def test_lookup_permission_error_scanning_agents_subdir_is_unanswerable(
@@ -190,6 +199,7 @@ def test_lookup_permission_error_scanning_agents_subdir_is_unanswerable(
 
     assert result["foo.py"] == ["sess-a"]
     assert result["never/touched.py"] == [claim_index.UNANSWERABLE]
+    assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
 def test_lookup_permission_error_reading_agent_backpointer_is_unanswerable(
@@ -211,6 +221,110 @@ def test_lookup_permission_error_reading_agent_backpointer_is_unanswerable(
     result = claim_index.lookup(["x.py"], sessions_dir=base)
 
     assert result == {"x.py": [claim_index.UNANSWERABLE]}
+    assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
+
+
+def test_lookup_permission_error_reading_touched_txt_body_is_unanswerable(
+    tmp_path, monkeypatch
+):
+    """Bug backlog
+    2026-08-11-an-io-error-reading-a-touched-txt-body-i-18abf7c6f3be (P3):
+    an OSError raised while reading a claimant's touched.txt CONTENT
+    (as opposed to enumerating it) must surface as UNANSWERABLE for the
+    path that claimant would have claimed, never silently collapse to
+    "unclaimed" -- that is the one answer that authorizes a write over a
+    live peer."""
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+    touched_path = os.path.join(base, "sess-a", "touched.txt")
+
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if os.path.abspath(str(path)) == os.path.abspath(touched_path):
+            raise PermissionError("simulated I/O error reading body")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result == {"foo.py": [claim_index.UNANSWERABLE]}
+    assert result.complete is False
+    assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
+
+
+def test_torn_tail_content_read_still_reports_complete(tmp_path):
+    """Regression guard on invariant 1: a torn (mid-append) trailing line is
+    a normal read outcome, not an IO error -- the walk must still report
+    complete=True, abort_cause=None."""
+    base = str(tmp_path)
+    torn = _touch_line("T", "complete.py") + "\n" + "T 2026-08-08T10:00:01.000000Z partial"
+    _write(os.path.join(base, "sess-a", "touched.txt"), torn)
+
+    state = claim_index.rebuild(sessions_dir=base)
+
+    assert state.complete is True
+    assert state.abort_cause is None
+
+
+def test_empty_touched_txt_still_reports_complete(tmp_path):
+    """Regression guard on invariant 2: a genuinely empty touched.txt is not
+    an IO error."""
+    base = str(tmp_path)
+    _write(os.path.join(base, "sess-a", "touched.txt"), "")
+
+    state = claim_index.rebuild(sessions_dir=base)
+
+    assert state.complete is True
+    assert state.abort_cause is None
+    assert state.claims == {}
+
+
+def test_missing_touched_txt_still_reports_complete(tmp_path):
+    """Regression guard on invariant 3: FileNotFoundError reading a
+    claimant's touched.txt content is not an IO error -- it means no claims
+    yet from that claimant, not a substrate failure."""
+    base = str(tmp_path)
+    os.makedirs(os.path.join(base, "sess-a"), exist_ok=True)
+    touched_path = os.path.join(base, "sess-a", "touched.txt")
+    # Create then remove so _enumerate_touched_files sees it as a file at
+    # enumeration time but the content read below hits FileNotFoundError.
+    _write(touched_path, "")
+    os.remove(touched_path)
+
+    lines, read_ok = claim_index._read_lines_discard_torn_tail(touched_path)
+
+    assert lines == []
+    assert read_ok is True
+
+
+def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monkeypatch):
+    """First-detected-cause-wins: an enumeration-time IO error (agent
+    backpointer unreadable) must not be overwritten by a later content-read
+    IO error encountered further along the same walk."""
+    base = str(tmp_path)
+    _agent_touched(base, "agent-1", "sess-owner", [_touch_line("T", "x.py")])
+    backptr = os.path.join(base, ".agents", "agent-1", "em-session-id.txt")
+    _session_touched(base, "sess-z", [_touch_line("T", "y.py")])
+    content_path = os.path.join(base, "sess-z", "touched.txt")
+
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        p = os.path.abspath(str(path))
+        if p == os.path.abspath(backptr):
+            raise PermissionError("simulated enumeration-time I/O error")
+        if p == os.path.abspath(content_path):
+            raise PermissionError("simulated content-read I/O error")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    state = claim_index.rebuild(sessions_dir=base)
+
+    assert state.complete is False
+    assert state.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +344,7 @@ def test_rebuild_cap_exceeded_mid_walk_marks_incomplete(tmp_path, monkeypatch):
     state = claim_index.rebuild(sessions_dir=base)
 
     assert state.complete is False
+    assert state.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
 
 
 def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path, monkeypatch):
@@ -241,6 +356,34 @@ def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path, monke
     result = claim_index.lookup(["foo.py"], sessions_dir=base)
 
     assert result == {"foo.py": [claim_index.UNANSWERABLE]}
+    assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+
+
+def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base(
+    tmp_path, monkeypatch
+):
+    """Drives the cap-exceeded abort by patching ``time.monotonic`` (per the
+    worked construction in
+    ``state/subagent-share/31106a01-e326-4ab8-a033-b4aa5d757cbd/
+    repro-partial-positive-fail-open.py``), NOT by zeroing
+    ``REBUILD_WALL_CLOCK_CAP_SECS`` — a zeroed cap breaks before the first
+    read and yields an empty claims dict, which would look identical to the
+    empty-base case (C1 AC6) if this test asserted only ``claims == {}``.
+    This construction consumes ``sess-a``'s file before the deadline check
+    trips, proving the walk genuinely started rather than never running."""
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+    _session_touched(base, "sess-b", [_touch_line("T", "bar.py")])
+
+    # sess-a sorts first; consume it, then trip the deadline before sess-b.
+    ticks = iter([0.0, 0.0, 10_000.0] + [10_000.0] * 64)
+    monkeypatch.setattr(claim_index.time, "monotonic", lambda: next(ticks))
+
+    state = claim_index.rebuild(sessions_dir=base)
+
+    assert state.complete is False
+    assert state.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+    assert state.claims == {"foo.py": ["sess-a"]}
 
 
 # ---------------------------------------------------------------------------

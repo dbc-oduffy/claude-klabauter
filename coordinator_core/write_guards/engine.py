@@ -224,7 +224,14 @@ def evaluate(
             session_id = payload.get("session_id") or ""
             if session_id and _consume_unlock(session_id, g.name):
                 continue
-            return _annotate_unlock(out, session_id, g.name, _override_keys_doc_display())
+            agent_id = payload.get("agent_id") or ""
+            return _annotate_unlock(
+                out,
+                session_id,
+                g.name,
+                _override_keys_doc_display(),
+                agent_id=agent_id,
+            )
 
     # --- advisory phase, PRIORITY order ---------------------------------------
     # Legacy shape (aggregate=False): first non-None wins, at most one.

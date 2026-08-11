@@ -66,6 +66,7 @@ disposition residue)
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -77,9 +78,12 @@ from coordinator_core.git_lock_retry import (
 from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS as _MAX_ATTEMPTS
 from coordinator_core.git_lock_retry import is_lock_contention as _is_lock_contention
 from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
+from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
 _NO_WINDOW = no_console_creationflags()
+_LOG = logging.getLogger(__name__)
 
 
 def _run_git(args, cwd: Path) -> subprocess.CompletedProcess:
@@ -167,6 +171,29 @@ def commit_own_artifact(
             return False
 
         if commit_result.returncode == 0:
+            # Post-commit claim release (C3, AC1): same worktree, this
+            # session's own sid, single explicit pathspec (rel_path, the
+            # exact scope of the commit just above). Sync call, in place —
+            # this function is entirely synchronous (subprocess.run
+            # throughout, no event loop involved), so there is no
+            # blocking-the-loop concern to offload. A failure here must
+            # never turn an already-landed commit into a reported failure.
+            try:
+                release_path = (
+                    rel_path if not Path(rel_path).is_absolute()
+                    else str(Path(rel_path).resolve().relative_to(root.resolve()))
+                )
+                session_scope.release_committed_claims(
+                    session_core.resolve_session_id(str(root)),
+                    [release_path],
+                    cwd=str(root),
+                )
+            except Exception:
+                _LOG.debug(
+                    "commit_own_artifact: release_committed_claims failed "
+                    "post-commit; claim(s) retained",
+                    exc_info=True,
+                )
             return True
 
         last_stderr = commit_result.stderr.strip()

@@ -33,28 +33,27 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from git_hook_install import (  # noqa: E402
-    ensure_hooks_fleet,
-    ensure_prepare_commit_msg_hook,
-)
+from git_hook_install import ensure_prepare_commit_msg_hook  # noqa: E402
 
 
 def main() -> int:
-    # `--fleet` heals BOTH coordinator hooks across every registered repo
-    # rather than only the process's own cwd. Added 2026-08-08: the daily
-    # self-heal on /workday-start was single-repo scoped, so 12 of 13 repos
-    # drifted for weeks while the heal reported success. Argument-parsed by
-    # hand rather than via argparse — this runs on the session-boot path and
-    # must never exit non-zero on an unrecognized argument.
+    # `--fleet` was hand-parsed here between 2026-08-08 (b66dec143) and
+    # 2026-08-11; fleet-wide healing now has its own named entrypoint,
+    # `coordinator-ensure-hooks-fleet`. The flag is answered rather than
+    # ignored: a caller that still passes it would otherwise get a
+    # single-repo heal reported as a fleet heal -- the accepted-and-ignored
+    # shape example-doctrine-repo-em refused to write into /workday-start Step -0.45
+    # (cross-repo/inbox/2026-08-11-example-doctrine-repo-em-fleet-flag-request-is-not-
+    # actionable-entrypoints-read-no-argv.md). Redirect is stderr-only and
+    # still exits 0 via the cwd heal below: this runs on the session-boot
+    # path and must never block a session start.
     if "--fleet" in sys.argv[1:]:
-        try:
-            return ensure_hooks_fleet(_BIN_DIR)
-        except Exception as exc:  # never block a session start
-            print(
-                f"coordinator-ensure-prepare-commit-msg-hook --fleet: {exc}",
-                file=sys.stderr,
-            )
-            return 0
+        print(
+            "coordinator-ensure-prepare-commit-msg-hook: --fleet is no longer "
+            "handled here -- run `coordinator-ensure-hooks-fleet` for every "
+            "registered repo. Healing this repo only.",
+            file=sys.stderr,
+        )
     try:
         return ensure_prepare_commit_msg_hook(_BIN_DIR)
     except Exception as exc:  # never block a session start

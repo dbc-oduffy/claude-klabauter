@@ -71,6 +71,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -114,13 +115,58 @@ def _no_console_kw() -> dict:
 
 _VERIFICATION_CLAUSE = """
 VERIFICATION IS MANDATORY, NOT OPTIONAL. Every file, symbol, constant, line
-number, and commit SHA a memo names gets checked against the CURRENT working
-tree before you record anything about it. Put every mismatch in a dedicated
-"Stale claims" section of your report. A memo saying "your X is broken" is a
-claim to check, not a fact to record -- these memos are days old and assert
-things about a tree that has moved. In the run this ceremony is modelled on,
-three of thirty memos asserted things that had already shipped; without this
-pass the receiving team would have redone work that was already done.
+number, and commit SHA a finding names gets checked against the CURRENT
+working tree before you confirm or refute it. A memo saying "your X is
+broken" is a claim to check, not a fact to record -- these memos are days
+old and assert things about a tree that has moved. In the run this ceremony
+is modelled on, three of thirty memos asserted things that had already
+shipped; without this pass the receiving team would have redone work that
+was already done.
+""".strip()
+
+_NOT_VERIFIED_SENTENCE = """
+This pass does NOT verify anything against the current tree. Record what
+each memo claims as a claim, not a fact -- a separate verify dispatch checks
+every claim against disk afterward. Do not skip a memo because a claim in it
+looks stale; that judgment belongs to the verify pass, not this one.
+
+Write your report to `{report_path}` verbatim -- the verify pass reads that
+exact path.
+""".strip()
+
+# Framing is deliberately claim-shaped rather than finding-shaped: this brief is
+# shared across all three buckets, and `fyi` produces routes, never break-class
+# findings. Naming only findings let a verify pass read a route-only report as
+# having nothing to check — on the run this stage split came from, that bucket's
+# ESCALATEs were the ones most needing verification and three of five were
+# refuted. Keep the route vocabulary here if the brief is reworded.
+_VERIFY_BRIEF = """
+You are verifying the claims recorded in the triage report at
+`{report_path}` -- whatever shape this bucket's triage pass actually
+produced: a break-class finding, an ESCALATE/CLOSE/CLOSE-WITH-NOTE/SUPERSEDED
+route, or a classification with rationale. A route is a claim like any
+other -- an ESCALATE asserts something collides with a live contract; a
+CLOSE asserts nothing is owed. Both get checked against disk, not read as
+already-settled. Read THAT report, not the original memos -- re-reading the
+memos is a second triage, not a verification.
+
+{verification}
+
+Watch for these three failure shapes, each one drawn from a finding or route
+this blitz actually produced:
+  - A NEIGHBOURING GUARD a symbol-grep skips -- the claim names a missing
+    check, but a sibling file already enforces the same rule under a
+    different symbol name.
+  - A DECISION ALREADY ON RECORD making current behaviour deliberate -- the
+    claim reads like a defect, but a memo, plan, or PM ruling already
+    chose this behaviour on purpose.
+  - A CLAIM ABOUT A SCHEMA the schema itself contradicts -- the claim
+    quotes a shape from memory or an older version; the live schema on disk
+    disagrees.
+
+Report: CONFIRMED or REFUTED per finding/route, with your basis, appended as
+a "Verification" section to the same report file at `{report_path}`. Do not
+edit any memo; do not flip any lifecycle field.
 """.strip()
 
 _FYI_BRIEF = """
@@ -144,10 +190,10 @@ assign exactly one route:
   SUPERSEDED       -- a later memo from the same sender already resolves it;
                       name that memo.
 
-{verification}
+{not_verified}
 
-Report: one block per memo -- path, route, one-line rationale, plus the
-"Stale claims" section. Do not edit any memo; do not flip any lifecycle field.
+Report: one block per memo -- path, route, one-line rationale. Do not edit
+any memo; do not flip any lifecycle field.
 """.strip()
 
 _DOMINANT_BRIEF = """
@@ -180,11 +226,11 @@ Three ORDERED passes. The order is load-bearing:
   defect and building a surface want different briefs and different
   verification.
 
-{verification}
+{not_verified}
 
 Report: the supersession map, then the thread groups, then one block per
-surviving memo (path, classification, one-line rationale, space), plus the
-"Stale claims" section. Do not edit any memo; do not flip any lifecycle field.
+surviving memo (path, classification, one-line rationale, space). Do not
+edit any memo; do not flip any lifecycle field.
 """.strip()
 
 _REST_BRIEF = """
@@ -204,11 +250,10 @@ ALSO assign each memo an explicit problem/solution space label. Where the memo
 carries a sender-declared `space:` you may adopt or override it; where it does
 not, name one. These labels are what the EM groups PLAN-WEIGHT items by.
 
-{verification}
+{not_verified}
 
-Report: one block per memo -- path, classification, space, one-line rationale
--- plus the "Stale claims" section. Do not edit any memo; do not flip any
-lifecycle field.
+Report: one block per memo -- path, classification, space, one-line
+rationale. Do not edit any memo; do not flip any lifecycle field.
 """.strip()
 
 _BUCKET_SPEC = {
@@ -273,11 +318,17 @@ def _partition(candidates: list) -> tuple[list, dict, list, dict]:
 
 
 def _build_dispatches(buckets: list, supersessions: list) -> tuple[list, int]:
-    """One dispatch per NON-EMPTY bucket, each carrying its own finished brief.
+    """One paired {triage, verify} dispatch per NON-EMPTY bucket, each triage
+    dispatch carrying its own finished brief and an assembler-assigned
+    `report_path` its paired verify dispatch shares.
 
-    An empty bucket yields no dispatch — a fan-out that spawns an agent to
-    report "nothing in my bucket" costs a model call for a fact the counts
-    already carry.
+    An empty bucket yields NEITHER dispatch — a fan-out that spawns an agent
+    to report "nothing in my bucket" (or "nothing to verify") costs a model
+    call for a fact the counts already carry.
+
+    The verify stage needs the triage report's LOCATION, not its CONTENT —
+    this function runs before any report exists, so it assigns the path
+    rather than reading anything back.
 
     Op-supplied dict fields (`id`/`path` on a bucket candidate, `newer`/
     `older`/`basis` on a supersession candidate) are read defensively —
@@ -291,6 +342,7 @@ def _build_dispatches(buckets: list, supersessions: list) -> tuple[list, int]:
     """
     dispatches = []
     skipped = 0
+    today = datetime.date.today().isoformat()
     for bucket_name, (label, brief_template) in _BUCKET_SPEC.items():
         raw_memos = [b for b in buckets if b.get("bucket") == bucket_name]
         memos = []
@@ -302,7 +354,9 @@ def _build_dispatches(buckets: list, supersessions: list) -> tuple[list, int]:
             memos.append(m)
         if not memos:
             continue
-        brief = brief_template.format(verification=_VERIFICATION_CLAUSE)
+        report_path = f"state/audits/{today}-inbox-blitz-{bucket_name}.md"
+        not_verified = _NOT_VERIFIED_SENTENCE.format(report_path=report_path)
+        brief = brief_template.format(not_verified=not_verified)
         if bucket_name == "dominant":
             memo_ids = {m["id"] for m in memos}
             relevant = []
@@ -336,11 +390,25 @@ def _build_dispatches(buckets: list, supersessions: list) -> tuple[list, int]:
                     "supersede itself in a shape none of those three see."
                 )
         dispatches.append({
+            "stage": "triage",
+            "id": f"triage-{bucket_name}",
+            "report_path": report_path,
             "bucket": bucket_name,
             "label": label,
             "count": len(memos),
             "memos": [m["path"] for m in memos],
             "brief": brief,
+        })
+        dispatches.append({
+            "stage": "verify",
+            "id": f"verify-{bucket_name}",
+            "depends_on": f"triage-{bucket_name}",
+            "report_path": report_path,
+            "bucket": bucket_name,
+            "label": label,
+            "brief": _VERIFY_BRIEF.format(
+                verification=_VERIFICATION_CLAUSE, report_path=report_path
+            ),
         })
     return dispatches, skipped
 

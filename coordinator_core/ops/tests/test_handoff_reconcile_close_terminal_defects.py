@@ -51,6 +51,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.ops.handoff_reconcile_close_terminal  # noqa: F401 — fires @register_op
+import coordinator_core.ops.handoff_reconcile_close_terminal as _rct_mod
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
@@ -235,6 +236,32 @@ def test_close_reruns_on_prior_closed_record_still_advertising_pickup_ready(repo
     assert read_fm_field(fm, "pickup_ready") == "false"
 
 
+def test_close_inserts_pickup_ready_false_when_absent_on_already_closed_record(repo):
+    """`pickup_ready` absent (not true/false) on an already-closed record
+    with a matching closed_reason falls through the three-way idempotency
+    AND (deployment=="closed" and existing_reason==reason and
+    existing_pickup_ready=="false") — absent, not "false", so the third
+    condition is False and this must re-apply via the else insert-after-
+    closed_reason branch (handoff_transition.py line ~1083). Existing
+    coverage only exercised "absent" on a non-closed record and "closed+
+    matching" with pickup_ready explicitly set — this combination
+    (closed+matching+ABSENT) was untested."""
+    name = "2026-08-11-closed-no-pickup-ready-field.md"
+    repo.seed_handoff(
+        name, "open", deployment_state="closed", closed_reason="displaced",
+    )
+
+    result = _close(f"state/handoffs/{name}", "displaced", repo.root, repo.common_dir)
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True, (
+        "pickup_ready absent must not satisfy the idempotency no-op — "
+        "must re-apply and insert the field"
+    )
+    fm = repo.fm(name)
+    assert read_fm_field(fm, "pickup_ready") == "false"
+
+
 def test_close_idempotent_noop_at_full_target_state_including_pickup_ready(repo):
     """Once pickup_ready is already false alongside a matching closed_reason,
     a re-close call IS a genuine no-op (byte-identical write skipped)."""
@@ -308,3 +335,146 @@ def test_reconcile_close_terminal_still_closes_when_no_lineage_edge(repo):
     assert read_fm_field(split.fm_text, "deployment_state") == "closed"
     assert read_fm_field(split.fm_text, "closed_reason") == "displaced"
     assert read_fm_field(split.fm_text, "pickup_ready") == "false"
+
+
+def test_reconcile_close_terminal_refuses_on_indeterminate_guard(repo, monkeypatch):
+    """Guard exit_code==2 (indeterminate/fail-closed, e.g. an unscannable
+    subtree) must refuse the close outright, same fail-closed posture as
+    every other consumer of this guard — `_handler`'s exit_code==2 branch
+    (module lines ~393-398) was unverified by any test before this one."""
+    name = "2026-08-11-indeterminate-guard.md"
+    repo.seed_handoff(name, "open", deployment_state="ready_to_fire")
+
+    async def _fake_indeterminate(params, repo_root=None):
+        return {"exit_code": 2, "error": "synthetic: unscannable subtree"}
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.handoff_reconcile_close_terminal._handoff_has_live_children",
+        _fake_indeterminate,
+    )
+
+    result = _run(_reconcile_handler(
+        {"handoff_path": f"state/handoffs/{name}", "reason": "displaced"},
+        repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["closed"] is False
+    assert result["archived"] is False
+    assert "indeterminate" in (result.get("error") or "").lower()
+    fm = repo.fm(name)
+    assert read_fm_field(fm, "deployment_state") == "ready_to_fire", (
+        "no mutation may land when the guard is indeterminate"
+    )
+
+
+def test_reconcile_close_terminal_idempotent_replay_from_archive_root(repo):
+    """A second call against a handoff already closed+archived by a prior
+    call resolves under archive/handoffs/ (not state/handoffs/) — the op
+    must detect the already-terminal on-disk state and return a clean
+    no-op (already_closed/already_archived: True, exit_code 0) rather than
+    attempting a mutation `handoff_transition._resolve_path` would refuse.
+    Covers module lines ~276-308, untested before this."""
+    name = "2026-08-11-archived-already-terminal.md"
+    archive_path = repo.root / "archive" / "handoffs" / "2026-08" / name
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(
+        "---\n"
+        f'title: "Test Handoff {name}"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: closed\n"
+        "predecessor: null\n"
+        "deployment_state: closed\n"
+        "closed_reason: displaced\n"
+        "pickup_ready: false\n"
+        "---\n\n# Handoff\n\nBody.\n",
+        encoding="utf-8",
+    )
+    repo._git("add", str(archive_path))
+    repo._git("commit", "-m", f"archive {name}")
+
+    result = _run(_reconcile_handler(
+        {"handoff_path": str(archive_path), "reason": "displaced"},
+        repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["closed"] is True
+    assert result["already_closed"] is True
+    assert result["archived"] is True
+    assert result["already_archived"] is True
+
+
+# ---------------------------------------------------------------------------
+# P1 TOCTOU fix — guard/write race between step-0's unlocked pre-check and
+# _close's locked write
+# ---------------------------------------------------------------------------
+
+
+def test_close_live_children_recheck_aborts_when_edge_appears_under_lock(repo):
+    """Synthetic interleaving pin, at the `_close` seam: a
+    `live_children_recheck` callback that reports a live edge appeared
+    (exit_code=0) — as if a successor were created between step 0's
+    unlocked guard and this write — must abort the write from INSIDE the
+    locked mutate closure, proving the recheck runs somewhere that can
+    actually prevent the race rather than as a dead parameter."""
+    name = "2026-08-11-toctou-recheck.md"
+    repo.seed_handoff(name, "open", deployment_state="ready_to_fire")
+
+    def _recheck_reports_live_edge() -> dict:
+        return {"exit_code": 0, "children": ["synthetic-successor.md"]}
+
+    result = _close(
+        f"state/handoffs/{name}", "displaced", repo.root, repo.common_dir,
+        live_children_recheck=_recheck_reports_live_edge,
+    )
+
+    assert result["exit_code"] == 1, result
+    assert "live-lineage-edge re-check" in (result.get("error") or "")
+    fm = repo.fm(name)
+    assert read_fm_field(fm, "deployment_state") == "ready_to_fire", (
+        "the write must be aborted before it commits when the recheck "
+        "reports a live edge appeared inside the lock"
+    )
+
+
+def test_reconcile_close_terminal_toctou_recheck_blocks_race(repo, monkeypatch):
+    """End-to-end pin: simulate a successor landing in the window between
+    step 0's unlocked guard read and _close's own locked write — the
+    FIRST guard call (step 0) sees no live children, but the SECOND call
+    (the in-lock recheck `_close` now runs) sees the race and must abort
+    the write, even though step 0 alone reported it safe."""
+    name = "2026-08-11-toctou-e2e.md"
+    repo.seed_handoff(name, "open", deployment_state="ready_to_fire")
+
+    real_guard = _rct_mod._handoff_has_live_children
+    calls = {"n": 0}
+
+    async def _guard_then_race(params, repo_root=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return await real_guard(params, repo_root)
+        return {
+            "exit_code": 0,
+            "children": [repo.abs_path("synthetic-successor.md")],
+        }
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.handoff_reconcile_close_terminal._handoff_has_live_children",
+        _guard_then_race,
+    )
+
+    result = _run(_reconcile_handler(
+        {"handoff_path": f"state/handoffs/{name}", "reason": "displaced"},
+        repo.common_dir,
+    ))
+
+    assert calls["n"] >= 2, "the recheck inside the lock must actually run"
+    assert result["exit_code"] == 1, result
+    assert result["closed"] is False
+    fm = repo.fm(name)
+    assert read_fm_field(fm, "deployment_state") == "ready_to_fire", (
+        "the TOCTOU fix must catch the race and refuse the write even "
+        "though step 0's unlocked guard reported it safe"
+    )

@@ -1855,7 +1855,20 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                             "waiver is consulted "
                             "(coverage._record_range_has_stored_head), so a "
                             "`..HEAD` record would not discharge these even "
-                            "though a per-commit record does.",
+                            "though a per-commit record does. The waiver "
+                            "explains why the write guard PERMITS this "
+                            "write: it relaxes the foreign-session strip "
+                            "(coverage.py::_narrow_foreign_session_scope) "
+                            "so a covering record MAY credit these "
+                            "commits. It is NOT evidence that anyone "
+                            "reviewed them (the waiver record carries "
+                            "certifies_review: false; see "
+                            "chain_ancestry_waivers._READER_NOTE and "
+                            "docs/decisions/DR-245-gate-minted-chain-"
+                            'ancestry-waivers-supersede-in.md ("The '
+                            'disclosed limit" section). Write a record '
+                            "ONLY for commits this session actually "
+                            "reviewed.",
                             file=sys.stderr,
                         )
                         for line in _describe_uncovered_shas(
@@ -1875,7 +1888,12 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                             "predecessor session, carrying no chain-ancestry "
                             "waiver for this chain, and the foreign-session "
                             "guard refuses any range naming them, so no "
-                            "record this session writes can discharge them.",
+                            "record this session writes can discharge them. "
+                            "The review is still OWED, not waived away: "
+                            "naming this gap and its cause in the "
+                            "workstream-complete narration IS the discharge "
+                            "for it — do not read this refusal as license "
+                            "to leave the ancestry silently uncovered.",
                             file=sys.stderr,
                         )
                         for line in _describe_uncovered_shas(

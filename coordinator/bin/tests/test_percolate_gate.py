@@ -391,3 +391,174 @@ def test_list_targets_no_targets_registered_errors_to_stderr(tmp_path):
     assert rc == 1
     assert out_buf.getvalue() == ""
     assert err_buf.getvalue() != ""
+
+
+# ---------------------------------------------------------------------------
+# resolve-root
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_root_bare_prints_path_only(monkeypatch, tmp_path):
+    resolved = tmp_path / "some-root"
+    resolved.mkdir()
+
+    monkeypatch.setattr(
+        "coordinator_core.percolate.runtime_root.coordinator_percolate_runtime_root_explained",
+        lambda: (str(resolved), "repo-local-git"),
+    )
+
+    rc, out, err = _run_cli_capturing_stderr(["resolve-root"])
+    assert rc == 0
+    assert out.strip() == str(resolved)
+    assert err == ""
+
+
+def test_resolve_root_explain_prints_path_and_rung(monkeypatch, tmp_path):
+    resolved = tmp_path / "some-root"
+    resolved.mkdir()
+
+    monkeypatch.setattr(
+        "coordinator_core.percolate.runtime_root.coordinator_percolate_runtime_root_explained",
+        lambda: (str(resolved), "doe-root-pointer"),
+    )
+
+    rc, out, err = _run_cli_capturing_stderr(["resolve-root", "--explain"])
+    assert rc == 0
+    assert out.strip() == f"{resolved}\tdoe-root-pointer"
+    assert err == ""
+
+
+def test_resolve_root_ladder_failure_writes_stderr_verbatim_no_stdout(monkeypatch):
+    message = "coordinator_percolate_runtime_root: cannot resolve PERCOLATE_ROOT.\n  (details)"
+
+    def _raise():
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(
+        "coordinator_core.percolate.runtime_root.coordinator_percolate_runtime_root_explained",
+        _raise,
+    )
+
+    rc, out, err = _run_cli_capturing_stderr(["resolve-root"])
+    assert rc == 1
+    assert out == ""
+    assert err.strip() == message
+
+
+# ---------------------------------------------------------------------------
+# Step 2d — pathspec batching and source-path mapping
+#
+# Both regressions here were live defects, found 2026-08-11 while running the
+# klabauter republish: the check crashed on Windows for any target with a few
+# hundred files, and — once it stopped crashing — matched nothing at all,
+# because the file list it is handed is built from SOURCE paths.
+# ---------------------------------------------------------------------------
+
+
+def _run_cli_capturing_stderr(args: list[str]):
+    """_run_cli captures stdout only; Step 2d's fail-loud path writes stderr."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = _mod.main(args)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+@pytest.fixture()
+def drift_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "dest"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-qm", "base")
+    return repo
+
+
+def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
+    drift_repo: Path,
+) -> None:
+    """>32767 chars of pathspec must not raise WinError 206."""
+    names = [f"file_{i:04d}_{'p' * 60}.py" for i in range(600)]
+    for name in names:
+        (drift_repo / name).write_text("x\n", encoding="utf-8")
+    _git(drift_repo, "add", "-A")
+    _git(drift_repo, "commit", "-qm", "bulk add")
+
+    assert sum(len(n) + 1 for n in names) > 32767, "fixture must exceed the cap"
+
+    base = [
+        "git", "-C", str(drift_repo), "log",
+        "--no-merges", "--format=%h %ad %s", "--date=short",
+    ]
+    lines = _mod._git_log_batched(base, ["--since=30 days ago"], names)
+
+    # One commit touched every path; the union must not report it 600 times.
+    assert len(lines) == 1
+    assert "bulk add" in lines[0]
+
+
+def test_git_log_batched_raises_instead_of_swallowing_a_git_failure(
+    drift_repo: Path,
+) -> None:
+    base = ["git", "-C", str(drift_repo), "log", "--format=%h %ad %s", "--date=short"]
+    with pytest.raises(RuntimeError, match="git log failed"):
+        _mod._git_log_batched(base, ["no-such-ref..HEAD"], ["seed.txt"])
+
+
+def test_inverse_drift_maps_source_paths_onto_the_dest_tree(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """A source-built file list must still match dest history.
+
+    The pre-fix code appended unresolvable paths verbatim, so git matched
+    nothing and the gate reported "no drift" no matter what had landed.
+    """
+    (drift_repo / "seed.txt").write_text("changed in dest\n", encoding="utf-8")
+    _git(drift_repo, "commit", "-qam", "dest-authored fix")
+
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "seed.txt").write_text("seed\n", encoding="utf-8")
+
+    files_list = tmp_path / "files.txt"
+    files_list.write_text(str(source_dir / "seed.txt"), encoding="utf-8")
+
+    percolate_root = tmp_path / "root"
+    (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
+
+    code, out, err = _run_cli_capturing_stderr([
+        "inverse-drift", "some-target",
+        "--percolate-root", str(percolate_root),
+        "--dest", str(drift_repo),
+        "--source-dir", str(source_dir),
+        "--files", str(files_list),
+    ])
+
+    assert code == 0, err
+    assert "dest-authored fix" in out, out
+
+
+def test_inverse_drift_fails_loud_when_paths_resolve_against_nothing(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    files_list = tmp_path / "files.txt"
+    files_list.write_text(str(tmp_path / "elsewhere" / "orphan.py"), encoding="utf-8")
+
+    percolate_root = tmp_path / "root"
+    (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
+
+    code, _out, err = _run_cli_capturing_stderr([
+        "inverse-drift", "no-such-target",
+        "--percolate-root", str(percolate_root),
+        "--dest", str(drift_repo),
+        "--files", str(files_list),
+    ])
+
+    assert code == 1
+    assert "--source-dir" in err

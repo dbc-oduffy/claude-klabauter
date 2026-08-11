@@ -118,6 +118,19 @@
         "kind": "relative",
         "value": 0.2
       }
+    },
+    "ceremony.scoped_git_commit": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "green_path": 12,
+        "refusal_path_unanswerable": 0,
+        "directory_pathspec_expansion": 13
+      },
+      "_rationale": "C8 (2026-08-11-claim-release-and-the-gate-that-cannot-clear.md), A8/A10: end-to-end git-SUBPROCESS-SPAWN COUNT (not latency -- a timing figure is noise on this repo's 50-70-concurrent-session box, see CLAUDE.md load norm) for the whole `_handler`/`run_commit_pipeline` staging+commit+push pipeline, measured via `git_native._git` -- this op's sole native-git choke point (git_native.py's own docstring). Enforced by `test_commit_e2e_spawn_budget.py`. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape; this op is NOT in `op_fixtures.COMPUTE_ONLY_FIXTURES` (it is MUTATING, not swept automatically), so the ms figure is inert/advisory -- `spawn_count_budget` is the actually-enforced invariant. Measured 2026-08-11 on this repo: green_path=12 (rename-diff status probe x2, ls-files --deleted, check-ignore stdin probe, add x2, diff --cached --name-only, --no-optional-locks status, rev-parse HEAD, commit, post-commit Commit-Token log search, remote); refusal_path_unanswerable=0 (an UNANSWERABLE path -- e.g. unverified caller identity conflicting with a live claimant -- short-circuits `_handler` before any staging spawn); directory_pathspec_expansion=13 (green_path's 12 plus the one extra pathspec-scoped `git status --porcelain -- <dir>` `_expand_directory_pathspecs` issues before the rest of the pipeline runs). A8's pre-amendment '+1' referred to the CONJUNCTION-path delta inside `_check_claim_conflicts` alone (C5's own lazy call, see test_commit_gate_budget.py), not this op-level figure -- see that test module and this chunk's run-report sidecar for the reconciliation."
     }
   }
 }

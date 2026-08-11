@@ -51,6 +51,33 @@ def _payload(command: str, agent_type: str, agent_id: str = "deadbeef0123") -> D
     }
 
 
+#: 2026-08-11 order-dependency fix -- see ``_fake_is_confined_by_roster_absence``
+#: below, and the byte-identical incident writeup in the sibling oracle
+#: ``test_executor_bash_confinement.py``.
+_FAKE_ENUMERATED_TYPES = frozenset({_EXECUTOR_TYPE, _REVIEWER_TYPE})
+
+
+def _fake_is_confined_by_roster_absence(effective_type: str) -> bool:
+    """Deterministic stand-in for ``_helpers.is_confined_by_roster_absence``
+    -- see ``test_executor_bash_confinement._fake_is_confined_by_roster_absence``
+    for the full incident writeup (2026-08-11, this dispatch). This file's
+    own ``TestVerdictInvarianceAcrossBothConfinedTypes``/
+    ``TestExecutorNoLongerConfinedByThisGuard`` classes exercise the SAME
+    real, unmocked leg-3 roster check via ``guard.check`` -> ``_is_confined_type``
+    -> ``is_confined_by_roster_absence`` -> ``resolve_roster()``, which
+    reliably fails closed under this suite's autouse HOME-quarantine fixture
+    (``coordinator_core/conftest.py::_quarantine_real_home``) absent a
+    surviving ``COORDINATOR_SETTINGS_HOME`` override -- confining
+    ``coordinator:executor`` (this file's whole point is pinning it as
+    UNconfined) regardless of run order. Injected here for the same reason:
+    this leg is real disk/env I/O the pinned verdict table must not depend
+    on.
+    """
+    if not effective_type:
+        return False
+    return effective_type not in _FAKE_ENUMERATED_TYPES
+
+
 def _confine(monkeypatch, subagent_type: str) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
@@ -60,6 +87,9 @@ def _confine(monkeypatch, subagent_type: str) -> None:
         guard,
         "_read_backpointer_subagent_type",
         lambda git_root, agent_id: subagent_type,
+    )
+    monkeypatch.setattr(
+        guard, "is_confined_by_roster_absence", _fake_is_confined_by_roster_absence
     )
 
 

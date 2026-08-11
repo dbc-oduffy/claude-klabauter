@@ -482,6 +482,15 @@ def assert_full_parity(emission: dict) -> None:
 # (no bash-golden equivalent AND no bespoke-oracle coverage of their own) when adding new ones.
 _NO_GOLDEN_ORACLE_SECTIONS = frozenset({"commit_closures"})
 
+# Non-porter helper modules colocated under sections/ for import ergonomics — no `collect()`,
+# never wired into envelope.py, and not a "section" under any of the predicates above (unlike
+# _NO_GOLDEN_ORACLE_SECTIONS, this isn't a section lacking an oracle — it's not a section at
+# all). Kept without the `_shared.py`-style leading-underscore convention because it is a named,
+# public extraction point another op (handoff.columns, C3) imports directly — see
+# sections/handoff_columns.py's own module docstring.
+# Spec backlink: docs/plans/2026-08-11-pull-surface-for-cockpit-the-four-columns-and-the-archive.md § C1.
+_NON_PORTER_HELPER_MODULES = frozenset({"handoff_columns"})
+
 
 # --------------------------------------------------------------------------- discovery + params
 def _discover_sections() -> list[str]:
@@ -497,8 +506,10 @@ def _discover_sections() -> list[str]:
 # Discovery drives the golden-slice comparison, which is only meaningful for a section that
 # has a golden slice to compare against — exclude _NO_GOLDEN_ORACLE_SECTIONS (net-new record
 # types with no bash equivalent; see that set's docstring). They get a bespoke test instead.
+# Also exclude _NON_PORTER_HELPER_MODULES — never section porters in the first place.
 _DISCOVERED = [
-    name for name in _discover_sections() if name not in _NO_GOLDEN_ORACLE_SECTIONS
+    name for name in _discover_sections()
+    if name not in _NO_GOLDEN_ORACLE_SECTIONS and name not in _NON_PORTER_HELPER_MODULES
 ]
 
 

@@ -208,6 +208,36 @@ def test_refusal_names_who_claims_path_instrument_and_plane_distinction(tmp_path
     assert "list-claims-by-session" in result["error"]
 
 
+def test_refusal_offers_no_rank_based_escape(tmp_path):
+    """The remedy must not name an escape the gate cannot honour.
+
+    `_check_claim_conflicts` has no override parameter and reads no caller
+    rank, so "ask an EM to re-issue" was a remedy no EM could execute --
+    a reader who goes looking for it finds the bypass instead. The refusal
+    must instead name the two things that DO work: wait for the holder's
+    session to end, or narrow the pathspec.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, "sess-peer", [_touch_line("T", "peers.txt")])
+    _write_meta(repo, "sess-peer", live=True)
+    _write_meta(repo, "sess-caller", live=True)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["peers.txt"],
+        "message": "steal a live peer's file",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is False
+    assert "re-issue" not in result["error"]
+    assert "clears when that session ends" in result["error"]
+    assert "drop the affected path(s) from the pathspec" in result["error"]
+
+
 def test_refusal_is_per_path_not_per_pathspec(tmp_path):
     """AC4: a live peer claim on ONE path must not deny a sibling path in
     the same call."""
@@ -471,3 +501,130 @@ def test_include_orphans_does_not_relax_unanswerable_path(tmp_path, monkeypatch)
 
     assert result["committed"] is False
     assert "cannot-answer.txt" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# C10 -- a caller-only positive claimant under an INCOMPLETE walk must not
+# authorize a write: the walk may have aborted before reaching a live
+# peer's claim on the SAME path.
+#
+# docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md, folded in
+# mid-execution from a peer EM's defect report (claude-klabauter-em, session
+# 31106a01), independently verified at HEAD before this brief was written.
+# ---------------------------------------------------------------------------
+
+
+def _fake_lookup_caller_only_incomplete(caller_sid: str, path: str):
+    """Build a `claim_index.lookup` replacement whose return value has the
+    exact shape the C10 defect composes over: a POSITIVE claimant list
+    containing nothing but *caller_sid* for *path*, paired with
+    `.complete = False` -- the signature of a walk that read the caller's
+    own `touched.txt` and then aborted (wall-clock cap / unreadable claim
+    source) before it could have reached a live peer's claim on the same
+    path. Never spawns a rebuild -- returns a canned `_LookupResult`
+    directly, so the fixture needs no real peer session dir at all."""
+
+    def _fake_lookup(paths, sessions_dir=None, cwd=None):
+        result = claim_index._LookupResult()
+        for p in paths:
+            result[p] = [caller_sid] if p == path else []
+        result.complete = False
+        return result
+
+    return _fake_lookup
+
+
+def test_incomplete_walk_caller_only_claimant_is_refused_not_allowed(
+    tmp_path, monkeypatch
+):
+    """The repro this chunk's brief required be written and run BEFORE any
+    fix: pre-C10 code (`others = claimants - {caller_sid}`, no completeness
+    check at all) allowed this composition unconditionally. Post-fix, this
+    same call must refuse -- the walk that produced the caller-only
+    positive answer never confirmed no OTHER claimant exists behind it."""
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "race.txt", "v1\n")
+    _dirty_file(repo, "race.txt", "v2\n")
+    _write_meta(repo, "sess-caller", live=True)
+
+    monkeypatch.setattr(
+        scoped_git_commit.claim_index,
+        "lookup",
+        _fake_lookup_caller_only_incomplete("sess-caller", "race.txt"),
+    )
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["race.txt"],
+        "message": "commit under an incomplete walk that only saw my own claim",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is False
+    assert "race.txt" in result["error"]
+
+
+def test_incomplete_walk_dead_peer_only_claimant_still_allowed(
+    tmp_path, monkeypatch
+):
+    """Guard against the REJECTED blanket form ("any positive under
+    complete=False becomes unanswerable"): a walk that resolved a path to
+    a claimant OTHER than the caller must still go through the ordinary
+    live/dead liveness gate, unaffected by walk completeness -- a dead
+    peer's stale claim stays allowed even when the walk that found it was
+    incomplete, exactly as it was allowed when the walk was complete."""
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "orphaned.txt", "v1\n")
+    _dirty_file(repo, "orphaned.txt", "v2\n")
+    _write_meta(repo, "sess-dead", live=False)
+    _write_meta(repo, "sess-caller", live=True)
+
+    def _fake_lookup(paths, sessions_dir=None, cwd=None):
+        result = claim_index._LookupResult()
+        for p in paths:
+            result[p] = ["sess-dead"] if p == "orphaned.txt" else []
+        result.complete = False
+        return result
+
+    monkeypatch.setattr(scoped_git_commit.claim_index, "lookup", _fake_lookup)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["orphaned.txt"],
+        "message": "dead peer's claim under an incomplete walk",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is True
+    assert "error" not in result
+
+
+def test_incomplete_walk_live_peer_claim_still_refused(tmp_path, monkeypatch):
+    """A claimant list already containing a live OTHER session refuses
+    through the pre-existing conflict path regardless of walk completeness
+    -- this chunk's added conjunct must never be the thing that makes this
+    case refuse OR allow; it was already refusing before C10."""
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+    _write_meta(repo, "sess-peer", live=True)
+    _write_meta(repo, "sess-caller", live=True)
+
+    def _fake_lookup(paths, sessions_dir=None, cwd=None):
+        result = claim_index._LookupResult()
+        for p in paths:
+            result[p] = ["sess-peer"] if p == "peers.txt" else []
+        result.complete = False
+        return result
+
+    monkeypatch.setattr(scoped_git_commit.claim_index, "lookup", _fake_lookup)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["peers.txt"],
+        "message": "live peer claim under an incomplete walk",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is False
+    assert "peers.txt" in result["error"]

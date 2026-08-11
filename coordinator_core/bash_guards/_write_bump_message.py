@@ -218,10 +218,13 @@ def _target_phrase(target_repo: str, raw_target: str = "") -> str:
 def _clear_offer_phrase(surface: str) -> str:
     """The truthful per-surface description of what `clear_line()`'s
     `touch` actually stands down (see module docstring, `SURFACE_BASH`/
-    `SURFACE_TOOL`). Lower-case, mid-sentence form -- callers that need it
-    capitalized (a template opening a new sentence with it) title-case the
-    first character at the call site rather than here, since most call
-    sites splice it mid-sentence."""
+    `SURFACE_TOOL`). Lower-case, mid-sentence form -- a caller that needs it
+    capitalized (a template opening a new sentence with it) title-cases the
+    first character at the call site rather than here. Review:
+    coordinator:code-reviewer (P3) -- only `render_publish_em_message`
+    exercises that branch today (three of the four templates splice this
+    phrase mid-sentence); worded singular rather than plural to match.
+    """
     if surface == SURFACE_TOOL:
         return "stand the boundary down, session-wide"
     return "clear this target"
@@ -267,9 +270,9 @@ def render_subagent_message(
     line = clear_line(gitdir, session_id)
     phrase = _clear_offer_phrase(surface)
     return (
-        "Coordinator guard — instead: you have no PM here, report to the EM that "
+        "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
-        f"your sandbox `{sandbox_root}` is the place to write, or once assented, "
+        f"write in your sandbox `{sandbox_root}` instead, or once assented, "
         f"{phrase}:\n"
         f"  {line}"
     )

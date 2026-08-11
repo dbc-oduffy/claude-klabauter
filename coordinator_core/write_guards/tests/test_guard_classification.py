@@ -81,13 +81,31 @@ carve-out-3 paraphrase (above) would also require. The parity argument
 below is real and worth keeping on its own terms; it is not, as written,
 covered by DR-277.
 
-This guard's classification therefore EXCEEDS DR-277 as currently written
-and is PENDING a PM ruling: amend DR-277 with a named cross-surface-parity
-carve-out, add a census entry, or re-argue the harm against one of the
-three carve-outs that already exist. `CLASS` is left at hard-deny pending
-that ruling -- this paragraph records the gap, it does not close it, and
-should not be resolved by editing this prose a second time without that
-ruling in hand.
+RULED 2026-08-11 (example-doctrine-repo, PM-delegated). This guard stays hard-deny by a
+NAMED ONE-OFF RULING OUTSIDE THE THREE CARVE-OUTS -- not pending, not
+implied, and not a fourth carve-out. DR-277 records the ruling in its own
+§ "Not a carve-out: cross-surface parity", verbatim: "A sibling guard's
+hardness on another tool surface is not an argument for hardness here." The
+same section states the disposition of THIS guard: "That guard stays hard by
+named one-off ruling, not by carve-out, and is not a precedent." No
+carve-out was added, because a parity carve-out propagates hardness from one
+leg of a boundary to every surface the same subject can be reached from --
+the opposite of DR-277's default -- and because exactly one guard qualifies,
+which is not a class. DR-277 also fixes the standing answer for the next
+guard proposed on this argument: "If a second guard is ever proposed for
+hardness on a parity argument, the answer this record points at is to soften
+the Bash legs into genuine advisories, not to admit a second member."
+
+Two facts DR-277 now carries alongside the ruling, repeated here because
+this file is where a class change would be attempted: the
+`state/audits/2026-08-06-guard-class-census/` census contains NO entry for
+any of the three write-confinement bump guards, in either direction (so
+"this guard is missing from the census" is not evidence against its class,
+it is evidence the census never reached this boundary); and the two Bash
+legs deny from a band literally named `ADVISORY_REWRITE` with
+`fail_closed=False`, which is a registration-hygiene defect the ruling
+neither fixes nor blesses. Do not resolve either by editing this prose --
+the first needs a census entry, the second a registration change.
 
 The parity argument itself: leaving this module advisory while its
 Bash-surface siblings, `bump_foreign_repo_write` [C4] and
@@ -118,6 +136,8 @@ plane one hard-deny guard's enforcement rests on.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Dict, List
 
 from coordinator_core.write_guards import engine
@@ -248,3 +268,75 @@ def test_each_guard_carries_its_expected_class():
 def test_no_name_appears_in_both_lists():
     overlap = set(HARD_DENY_NAMES) & set(ADVISORY_NAMES)
     assert not overlap, f"guard(s) named in both classification lists: {sorted(overlap)}"
+
+
+# Three sources independently assert the `bump_out_of_repo_tool_write`
+# named-one-off-ruling facts and declare their own mutual agreement
+# load-bearing (see this module's own docstring, "RULED 2026-08-11" section,
+# and `bump_out_of_repo_tool_write.py`'s "THE HARD-DENY CLASS IS A NAMED
+# ONE-OFF RULING" section) -- nothing mechanical enforced that agreement
+# before this test (Review: coordinatorcode-reviewer-ad7b843b P3). Asserted
+# on a small number of exact quoted sentences, not whole-paragraph equality,
+# per that finding's own guidance: paragraph structure is free to diverge,
+# the load-bearing FACTS are not.
+_DR_277_PATH = Path(
+    "docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md"
+)
+_BUMP_GUARD_MODULE_PATH = Path(
+    "coordinator_core/write_guards/bump_out_of_repo_tool_write.py"
+)
+_THIS_FILE_PATH = Path(__file__)
+
+# The DR-277 quote, verbatim, is line-wrapped differently in each of the
+# three sources -- normalized whitespace (collapse runs of whitespace,
+# including the newline+indentation a wrapped docstring/markdown paragraph
+# introduces) before substring comparison so re-wrapping prose does not
+# break this test.
+_PARITY_NOT_ARGUMENT_SENTENCE = (
+    "A sibling guard's hardness on another tool surface is not an argument "
+    "for hardness here."
+)
+# The second load-bearing fact -- this guard is a named one-off, not a
+# precedent -- is phrased slightly differently at each of the three sites
+# (paragraph structure, not fact, is what is free to diverge here), so this
+# checks the shared substring rather than one exact sentence.
+_NOT_A_PRECEDENT_SUBSTRING = "is not a precedent"
+
+
+def _normalized_text(path: Path) -> str:
+    repo_root = Path(__file__).resolve().parents[3]
+    return re.sub(r"\s+", " ", (repo_root / path).read_text(encoding="utf-8"))
+
+
+def test_bump_guard_parity_ruling_sentences_agree_across_the_three_sources():
+    """DR-277 § "Not a carve-out: cross-surface parity",
+    `bump_out_of_repo_tool_write.py`'s own docstring, and this file's own
+    module docstring each independently assert the census gap and the
+    named-one-off-ruling disposition for `bump_out_of_repo_tool_write`, and
+    the guard's own docstring calls keeping the three in agreement
+    load-bearing. This test is the mechanical enforcement that was missing:
+    it fails if any of the three sources drifts off the shared quoted text."""
+    sources = {
+        "DR-277": _normalized_text(_DR_277_PATH),
+        "bump_out_of_repo_tool_write.py": _normalized_text(_BUMP_GUARD_MODULE_PATH),
+        "test_guard_classification.py (this file)": _normalized_text(_THIS_FILE_PATH),
+    }
+
+    missing_parity_sentence = [
+        name for name, text in sources.items() if _PARITY_NOT_ARGUMENT_SENTENCE not in text
+    ]
+    assert not missing_parity_sentence, (
+        "source(s) missing the exact quoted DR-277 parity sentence "
+        f"{_PARITY_NOT_ARGUMENT_SENTENCE!r}: {missing_parity_sentence} -- "
+        "the three-way agreement this guard's own docstring calls "
+        "load-bearing has drifted."
+    )
+
+    missing_precedent_fact = [
+        name for name, text in sources.items() if _NOT_A_PRECEDENT_SUBSTRING not in text
+    ]
+    assert not missing_precedent_fact, (
+        f"source(s) missing the shared {_NOT_A_PRECEDENT_SUBSTRING!r} fact: "
+        f"{missing_precedent_fact} -- the three-way agreement this guard's "
+        "own docstring calls load-bearing has drifted."
+    )

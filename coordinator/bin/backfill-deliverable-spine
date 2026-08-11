@@ -221,7 +221,12 @@ def main() -> None:
     # kwarg's effect by injecting `--root <default>` into argv ourselves,
     # UNLESS the caller already passed `--root` explicitly (which must win).
     argv = list(sys.argv[1:])
-    if "--root" not in argv:
+    # A help request must never depend on a resolvable corpus root — the
+    # caller has not chosen a root yet, and the published-mirror entrypoint
+    # gate runs `--help` against a hermetic fixture HOME that has no corpus
+    # by construction.
+    wants_help = any(arg in ("-h", "--help") for arg in argv)
+    if "--root" not in argv and not wants_help:
         default_root = _resolve_default_coordinator_root()
         if default_root:
             validation_error = _validate_default_root_has_corpus(default_root)

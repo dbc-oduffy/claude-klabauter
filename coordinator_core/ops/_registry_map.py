@@ -124,6 +124,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ceremony.session_instructions":          "coordinator_core.ops.ceremony.session_instructions",
     "ceremony.render_handoff_tracker":        "coordinator_core.ops.ceremony.render_handoff_tracker",
     "records.query":                          "coordinator_core.ops.records_query",
+    "handoff.columns":                        "coordinator_core.ops.handoff_columns_query",
     "changelog.append_day":                   "coordinator_core.ops.changelog_ops",
     "changelog.backfill_gaps":                "coordinator_core.ops.changelog_ops",
     "changelog.compute_day_fields":           "coordinator_core.ops.changelog_ops",

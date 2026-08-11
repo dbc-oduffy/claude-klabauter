@@ -278,19 +278,20 @@ def _load_cli_module():
 
 def test_cli_parses_deliverable_id_flag_into_params_shape():
     cli = _load_cli_module()
-    subject, repo, paths, as_json, include_orphans, deliverable_id = cli._parse_args(
-        ["-m", "subject", "--deliverable-id", "dlv-abc123", "--", "a.md"]
+    subject, repo, paths, as_json, include_orphans, deliverable_id, mangled_cr_paths = (
+        cli._parse_args(["-m", "subject", "--deliverable-id", "dlv-abc123", "--", "a.md"])
     )
     assert deliverable_id == "dlv-abc123"
     assert subject == "subject"
     assert paths == ["a.md"]
+    assert mangled_cr_paths == []
 
 
 def test_cli_omits_deliverable_id_when_not_given():
     cli = _load_cli_module()
-    _subject, _repo, _paths, _as_json, _include_orphans, deliverable_id = cli._parse_args(
-        ["-m", "subject", "--", "a.md"]
-    )
+    (
+        _subject, _repo, _paths, _as_json, _include_orphans, deliverable_id, _mangled_cr_paths,
+    ) = cli._parse_args(["-m", "subject", "--", "a.md"])
     assert deliverable_id is None
 
 

@@ -922,6 +922,47 @@ def test_chain_terminal_stamp_all_skipped_surfaces_tail_item_not_silent_exit_0(
     assert result["stamped"] == []
 
 
+def test_single_session_close_lands_but_names_no_flip_due_in_diagnostics(
+    wsc_tail_repo,
+):
+    """Regression for cross-repo/inbox/2026-08-10-example-doctrine-repo-em-wsc-tail-
+    silent-noop-and-gate-rewalk.md finding 1: a landed commit whose step-1
+    resolve found no consumed handoff for this sid (`chain_terminal=False`,
+    the ordinary single-session-close shape -- same fixture pattern as
+    `test_kpi_wsc_tail_blocking_path_under_2s`) must still exit 0 (this is
+    a genuinely successful close, not a defect), but `diagnostics` must
+    name that no terminal flip was due -- never a bare empty list
+    indistinguishable from "we never checked"."""
+    repo = wsc_tail_repo
+    sid = _unique_session_id()
+
+    (repo.root / "tasks" / "feature").mkdir(parents=True)
+    (repo.root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
+
+    result = _run(
+        wsc_tail_mod._handler(
+            {
+                "sid": sid,
+                "subject": "workstream-complete: feature",
+                "stage_paths": ["tasks/feature/todo.md"],
+                "caller_paths": ["tasks/feature/todo.md"],
+            },
+            repo_root=repo.common_dir,
+        )
+    )
+
+    # A genuinely-successful single-session close: still exits 0.
+    assert result["commit_failed"] is False
+    assert result["committed_sha"] is not None
+    assert result["exit_code"] == 0, result
+
+    diagnostics = result["diagnostics"]
+    assert any(
+        "chain_terminal=False" in d and sid in d and "no terminal flip was due" in d
+        for d in diagnostics
+    ), diagnostics
+
+
 def test_chain_terminal_commit_abort_stamps_never_evaluated_and_labels_nodes(
     wsc_tail_repo, monkeypatch
 ):

@@ -59,6 +59,7 @@ from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_resolver import compute_machine
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.fleet._common import main_worktree_root, parse_frontmatter_status
@@ -627,6 +628,7 @@ def backfill_gaps(
     repo_root: Path,
     host: Optional[str] = None,
     today_override: Optional[str] = None,
+    dry_run: bool = False,
 ) -> dict:
     """Backfill synthesized daily changelog blocks for any date gap since WEEK_START.
 
@@ -638,6 +640,11 @@ def backfill_gaps(
         repo_root: git common_dir (main_worktree_root derives the worktree).
         host: machine/host name override; defaults to COORDINATOR_MACHINE env or hostname.
         today_override: date override for 'today' (YYYY-MM-DD); defaults to current UTC date.
+        dry_run: when True, compute the same {backfilled, skipped} result WITHOUT
+            writing anything to disk (no `_atomic_write`, no `declare_write`).
+            Added for cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-
+            changelog-cli-three-defects.md item 1 -- there was previously no
+            way to ask this op what it would do before it did it.
 
     Returns:
         {backfilled: [str, ...], skipped: [str, ...]}
@@ -675,7 +682,8 @@ def backfill_gaps(
         or _get_hostname()
     )
 
-    week_changelog_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        week_changelog_dir.mkdir(parents=True, exist_ok=True)
 
     backfilled: List[str] = []
     skipped: List[str] = []
@@ -687,9 +695,10 @@ def backfill_gaps(
             git_body = _git_log_for_date(str(worktree), d, next_d)
             if git_body:
                 out = week_changelog_dir / f"{d}-{resolved_host}-backfill.md"
-                content = _compose_backfill_block(d, resolved_host, git_body)
-                _atomic_write(out, content)
-                declare_write(out)
+                if not dry_run:
+                    content = _compose_backfill_block(d, resolved_host, git_body)
+                    _atomic_write(out, content)
+                    declare_write(out)
                 backfilled.append(str(out))
         else:
             skipped.append(d)
@@ -2436,15 +2445,20 @@ def main(argv: List[str]) -> int:
       1 — cannot resolve git repo root from $PWD (not a git repo). Matches the
           facade's pre-existing Check at this same failure point.
 
-    Host resolution note: the retired facade computed `host` via
-    `hostname -s || hostname` UNCONDITIONALLY (jq-composed into the
-    `changelog.backfill_gaps` params blob) — it never consulted
-    `COORDINATOR_MACHINE` (that env-var precedence is `_backfill_gaps_handler`'s
-    own default-resolution path when `host` is omitted from JSON-RPC params,
-    a path this CLI never takes because it exercises `backfill_gaps()`
-    directly with an explicit `host`). This CLI reproduces the facade's exact
-    behavior — `_get_hostname()` unconditionally, `COORDINATOR_MACHINE` NOT
-    consulted — for byte-parity with the retired oracle.
+    Host resolution note (byte-parity target RETIRED 2026-08-11, see
+    cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-changelog-cli-three-
+    defects.md item 2): the retired facade computed `host` via
+    `hostname -s || hostname` UNCONDITIONALLY, and this CLI used to reproduce
+    that exactly — `_get_hostname()` unconditionally, `COORDINATOR_MACHINE`
+    NOT consulted. That parity was itself the defect: `_get_hostname()`
+    returns the raw OS hostname (e.g. "Machine-a"), while every other artifact
+    in the daily ceremony (`archive/daily-summaries/<day>-<machine>.md`, the
+    `<day>.md` block `changelog.append_day` writes) uses the lowercase
+    machine slug (`coordinator_core.machine_resolver.compute_machine()`,
+    e.g. "machine-a"). On a case-sensitive filesystem the mismatch reads as a
+    second machine. This CLI now resolves `host` via `compute_machine()` —
+    same slug the rest of the ceremony uses, which already honours
+    `COORDINATOR_MACHINE` as its own first-priority override.
 
     Repo-root resolution note: `backfill_gaps()` takes the git COMMON_DIR
     (mirrors `_OP_KEY_SCOPE["changelog.backfill_gaps"] == "common_dir"` — the
@@ -2454,7 +2468,12 @@ def main(argv: List[str]) -> int:
     for that reason — using the worktree root here would make
     `main_worktree_root()` walk one directory too high.
     """
-    del argv  # positional accepted-but-ignored, per legacy/facade contract
+    if "-h" in argv or "--help" in argv:
+        print(main.__doc__)
+        return 0
+    dry_run = "--dry-run" in argv
+    # every other positional (including the legacy [repo-root]) stays
+    # accepted-but-ignored, per legacy/facade contract
     cwd = os.getcwd()
     try:
         proc = subprocess.run(
@@ -2476,15 +2495,21 @@ def main(argv: List[str]) -> int:
     # against cwd to get an absolute common_dir before handing to backfill_gaps().
     common_dir = (Path(cwd) / proc.stdout.strip()).resolve()
 
-    # Byte-parity: the retired facade always used hostname -s (never
-    # COORDINATOR_MACHINE) — see the Host resolution note above.
-    host = _get_hostname()
+    # Machine slug, not raw hostname — see the Host resolution note above.
+    host = compute_machine()
 
     try:
-        result = backfill_gaps(repo_root=common_dir, host=host)
+        result = backfill_gaps(repo_root=common_dir, host=host, dry_run=dry_run)
     except Exception as exc:  # advisory — never fail the caller (DR-216 D2 legacy parity)
         logger.warning("backfill_gaps CLI: advisory error (non-fatal): %s", exc)
         result = {"backfilled": [], "skipped": [], "error": str(exc)}
+
+    # Item 1: name the files this op writes (or, under --dry-run, would
+    # write) on stderr — silent writes were half of why --help ran the
+    # backfill unnoticed.
+    for path in result.get("backfilled", []):
+        verb = "would write" if dry_run else "wrote"
+        print(f"backfill-week-changelog-gaps: {verb} {path}", file=sys.stderr)
 
     print(json.dumps(result))
     return 0

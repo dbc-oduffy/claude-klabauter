@@ -9,7 +9,38 @@ machinery handoffs/memos need).
 
 Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-implemented --plan <path>
+    plan-status-transition stamp-implemented --plan <path> --override-reason "<why>"
     plan-status-transition stamp-superseded --plan <path> --by <successor-plan-path>
+
+``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
+stamps-implemented-without-reading-the-ac-table.md): an explicit,
+self-documenting override of `stamp-implemented`'s own completeness verdict
+(the AC-open-rows advisory `_ac_open_rows_warning` prints) -- the sanctioned
+successor to two independently-invented, mutually-divergent frontmatter
+spellings (`status_stamped_by`/`status_stamped_reason` in one repo,
+`status_stamped_by_hand` in another) a hand-edit introduced when this op had
+no supported override path at all. A REQUIRED, non-empty reason string, not
+a bare boolean `--force` -- see `_stamp_implemented`'s "Completeness-verdict
+override" note for the field shape written (`status_override_by`,
+`status_override_reason`, `status_override_at`) and why insertion order is
+reversed. Omitting the flag leaves behaviour byte-for-byte unchanged from
+before this addition: no new refusal, no new field, nothing silently
+loosened. The live-foreign-holder refusal (`_refuse_if_live_foreign_holder`)
+and the locked-write/commit-ownership machinery are UNCHANGED and still run
+in full on this path -- the override only ever concerns the completeness
+verdict, never who may hold the write. Rejected outright on
+`stamp-superseded` (see `main()`): that verb asserts no completeness at all,
+so there is nothing there for the flag to override.
+
+NOTE (schema declaration, out of this change's scope): `status_override_by`
+/ `status_override_reason` / `status_override_at` are written here but NOT
+yet declared in the vendored `coordinator_core/frontmatter/schemas/
+plan.schema.json` -- that file was outside this change's authorized file
+scope (`coordinator_core/ops/plan_status_transition.py` +
+`coordinator_core/ops/tests/` only). `plan.schema.json` has no
+`additionalProperties: false` at the top level, so these fields validate
+today without a schema entry, but they are UNDOCUMENTED there. Flagged for
+a follow-up schema-declaration edit, not silently skipped.
 
 ``stamp-superseded`` (C2, docs/plans/2026-08-06-<this-plan>.md): the second
 authorized writer of a plan's ``status:`` field, added because ``implemented``
@@ -262,12 +293,19 @@ _FLIPPABLE_STATUSES = frozenset(_FLIPPABLE_STATUSES_ORDER)
 
 
 class _Opts:
-    __slots__ = ("verb", "plan", "by")
+    __slots__ = ("verb", "plan", "by", "override_reason")
 
-    def __init__(self, verb: Optional[str], plan: Optional[str], by: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        verb: Optional[str],
+        plan: Optional[str],
+        by: Optional[str] = None,
+        override_reason: Optional[str] = None,
+    ) -> None:
         self.verb = verb
         self.plan = plan
         self.by = by
+        self.override_reason = override_reason
 
 
 class _CliError(Exception):
@@ -286,6 +324,12 @@ def _parse_args(argv: List[str]) -> _Opts:
     and rejecting an out-of-verb flag is `main()`'s job, not the parser's,
     mirroring how `--plan` itself is unconditionally recognised regardless
     of verb.
+
+    ``--override-reason`` (2026-08-10, cross-repo memo
+    2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-reading-
+    the-ac-table.md) is parsed the same way, generically, for the same
+    reason: gating an out-of-verb flag belongs to `main()`, not the parser
+    (see the rejection there for `stamp-superseded`).
     """
     verb = argv[0] if argv else None
     opts = _Opts(verb=verb, plan=None)
@@ -302,6 +346,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.by = argv[i]
+        elif a == "--override-reason":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.override_reason = argv[i]
         else:
             raise _CliError(f"unknown argument: {a}")
         i += 1
@@ -789,6 +838,64 @@ def _refuse_if_live_foreign_holder(plan_path: Path, worktree_root: Path, closing
     )
 
 
+def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
+    """Emit an advisory-only WARNING to stderr naming any still-open
+    `## Acceptance Criteria` table rows, immediately after a successful
+    (non-no-op) `stamp-implemented` flip -- cross-repo memo
+    `2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-
+    reading-the-ac-table.md` from example-retrieval-repo-em: this CLI's own flip gate
+    is entirely the `_FROZEN_STATUSES`/`_FLIPPABLE_STATUSES` vocabulary
+    matrix; it never opened the plan's AC table at all.
+
+    Deliberately NOT gated on `spine_fully_resolved` (unlike
+    `close_out_and_stamp`'s own caller-side gate on `_ac_table_desync_
+    finding`) -- this path has no spine verdict to gate on: the
+    workstream-complete directive route (`cs_stamp_plan_implemented` ->
+    `plan_status_transition.main(["stamp-implemented", ...])`) bypasses
+    `close_out_and_stamp` entirely, so this is the ONLY AC-awareness this
+    route gets, and it must not silently wait on a verdict it cannot see.
+
+    Advisory only, never blocking (per the driving memo: "a warning that
+    can be acknowledged is probably right; a refusal that forces the table
+    to lie would be worse than what exists now"): never raises, never
+    changes the exit code, never skips or reverts the write already on
+    disk. An unparseable/absent/malformed AC table stays silent, mirroring
+    `_ac_table_desync_finding`'s own degrade-quietly posture -- this
+    function's own broad `except Exception` is a second, redundant
+    backstop on top of that one, not a substitute for it.
+
+    Coupling decision: reuses `close_out_and_stamp`'s existing AC-table
+    parser (`_ac_table_desync_finding` and its own helpers) rather than
+    hand-rolling a second, divergent AC oracle. Imported FUNCTION-LOCALLY,
+    not at module scope: `execute_plan_assemble.close_out_and_stamp`
+    already imports THIS module (`plan_status_transition`) at ITS OWN
+    module scope (`from coordinator_core.ops.plan_status_transition import
+    ...`), so a module-level import here in the other direction would be a
+    genuine import cycle, not merely a new `ops` -> `execute_plan_assemble`
+    edge. A function-local import resolves cleanly at call time (both
+    modules are always fully loaded by the time a real `stamp-implemented`
+    flip runs) -- mirrors `_run_cascade`'s own identical function-local
+    avoidance of the sibling `archive_stamp` cycle already documented at
+    that call site in this same file.
+    """
+    try:
+        from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+            _ac_table_desync_finding,
+        )
+
+        finding = _ac_table_desync_finding(plan_text, spine_fully_resolved=True)
+        if finding is None:
+            return
+        unresolved = ", ".join(finding.get("unresolved_ac_ids", []) or [])
+        print(
+            f"{_PROG}: WARNING: {plan_path} was stamped implemented but its "
+            f"## Acceptance Criteria table still has open row(s): {unresolved}",
+            file=sys.stderr,
+        )
+    except Exception:
+        return
+
+
 def _stamp_implemented(opts: _Opts) -> int:
     """Perform the stamp-implemented verb; returns the exit code.
 
@@ -811,6 +918,21 @@ def _stamp_implemented(opts: _Opts) -> int:
     """
     if not opts.plan:
         print(f"{_PROG}: stamp-implemented requires --plan <path>", file=sys.stderr)
+        return 1
+    # `--override-reason` (2026-08-10) fails loud on an EMPTY reason (flag
+    # given with a blank/whitespace-only value) the same way `--by` fails
+    # loud without `--override-reason` on stamp-superseded above: the
+    # override is a judgment call the caller must state, not a bare
+    # boolean toggle -- see module docstring "Override" note and this
+    # function's own "Completeness-verdict override" section below.
+    override_reason = opts.override_reason
+    if override_reason is not None and not override_reason.strip():
+        print(
+            f"{_PROG}: --override-reason requires a non-empty reason "
+            "(state WHY the completeness verdict is being overridden -- "
+            "no bare/blank override)",
+            file=sys.stderr,
+        )
         return 1
     if not os.path.exists(opts.plan):
         print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
@@ -853,7 +975,12 @@ def _stamp_implemented(opts: _Opts) -> int:
             print(f"{_PROG}: refusing to stamp implemented: {refusal_reason}", file=sys.stderr)
             return 1
 
-    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+    _state: dict = {
+        "flipped": False,
+        "prior_status": None,
+        "deliverable_id": None,
+        "override_applied": False,
+    }
 
     def mutate(old_text: str) -> str:
         text = old_text.replace("\r\n", "\n")
@@ -936,6 +1063,36 @@ def _stamp_implemented(opts: _Opts) -> int:
             )
 
         fm_text = replace_fm_field(split.fm_text, "status", "implemented")
+
+        # Completeness-verdict override (2026-08-10): record WHO overrode
+        # the AC-open-rows advisory (`_ac_open_rows_warning` below) and WHY,
+        # as canonical schema'd frontmatter -- the sanctioned successor to
+        # the two ad-hoc, mutually-divergent hand-authored spellings
+        # (`status_stamped_by`/`status_stamped_reason` in one repo,
+        # `status_stamped_by_hand` in another) this closes. Only written on
+        # a REAL flip (this branch), never on the frozen/no-op branch above
+        # -- an override with nothing to override (the plan was already
+        # terminal) writes nothing. Inserted in reverse (`at`, then
+        # `reason`, then `by`) because `insert_fm_field(..., after_key=
+        # "status")` anchors each new line immediately after `status:`,
+        # pushing the previously-inserted line down -- the last insertion
+        # ends up first, giving the on-disk order status -> by -> reason ->
+        # at (see `_stamp_superseded`'s identical single-field use of this
+        # anchor for the established idiom this mirrors).
+        if override_reason is not None:
+            from datetime import datetime, timezone
+
+            from coordinator_core.session.core import resolve_session_id
+
+            override_by = resolve_session_id() or "unknown-session"
+            override_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            fm_text = insert_fm_field(fm_text, "status_override_at", override_at, after_key="status")
+            fm_text = insert_fm_field(fm_text, "status_override_reason", override_reason, after_key="status")
+            fm_text = insert_fm_field(fm_text, "status_override_by", override_by, after_key="status")
+            _state["override_applied"] = True
+            _state["override_by"] = override_by
+            _state["override_at"] = override_at
+
         _state["flipped"] = True
         _state["prior_status"] = status
         return rebuild(split, fm_text)
@@ -976,6 +1133,7 @@ def _stamp_implemented(opts: _Opts) -> int:
         if new_text != old_text:
             with open(plan_path, "w", encoding="utf-8", newline="") as f:
                 f.write(new_text)
+        written_text = new_text
 
     # Only reachable when a git repo was actually resolved (`worktree_root` is
     # non-None only when `git_common_dir` is, per `_resolve_repo_root_for`'s own
@@ -1088,6 +1246,20 @@ def _stamp_implemented(opts: _Opts) -> int:
                     file=sys.stderr,
                 )
                 return 1
+
+    if written_text is not None:
+        _ac_open_rows_warning(opts.plan, written_text)
+
+    if _state.get("override_applied"):
+        # Loud on purpose (stdout, not stderr): this is the audit trail the
+        # cross-repo memo asked for -- an operator overriding the
+        # completeness verdict must see it echoed back, not have it land
+        # silently alongside the ordinary flip line below.
+        print(
+            f"{_PROG}: {opts.plan} completeness verdict OVERRIDDEN by "
+            f"{_state['override_by']} at {_state['override_at']} — reason: "
+            f"{override_reason}"
+        )
 
     print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → implemented")
 
@@ -1303,9 +1475,43 @@ def main(argv: List[str]) -> int:
         return 1
 
     if opts.verb == "stamp-implemented":
+        if opts.by is not None:
+            # Hardening (latent, not live -- see module docstring/dispatch
+            # brief): `_refuse_if_live_foreign_holder` takes an unauthenticated
+            # `closing_sid` override with NO verification against the actual
+            # resolved session identity. The only programmatic caller
+            # (`cs_stamp_plan_implemented`) never supplies `--by`, so this is
+            # unreached in production today -- but `_parse_args`'s own
+            # docstring already promises "rejecting an out-of-verb flag is
+            # main()'s job", and until now that promise was undischarged.
+            print(
+                f"{_PROG}: stamp-implemented does not accept --by "
+                "(it has no successor-plan judgment call to record, and "
+                "silently accepting it would let a caller disarm "
+                "_refuse_if_live_foreign_holder's own-session check with an "
+                "unauthenticated session id)",
+                file=sys.stderr,
+            )
+            return 1
         return _stamp_implemented(opts)
 
     if opts.verb == "stamp-superseded":
+        if opts.override_reason is not None:
+            # Symmetric rejection to `--by` on stamp-implemented above:
+            # `--override-reason` names an explicit judgment call about the
+            # COMPLETENESS verdict this op's `stamp-implemented` verb
+            # (advisorily) checks via `_ac_open_rows_warning` -- a
+            # `stamp-superseded` plan is not being asserted "done" at all,
+            # so there is no completeness verdict here for the flag to
+            # override. Rejected rather than silently ignored so a
+            # caller's typo/copy-paste is never absorbed quietly.
+            print(
+                f"{_PROG}: stamp-superseded does not accept --override-reason "
+                "(it has no completeness verdict to override -- name the "
+                "successor via --by instead)",
+                file=sys.stderr,
+            )
+            return 1
         return _stamp_superseded(opts)
 
     print(

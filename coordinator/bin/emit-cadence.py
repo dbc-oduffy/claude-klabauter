@@ -50,7 +50,6 @@ Negative-spec (retired patterns — DO NOT reintroduce):
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -69,69 +68,23 @@ class _SeamAbsentError(RuntimeError):
 
 # --- Self-stamping HALTED marker (2026-08-10, DR-287 self-stamping follow-up) ---
 #
-# Purpose: when the gate is off, this script skips emission in whichever repo's
-# ceremony invoked it — but the frozen `state/cockpit-emission.json` in THAT repo
-# carries no in-band signal that it stopped advancing (the in-artifact field is
-# blocked behind example-doctrine-repo's `additionalProperties: false` envelope schema gate). This
-# writes/removes a repo-local `state/cockpit-emission.HALTED.md` beside the frozen
-# artifact so cockpit's fleet-tier glob (`<fleet-parent>/*/state/cockpit-emission.json`)
-# has a co-located signal in every repo whose cadence is skipping, without anyone
-# remembering to copy a file by hand.
+# The marker's content and its write/refresh/remove operations live in
+# `coordinator/bin/lib/halted_marker.py` — shared with
+# `emit-cockpit-snapshot.py`, which re-stamps the same marker after an
+# on-demand emission so the stamp never lags the bytes beside it. This module
+# owns only the cadence-side lifecycle: refresh on a benign gate-off skip,
+# remove when the gate is ON.
 #
-# Negative-spec: this never raises past its own boundary and never turns a skip
-# (or a live emission) into a ceremony failure — every operation here is
-# best-effort, contained to broad except clauses, and callable from both the
-# gate-off skip path (write/refresh) and the gate-on path (remove-if-stale).
+# Negative-spec: nothing imported here raises past its own boundary — a marker
+# failure never turns a skip (or a live emission) into a ceremony failure.
 
-_HALT_DATE = "2026-08-10"
-_HALT_REASON = (
-    "PM ruling (DR-287): `emit.cadence` was firing 24-46x/day fleet-wide with "
-    "~64% timeout rate and no downstream consumer required per-ceremony freshness."
+from halted_marker import (  # noqa: E402
+    MARKER_READ_HEAD_BYTES as _MARKER_READ_HEAD_BYTES,
+    build_halted_marker_content as _build_halted_marker_content,
+    extract_emitted_at as _extract_emitted_at,
+    remove_halted_marker as _remove_halted_marker,
+    sync_halted_marker as _sync_halted_marker,
 )
-_DR_POINTER = "docs/decisions/DR-287-emit-cadence-halted-pending-consumer-pur.md (claude-klabauter)"
-_REENABLE_VAR = "COORDINATOR_EMISSION_CADENCE_LIVE=1"
-_EMITTED_AT_RE = re.compile(r'"emitted_at"\s*:\s*"([^"]*)"')
-_MARKER_READ_HEAD_BYTES = 4096
-
-
-def _extract_emitted_at(artifact_path: Path) -> str | None:
-    """Cheaply pull `emitted_at` out of a (possibly ~23MB) cockpit-emission.json
-    without reading it whole — `emitted_at` sits in the top-level envelope, well
-    within the first few KB, so a bounded head-read + regex suffices."""
-    try:
-        with open(artifact_path, "rb") as f:
-            head_bytes = f.read(_MARKER_READ_HEAD_BYTES)
-    except OSError:
-        return None
-    head = head_bytes.decode("utf-8", errors="replace")
-    match = _EMITTED_AT_RE.search(head)
-    return match.group(1) if match else None
-
-
-def _build_halted_marker_content(emitted_at: str | None) -> str:
-    emitted_line = (
-        emitted_at
-        if emitted_at
-        else "unknown (state/cockpit-emission.json absent or unreadable at write time)"
-    )
-    return (
-        "# state/cockpit-emission.json is HALTED — do not read as current\n\n"
-        f"**Halted:** {_HALT_DATE}, {_HALT_REASON}\n\n"
-        f"**Re-enable:** set `{_REENABLE_VAR}` in the environment the ceremony "
-        "directives run under.\n\n"
-        f"**Reference:** {_DR_POINTER}\n\n"
-        "**Local artifact `emitted_at` at halt-marker-write time:** "
-        f"`{emitted_line}`\n\n"
-        "**Scope note:** this marker is repo-local, self-stamped by "
-        "`coordinator/bin/emit-cadence.py` on each benign gate-off skip in "
-        "*this* repo only — it is written/refreshed here and does NOT travel "
-        "with a `git show <sha>:state/cockpit-emission.json` blob (a checked-out "
-        "historical commit will not carry this file's sibling marker). This is "
-        "exactly the limitation that motivated requesting an in-artifact halt "
-        "field, which is blocked behind example-doctrine-repo's `additionalProperties: false` "
-        "envelope schema gate; until that lands, this filesystem marker is the "
-        "weaker signal.\n"
-    )
 
 
 def _resolve_repo_root_safe() -> str | None:
@@ -149,54 +102,6 @@ def _resolve_repo_root_safe() -> str | None:
         return proc.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return None
-
-
-def _sync_halted_marker(repo_root: str) -> None:
-    """Ensure `<repo_root>/state/cockpit-emission.HALTED.md` exists and is
-    accurate. No-op if `state/` doesn't exist (never creates it), no-op if the
-    marker already holds the correct content (no mtime churn on a shared tree),
-    and swallows every error — a failure here degrades silently, it never
-    propagates."""
-    try:
-        state_dir = Path(repo_root) / "state"
-        if not state_dir.is_dir():
-            return
-        marker_path = state_dir / "cockpit-emission.HALTED.md"
-        artifact_path = state_dir / "cockpit-emission.json"
-        emitted_at = _extract_emitted_at(artifact_path) if artifact_path.is_file() else None
-        content = _build_halted_marker_content(emitted_at)
-        if marker_path.is_file():
-            try:
-                if marker_path.read_text(encoding="utf-8") == content:
-                    return
-            except OSError:
-                pass
-        tmp_path = marker_path.with_name(marker_path.name + f".tmp-{os.getpid()}")
-        try:
-            tmp_path.write_text(content, encoding="utf-8")
-            os.replace(tmp_path, marker_path)
-        finally:
-            # os.replace consumed tmp_path on success; a survivor means the
-            # swap failed, and an uncleaned one becomes untracked litter in
-            # state/ that trips the next session's dirty-tree gate.
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-    except Exception:
-        return
-
-
-def _remove_halted_marker(repo_root: str) -> None:
-    """Delete a stale `state/cockpit-emission.HALTED.md` when the gate is ON —
-    a marker beside a live artifact is the same lie in the other direction.
-    Swallows every error; never propagates."""
-    try:
-        marker_path = Path(repo_root) / "state" / "cockpit-emission.HALTED.md"
-        if marker_path.is_file():
-            marker_path.unlink()
-    except Exception:
-        return
 
 
 def _gate_is_off() -> bool:

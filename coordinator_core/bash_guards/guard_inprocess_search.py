@@ -25,12 +25,31 @@ Why the verdict is a deny
 A PreToolUse hook has exactly one channel for returning content to the model, and it is
 `permissionDecisionReason` on a deny. So "deny" here means ALREADY HANDLED, not refused:
 the grep subprocess does not run, and the caller receives the output it would have
-produced. The message therefore leads with the output, not with a policy statement --
-the caller asked a question and this is its answer.
+produced -- and the message now LEADS with that answer having already been produced
+(never with a "Denied"/"Refused"/"Blocked" lead a caller reads as a bare refusal),
+mentioning second, but still clearly, that the literal command did not run; see
+"Composed message leads with the contract, not the output" below for why, and the
+`_ANSWERED_MARKER` comment block further down for why the lead word itself changed.
 
 This is the `# UNDOCUMENTED-DENY` shape (`hooks._envelope.deny`), spike-verified on
 harness 2.1.193 but not a documented harness contract. That dependency was surfaced to
 the PM and accepted rather than assumed.
+
+Composed message leads with the contract, not the output (2026-08-11)
+-----------------------------------------------------------------------
+This module used to compose `rendered + footer` -- the caller's answer first, the
+"already handled" framing last. That shape is what let a genuine leak-shaped read
+happen: `cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-banner-still-reads-
+as-agent-instruction.md` Item 2 reports dispatched reviewers meeting real, correct
+results under what looked like a bare denial and having to infer, from where they
+sat in the text, that the results below were a substitution rather than a leaked
+answer to a refused command. `check()` now composes `footer + rendered` -- the
+already-handled/substitution statement is the FIRST thing in the payload, so an
+agent reading top-to-bottom meets "this is a substitution, not a refusal" before it
+meets anything that could otherwise be misread as a leak. The latched short marker
+(`_ANSWERED_MARKER`, below) carries the identical framing standalone, since after
+the first firing of a session it is the ONLY text an agent gets -- see "Session
+latch" for why the short form still had to say the same thing the paragraph does.
 
 Ordering
 --------
@@ -148,7 +167,31 @@ _LATCH_MARKER_NAME = "inprocess-search-footer-seen"
 #: The one-line invariant marker every answered call carries once the explanatory
 #: paragraph has already fired this session -- never a bare deny with no framing (the
 #: module docstring's "deny here means ALREADY HANDLED, not refused" contract).
-_ANSWERED_MARKER = "[answered in-process]"
+#:
+#: Reframed 2026-08-11 (this dispatch) so the FIRST three words tell the caller they
+#: received a real answer, not a lead "Denied" that a caller reads as a refusal before
+#: reaching the substitution framing later in the sentence -- three independently
+#: dispatched agents distrusted correct in-process results under the prior "Denied as
+#: written..." lead and burned extra tool calls cross-verifying them against direct
+#: `Read` calls (see `cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-banner-
+#: still-reads-as-agent-instruction.md` Item 2, and this dispatch's own exit-interview
+#: quotes). "Answered in-process" now leads; "not a refusal" plus the no-subprocess-ran
+#: fact still follow immediately -- that fact stays load-bearing, second, never dropped.
+#: Shares its opening clause with `_footer`'s full paragraph below by design -- the two
+#: forms state the identical fact, one at length and one tersely, never two different
+#: claims. Deliberately worded to NOT be a substring of that full paragraph (diverges
+#: right after the shared "[Answered in-process, not a refusal: " clause -- the marker
+#: continues "no subprocess ran...", the paragraph continues "your command was
+#: recognized...") -- `test_guard_inprocess_search.py::test_first_call_carries_full_
+#: paragraph` and `test_alternative_liveness_gate.py::test_fire_guard_isolates_from_a_
+#: pre_existing_session_latch` both assert the marker is ABSENT from a first-call
+#: (full-paragraph) reason, which would spuriously pass if the marker just happened to
+#: be a prefix of the paragraph; the divergence is real content, not an artifact of
+#: case alone.
+_ANSWERED_MARKER = (
+    "[Answered in-process, not a refusal: no subprocess ran, results below "
+    "are this engine's own answer to your command. Keep using grep as normal.]"
+)
 
 
 def _repo_root_from_cwd(cwd: str) -> Optional[str]:
@@ -240,9 +283,17 @@ def _footer(cwd: str) -> str:
         except Exception:
             pass
 
+    # Leads with the identical contract statement `_ANSWERED_MARKER` carries
+    # standalone (see that constant's own comment) -- "Search already answered
+    # in-process, no subprocess spawned" is a PINNED substring
+    # (test_guard_inprocess_search.py, test_alternative_liveness_gate.py); keep it
+    # verbatim if this paragraph is edited again.
     full = (
-        "[Search already answered in-process, no subprocess spawned. Keep using grep "
-        "as normal -- matching commands are auto-answered this way. %s]"
+        "[Answered in-process, not a refusal: your command was recognized as a "
+        "search and the results below are this engine's own answer to it, not "
+        "real command output -- no subprocess was spawned for it. Search already "
+        "answered in-process, no subprocess spawned. Keep using grep as normal -- "
+        "matching commands are auto-answered this way. %s]"
     ) % operator_override_note(_DISABLE_ENV_VAR)
 
     if sid:
@@ -339,4 +390,8 @@ def check(
         return None
     if rendered is None:
         return None
-    return deny("PreToolUse", "%s\n\n%s" % (rendered, _footer(cwd)))
+    # footer FIRST, rendered SECOND: the substitution contract must be the
+    # first thing an agent reads, before anything that could otherwise be
+    # misread as a leaked answer beneath a denial -- see the module
+    # docstring's "Composed message leads with the contract, not the output".
+    return deny("PreToolUse", "%s\n\n%s" % (_footer(cwd), rendered))

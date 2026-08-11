@@ -101,6 +101,48 @@ Negative-spec:
       identically as "one path". Byte-weighting is a different, unbuilt
       detector; this one answers "how much of the TREE, by path count, is
       gone", which is what an empty-tree-shaped incident actually produces.
+    - Does NOT accumulate deletions across commits (check 2) — each
+      invocation measures only the CURRENT staged commit's deleted-path
+      count/ratio against the tracked total at that moment; nothing here
+      tracks a running total across a SEQUENCE of commits. A paced split
+      (e.g. ~900 deletions per commit across 20 commits on a repo whose
+      floor is 5127) can keep both the absolute-floor and ratio legs under
+      threshold on every single commit while still emptying the tree over
+      the sequence — the exact broader-gap shape the carried backlog item
+      ``cf-deletion-tripwire-3a91c7`` names. EXECUTED AND CONFIRMED
+      2026-08-11, no longer a reasoned-about gap —
+      ``docs/research/spike-verdicts/2026-08-11-paced-deletion-evades-the-mass-deletion-tripwire.md``
+      ran these predicates unmodified at production thresholds against a
+      6000-file repo deleting HALF the remainder per commit: the guard stayed
+      silent for 13 consecutive commits and first fired at commit 14, with
+      5999 of 6000 files already gone. That spike also establishes a stronger
+      claim than "this is a gap": NO single-commit threshold can close it.
+      The 0.90 ratio exists because this repo's largest legitimate bulk
+      deletion measured 0.505, so any threshold above that is evaded by
+      pacing just under it, and any threshold at or below it blocks a
+      deletion this repo's own history calls legitimate. A cross-commit
+      window is the only shape that can work. This is an accepted, undisclosed
+      (until now) gap: closing it needs a bounded rolling-window check (sum
+      of staged-D counts across the last N pre-commit invocations), which is
+      a distinct, unbuilt detector, not a fix to the per-commit measurement
+      this module makes.
+    - Does NOT scope the mass-deletion check (or the rollback check) to the
+      pathspec a `git commit -- <path>` will actually write (check 2, also
+      check 1 via `_staged_blobs`) — both read the FULL staged index via an
+      unscoped ``git diff --cached --raw``, not the subset of the index a
+      pathspec-scoped commit will turn into tree content (git uses HEAD
+      content for unlisted paths in that mode). A developer with unrelated
+      deletions staged elsewhere who runs a narrow `git commit -- some/file`
+      is evaluated against the WHOLE staged set. This is NOT a fixable
+      oversight in this module: a standard git pre-commit hook is invoked
+      with no arguments and no environment variable carrying the commit's
+      pathspec (confirmed by reading
+      ``coordinator_core.ops.install_claude_klabauter_precommit_hook`` and
+      ``coordinator/bin/detect-staged-rollback.py`` — both forward/receive
+      only ``[repo-root]``, never the invoking `git commit`'s own argv) — a
+      pre-commit hook has no git-provided way to see which pathspec the
+      commit that triggered it will restrict itself to. Named here as a
+      git-hook-API limitation, not silently accepted.
     - Does NOT itself decide whether to block anything beyond its own exit
       code — it is a read/report library plus a CLI; the installed hook
       (``coordinator_core.ops.install_claude_klabauter_precommit_hook``) clamps that
@@ -234,12 +276,46 @@ def _run_git(args: Sequence[str], cwd: str, env: Optional[dict] = None) -> subpr
     )
 
 
-def _staged_blobs(repo_root: str, env: Optional[dict] = None) -> Dict[str, str]:
+def _staged_raw_diff(repo_root: str, env: Optional[dict] = None) -> List[str]:
+    """Shared ``git diff --cached --raw -z --no-renames --no-abbrev`` spawn,
+    tokenized on NUL with the trailing empty token trimmed.
+
+    Both `_staged_blobs` and `_staged_deletions` need the identical staged-
+    index raw-diff scan — factored out here so `main()` pays for it once,
+    not twice, per commit (real cost on this repo's ~50-concurrent-session
+    load norm: every commit on every session was paying this spawn twice).
+    Deliberately returns the bare token list, not a parsed dict/list, so
+    neither caller's own parsing (and neither caller's return CONTRACT —
+    `_staged_blobs`'s dict shape is pinned by `find_rollback_candidates`'s
+    tests) has to change to use it.
+    """
+    result = _run_git(
+        ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"],
+        cwd=repo_root,
+        env=env,
+    )
+    if result.returncode != 0:
+        return []
+    tokens = result.stdout.split("\0")
+    if tokens and tokens[-1] == "":
+        tokens = tokens[:-1]
+    return tokens
+
+
+def _staged_blobs(
+    repo_root: str,
+    env: Optional[dict] = None,
+    tokens: Optional[List[str]] = None,
+) -> Dict[str, str]:
     """Path -> full staged (index) blob sha for every staged, non-deleted path.
 
     One `git diff --cached --raw -z --no-renames --no-abbrev` call for the
     WHOLE staged set — not one call per path — is the perf-critical piece:
     this is O(1) git invocations in the number of staged paths, not O(N).
+    The spawn itself is shared with `_staged_deletions` via `_staged_raw_diff`;
+    pass a pre-fetched `tokens` (as `main()` does) to avoid paying for it a
+    second time, or omit it to have this function fetch its own (unchanged
+    standalone behavior, and what every existing caller/test still gets).
 
     Record shape per staged path, NUL-delimited (`-z`):
         ":<oldmode> <newmode> <oldsha> <newsha> <status>\\0<path>\\0"
@@ -250,17 +326,8 @@ def _staged_blobs(repo_root: str, env: Optional[dict] = None) -> Dict[str, str]:
     Deleted paths (status "D", newsha all-zero) are skipped — a deletion has
     no staged content to compare against a historical blob.
     """
-    result = _run_git(
-        ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"],
-        cwd=repo_root,
-        env=env,
-    )
-    if result.returncode != 0:
-        return {}
-
-    tokens = result.stdout.split("\0")
-    if tokens and tokens[-1] == "":
-        tokens = tokens[:-1]
+    if tokens is None:
+        tokens = _staged_raw_diff(repo_root, env=env)
 
     blobs: Dict[str, str] = {}
     i = 0
@@ -479,7 +546,7 @@ def _batch_path_history(
 
 
 def find_rollback_candidates(
-    repo_root: str, env: Optional[dict] = None
+    repo_root: str, env: Optional[dict] = None, tokens: Optional[List[str]] = None
 ) -> List[RollbackCandidate]:
     """Read-only scan of the staged index for exact-older-blob matches.
 
@@ -495,8 +562,13 @@ def find_rollback_candidates(
     function used to pay) — see that function's docstring for the
     multi-pathspec shape and the § Anti-scope 25 absence-reconciliation it
     guarantees.
+
+    `tokens`, if given (as `main()` does), is a pre-fetched `_staged_raw_diff`
+    result forwarded straight to `_staged_blobs` to avoid a duplicate spawn;
+    omit it to have `_staged_blobs` fetch its own (unchanged standalone
+    behavior).
     """
-    staged = _staged_blobs(repo_root, env=env)
+    staged = _staged_blobs(repo_root, env=env, tokens=tokens)
     all_history = _batch_path_history(repo_root, list(staged.keys()), env=env)
     candidates: List[RollbackCandidate] = []
     for path, staged_blob in staged.items():
@@ -537,30 +609,28 @@ class MassDeletionFinding:
     deleted_paths: Tuple[str, ...] = field(default_factory=tuple)
 
 
-def _staged_deletions(repo_root: str, env: Optional[dict] = None) -> List[str]:
+def _staged_deletions(
+    repo_root: str,
+    env: Optional[dict] = None,
+    tokens: Optional[List[str]] = None,
+) -> List[str]:
     """Every staged status-D path — the exact set `_staged_blobs` discards.
 
     Same single `git diff --cached --raw -z --no-renames --no-abbrev` shape
     (and the same record parsing) as `_staged_blobs`, kept as an independent
-    pass rather than folded into that function: `_staged_blobs` is a hot path
-    for the rollback check and its contract (deleted paths absent from the
-    returned dict) is depended on by `find_rollback_candidates` and pinned by
-    that function's own tests — branching its return shape to also carry
-    deletions would be a wider, riskier change for no shared benefit, since
-    this function's caller (`find_mass_deletion`) needs nothing else from the
-    diff.
+    PARSING pass rather than folded into that function: `_staged_blobs` is a
+    hot path for the rollback check and its contract (deleted paths absent
+    from the returned dict) is depended on by `find_rollback_candidates` and
+    pinned by that function's own tests — branching its return shape to also
+    carry deletions would be a wider, riskier change for no shared benefit,
+    since this function's caller (`find_mass_deletion`) needs nothing else
+    from the diff. The SPAWN itself, however, is shared via
+    `_staged_raw_diff` — pass a pre-fetched `tokens` (as `main()` does) to
+    avoid a second `git diff --cached` process per commit; omit it to have
+    this function fetch its own (unchanged standalone behavior).
     """
-    result = _run_git(
-        ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"],
-        cwd=repo_root,
-        env=env,
-    )
-    if result.returncode != 0:
-        return []
-
-    tokens = result.stdout.split("\0")
-    if tokens and tokens[-1] == "":
-        tokens = tokens[:-1]
+    if tokens is None:
+        tokens = _staged_raw_diff(repo_root, env=env)
 
     deleted: List[str] = []
     i = 0
@@ -597,7 +667,9 @@ def _tracked_file_count(repo_root: str, env: Optional[dict] = None) -> int:
     return sum(1 for t in tokens if t)
 
 
-def find_mass_deletion(repo_root: str, env: Optional[dict] = None) -> Optional[MassDeletionFinding]:
+def find_mass_deletion(
+    repo_root: str, env: Optional[dict] = None, tokens: Optional[List[str]] = None
+) -> Optional[MassDeletionFinding]:
     """Read-only scan of the staged index for an implausible-share deletion.
 
     Never mutates the repo. Returns None when nothing is staged for
@@ -605,8 +677,13 @@ def find_mass_deletion(repo_root: str, env: Optional[dict] = None) -> Optional[M
     crosses either threshold (`_mass_deletion_should_fire` makes that call);
     this function is measurement only, mirroring `find_rollback_candidates`'s
     own separation of "what was found" from "does it fire".
+
+    `tokens`, if given (as `main()` does), is a pre-fetched `_staged_raw_diff`
+    result forwarded straight to `_staged_deletions` to avoid a duplicate
+    spawn; omit it to have `_staged_deletions` fetch its own (unchanged
+    standalone behavior).
     """
-    deleted = _staged_deletions(repo_root, env=env)
+    deleted = _staged_deletions(repo_root, env=env, tokens=tokens)
     if not deleted:
         return None
     total = _tracked_file_count(repo_root, env=env)
@@ -721,16 +798,23 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
 
     repo_root = argv[0] if argv else "."
 
+    # ONE `git diff --cached --raw` spawn shared by both checks below — each
+    # of `_staged_blobs` and `_staged_deletions` used to run this identical
+    # command independently, doubling the per-commit git spawn count for no
+    # benefit (real cost at ~50 concurrent sessions, each paying it on every
+    # commit). See `_staged_raw_diff`'s docstring.
+    raw_diff_tokens = _staged_raw_diff(repo_root, env=env)
+
     # Both checks always run, independently — a commit can trip either, both,
     # or neither, and each has its own override (see module docstring,
     # "Override"). Neither check short-circuits the other: a rollback finding
     # below its own threshold must not suppress a mass-deletion finding
     # staged alongside it, and vice versa.
-    candidates = find_rollback_candidates(repo_root, env=env)
+    candidates = find_rollback_candidates(repo_root, env=env, tokens=raw_diff_tokens)
     rollback_fires = bool(candidates) and _should_fire(candidates)
     rollback_overridden = env.get(OVERRIDE_ENV, "") not in ("", "0")
 
-    mass_finding = find_mass_deletion(repo_root, env=env)
+    mass_finding = find_mass_deletion(repo_root, env=env, tokens=raw_diff_tokens)
     mass_fires = _mass_deletion_should_fire(mass_finding)
     mass_overridden = env.get(MASS_DELETION_OVERRIDE_ENV, "") not in ("", "0")
 

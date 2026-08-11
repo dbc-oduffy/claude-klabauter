@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1356,3 +1357,100 @@ class TestHandoffKindOffEnumUnconditionalDeny:
             assert "spinoff-roadmap" in reason
         else:
             assert result is None
+
+
+def _git(root: str, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _init_repo(tmp_path: Path, name: str) -> Path:
+    root = tmp_path / name
+    root.mkdir()
+    _git(str(root), "init", "-q")
+    _git(str(root), "config", "user.email", "t@example.com")
+    _git(str(root), "config", "user.name", "Test")
+    (root / "README.md").write_text("init\n", encoding="utf-8")
+    _git(str(root), "add", "README.md")
+    _git(str(root), "commit", "-q", "-m", "init")
+    return root
+
+
+class TestCrossRepoTargetReachesSchemaStepAdvisoryOnly:
+    """2a: cwd-vs-target defect fix (`_first_result` now resolves `repo_root`
+    from the TARGET FILE's own repo, not the session cwd) plus the
+    advisory-only cross-repo rule (DR-277) it enables — see `check()`'s
+    docstring.
+
+    Uses TWO real git repos (mirrors `test_bump_out_of_repo_tool_write.py`'s
+    pattern) so `repo_root` genuinely differs between the session's cwd and
+    the write target, reproducing the real defect shape (a session in one
+    repo writing into a sibling repo's cross-repo/inbox/) rather than a
+    same-repo stand-in.
+    """
+
+    def test_cross_repo_own_inbox_write_reaches_schema_step_and_warns(self, tmp_path):
+        session_repo = _init_repo(tmp_path, "session-repo")
+        target_repo = _init_repo(tmp_path, "target-repo")
+
+        ctx = guard._load_context()
+        # Resolve the em-id `_memo_guard_step` would derive for target_repo's
+        # own basename, so the own-inbox misplacement predicate (from ==
+        # landing repo, to != landing repo) genuinely fires for this write.
+        target_em_id = guard._em_id_for_basename(ctx, target_repo.name)
+
+        fp = target_repo / "cross-repo" / "inbox" / "2099-01-01-cross-repo-test.md"
+        fp.parent.mkdir(parents=True)
+        content = (
+            f"---\nfrom: {target_em_id}\nto: some-other-repo-em\ntopic: test\ntitle: t\n"
+            "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
+        )
+        payload = _payload("Write", str(fp), str(session_repo), content=content)
+
+        # Same finding, evaluated IN-REPO (cwd == target repo), still denies
+        # exactly as before this fix — in-repo behavior is byte-identical.
+        in_repo_payload = _payload("Write", str(fp), str(target_repo), content=content)
+        in_repo_result = guard.check(in_repo_payload)
+        assert in_repo_result is not None
+        _assert_deny_shape(in_repo_result)
+
+        # Cross-repo (cwd == session_repo, target under target_repo): the
+        # SAME own-inbox misplacement finding now reaches the schema step
+        # (previously `_to_repo_relative` returned None here and the guard
+        # produced nothing at all) but is advisory-only, never a deny.
+        result = guard.check(payload)
+        assert result is not None, (
+            "cross-repo write must reach the schema/deny walk, not silently "
+            "short-circuit before any validation runs"
+        )
+        reason = _assert_advisory_shape(result)
+        assert "cross-repo/inbox/" in reason
+        assert "cross-repo target" in reason
+
+    def test_cross_repo_off_enum_handoff_kind_warns_not_denies(self, tmp_path):
+        session_repo = _init_repo(tmp_path, "session-repo-2")
+        target_repo = _init_repo(tmp_path, "target-repo-2")
+
+        handoff_dir = target_repo / "state" / "handoffs"
+        handoff_dir.mkdir(parents=True)
+        fp = handoff_dir / "off-enum.md"
+        content = (
+            "---\nkind: not-a-real-kind\ntitle: t\ncreated: 2026-07-29\nbranch: main\n"
+            "status: open\npredecessor: none\ncategory: infra\n"
+            "summary: a one-line summary\n---\nold"
+        )
+        fp.write_text(content, encoding="utf-8")
+
+        in_repo_payload = _payload("Edit", str(fp), str(target_repo),
+                                    old_string="old", new_string="new")
+        in_repo_result = guard.check(in_repo_payload)
+        assert in_repo_result is not None
+        reason = _assert_deny_shape(in_repo_result)
+        assert "not-a-real-kind" in reason
+
+        cross_repo_payload = _payload("Edit", str(fp), str(session_repo),
+                                       old_string="old", new_string="new")
+        result = guard.check(cross_repo_payload)
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "not-a-real-kind" in reason
+        assert "cross-repo target" in reason

@@ -246,12 +246,16 @@ def test_nudge_improvement_queue_write_deny_carries_override_note():
         in rendered
     )
     assert "re-run the write" not in rendered
-    assert "(pre-launch only)" in rendered
-    # Shape must be reason-shaped (VAR="...") not flag-shaped (VAR=1) -- "1"
-    # is denylisted by this guard's own _is_trivial_reason, so a VAR=1
-    # remediation would be refused by the very guard printing it (the P1
-    # bug this test exists to catch).
+    assert "unsettable from inside this session" in rendered
+    # Shape must be reason-shaped (an "e.g. ..." example, no assignment) not
+    # flag-shaped (VAR=1) -- "1" is denylisted by this guard's own
+    # _is_trivial_reason, so a VAR=1 remediation would be refused by the very
+    # guard printing it (the P1 bug this test exists to catch). 2026-08-11
+    # reshape: neither shape renders an assignment at all anymore (see
+    # operator_override_note's own NEGATIVE SPEC 4), so this also pins the
+    # broader invariant.
     assert "%s=1" % env_var not in rendered
+    assert "%s=" % env_var not in rendered
 
 
 def test_nudge_improvement_queue_write_override_note_round_trips_through_own_guard():
@@ -265,8 +269,13 @@ def test_nudge_improvement_queue_write_override_note_round_trips_through_own_gua
     denylist)."""
     env_var = nudge_improvement_queue_write._ESCAPE_HATCH_ENV_VAR
     rendered = operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-    match = re.search(r'%s="([^"]*)"' % re.escape(env_var), rendered)
-    assert match is not None, "expected a reason-shaped VAR=\"...\" mention in the rendered note"
+    # 2026-08-11 reshape: the reason-shaped render no longer prints
+    # `VAR="<placeholder>"` (no assignment form at all, see
+    # operator_override_note's own NEGATIVE SPEC 4) -- the placeholder is
+    # instead rendered as a bare, non-assignment example: `(reason, e.g.
+    # "<placeholder>")`. Extract from that shape instead.
+    match = re.search(r'e\.g\. "([^"]*)"', rendered)
+    assert match is not None, 'expected a reason-shaped (reason, e.g. "...") mention in the rendered note'
     printed_value = match.group(1)
     assert not nudge_improvement_queue_write._is_trivial_reason(printed_value), (
         "the printed remediation value %r is rejected by this guard's own "
@@ -339,8 +348,9 @@ def test_nudge_baton_body_bar_advisory_does_not_instruct_rerun():
         operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
         in rendered
     )
-    assert "(pre-launch only)" in rendered
+    assert "unsettable from inside this session" in rendered
     assert "%s=1" % env_var not in rendered
+    assert "%s=" % env_var not in rendered
 
 
 def test_nudge_baton_body_bar_override_note_round_trips_through_own_guard():
@@ -351,8 +361,13 @@ def test_nudge_baton_body_bar_override_note_round_trips_through_own_guard():
     predicate."""
     env_var = nudge_baton_body_bar._ESCAPE_HATCH_ENV_VAR
     rendered = operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-    match = re.search(r'%s="([^"]*)"' % re.escape(env_var), rendered)
-    assert match is not None, "expected a reason-shaped VAR=\"...\" mention in the rendered note"
+    # 2026-08-11 reshape: the reason-shaped render no longer prints
+    # `VAR="<placeholder>"` (no assignment form at all, see
+    # operator_override_note's own NEGATIVE SPEC 4) -- the placeholder is
+    # instead rendered as a bare, non-assignment example: `(reason, e.g.
+    # "<placeholder>")`. Extract from that shape instead.
+    match = re.search(r'e\.g\. "([^"]*)"', rendered)
+    assert match is not None, 'expected a reason-shaped (reason, e.g. "...") mention in the rendered note'
     printed_value = match.group(1)
     assert not nudge_baton_body_bar._is_trivial_reason(printed_value), (
         "the printed remediation value %r is rejected by this guard's own "

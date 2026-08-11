@@ -441,6 +441,17 @@ def build_governing_plan_directives(
 #: Every optional flag the CLI accepts appears here: a facet the EM composes but
 #: the assembler has no flag for is a facet silently dropped on the way to disk,
 #: which is what forces an author to bypass the directive and hand-run the CLI.
+#: Keys every `decisions["lessons"]` entry must carry before a lesson-add
+#: directive can be composed. Validated up front rather than indexed blind:
+#: a missing key previously surfaced as a bare `KeyError` traceback out of
+#: `build_lesson_capture_directives`, which reads as an engine crash mid-
+#: ceremony rather than as the malformed-input error it actually is, and
+#: gives the author no clue which entry or which key was at fault.
+#: Negative-spec: do NOT default a missing value here. These are
+#: author-composed prose; substituting a placeholder would put an
+#: unauthored lesson on disk, which is worse than refusing.
+_LESSON_REQUIRED_KEYS: tuple[str, ...] = ("title", "body", "scope")
+
 _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = (
     ("trigger", "--trigger"),
     ("why", "--why"),
@@ -515,6 +526,14 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
     directives: list[dict[str, Any]] = []
     for idx, lesson in enumerate(decisions.get(_KEY_LESSONS, []) or []):
         add_id = lesson_add_directive_id(idx)
+        missing = [k for k in _LESSON_REQUIRED_KEYS if not str(lesson.get(k) or "").strip()]
+        if missing:
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] is missing required "
+                f"key(s) {missing!r} (required: {list(_LESSON_REQUIRED_KEYS)!r}). "
+                "Supply them and re-run apply — this is a malformed decisions "
+                "map, not a ceremony failure, and nothing has been written."
+            )
         add_args = [
             "--title", str(lesson["title"]),
             "--body", str(lesson["body"]),
