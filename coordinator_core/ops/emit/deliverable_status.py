@@ -29,6 +29,20 @@ field's shape and the write-back target are unchanged; the value becomes correct
 declared fork because both legs now group under one canonical key. No record's own
 ``deliverable_id`` field is ever mutated by this module.
 Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b)
+
+sedge-03 s1 review follow-on evidence note (AC6/AC9, 2026-08-11): AC6's five-zombie check
+against the live `state/cockpit-emission.json` corpus was performed as a one-off manual
+run at implementation time, not by a standing automated test — the five real ids appear in
+this module's test suite only as literals inside hand-built fixture dicts. No test here
+loads the live corpus or runs `_compute_map`/`stamp` against it, so AC6 currently has no
+regression coverage; a corpus-backed test was deliberately not added because it would rot
+against corpus drift. AC9 (golden reconciliation): verified by inspection that this is a
+non-issue rather than an untested claim — `_handoff_phase` already mapped a `continued`
+handoff to `"in-progress"` before this change (it falls through the shipped/closed/
+abandoned checks to the default), and the bridge only changes which groups are marked in
+the new `bridged_ids` side-channel, not the emitted `deliverable_status` value for any
+group. Goldens keyed on `deliverable_status` values alone therefore would not move; no
+golden file changes were needed or made.
 """
 
 from __future__ import annotations
@@ -157,6 +171,7 @@ def _compute_map(
     plans: list[dict],
     roadmaps: list[dict],
     equivalence_map: Optional[dict[str, str]] = None,
+    bridged_ids: Optional[set[str]] = None,
 ) -> dict[str, str]:
     """Build a deliverable_id → deliverable_status map from the three entity arrays.
 
@@ -170,22 +185,101 @@ def _compute_map(
     today's raw-comparison behaviour — every id groups under itself. Join-key transform
     only: the returned map is still keyed by canonical id, never written back onto any
     record's own ``deliverable_id`` field.
+
+    ``bridged_ids`` (sedge-03, Resolution 2 Step A): an optional caller-supplied
+    ``set[str]``, populated in place with every canonical deliverable id whose group was
+    resolved via the ``in-progress`` bridge below (a ``continued`` handoff group with no
+    live carrier). Runtime-shape choice, recorded per the OVERVIEW's Bridge sub-section:
+    ``_compute_map`` has 18 call sites (1 production, 17 across two pinned parity/fixture
+    test modules) that all bind the return value directly as a bare ``dict[str, str]`` —
+    an extra return value or a ``(dlv_map, bridged_ids)`` tuple churns all 18 call sites
+    for no behavioural gain, and an internal audit-sink write would add I/O to a module
+    whose own corpus already flags an open jq-parity question (a live concern this stub
+    must not collide with). An optional collector parameter touches exactly one call site
+    (``stamp``) and zero existing tests, so that is the shape used here. The return value
+    itself stays a bare ``dict[str, str]`` — unchanged shape, unchanged for all 18 sites
+    that don't pass ``bridged_ids``.
+
+    Review follow-on (sedge-03 s1 integration, 2026-08-11): ``stamp()`` now accepts and
+    threads its own optional ``bridged_ids`` collector (below), so any caller of ``stamp``
+    can observe the marker -- this closes the gap where the collector was reachable only
+    from tests calling ``_compute_map`` directly. Still NOT done: no production consumer
+    of ``stamp()``'s output (i.e. the emit envelope) collects the set yet -- wiring a
+    collector through ``envelope.emit`` and surfacing it in the emitted artifact is out of
+    scope for this stub (``envelope.py`` is not touched here) and is a named, bounded
+    follow-on, not an implied completion.
     """
     equivalence_map = equivalence_map or {}
     # Collect (deliverable_id, phase) pairs — skip records with null deliverable_id.
     pairs: list[tuple[str, str]] = []
+    # Group-level liveness partition (sedge-03 Resolution 2 Step A). Per-group data needed
+    # to detect a live-carrier-less `continued` handoff group, computed with zero extra
+    # filesystem I/O: `provenance.path`'s already-present `archive/` vs `state/` prefix.
+    # `has_live_carrier` answers "does any live artifact carry THIS canonical id" — this
+    # single per-canonical-id test covers BOTH measured failure shapes without needing to
+    # follow `continued_into` at all: Shape A (successor exists live but under a
+    # DIFFERENT deliverable_id — the id does not carry forward, so this group's own
+    # `has_live_carrier` is correctly False even though the chain itself continues live
+    # elsewhere, under a different group) and Shape B (`continued_into` dangles — no live
+    # record anywhere, so `has_live_carrier` is trivially False). Cross-referencing
+    # `continued_into` against `envelope["handoffs"]`'s live `provenance.path` values (an
+    # in-memory set lookup, free, no extra I/O) was evaluated as an alternative signal but
+    # is redundant with — and, used as a gate, would wrongly rescue Shape A from bridging,
+    # since its `continued_into` DOES resolve to a live path (just under a different id).
+    # The named soundness caveat therefore lands on `has_live_carrier` itself, not a
+    # `continued_into` lookup: `has_live_carrier` is computed strictly from the RECORDS
+    # actually present in this emission's own arrays, so a successor that legitimately
+    # carries the SAME canonical id forward but was, for whatever reason, not collected
+    # into this run's `handoffs`/`plans`/`roadmaps` arrays would false-negative (bridge a
+    # group that has live work the collector simply didn't see this run) — a named,
+    # accepted gap, not a silent one; `plan`/`roadmap` rows are ipso facto live per
+    # `_TYPE_TO_GLOB`.
+    #
+    # Named, accepted gap (sedge-03 s1 review, mixed-membership groups): `all_continued`
+    # requires EVERY handoff member of a canonical group to be `continued` before the
+    # group is bridge-eligible. A group mixing `continued` with `closed`/`abandoned`
+    # handoffs, with zero live carriers, has no live carrier by every measure the bridge
+    # cares about, yet `all_continued` is False for it (one non-`continued` member breaks
+    # the AND-chain) — so it is never bridged and never lands in `bridged_ids`. Its emitted
+    # *status* still lands on "in-progress" via the ordinary max-score path (not all
+    # phases are abandoned), so the value is accidentally correct, but the zombie goes
+    # unmarked in `bridged_ids`. Deliberately NOT widened here: whether the intended bridge
+    # scope is "any live-carrier-less group" or "only uniformly-continued groups" is a
+    # spec-precision question this stub does not settle, and widening `all_continued`
+    # would change emitted values for other group shapes on a bilateral-contract surface.
+    # Surfaced to the PM separately rather than resolved by silent widening.
+    has_live_carrier: dict[str, bool] = {}
+    all_continued: dict[str, bool] = {}
+
     for r in handoffs:
         dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
-        if dlv is not None:
-            pairs.append((dlv, _handoff_phase(r)))
+        if dlv is None:
+            continue
+        phase = _handoff_phase(r)
+        pairs.append((dlv, phase))
+
+        provenance_path = (r.get("provenance") or {}).get("path")
+        is_live = bool(provenance_path) and not provenance_path.startswith("archive/")
+        has_live_carrier[dlv] = has_live_carrier.get(dlv, False) or is_live
+
+        deployment_state = r.get("deployment_state") or ""
+        is_continued = deployment_state == "continued"
+        all_continued[dlv] = all_continued.get(dlv, True) and is_continued
+
     for r in plans:
         dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
         if dlv is not None:
             pairs.append((dlv, _plan_phase(r)))
+            # Plan rows are live-only per `_TYPE_TO_GLOB` — ipso facto a live carrier.
+            has_live_carrier[dlv] = True
+            all_continued[dlv] = False
     for r in roadmaps:
         dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
         if dlv is not None:
             pairs.append((dlv, _roadmap_phase(r)))
+            # Roadmap rows are live-only per `_TYPE_TO_GLOB` — ipso facto a live carrier.
+            has_live_carrier[dlv] = True
+            all_continued[dlv] = False
 
     # Group phases by deliverable_id (order-preserving insertion).
     groups: dict[str, list[str]] = {}
@@ -195,7 +289,24 @@ def _compute_map(
     # Derive deliverable-level status per group.
     dlv_map: dict[str, str] = {}
     for dlv_id, phases in groups.items():
-        if any(p == "shipped" for p in phases):
+        # Bridge (sedge-03, Resolution 2 Step A): a group whose every handoff member is
+        # `continued`, with no live carrier of any kind (no live handoff, plan, or
+        # roadmap row) under this canonical id. Covers both measured failure shapes (see
+        # the `has_live_carrier` comment above). Named bridge value `in-progress` (per the
+        # OVERVIEW's Bridge sub-section) — the only frozen `DeliverableStatus` member that
+        # does not misstate "not stopped" or "not shipped". `shipped_sha` still wins over
+        # the bridge (matches `_handoff_phase`'s own shipped_sha-first precedence). Not a
+        # final shape: retirement AC5 below.
+        is_bridged = (
+            all_continued.get(dlv_id, False)
+            and not has_live_carrier.get(dlv_id, False)
+            and not any(p == "shipped" for p in phases)
+        )
+        if is_bridged:
+            dlv_status = "in-progress"
+            if bridged_ids is not None:
+                bridged_ids.add(dlv_id)
+        elif any(p == "shipped" for p in phases):
             dlv_status = "shipped"
         elif all(p == "abandoned" for p in phases):
             dlv_status = "abandoned"
@@ -216,6 +327,7 @@ def stamp(
     plans: list[dict],
     roadmaps: list[dict],
     worktree_root: Optional[Path] = None,
+    bridged_ids: Optional[set[str]] = None,
 ) -> None:
     """Compute and stamp ``deliverable_status`` in-place on all three arrays (bash §8.16).
 
@@ -234,10 +346,16 @@ def stamp(
     ``deliverable_equivalence.load_equivalence_map`` and canonicalizes each record's raw
     ``deliverable_id`` at the lookup point only — the written-back ``deliverable_status``
     field's shape is unchanged; no record's own ``deliverable_id`` is mutated.
+
+    ``bridged_ids`` (sedge-03 s1 review follow-on): optional caller-supplied ``set[str]``,
+    threaded straight through to ``_compute_map`` and populated in place with every
+    canonical id whose group was resolved via the in-progress bridge. No current caller of
+    ``stamp`` (i.e. ``envelope.emit``) passes this yet -- wiring the emit envelope to
+    collect and surface it is a named follow-on, out of scope here.
     """
     root = worktree_root if worktree_root is not None else Path.cwd()
     equivalence_map = load_equivalence_map(root)
-    dlv_map = _compute_map(handoffs, plans, roadmaps, equivalence_map)
+    dlv_map = _compute_map(handoffs, plans, roadmaps, equivalence_map, bridged_ids)
     for r in handoffs:
         dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
         r["deliverable_status"] = dlv_map.get(dlv) if dlv is not None else None

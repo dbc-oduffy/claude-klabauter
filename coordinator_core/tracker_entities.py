@@ -75,6 +75,7 @@ import hashlib
 import json
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,6 +91,10 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "item_project_retracted",
         "item_person_added",
         "item_person_retracted",
+        "person_created",
+        "person_alias_added",
+        "person_alias_retracted",
+        "person_merged",
     }
 )
 """The closed set of entity-event kinds this plan introduces. Nothing else
@@ -354,6 +359,122 @@ def item_person_retracted(item_id: str, person_id: str, role: str) -> dict:
     }
 
 
+# --- sat-05: person/alias/merge payload constructors (DEC-40/DEC-42/DEC-44) ---
+
+ALIAS_NAMESPACES: frozenset[str] = frozenset(
+    {"transcript_name", "email", "git_author", "display"}
+)
+"""The closed alias-namespace enum for `person_alias_added`/
+`person_alias_retracted`. Nothing else rides in an alias payload's
+``namespace`` field for this plan."""
+
+
+def reject_invalid_namespace(namespace: str, *, action: str) -> None:
+    """Guard shared by both alias payload constructors.
+
+    Raises ``TrackerEntityError`` unless *namespace* is one of the closed
+    ``ALIAS_NAMESPACES`` enum values — ``transcript_name`` / ``email`` /
+    ``git_author`` / ``display``. Exported (not a leading-underscore
+    private) so any future alias-related constructor routes through this
+    one guard rather than re-deriving the namespace check, mirroring
+    ``reject_invalid_role``'s shape.
+    """
+    if namespace not in ALIAS_NAMESPACES:
+        raise TrackerEntityError(
+            f"cannot {action} alias with namespace {namespace!r} — namespace "
+            f"must be one of {sorted(ALIAS_NAMESPACES)!r}"
+        )
+
+
+def normalize_alias(namespace: str, raw_value: str) -> str:
+    """Normalize an alias's raw value per DEC-44, keyed on *namespace*.
+
+    ``email`` and ``git_author`` are stripped and casefolded (identity is
+    case-insensitive for those namespaces). ``display`` and
+    ``transcript_name`` are stripped only — case is significant for a
+    human-facing display form.
+    """
+    stripped = raw_value.strip()
+    if namespace in ("email", "git_author"):
+        return stripped.casefold()
+    return stripped
+
+
+def mint_person_id() -> str:
+    """Mint a permanent-for-life ``person.id`` as a UUID4 string.
+
+    Deliberately does NOT reuse ``mint_item_id``'s slug+nonce+digest
+    grammar — that grammar encodes a ``title`` and a ``created_at`` this
+    entity does not have. DEC-42's immutability is a property of never
+    re-minting a person id once assigned, not of the id's format.
+    """
+    return str(uuid.uuid4())
+
+
+def person_created(person_id: str, *, display_name: str) -> dict:
+    """Construct a ``person_created`` event payload."""
+    return {
+        "kind": "person_created",
+        "person_id": person_id,
+        "display_name": display_name,
+    }
+
+
+def person_alias_added(person_id: str, namespace: str, raw_value: str) -> dict:
+    """Construct a ``person_alias_added`` payload.
+
+    Carries *raw_value* UNCHANGED as provenance alongside the DEC-44
+    normalized value (``normalized_value``), which is the identity used
+    for alias resolution. Both keys are present — this is not an
+    either/or.
+
+    Raises ``TrackerEntityError`` if *namespace* is outside the closed
+    ``ALIAS_NAMESPACES`` enum.
+    """
+    reject_invalid_namespace(namespace, action="add")
+    return {
+        "kind": "person_alias_added",
+        "person_id": person_id,
+        "namespace": namespace,
+        "raw_value": raw_value,
+        "normalized_value": normalize_alias(namespace, raw_value),
+    }
+
+
+def person_alias_retracted(person_id: str, namespace: str, raw_value: str) -> dict:
+    """Construct a ``person_alias_retracted`` payload.
+
+    Same raw/normalized dual-key shape as ``person_alias_added`` — the
+    retraction must be matchable against the exact original add either by
+    provenance (``raw_value``) or by identity (``normalized_value``).
+
+    Raises ``TrackerEntityError`` if *namespace* is outside the closed
+    ``ALIAS_NAMESPACES`` enum.
+    """
+    reject_invalid_namespace(namespace, action="retract")
+    return {
+        "kind": "person_alias_retracted",
+        "person_id": person_id,
+        "namespace": namespace,
+        "raw_value": raw_value,
+        "normalized_value": normalize_alias(namespace, raw_value),
+    }
+
+
+def person_merged(from_id: str, into_id: str, actor: str) -> dict:
+    """Construct a ``person_merged`` event payload.
+
+    ``from_id`` is the losing (superseded) person id; ``into_id`` is the
+    surviving id; ``actor`` records who/what performed the merge.
+    """
+    return {
+        "kind": "person_merged",
+        "from_id": from_id,
+        "into_id": into_id,
+        "actor": actor,
+    }
+
+
 # --- C2: the emission layer — payload -> stored event -> append_event ---
 
 
@@ -611,3 +732,203 @@ def emit_item_person_retracted(
         item_id_or_pair=(item_id, person_id, role),
         repo_root=repo_root,
     )
+
+
+# --- C2: person emission — emitters, alias-collision refusal, merge
+# idempotency and cycle guard (DEC-40/DEC-42/DEC-43/DEC-44) ---
+#
+# All three write-time guards below scan `tracker_store.read_events`
+# directly, never `tracker_projection`'s folds — `tracker_projection`
+# already imports `RESERVED_PROJECT_ID` from this module, so the reverse
+# edge is a circular import, not a style preference. This mirrors
+# `_require_local_item`/`_item_person_edge_present`'s existing precedent in
+# this same module. The C3 fold (`fold_person_registry`/`resolve_person`)
+# does not exist yet and, when it lands, will live in `tracker_projection` —
+# it is never imported from here.
+
+
+def _alias_owner(
+    namespace: str, normalized_value: str, *, repo_root: Path
+) -> str | None:
+    """Fold this repo's own `person_alias_added`/`person_alias_retracted`
+    events restricted to ONE `(namespace, normalized_value)` pair, in
+    `read_events`' own ratified order, and return the `person_id` currently
+    holding that alias, or ``None`` if it is unclaimed.
+
+    Direct `read_events` scan only — see the module-section note above on
+    why this never reaches into `tracker_projection`.
+    """
+    owner: str | None = None
+    for event in tracker_store.read_events(repo_root=repo_root):
+        if (
+            event.get("namespace") != namespace
+            or event.get("normalized_value") != normalized_value
+        ):
+            continue
+        if event.get("kind") == "person_alias_added":
+            # Review: code-reviewer a9ebdff5 Finding P2 — a malformed add
+            # event missing person_id would silently become "unclaimed"
+            # (None), indistinguishable from a real absence, rather than
+            # raising as this event passes through the same _emit path as
+            # person_merged (P1) with the same string-id guarantee.
+            person_id = event.get("person_id")
+            if not isinstance(person_id, str):
+                raise TrackerEntityError(
+                    f"malformed person_alias_added event {event.get('id')!r}: "
+                    f"person_id={person_id!r} must be a string"
+                )
+            owner = person_id
+        elif event.get("kind") == "person_alias_retracted":
+            owner = None
+    return owner
+
+
+def _person_merge_map(*, repo_root: Path) -> dict[str, str]:
+    """Fold this repo's own `person_merged` events into a flat
+    ``from_id -> into_id`` mapping, one hop per entry.
+
+    Multi-hop chains (``a -> b -> c``) are resolved by the caller walking
+    this map, not by this function — kept as a single flat scan so both
+    ``emit_person_merged`` guards (idempotency and cycle) share one read of
+    the event stream's shape.
+    """
+    mapping: dict[str, str] = {}
+    for event in tracker_store.read_events(repo_root=repo_root):
+        if event.get("kind") != "person_merged":
+            continue
+        from_id = event.get("from_id")
+        into_id = event.get("into_id")
+        # Review: code-reviewer a9ebdff5 Finding P1 — a missing/non-string
+        # from_id or into_id was silently dropped rather than raised, which
+        # would let the AC5 idempotency guard and AC7 cycle guard both miss
+        # an existing tombstone/edge for a malformed event already on disk.
+        # This module's convention (_require_local_item) is to raise, never
+        # silently skip, malformed input.
+        if not (isinstance(from_id, str) and isinstance(into_id, str)):
+            raise TrackerEntityError(
+                f"malformed person_merged event {event.get('id')!r}: "
+                f"from_id={from_id!r}, into_id={into_id!r} must both be "
+                "strings"
+            )
+        mapping[from_id] = into_id
+    return mapping
+
+
+def _resolves_to(start_id: str, target_id: str, merge_map: dict[str, str]) -> bool:
+    """Walk ``merge_map`` from *start_id* and return whether the chain ever
+    reaches *target_id*.
+
+    Cycle-safe by construction: each hop consumes one map entry via a
+    ``visited`` set, so a malformed cyclic map (which this guard exists to
+    prevent from ever being written) cannot loop this walk forever.
+    """
+    current = start_id
+    visited: set[str] = set()
+    while current in merge_map and current not in visited:
+        visited.add(current)
+        current = merge_map[current]
+        if current == target_id:
+            return True
+    return False
+
+
+def emit_person_created(person_id: str, *, display_name: str, repo_root: Path) -> dict:
+    """Build a ``person_created`` payload (C1) and append it as one event."""
+    payload = person_created(person_id, display_name=display_name)
+    return _emit(payload, item_id_or_pair=person_id, repo_root=repo_root)
+
+
+def emit_person_alias_added(
+    person_id: str, namespace: str, raw_value: str, *, repo_root: Path
+) -> dict:
+    """Build a ``person_alias_added`` payload (C1) and append it as one
+    event.
+
+    Raises ``TrackerEntityError`` before emitting if *namespace* is outside
+    the closed ``ALIAS_NAMESPACES`` enum (inherited from
+    ``person_alias_added``), or if the normalized ``(namespace,
+    normalized_value)`` pair is already claimed by a DIFFERENT
+    ``person_id`` (AC3) — the error message names both ids. Checked via
+    ``_alias_owner`` prior to the single ``append_event`` call, so a
+    colliding alias never reaches the store at all.
+    """
+    payload = person_alias_added(person_id, namespace, raw_value)
+    existing_owner = _alias_owner(
+        namespace, payload["normalized_value"], repo_root=repo_root
+    )
+    if existing_owner is not None and existing_owner != person_id:
+        raise TrackerEntityError(
+            f"alias collision: ({namespace!r}, {payload['normalized_value']!r}) "
+            f"is already registered to person {existing_owner!r}, cannot "
+            f"register it to person {person_id!r}"
+        )
+    return _emit(
+        payload,
+        item_id_or_pair=(namespace, payload["normalized_value"]),
+        repo_root=repo_root,
+    )
+
+
+def emit_person_alias_retracted(
+    person_id: str, namespace: str, raw_value: str, *, repo_root: Path
+) -> dict:
+    """Build a ``person_alias_retracted`` payload (C1) and append it as one
+    event.
+
+    Raises ``TrackerEntityError`` before emitting if *namespace* is outside
+    the closed ``ALIAS_NAMESPACES`` enum (inherited from
+    ``person_alias_retracted``). No collision guard applies here — a
+    retraction only removes an existing claim, it cannot create one.
+    """
+    payload = person_alias_retracted(person_id, namespace, raw_value)
+    return _emit(
+        payload,
+        item_id_or_pair=(namespace, payload["normalized_value"]),
+        repo_root=repo_root,
+    )
+
+
+def emit_person_merged(from_id: str, into_id: str, actor: str, *, repo_root: Path) -> dict:
+    """Build a ``person_merged`` payload (C1) and append it as one event.
+
+    Two write-time guards run before the single ``append_event`` call, so a
+    refused merge never reaches the store:
+
+    - **Idempotency (AC5, DEC-43).** Refuses if *from_id* is already
+      retired by an existing ``person_merged`` tombstone naming it as the
+      losing id. This mirrors ``emit_item_person_added``'s exact-duplicate
+      refusal pattern rather than inventing a new one.
+      ``append_event``'s own duplicate pass cannot catch a replay of this
+      case: ``_mint_event_id`` folds ``applied_at`` (the DEC-19
+      microsecond nonce) into the event id digest, so a second
+      ``person_merged(from_id, into_id, actor)`` call — even with byte-
+      identical arguments — mints a distinct event id and would sail
+      straight past the store's own uniqueness check.
+
+    - **Cycle guard (AC7, DEC-42).** Refuses if *into_id* already resolves,
+      through the existing merge chain, back to *from_id* — i.e. merging
+      ``from_id`` into ``into_id`` would close a cycle. This guard is an
+      ergonomics check only, NOT the correctness guarantee against
+      cross-shard merge cycles — the real guarantee is DEC-42's fold-time
+      cycle-edge drop, landing in C3 (``tracker_projection``). Each
+      machine's write-side guard here passes against its own shard only;
+      git merges per-machine shards by design, so a cross-shard cycle
+      (machine A merges ``a->b`` while machine B concurrently merges
+      ``b->a``, then the shards are git-merged) remains reachable in
+      ordinary two-machine operation and this guard cannot see it.
+    """
+    merge_map = _person_merge_map(repo_root=repo_root)
+    if from_id in merge_map:
+        raise TrackerEntityError(
+            f"cannot merge person {from_id!r} into {into_id!r} — {from_id!r} "
+            f"is already retired by an existing person_merged tombstone "
+            f"(DEC-43 idempotency)"
+        )
+    if into_id == from_id or _resolves_to(into_id, from_id, merge_map):
+        raise TrackerEntityError(
+            f"cannot merge person {from_id!r} into {into_id!r} — {into_id!r} "
+            f"already resolves back to {from_id!r} through the existing "
+            f"merge chain, which would close a cycle (DEC-42)"
+        )
+    payload = person_merged(from_id, into_id, actor)
+    return _emit(payload, item_id_or_pair=from_id, repo_root=repo_root)

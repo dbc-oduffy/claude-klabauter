@@ -53,8 +53,9 @@ def _resolve_claude_klabauter_root_silent() -> "str | None":
 def _no_console_window() -> dict:
     """`**no_console_creationflags()` when coordinator_core is resolvable;
     falls back to the inline literal (0 elsewhere) if CLAUDE_KLABAUTER_ROOT cannot be
-    resolved yet — this CLI's own repo-root discovery (`main`'s
-    `git rev-parse --show-toplevel`) runs before CLAUDE_KLABAUTER_ROOT is known.
+    resolved yet — this CLI's own repo-root discovery (`main`'s call into
+    `repo_identity.resolve_checked_repo_root`) may run before CLAUDE_KLABAUTER_ROOT is
+    known.
 
     Review: coordinator:code-reviewer — consolidated onto the single
     resolution path this file already owns (`_resolve_claude_klabauter_root_silent`),
@@ -111,14 +112,20 @@ def _heading(path: str) -> str:
 
 
 def main() -> int:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, **_no_console_window(),
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    # Resolve repo root via the checked resolver. READER (AC10): a MISMATCH
+    # verdict is warned to stderr and the resolved root used anyway (DR-277);
+    # UNRESOLVED never refuses either (AC4).
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    from repo_identity import resolve_checked_repo_root  # noqa: E402  (path injected above)
+
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if repo_root is None:
         sys.stderr.write("ERROR: not inside a git repository\n")
         return 1
-    repo_root = result.stdout.strip()
+    if verdict["verdict"] == "MISMATCH":
+        sys.stderr.write(verdict["message"] + "\n")
 
     # -----------------------------------------------------------------------
     # Section 1: Coordinator improvement queue — top 5 central entries

@@ -6106,6 +6106,49 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         assert d6 is not None
         assert d6["args"][0] == lineage["predecessor"]
 
+    def test_plan_input_multi_claim_ledger_extras_land_on_additional_predecessors(
+        self, tmp_path, monkeypatch
+    ):
+        """sedge-01 regression (EM-clarified 2026-08-11): a plan-input session
+        holding MULTIPLE ledger claims must still report every ledger-sourced
+        extra on `lineage["additional_predecessors"]` -- the N-rung widening's
+        hoisted resolution (`resolved_additional_predecessors`, computed
+        BEFORE this branch's own `_resolve_held_handoff_for_session` call)
+        must not cause these ledger-discovered legs to silently vanish from
+        the field. This is the corner an earlier reading of R2 ("do not
+        re-walk") narrowed by mistake -- this test pins the corrected shape."""
+        _init_repo(tmp_path)
+        primary_claimed = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-01-primary-claimed.md",
+            ["handoff_id: hnd-plan-input-primary-1a2b51"],
+        )
+        extra_claimed = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-01-extra-claimed.md",
+            ["handoff_id: hnd-plan-input-extra-1a2b52"],
+        )
+        plan = _write_artifact(
+            tmp_path / "docs" / "plans" / "2026-08-02-c4-multi-claim-plan.md",
+            ["plan_id: PLAN-C4-MULTI", "deliverable_id: DEL-C4-MULTI"],
+        )
+        self._seed_handoff_claim(tmp_path, "sid-c4-multi", primary_claimed.name)
+        self._seed_handoff_claim(tmp_path, "sid-c4-multi", extra_claimed.name)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-c4-multi")
+
+        decision = ba.brief("handoff", str(plan), repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        both_claims = {
+            primary_claimed.relative_to(tmp_path).as_posix(),
+            extra_claimed.relative_to(tmp_path).as_posix(),
+        }
+        # No `claimed_at` seeded, so primary-vs-additional is basename-sort
+        # order (unrelated to this test, see `sedge-14`) -- assert on the SET
+        # union of `predecessor` + `additional_predecessors` rather than
+        # which specific claim landed in which slot.
+        assert lineage["additional_predecessors"] is not None
+        assert len(lineage["additional_predecessors"]) == 1
+        assert {lineage["predecessor"]} | set(lineage["additional_predecessors"]) == both_claims
+
     def test_zero_ledger_claims_emits_judgment_point_naming_plan_replay_and_never(
         self, tmp_path, monkeypatch
     ):
@@ -6801,3 +6844,203 @@ class TestD7ApplyEndToEnd:
         assert exit_code == ba_apply.apply_base.APPLY_EXIT_PARTIAL_MUTATION
         assert report["failed_directive"] == "d7"
         assert "d1" not in report.get("landed", [])
+
+
+class TestSuccessorSideFanInDownEdge:
+    """sedge-02 -- d1 writes the successor-side `additional_predecessors`
+    down-edge matching the up-edges `d6*` already stamps on every fan-in leg.
+
+    Spec: roadmap stub sedge-02, state/roadmap/sedge-2026-08-06/ §
+    "Successor-side back-edge on a fan-in". Before this, a fan-in successor
+    carried N up-edges and zero down-edges, so legs 2..N became unreachable
+    from the successor the moment they were archived.
+    """
+
+    @staticmethod
+    def _seed_handoff_claim(repo_root: Path, session_id: str, basename: str, claimed_at: str) -> None:
+        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+        (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+
+    def _fan_in_decision(self, tmp_path, monkeypatch):
+        """Two held claims -> one primary + one additional predecessor."""
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-21-second-alpha.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-primary-1a2b46"],
+        )
+        extra = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-first-alpha.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-extra-1a2b50"],
+        )
+        self._seed_handoff_claim(tmp_path, "sid-fanin", primary.name, "2026-07-20T09:00:00Z")
+        self._seed_handoff_claim(tmp_path, "sid-fanin", extra.name, "2026-07-20T10:00:00Z")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fanin")
+        return ba.brief("handoff", "", repo_root=tmp_path).decision_object, primary, extra
+
+    def test_d1_threads_every_additional_predecessor(self, tmp_path, monkeypatch):
+        """AC4 -- the resolved fan-in list reaches d1 as repeated flags."""
+        decision, _primary, extra = self._fan_in_decision(tmp_path, monkeypatch)
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+
+        assert (
+            f"--additional-predecessor={extra.relative_to(tmp_path).as_posix()}" in d1["args"]
+        ), d1["args"]
+
+    def test_no_fan_in_emits_no_additional_predecessor_flag(self, tmp_path):
+        """AC4 -- a single-predecessor run's d1 args stay byte-identical to
+        their pre-sedge-02 shape: the flag appears only on an actual fan-in."""
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            ["handoff_id: hnd-pred-1a2b4c"],
+        )
+        decision = ba.brief("handoff", str(predecessor), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+
+        assert not any(a.startswith("--additional-predecessor=") for a in d1["args"]), d1["args"]
+
+    def test_down_edge_lands_at_d1_strictly_before_every_d6(self, tmp_path, monkeypatch):
+        """AC4 -- ordering discipline. `apply_base.execute_directives` has no
+        rollback and the `d6*` predecessor mutations are deliberately emitted
+        last, so the down-edge must ride d1 and no new post-d6 directive may
+        exist to carry it.
+        """
+        decision, _primary, _extra = self._fan_in_decision(tmp_path, monkeypatch)
+        ids = [d["id"] for d in decision["directives"]]
+        d6_positions = [i for i, d in enumerate(decision["directives"])
+                        if d["cli"] == "handoff.supersede_predecessor"]
+
+        assert ids.index("d1") < min(d6_positions), ids
+        # No directive after the last d6 writes the down-edge.
+        for directive in decision["directives"][max(d6_positions) + 1:]:
+            assert not any(
+                str(a).startswith("--additional-predecessor=") for a in directive["args"]
+            ), f"post-d6 directive {directive['id']} carries the down-edge"
+
+    def test_every_entry_is_rendered_repo_relative(self, tmp_path, monkeypatch):
+        """AC2 -- normalization is load-bearing, not cosmetic: the schema's
+        duplicate-of-primary rule is exact-string, so an absolute entry would
+        evade the very check the normalized primary is subject to."""
+        decision, _primary, _extra = self._fan_in_decision(tmp_path, monkeypatch)
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+        emitted = [
+            a.split("=", 1)[1] for a in d1["args"]
+            if a.startswith("--additional-predecessor=")
+        ]
+
+        assert emitted
+        for value in emitted:
+            assert not Path(value).is_absolute(), value
+            assert "\\" not in value, value
+
+    def test_replay_skipping_d1_names_the_unwritten_down_edge(self, tmp_path, monkeypatch):
+        """AC7 -- the replay hazard, asserted as DOCUMENTED behaviour rather
+        than silent field loss.
+
+        d1 is `already_satisfied` when its `--out` already exists, and the
+        down-edge is written by d1 and only by d1. On a resumed run the write
+        therefore does not happen. That is acceptable only because it is
+        announced: this asserts the reason string names the specific legs, so
+        `report["replayed"]` tells the operator exactly what to add by hand.
+        """
+        _init_repo(tmp_path)
+        # A prior attempt of this same run got as far as d6: it scaffolded a
+        # successor and recorded it on the primary predecessor. That
+        # predecessor-side evidence -- claimed/shipped + deployment_state:
+        # continued + continued_into -- is what `_resume_recorded_successor_
+        # path` reads (DR-242: never the successor's own `predecessor:`
+        # pointer), and it is the ONLY way d1 becomes already_satisfied. A
+        # bare file on disk does not do it: `_compute_fresh_output_path`
+        # deliberately disambiguates away from any existing path.
+        recorded_successor = "state/handoffs/2026-07-22-prior-attempt-successor.md"
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-21-second-alpha.md",
+            [
+                "deliverable_id: DEL-1",
+                "handoff_id: hnd-primary-1a2b46",
+                "claimed_at: 2026-07-20T10:00:00Z",
+                "claimed_by: sid-fanin",
+                "deployment_state: continued",
+                f"continued_into: {recorded_successor}",
+            ],
+        )
+        extra = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-first-alpha.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-extra-1a2b50"],
+        )
+        _write_artifact(tmp_path / recorded_successor, ["kind: session-handoff"])
+        self._seed_handoff_claim(tmp_path, "sid-fanin", primary.name, "2026-07-20T09:00:00Z")
+        self._seed_handoff_claim(tmp_path, "sid-fanin", extra.name, "2026-07-20T10:00:00Z")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fanin")
+
+        replayed = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        d1_replayed = next(d for d in replayed["directives"] if d["id"] == "d1")
+
+        assert d1_replayed["already_satisfied"] is True
+        reason = d1_replayed["already_satisfied_reason"]
+        assert "additional predecessor" in reason, reason
+        assert extra.relative_to(tmp_path).as_posix() in reason, reason
+
+    def test_clean_run_reason_key_absent_even_on_a_fan_in(self, tmp_path, monkeypatch):
+        """AC7 -- the replay note rides `already_satisfied_reason`, which a
+        clean run must not carry at all (pins the existing invariant that a
+        clean run's directive dicts keep their pre-replay shape)."""
+        decision, _primary, _extra = self._fan_in_decision(tmp_path, monkeypatch)
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+
+        assert d1["already_satisfied"] is False
+        assert "already_satisfied_reason" not in d1
+
+    def test_tied_claimed_at_still_writes_the_down_edge_unconditionally(self, tmp_path, monkeypatch):
+        """AC6 -- the unconditional-vs-gated decision, exercised on exactly the
+        case that motivated the question.
+
+        `_resolve_held_handoff_for_session` documents its own tie-break as
+        ARBITRARY (alphabetical basename `sorted()`, not temporal) when
+        `claimed_at` ties. sedge-02 decided the write stays UNCONDITIONAL
+        anyway: the arbitrariness determines which leg is PRIMARY -- an
+        ordering question owned by sedge-14 -- while the fan-in SET recorded
+        here is order-independent. Whichever leg wins the coin-flip, the other
+        must still be recorded, because `d6*` stamps its up-edge either way and
+        a gate here would restore the N-up/zero-down asymmetry.
+        """
+        _init_repo(tmp_path)
+        alpha = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-alpha.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-alpha-1a2b46"],
+        )
+        beta = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-beta.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-beta-1a2b50"],
+        )
+        tied = "2026-07-20T09:00:00Z"
+        self._seed_handoff_claim(tmp_path, "sid-tied", alpha.name, tied)
+        self._seed_handoff_claim(tmp_path, "sid-tied", beta.name, tied)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-tied")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+        emitted = {
+            a.split("=", 1)[1] for a in d1["args"]
+            if a.startswith("--additional-predecessor=")
+        }
+
+        both = {
+            alpha.relative_to(tmp_path).as_posix(),
+            beta.relative_to(tmp_path).as_posix(),
+        }
+        primary = lineage["predecessor"]
+        # No judgment point gates the write -- it is not deferred to an operator.
+        assert not any(
+            "additional_predecessor" in f"{jp.get('id', '')} {jp.get('question', '')}".lower()
+            for jp in decision.get("judgment_points") or []
+        ), decision.get("judgment_points")
+        # Exactly the non-primary leg is recorded, whichever way the tie fell.
+        assert emitted == both - {primary}, (emitted, primary)
+        assert len(emitted) == 1
+
+        # And every leg gets its up-edge, so the down-edge count matches N-1.
+        d6s = [d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"]
+        assert len(d6s) == len(emitted) + 1

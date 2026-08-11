@@ -465,37 +465,37 @@ class TestHeadTailPlumbingRewrite:
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         assert _run_python_c(rewrite) == ""
 
-    def test_unrecognized_upstream_advises_not_rewrites(self):
-        out = ht.check_head_tail_plumbing_rewrite("sort weird.txt | head -n 3")
-        assert out is not None
-        assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
-        assert "updatedInput" not in out["hookSpecificOutput"]
+    def test_unrecognized_upstream_silent_not_advised(self):
+        # No rewrite possible (unrecognized upstream) -> the guard has
+        # already computed no rewrite would help, so it stays silent
+        # rather than advise (see guard_head_tail_rewrite.py's comment at
+        # this branch, backlinking the fleet-wide fire-volume memo).
+        assert ht.check_head_tail_plumbing_rewrite("sort weird.txt | head -n 3") is None
 
-    def test_grep_dash_w_upstream_advises_not_rewrites(self, census_dir):
+    def test_grep_dash_w_upstream_silent_not_advised(self, census_dir):
         """Finding 4: `check_head_tail_plumbing_rewrite`'s grep-upstream
         translation feeds the same `_bt_grep_flags_and_operands` choke
         point as `check_grep_via_bash_rewrite` -- `-w` must be refused here
         too, not just at the standalone-grep entry point, since dropping
         `-w` from `_GREP_SUBSTITUTABLE_SHORT_FLAGS` closes both callers at
-        once."""
+        once. No rewrite means no advisory either (silenced branch)."""
         out = ht.check_head_tail_plumbing_rewrite(
             "grep -wrn TODO %s | head -n 5" % _posix(census_dir)
         )
-        assert out is not None
-        assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
-        assert "updatedInput" not in out["hookSpecificOutput"]
+        assert out is None
 
     def test_unrecognized_count_form_advises(self, census_dir):
         out = ht.check_head_tail_plumbing_rewrite("ls %s | head -c 10" % _posix(census_dir))
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
-    def test_composed_three_stage_pipeline_advises(self, census_dir):
+    def test_composed_three_stage_pipeline_silent_not_advised(self, census_dir):
+        # A chain longer than the conservative two-stage shape -> the
+        # silenced branch (no rewrite means no advisory either).
         out = ht.check_head_tail_plumbing_rewrite(
             "ls %s | sort | head -n 2" % _posix(census_dir)
         )
-        assert out is not None
-        assert "updatedInput" not in out["hookSpecificOutput"]
+        assert out is None
 
     def test_quoted_pipe_character_not_mis_split(self, census_dir):
         """A `|` inside a quoted grep pattern must not be treated as a
@@ -526,14 +526,12 @@ class TestHeadTailPlumbingRewrite:
         """The founding-incident shape, at the `head`-pipeline call site:
         a bare (non `-E`/`-F`) grep pattern containing `|` must NOT be
         auto-rewritten (its BRE-vs-Python-re meaning is ambiguous), and must
-        fall through to the advisory skeleton rather than a silently wrong
-        `updatedInput`."""
+        fall through to silence (the silenced branch: no rewrite means no
+        advisory either) rather than a silently wrong `updatedInput`."""
         (census_dir / "pipe.txt").write_text("a|b marker\n")
         cmd = "grep -rn 'a|b' %s | head -n 1" % _posix(census_dir)
         out = ht.check_head_tail_plumbing_rewrite(cmd)
-        assert out is not None
-        assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
-        assert "updatedInput" not in out["hookSpecificOutput"]
+        assert out is None
 
     def test_bare_pipeline_without_head_tail_returns_none(self, census_dir):
         assert ht.check_head_tail_plumbing_rewrite("ls %s" % _posix(census_dir)) is None
@@ -566,10 +564,13 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
     """
 
     def _declines_rewrite(self, cmd: str) -> None:
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
-        assert out is not None
-        assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
-        assert "updatedInput" not in out["hookSpecificOutput"], out
+        # A redirection token in the upstream segment's own args makes
+        # `_bt_parse_ls_segment`/`_bt_parse_find_census_segment`/
+        # `_bt_grep_flags_and_operands` return None -> `kind is None`, the
+        # silenced branch: no rewrite means no advisory either (silence is
+        # itself the "declined to rewrite" outcome now, not just an absent
+        # updatedInput).
+        assert ht.check_head_tail_plumbing_rewrite(cmd) is None
 
     def test_exact_live_repro_command(self, census_dir):
         """The exact shape that crashed live: `ls DIR 2>/dev/null | head -N`."""

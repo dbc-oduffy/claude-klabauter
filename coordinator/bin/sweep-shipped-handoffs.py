@@ -103,7 +103,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -112,6 +111,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def _ensure_claude_klabauter_on_path() -> str:
@@ -392,30 +392,16 @@ def _no_fallback() -> None:
     )
 
 
-def _resolve_repo_root() -> str | None:
-    try:
-        _ensure_claude_klabauter_on_path()
-        from coordinator_core.win_portability import no_console_creationflags  # noqa: PLC0415
-
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except (OSError, RuntimeError):
-        return None
-    resolved = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not resolved:
-        return None
-    return resolved
-
-
 def main(argv: list[str] | None = None) -> int:
-    git_repo_root = _resolve_repo_root()
+    git_repo_root, _verdict = resolve_checked_repo_root(explicit_root=None)
     if git_repo_root is None:
         print("sweep-shipped-handoffs.py: not inside a git repo", file=sys.stderr)
         return 2
+    if _verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root beyond its
+        # own archive-completed-handoffs op, gated separately) -- warn and
+        # proceed rather than refuse. UNRESOLVED never refuses either (AC4).
+        print(_verdict["message"], file=sys.stderr)
 
     try:
         state_root = _resolve_state_root(git_repo_root)

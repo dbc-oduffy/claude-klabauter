@@ -110,6 +110,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -256,19 +257,28 @@ def _parse_args(argv):
 
 
 def _resolve_coordinator_root():
-    """Mirror the bash oracle's COORDINATOR_ROOT resolution + mismatch warning."""
-    try:
-        top_raw = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout.strip()
-    except OSError:
-        top_raw = ""
+    """Mirror the bash oracle's COORDINATOR_ROOT resolution + mismatch warning.
+
+    The cwd-derived candidate now comes from the checked resolver
+    (`repo_identity.resolve_checked_repo_root`) rather than a fresh `git
+    rev-parse --show-toplevel` spawn. WRITER (AC10): main() goes on to call
+    changelog_ops.append_day(), a native mutating write into the resolved
+    root's changelog. A positive MISMATCH refuses HERE, before that write
+    (and before every other call site in main()) — the DR-277 carve-out
+    ("prevents a write into a foreign tree") licenses the hard deny.
+    UNRESOLVED never refuses (DR-277, AC4). This is independent of, and in
+    addition to, the pre-existing COORDINATOR_ROOT-vs-cwd-toplevel warning
+    below.
+    """
+    cwd_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+        sys.exit(1)
 
     cwd_top = ""
-    if top_raw:
+    if cwd_root:
         try:
-            cwd_top = str(Path(top_raw).resolve(strict=False))
+            cwd_top = str(Path(cwd_root).resolve(strict=False))
         except OSError:
             cwd_top = ""
 

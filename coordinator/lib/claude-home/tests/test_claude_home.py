@@ -1,7 +1,7 @@
 """test_claude_home.py — coverage for coordinator/lib/claude-home/_claude_home.py.
 
-Run directly:  python plugins/coordinator/lib/claude-home/tests/test_claude_home.py
-Run via unittest discovery:  python -m unittest discover plugins/coordinator/lib/claude-home/tests
+Run directly:  python plugins/coordinator-claude/coordinator/lib/claude-home/tests/test_claude_home.py
+Run via unittest discovery:  python -m unittest discover plugins/coordinator-claude/coordinator/lib/claude-home/tests
 
 Stdlib-only — no pytest dependency. The module under test is also stdlib-only,
 so this test suite runs anywhere Python 3.9+ runs.

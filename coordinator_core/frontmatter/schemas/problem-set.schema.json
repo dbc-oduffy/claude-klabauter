@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/problem-set.schema.json",
   "x-schema-name": "problem-set",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 adds the optional nullable top-level scalar `deliverable_id`, the join key that lets a problem-set attach to the REACH deliverable spine (problem-sets previously had no join key onto it at all). Shape mirrors completion-entry.schema.json's `deliverable_id` verbatim — anyOf [string, null], no cross-field rule. OPEN/ADVISORY, not required-when, and deliberately so: /shape authors a problem-set BEFORE any solution exists, so a deliverable spine id frequently does not exist at ratification time, and requiring it would gate ratification on downstream identity the ceremony has not produced yet. Separately, required-when needs a cross-field rule and this schema carries none by design — `estimated_horizon`'s description says cross-field routing is enforced by /shape skill logic, NOT by this validator; an advisory join key is not worth being the first exception. LANDING ORDER: this side lands FIRST, deliberately. The file is vendored here byte-identical to example-doctrine-repo's `coordinator/schemas/problem-set.schema.json`, and their `coordinator/tests/test_vendored_schema_version_parity.py` parametrizes over a GLOB of the source schema dir rather than a hand-listed vendored set, so it already covers this file and asserts x-schema-version equality against this repo's committed blob. Per example-doctrine-repo's `coordinator/docs/wiki/schema-version-gate.md` a nested-field-additive bump holds unconditionally on the x-schema-version axis (no declared-tolerance carve-out, unlike CONTRACT_VERSION), so a example-doctrine-repo-first land would red THEIR suite until this repo re-vendored — the reverse edge Resolution 4 forbids. Vendoring first is additive here, trips no drift-watch, and creates no obligation on their side. Origin: sedge-21's sibling stub sedge-20 (author-and-handover, Resolution 4), whose \"problem-set.schema.json is not in claude-klabauter's vendored set, so this is genuinely one-way\" premise was FALSE and was corrected by cross-repo/inbox/2026-08-11-example-doctrine-repo-em-problem-set-deliverable-id-is-vendored-vendor-first.md.",
   "applies_to": "docs/problems/*.md",
   "kinds": ["problem-set"],
   "description": "Problem-set — ratified problem statement authored via /shape before any solution; plans cite these as the external coverage oracle.",
@@ -34,6 +36,10 @@
     "estimated_horizon": {
       "enum": ["session", "week", "initiative"],
       "description": "Work horizon estimated at ratification time. session=one or two sessions; week=roughly a week of work; initiative=weeks-to-quarters, multi-goal scope. Set by /shape at convergence; read by the altitude-router to select the correct downstream ceremony (plan | roadmap-planning | goal-setting). Note: cross-field routing from horizon to ceremony type is enforced by the /shape skill logic, NOT by this schema validator — no cross-field rule is present here and that is intentional."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Durable deliverable join key attaching this problem-set to the REACH deliverable spine. OPEN/ADVISORY, never required-when: /shape ratifies a problem-set before any solution exists, so the spine id frequently does not exist yet at ratification time and null is the expected authoring-time value, not a defect. Populated later by whatever downstream ceremony mints the deliverable. Shape mirrors completion-entry.schema.json's `deliverable_id` verbatim. Spec backlink: state/roadmap/sedge-2026-08-06/OVERVIEW.md § problem-set gains deliverable_id (stub sedge-20)."
     }
   }
 }

@@ -76,6 +76,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cc_invoke  # noqa: E402  (sys.path mutated above)
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _SAFE_RANGE_RE = re.compile(
     r"^[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*\.\.\.?[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*$"
@@ -176,15 +177,13 @@ def main(argv: list[str]) -> int:
             )
         range_arg = f"{merge_base}..HEAD"
 
-    try:
-        repo_root = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
+    # READER (AC10): a MISMATCH verdict is warned to stderr and the resolved
+    # root used anyway (DR-277); UNRESOLVED never refuses either (AC4).
+    repo_root, _repo_verdict = resolve_checked_repo_root(explicit_root=None)
+    if repo_root is None:
         _die("review-coverage-gate.py: cannot find git repo root")
+    if _repo_verdict["verdict"] == "MISMATCH":
+        print(_repo_verdict["message"], file=sys.stderr)
 
     params: dict[str, object] = {}
     if from_handoff:

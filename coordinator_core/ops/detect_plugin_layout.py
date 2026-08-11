@@ -4,7 +4,7 @@ operation.
 
 Purpose: determine whether a given plugin directory is checked out as a
 FLAT publish-repo (a standalone `coordinator-claude/` clone) or a NESTED
-working-repo (living under `~/.claude/plugins/coordinator-claude/coordinator/`
+working-repo (living under `~/.claude/plugins/coordinator/`
 inside a meta-repo). The discriminator is presence of `docs/install/AGENT.md`
 relative to the supplied plugin root — flat layouts ship that file directly
 under the plugin root; nested layouts do not (`AGENT.md` lives one level up,

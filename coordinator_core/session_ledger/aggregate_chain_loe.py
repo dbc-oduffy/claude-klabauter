@@ -72,7 +72,9 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.loe_thresholds import DEFAULT_THRESHOLDS, compute_tshirt, load_thresholds
+from coordinator_core.pickup_assemble import compute_repo_identity_gate
 from coordinator_core.session import core as _session_core
+from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE as _SESSION_LEDGER_HEADING_RE
 from coordinator_core.state_root import StateRootError, coordinator_state_root
 
 _EDGE_KINDS = {"predecessor", "additional_predecessors"}
@@ -86,7 +88,10 @@ _KNOWN_FIELDS = (
     "created",
 )
 
-_SESSION_LEDGER_HEADING_RE = re.compile(r"^## Session Ledger")
+# Review: code-reviewer 49e8b242 P2 — was a locally-hand-typed regex that
+# near-missed frontmatter.body_blocks._compile_heading_re's grammar; now the
+# canonical one shared with every detection site (see
+# coordinator_core.session_ledger's module docstring).
 _ANY_HEADING_RE = re.compile(r"^## ")
 _SEPARATOR_ROW_RE = re.compile(r"^-+$")
 _NUMERIC_RE = re.compile(r"^[0-9]+$")
@@ -575,6 +580,24 @@ def _is_same_session(ledger_sid: str, closing_sid: str) -> bool:
     double-count the closing session's tally on every re-run once its row
     landed. Suffix-match, case-insensitively, in whichever direction the
     abbreviation runs.
+
+    Tradeoff (Review: code-reviewer 49e8b242 P3): the abbreviation width is
+    caller-controlled, not fixed at 6 — ``_ONELINE_RE`` accepts 4-12 hex, and
+    this function imposes no length floor beyond non-empty. A short
+    abbreviation (4 hex) can suffix-match the tail of an unrelated session's
+    uuid by chance (~1/65536 per comparison); both failure directions are
+    silent (a real closing session wrongly treated as already-attributed, or
+    an unrelated row wrongly suppressing attribution — undercounting the
+    exact chain this module exists to sum correctly). Suffix-matching is
+    still the right call versus not matching at all: the two id grammars
+    genuinely carry different widths for the same session by design (see
+    above), so an exact-equality test would leave every closing session
+    permanently un-deduplicated, which is the certain, always-firing defect
+    this function exists to close — a low-probability collision is preferred
+    over a certain miss. No length floor is added here deliberately: raising
+    the minimum only trades a silent under-count (this collision) for a
+    silent double-count (a short-but-legitimate abbreviation rejected as
+    "too short to trust" and left un-deduplicated).
     """
     if not ledger_sid or not closing_sid:
         return False
@@ -872,6 +895,12 @@ def format_yaml_frontmatter(result: Dict[str, Any]) -> str:
     if result["chain_walk_terminated_early"]:
         lines.append(f'chain_walk_terminated_early: "{result["chain_walk_terminated_early"]}"')
 
+    gates = result.get("gates")
+    repo_identity_gate = gates.get("repo_identity") if gates else None
+    if repo_identity_gate is not None:
+        lines.append("gates:")
+        lines.append(f'  repo_identity: "{repo_identity_gate["verdict"]}"')
+
     return "\n".join(lines) + "\n"
 
 
@@ -907,6 +936,11 @@ def format_json(result: Dict[str, Any]) -> str:
 
     if result["chain_walk_terminated_early"]:
         obj["chain_walk_terminated_early"] = result["chain_walk_terminated_early"]
+
+    gates = result.get("gates")
+    repo_identity_gate = gates.get("repo_identity") if gates else None
+    if repo_identity_gate is not None:
+        obj["gates"] = {"repo_identity": repo_identity_gate["verdict"]}
 
     return json.dumps(obj) + "\n"
 
@@ -1054,6 +1088,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Error: not inside a git repo", file=sys.stderr)
         return 1
 
+    # C4 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+    # `main()` takes no explicit repo-root argument — `git_root` above is
+    # ALWAYS cwd-derived, so the gate applies unconditionally here (there is
+    # no "explicit root" leg to exempt, unlike workstream_complete.brief()).
+    # MISMATCH refuses via this module's own existing exit convention
+    # (`print("Error: ...", file=sys.stderr); return 1`, used throughout this
+    # function) rather than a new exception type or exit code. UNRESOLVED
+    # never refuses (DR-277) — this is a read-only report generator, so an
+    # unresolved gate degrades to "the check could not run" via the
+    # `chain_walk_terminated_early`-adjacent yaml/json `gates.repo_identity`
+    # entry emitted below, never a silent pass. MATCH records the same way.
+    sid = _session_core.resolve_session_id() or None
+    repo_identity_gate = compute_repo_identity_gate(git_root, sid)
+    if repo_identity_gate["verdict"] == "MISMATCH":
+        print(f"Error: {repo_identity_gate['message']}", file=sys.stderr)
+        return 1
+
     coordinator_root_env = os.environ.get("COORDINATOR_CONTENT_ROOT")
     coordinator_root = Path(coordinator_root_env) if coordinator_root_env else git_root / "coordinator"
 
@@ -1075,6 +1126,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if result["exit_code"] != 0:
         print(f"Error: {result['error']}", file=sys.stderr)
         return 1
+
+    result["gates"] = {"repo_identity": repo_identity_gate}
 
     if fmt == "yaml-frontmatter":
         sys.stdout.write(format_yaml_frontmatter(result))

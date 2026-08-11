@@ -141,6 +141,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 from handoff_lifecycle import is_claimed_status  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _ARCHIVE_STAMP_CLI = os.path.join(_SCRIPT_DIR, "archive-stamp-cli")
@@ -601,17 +602,14 @@ def main(argv: Optional[list] = None) -> int:
     # state/handoffs/ directly (session-claim liveness is itself keyed off
     # this same git root's .git/coordinator-sessions/).
     # ---------------------------------------------------------------------
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False,
-            **no_console_creationflags(),
-        )
-        repo_root = (result.stdout or "").strip()
-    except OSError:
-        repo_root = ""
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if not repo_root:
         print("reap-orphaned-in-flight-handoffs.py: not inside a git repo", file=sys.stderr)
         return 2
+    if verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root) -- warn
+        # and proceed. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     handoffs_dir = os.path.join(repo_root, "state", "handoffs")
 

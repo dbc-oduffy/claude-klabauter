@@ -22,12 +22,14 @@ Spec backlink: example-doctrine-repo
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
 
 import pytest
 
+from coordinator_core.session import harness_registry as hr
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
@@ -249,3 +251,149 @@ def test_local_config_path_matches_the_protected_entry(scratch_repo):
 
 def test_local_config_path_is_none_without_a_repo_root():
     assert guard._local_config_path(None) is None
+
+
+# ---------------------------------------------------------------------------
+# C4 — advisory `gates.repo_identity` recording
+# (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md § C4).
+#
+# DR-277: this guard is advisory-by-default and clears no hard-deny
+# carve-out for the repo-identity gate. These tests construct a REAL
+# MISMATCH via real harness-registry files on disk (C1's fixture pattern,
+# `pickup_assemble/tests/test_repo_identity_gate.py`) rather than
+# monkeypatching `compute_repo_identity_gate`'s own return value, and pin
+# the load-bearing property: the verdict is RECORDED, and the guard's
+# ALLOW/DENY decision is UNCHANGED by it.
+# ---------------------------------------------------------------------------
+
+
+def _epoch_to_filetime_ticks(epoch: float) -> int:
+    return int((epoch + hr._FILETIME_EPOCH_OFFSET_SEC) * hr._FILETIME_TICKS_PER_SEC)
+
+
+def _write_registry_record(sessions_dir, filename, session_id, pid, cwd, epoch=None):
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    if epoch is None:
+        epoch = time.time() - 60
+    payload = {
+        "sessionId": session_id,
+        "pid": pid,
+        "procStart": _epoch_to_filetime_ticks(epoch),
+        "cwd": str(cwd),
+    }
+    (sessions_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+    return epoch
+
+
+def _make_repo(root) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+
+
+def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
+    if hit:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((pid, create_time), "env-hit"),
+        )
+    else:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: (None, "env-miss:absent"),
+        )
+
+
+def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monkeypatch):
+    """THE LOAD-BEARING TEST: a real repo-identity MISMATCH is recorded to
+    the advisory log AND `check()`'s decision (ALLOW, for an unprotected
+    file) is unchanged by it -- proving the guard is advisory-only, not
+    merely intended to be. A test that only asserted the verdict was
+    emitted would pass against a version that also refused."""
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _make_repo(repo_root)
+    _make_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    _write_registry_record(sessions_dir, "9001.json", "sess-mismatch", 9001, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _patch_pid_env(monkeypatch, 9001)
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": True,
+    )
+    monkeypatch.setattr(guard, "_git_root", lambda: str(repo_root))
+
+    unprotected = repo_root / "some_file.py"
+    unprotected.write_text("x = 1\n", encoding="utf-8")
+
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(unprotected)},
+        "session_id": "sess-mismatch",
+    }
+    result = guard.check(payload)
+
+    # Decision unchanged: this file is not a protected doctrine surface, so
+    # the guard must ALLOW regardless of the MISMATCH verdict computed.
+    assert result is None
+
+    log_path = repo_root / ".git" / "coordinator-sessions" / "sess-mismatch" / "repo-identity-gate.log"
+    assert log_path.is_file(), "advisory gates.repo_identity fact was not recorded"
+    contents = log_path.read_text(encoding="utf-8")
+    assert "gates.repo_identity" in contents
+    assert "verdict=MISMATCH" in contents
+
+
+def test_advisory_log_mismatch_does_not_add_a_second_deny_on_protected_file(tmp_path, monkeypatch):
+    """A protected doctrine surface with NO approval sentinel already denies
+    for its own (unrelated) reason. This pins that a MISMATCH verdict does
+    not change *why* it denies -- the deny reason stays the doctrine-surface
+    message, never a repo-identity refusal."""
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _make_repo(repo_root)
+    _make_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    _write_registry_record(sessions_dir, "9002.json", "sess-mismatch-2", 9002, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _patch_pid_env(monkeypatch, 9002)
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": True,
+    )
+    monkeypatch.setattr(guard, "_git_root", lambda: str(repo_root))
+
+    protected = repo_root / "CLAUDE.md"
+    protected.write_text("doctrine\n", encoding="utf-8")
+
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(protected)},
+        "session_id": "sess-mismatch-2",
+    }
+    result = guard.check(payload)
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "doctrine" in reason.lower()
+    assert "repo" not in reason.lower() or "repository" not in reason.lower()
+
+
+def test_advisory_log_not_written_without_repo_root(monkeypatch):
+    """No repo root resolvable -> the gate is never called and no advisory
+    log write is attempted (mirrors the guard's own fail-open-on-repo-root
+    posture for this advisory addendum -- see `check()`)."""
+    calls = []
+    monkeypatch.setattr(
+        "coordinator_core.write_guards.guard_doctrine_surface_edits.compute_repo_identity_gate",
+        lambda *a, **k: calls.append((a, k)) or {"verdict": "UNRESOLVED"},
+    )
+    monkeypatch.setattr(guard, "_git_root", lambda: None)
+
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/whatever.py"},
+        "session_id": "sess-no-root",
+    }
+    guard.check(payload)
+    assert calls == []

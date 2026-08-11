@@ -4175,10 +4175,25 @@ def close_out_and_stamp(
     nothing new to auto-resolve), and the commit leg is skipped rather
     than attempted against zero diff.
 
+    Repo-identity gate (C4a, 2026-08-11 -- see
+    `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`):
+    `coordinator_core.pickup_assemble.compute_repo_identity_gate(root, sid)`
+    is called once `root` is resolved. cwd-derived-only: this call refuses
+    (existing `EXIT_BUSINESS_FAIL`/`{"error": ...}` vocabulary, carrying the
+    gate's own `message`) ONLY on a `MISMATCH` verdict AND only when the
+    caller did NOT pass an explicit `repo_root` -- an explicitly-supplied
+    root is the caller's own choice and never second-guessed here.
+    `UNRESOLVED` never refuses (DR-277: hardening it into a refusal turns a
+    fail-open guard into a fleet-wide ceremony outage). Both `MATCH` and
+    `UNRESOLVED` (and `MISMATCH` on an explicit-root call, which is not
+    refused) are carried informationally on the `EXIT_OK` return as
+    `"gates": {"repo_identity": <gate's own returned dict>}`.
+
     Returns `(exit_code, result_dict)`:
       - `EXIT_OK` with `{"shipped": bool, "stamped": bool,
         "missing_chunk_ids": [str, ...], "deliverable_id_mismatch": [...],
-        "commit": {...}, "message": str, "skipped_sibling_repos": [str, ...]}`
+        "commit": {...}, "message": str, "skipped_sibling_repos": [str, ...],
+        "gates": {"repo_identity": {...}}}`
         on success. `skipped_sibling_repos` (Defect fix, 2026-07-27 -- see
         this module's docstring § Cross-repo scope scanning) is `[]` when
         the plan's `scope:` names no sibling repo, or every named sibling
@@ -4248,12 +4263,34 @@ def close_out_and_stamp(
     # Deferred: `coordinator_core.pickup_assemble` imports `coordinator_core.ops`,
     # whose eager registration walk reaches this module. A module-level import here
     # closes that cycle and drops the cascade ops from the registry.
-    from coordinator_core.pickup_assemble import resolve_repo_root
+    from coordinator_core.pickup_assemble import (
+        _REPO_IDENTITY_MISMATCH,
+        compute_repo_identity_gate,
+        resolve_repo_root,
+    )
 
+    explicit_repo_root = repo_root is not None
     root = repo_root or resolve_repo_root()
     if root is None:
         return EXIT_BUSINESS_FAIL, {
             "error": "could not resolve a git worktree root",
+            "dry_run": dry_run,
+        }
+
+    # Repo-identity gate (C4a) -- cwd-derived-only: an explicitly-supplied
+    # `repo_root` still gets the informational `gates.repo_identity` entry
+    # below, but never a refusal from it (the caller named the root, so a
+    # cwd/registry-anchor divergence isn't this call's business). Only the
+    # cwd-derived (`repo_root` omitted) path can refuse on MISMATCH.
+    # UNRESOLVED never refuses either way (DR-277).
+    sid = session_core.resolve_session_id(str(root)) or None
+    repo_identity_gate = compute_repo_identity_gate(root, sid)
+    if (
+        repo_identity_gate["verdict"] == _REPO_IDENTITY_MISMATCH
+        and not explicit_repo_root
+    ):
+        return EXIT_BUSINESS_FAIL, {
+            "error": repo_identity_gate["message"],
             "dry_run": dry_run,
         }
 
@@ -4951,6 +4988,7 @@ def close_out_and_stamp(
         "skipped_sibling_repos": skipped_sibling_repos,
         "dry_run": dry_run,
         "origin_stub_close": origin_stub_result,
+        "gates": {"repo_identity": repo_identity_gate},
     }
 
 

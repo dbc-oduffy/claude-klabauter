@@ -53,15 +53,17 @@ class TestPowerShellSelectObjectFirstLast:
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
-    def test_longer_chain_advises_not_rewrites(self):
-        out = _ps_rewrite("ls . | Sort-Object | Select-Object -First 5")
-        assert out is not None
-        assert "updatedInput" not in out["hookSpecificOutput"]
+    def test_longer_chain_silent_not_advised_or_rewritten(self):
+        # No rewrite offered, AND no advisory: this branch has already
+        # computed that no rewrite would help, so the guard stays silent
+        # rather than nag (see the guard module's own comment at this
+        # branch, backlinking the fleet-wide fire-volume memo).
+        assert _ps_rewrite("ls . | Sort-Object | Select-Object -First 5") is None
 
-    def test_unrecognized_upstream_generator_advises(self):
-        out = _ps_rewrite("Get-Process | Select-Object -First 5")
-        assert out is not None
-        assert "updatedInput" not in out["hookSpecificOutput"]
+    def test_unrecognized_upstream_generator_silent_not_advised(self):
+        # Same silencing as the longer-chain case above -- no rewrite
+        # possible, so no advisory either.
+        assert _ps_rewrite("Get-Process | Select-Object -First 5") is None
 
     def test_no_select_object_at_all_is_a_genuine_clean(self):
         assert _ps_rewrite("Get-Process") is None

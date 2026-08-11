@@ -23,7 +23,8 @@ Contract (unchanged from the bash oracle, except `main(argv)`'s own indexing
           (bin/coordinator-resolve-validation-cmd.py), loaded under a guard
           (see § Guarded import below).
           Empty/absent key -> silent no-op, exit 0, NO output.
-  Repo root — git rev-parse --show-toplevel, falling back to cwd.
+  Repo root — resolved via `lib.repo_identity.resolve_checked_repo_root`
+          (memoized, non-spawning), falling back to cwd on UNRESOLVED.
   Execution — ARGV-ONLY (breaking change, PM-ruled 2026-08-06: full argv-mode,
           no compatibility path, no per-key opt-in). The configured value is
           parsed with `shlex.split` and exec'd directly — no `shell=True`, no
@@ -106,6 +107,10 @@ import sys
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RVC_PATH = os.path.join(_PLUGIN_ROOT, "bin", "coordinator-resolve-validation-cmd.py")
+
+_LIB_DIR = os.path.join(_PLUGIN_ROOT, "bin", "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
 
 _KNOWN_CEREMONIES = (
     "workday-start",
@@ -202,18 +207,16 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+    from repo_identity import resolve_checked_repo_root
 
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-        repo_root = result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else os.getcwd()
-    except OSError:
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if repo_root is None:
         repo_root = os.getcwd()
+    elif verdict["verdict"] == "MISMATCH":
+        # DR-277: this hook DISPATCHES a configured post-command, it does not
+        # itself write into the resolved root -- warn and proceed rather than
+        # refuse. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     cmd = rvc.read_local_md_key(repo_root, key)
 

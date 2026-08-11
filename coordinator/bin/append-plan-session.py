@@ -83,6 +83,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cc_invoke  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)
 
@@ -114,25 +115,17 @@ def _resolve_session_id() -> str:
 
 
 def _resolve_repo_root() -> str | None:
-    """Resolve the current git worktree root from PWD.
+    """Resolve the current git worktree root via the checked resolver.
 
-    Mirrors strangler-facade.sh's `git -C "$PWD" rev-parse --show-toplevel`
-    (standalone-repo assumption; no explicit repo-root positional arg).
-    Returns None on failure (caller maps this to exit 1, matching the bash
-    oracle's `return 1` on the same failure).
+    READER classification (DR-277 / plan C5): MISMATCH is advisory only --
+    warn to stderr and proceed with the resolved root. Returns None only when
+    no root at all could be resolved (caller maps this to exit 1, matching
+    the bash oracle's `return 1` on the same failure). UNRESOLVED never
+    refuses (AC4).
     """
-    try:
-        result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **_no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
     return root
 
 

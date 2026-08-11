@@ -51,8 +51,9 @@ otherwise.
 # Idempotent: a second run with nothing left to reap is a clean exit 0 with a
 # "nothing to reap" line — never an error, never an empty commit.
 #
-# Safe / fail-loud (legacy path): resolves the repo root via
-# `git rev-parse --show-toplevel`; if not inside a git repo, or
+# Safe / fail-loud: resolves the repo root via the checked resolver
+# (`lib.repo_identity.resolve_checked_repo_root`, memoized, non-spawning);
+# if not inside a git repo, or
 # state/review-trail/findings/ does not exist under that root, prints a
 # message and exits 0 (nothing to do) rather than erroring or operating
 # against the wrong tree.
@@ -149,6 +150,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _PROG = "reap-integrated-review-findings.sh"
 
@@ -235,11 +237,14 @@ def _reap_integrated_legacy(
     # a-git-repo and no-findings-dir are both "nothing to do" (exit 0), not
     # errors.
     # -------------------------------------------------------------------
-    rp = _git(["rev-parse", "--show-toplevel"])
-    repo_root = rp.stdout.strip() if rp.returncode == 0 else ""
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if not repo_root:
         print(f"{_PROG}: not inside a git repo; nothing to do")
         return 0
+    if verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root) -- warn
+        # and proceed. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     findings_dir = Path(repo_root) / "state" / "review-trail" / "findings"
     if not findings_dir.is_dir():
@@ -434,8 +439,7 @@ def _reap_native(
     if summary:
         params["summary_limit"] = summary_limit
 
-    rp = _git(["rev-parse", "--show-toplevel"])
-    repo_root = rp.stdout.strip() if rp.returncode == 0 else ""
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if not repo_root:
         print(
             f"{_PROG}: WARN: fleet.reap_integrated_findings transport error "
@@ -443,6 +447,10 @@ def _reap_native(
             file=sys.stderr,
         )
         return 0
+    if verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root) -- warn
+        # and proceed. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     try:
         result = cc_invoke.cc_invoke(

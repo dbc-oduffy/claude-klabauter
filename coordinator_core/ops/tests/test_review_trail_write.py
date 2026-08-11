@@ -515,6 +515,110 @@ class TestValidation:
 
 
 # ---------------------------------------------------------------------------
+# Tests: execution_basis (docs/plans/2026-08-11-review-trail-carries-execution-basis.md § C1)
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionBasis:
+    """``execution_basis`` is additive: two round-trippable values, emitted regardless
+    of scope_kind, an invalid value refused loud, and omission byte-identical to the
+    pre-existing (pre-this-chunk) record shape (AC5)."""
+
+    @pytest.mark.parametrize("basis", ["executed", "read-only"])
+    def test_round_trip_per_value(self, tmp_path, monkeypatch, basis):
+        """Writing with execution_basis=<value> persists that value; reading it back
+        from the file on disk shows the key and value."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            scope_kind="diff",
+            session_id=_TEST_SESSION,
+            workstream=None,
+            execution_basis=basis,
+        )
+        assert result["execution_basis"] == basis
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk["execution_basis"] == basis
+
+    def test_non_diff_scope_kind_still_carries_execution_basis(self, tmp_path, monkeypatch):
+        """Unlike reviewed_paths, execution_basis is NOT conditioned on scope_kind —
+        a plan-scoped record carries it too."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range="abc1234567",  # no ".." — valid for plan
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=0,
+            scope_kind="plan",
+            session_id=_TEST_SESSION,
+            workstream=None,
+            execution_basis="read-only",
+        )
+        assert result["execution_basis"] == "read-only"
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk["execution_basis"] == "read-only"
+        assert "reviewed_paths" not in on_disk
+
+    def test_invalid_execution_basis_raises_value_error(self):
+        """A value outside {executed, read-only} → ValueError naming the accepted set."""
+        with pytest.raises(ValueError, match="execution_basis"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+                execution_basis="unknown",
+            )
+
+    def test_omitted_execution_basis_is_byte_identical_to_pre_existing_shape(self):
+        """execution_basis=None (the default / omitted case) must produce the exact
+        same bytes _build_json_record produced before this key existed — the
+        load-bearing AC5 constraint. Asserted against a literal expected string, not
+        a re-derivation from the function under test."""
+        record = _build_json_record(
+            sha_range="abc1234..def5678",
+            reviewer="code-reviewer",
+            scope="chain",
+            scope_kind="diff",
+            verdict="ok",
+            diff_loc=100,
+            session_id="abc12345",
+            workstream=None,
+            reviewed_paths=None,
+        )
+        expected = (
+            '{"sha_range":"abc1234..def5678",'
+            '"reviewer":"code-reviewer",'
+            '"scope":"chain",'
+            '"scope_kind":"diff",'
+            '"verdict":"ok",'
+            '"diff_loc":100,'
+            '"session_id":"abc12345",'
+            '"workstream":null,'
+            '"reviewed_paths":null}'
+        )
+        assert record == expected
+        assert "execution_basis" not in record
+
+
+# ---------------------------------------------------------------------------
 # Tests: wsc_commit auto-source sentinel round-trip (AC-auto-source-sentinels)
 # ---------------------------------------------------------------------------
 
@@ -2154,6 +2258,159 @@ class TestReviewerEvidenceGate:
             self._write(
                 tmp_path, monkeypatch,
                 reviewer="waived", verdict="pending", reviewer_evidence=None,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: execution_basis derivation from the reviewer's own sidecar (C2,
+# docs/plans/2026-08-11-review-trail-carries-execution-basis.md § C2)
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionBasisSidecarDerivation:
+    """DELEGATE-reviewer ``reviewer_evidence`` resolving to a sidecar drives
+    ``execution_basis`` derivation instead of trusting a typed caller value."""
+
+    def _sidecar(self, caller_worktree: Path, body: str) -> str:
+        rel = "state/subagent-share/sess-1/review.md"
+        path = caller_worktree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        return rel
+
+    def _write(self, tmp_path, monkeypatch, *, reviewer_evidence, execution_basis=None):
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path / "trail"))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        return write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=0,
+            session_id=_TEST_SESSION,
+            reviewer_evidence=reviewer_evidence,
+            execution_basis=execution_basis,
+            caller_worktree=tmp_path,
+        )
+
+    def test_sidecar_says_executed_derives_executed(self, tmp_path, monkeypatch):
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\nRan the full test suite, all green.\n\n## Divergence\n",
+        )
+        result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
+        assert result["execution_basis"] == "executed"
+
+    def test_sidecar_carries_read_only_fallback_string(self, tmp_path, monkeypatch):
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\nnone — this verdict rests on reading only\n\n## Divergence\n",
+        )
+        result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
+        assert result["execution_basis"] == "read-only"
+
+    def test_sidecar_present_section_absent_omits_key_and_succeeds(self, tmp_path, monkeypatch):
+        """Rule 4: sidecar exists but has no '## Execution capability'
+        section at all — omit the key, do not refuse the write."""
+        rel = self._sidecar(tmp_path, "## Run notes\n\nsomething\n")
+        result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
+        assert "execution_basis" not in result
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert "execution_basis" not in on_disk
+
+    def test_sidecar_present_section_unfilled_placeholder_omits_key(self, tmp_path, monkeypatch):
+        """Section present but only the scaffolded HTML-comment placeholder
+        (never filled in) — treated as unparseable, key omitted."""
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\n<!-- Name what you actually ran... -->\n\n## Divergence\n",
+        )
+        result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
+        assert "execution_basis" not in result
+
+    def test_section_absent_caller_typed_value_is_discarded_not_written(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The regression that matters: a DELEGATE reviewer, a resolvable
+        sidecar with NO '## Execution capability' section, and a caller
+        passing execution_basis="executed" -- the write SUCCEEDS and the
+        written record has NO execution_basis key at all (not the caller's
+        typed value). The discard is logged, not silent."""
+        rel = self._sidecar(tmp_path, "## Run notes\n\nsomething\n")
+        with caplog.at_level("WARNING"):
+            result = self._write(
+                tmp_path, monkeypatch, reviewer_evidence=rel, execution_basis="executed",
+            )
+        assert "execution_basis" not in result
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert "execution_basis" not in on_disk
+        assert any(
+            "discarding caller-supplied execution_basis" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_section_placeholder_only_caller_typed_value_is_discarded(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Same outcome as the absent-section case, but the section is
+        present and scaffold-comment-only (still Rule 4: key omitted, caller
+        value discarded, discard logged)."""
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\n<!-- Name what you actually ran... -->\n\n## Divergence\n",
+        )
+        with caplog.at_level("WARNING"):
+            result = self._write(
+                tmp_path, monkeypatch, reviewer_evidence=rel, execution_basis="executed",
+            )
+        assert "execution_basis" not in result
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert "execution_basis" not in on_disk
+        assert any(
+            "discarding caller-supplied execution_basis" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_no_sidecar_caller_value_stands(self, tmp_path, monkeypatch):
+        """Rule 3: reviewer_evidence does not resolve to any sidecar at all
+        — the caller's execution_basis passes through unchanged."""
+        result = self._write(
+            tmp_path, monkeypatch, reviewer_evidence=None, execution_basis="executed",
+        )
+        assert result["execution_basis"] == "executed"
+
+    def test_contradiction_advisory_default_warns_and_sidecar_wins(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Env gate unset (default): caller value contradicting the sidecar
+        does not raise, but the sidecar-derived value wins."""
+        monkeypatch.delenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", raising=False)
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\nnone — this verdict rests on reading only\n\n## Divergence\n",
+        )
+        with caplog.at_level("WARNING"):
+            result = self._write(
+                tmp_path, monkeypatch, reviewer_evidence=rel, execution_basis="executed",
+            )
+        assert result["execution_basis"] == "read-only"
+        assert any(
+            "contradicts the reviewer's own sidecar" in rec.message for rec in caplog.records
+        )
+
+    def test_contradiction_enforcing_raises(self, tmp_path, monkeypatch):
+        """Env gate set truthy: the same contradiction refuses the write."""
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\nnone — this verdict rests on reading only\n\n## Divergence\n",
+        )
+        with pytest.raises(ValueError, match="contradicts the reviewer's own sidecar"):
+            self._write(
+                tmp_path, monkeypatch, reviewer_evidence=rel, execution_basis="executed",
             )
 
 

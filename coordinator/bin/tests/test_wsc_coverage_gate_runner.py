@@ -1025,6 +1025,44 @@ def test_brightline_gate_partition_mandatory_discharged_still_caps_cleanly(monke
     assert rc == 0  # tier=B is communicate-only once discharged
 
 
+# ---------------------------------------------------------------------------
+# C4b (docs/plans/2026-08-11-review-trail-carries-execution-basis.md, AC4):
+# `cmd_brightline_gate` now also calls the read-only reporting companion
+# `directives_review.chain_partition_execution_basis_report` and surfaces its
+# counts. Purely narration — the pair below pins BOTH halves of that
+# contract: the line appears, and it never moves the verdict/exit code.
+# ---------------------------------------------------------------------------
+
+def test_brightline_gate_execution_basis_report_line_appears(monkeypatch, tmp_path, capsys):
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        _mod,
+        "_load_trail_records",
+        lambda: [_discharging_record()],
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 0  # tier=B is communicate-only once discharged
+    assert "EXECUTION-BASIS: chain discharged on 1 record(s):" in err
+    assert "not recorded" in err
+
+
+@pytest.mark.parametrize("execution_basis", [None, "executed", "read-only"])
+def test_brightline_gate_execution_basis_field_never_moves_outcome(
+    monkeypatch, tmp_path, execution_basis,
+):
+    """Same inputs, same verdict-shaping fields — only `execution_basis`
+    varies. C4's companion is a VOICE, never a veto (its own docstring); this
+    pin is the regression that matters per the chunk brief."""
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    record = _discharging_record()
+    if execution_basis is not None:
+        record["execution_basis"] = execution_basis
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [record])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0
+
+
 def test_brightline_gate_partition_mandatory_unrelated_range_record_does_not_discharge(
     monkeypatch, tmp_path, capsys,
 ):

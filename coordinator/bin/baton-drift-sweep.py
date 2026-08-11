@@ -36,7 +36,6 @@ Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,28 +44,9 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
-
-from coordinator_core.win_portability import no_console_creationflags
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _USAGE = "Usage: baton-drift-sweep.py (no arguments)"
-
-
-def _resolve_repo_root() -> str | None:
-    """Resolve the current git worktree root from PWD (standalone-repo assumption,
-    mirrors day-coverage-sweep.py's own `_resolve_repo_root`)."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
-    return root
 
 
 def _import_baton_drift_sweep():
@@ -84,10 +64,14 @@ def main(argv: list[str]) -> int:
         print(_USAGE, file=sys.stderr)
         return 1
 
-    repo_root = _resolve_repo_root()
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         print(f"baton-drift-sweep.py: cannot resolve git repo root from {os.getcwd()}", file=sys.stderr)
         return 2
+    if verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root) -- warn and
+        # proceed rather than refuse. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     try:
         sweep = _import_baton_drift_sweep()

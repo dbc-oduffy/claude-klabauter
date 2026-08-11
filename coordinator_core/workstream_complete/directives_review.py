@@ -240,14 +240,20 @@ def decide_review_scale(
     Scope of each input (SESSION-scoped = this closing session's own diff;
     CHAIN-scoped = the full chain DAG a chain-terminal close accumulates
     across, walked once by the brightline gate, not re-walked here):
-      - `gross_loc`, `commit_count`, `surface_count` — SESSION-scoped.
-        Feed ONLY the row-4 big-diff brightline predicate below. A
+      - `commit_count`, `surface_count` — SESSION-scoped. Feed the row-4
+        big-diff brightline predicate below alongside `code_loc`. A
         session-scoped brightline on a chain terminal means "this final
         session's own diff is big," not "the diff accumulated across the
         whole chain is big" — deliberately: see `chain_partition_verdict`
         for the chain-scoped question row 6 actually answers.
-      - `code_loc` — SESSION-scoped. The code-vs-noise LOC split row 1/2/3
-        discrimination needs (distinct from `gross_loc`'s raw diff-stat sum).
+      - `code_loc` — SESSION-scoped, noise-excluded reviewable LOC. Feeds
+        BOTH the row 1/2/3 code-vs-noise discrimination AND (2026-08-11,
+        AC4) the row-4 big-diff brightline predicate — a gate measuring
+        "is this diff big" must not count prose/lockfiles/bookkeeping as
+        the reason to partition, any more than rows 1-3 count it as "code
+        touched". `gross_loc` is accepted for backward compatibility with
+        callers not yet producing `code_loc`, but no longer read by any row
+        below.
       - `executor_dispatched`, `shared_schema_touched` — SESSION-scoped.
         Whether THIS session dispatched an executor / touched a shared
         schema or seam.
@@ -271,7 +277,7 @@ def decide_review_scale(
         partition-mandatory-does-not-halt.md`). How many top-level batons
         `/mise-en-place` executed in the closing run. A resolved value
         `>= 2` MULTIPLIES the row-4 brightline's session-scoped metrics
-        (`gross_loc`/`commit_count`/`surface_count`) before the brightline
+        (`code_loc`/`commit_count`/`surface_count`) before the brightline
         predicate is evaluated — never forces the partitioned row outright;
         a trivial 2-baton run should not pay partition-mandatory's cost
         unconditionally. It ALSO FLOORS the outcome: a resolved
@@ -345,16 +351,20 @@ def decide_review_scale(
     # shell-doc-ok: the backticked comparison above is a Python boolean
     # expression, not a shell version constraint.
     baton_multiplier = baton_count if (baton_count is not None and baton_count >= 2) else 1
-    effective_gross_loc = gross_loc if gross_loc is None else gross_loc * baton_multiplier
+    # 2026-08-11 (AC4): row 4 reads `code_loc` — the noise-excluded,
+    # reviewable LOC rows 1-3 already discriminate on — not `gross_loc`'s
+    # raw diff-stat sum. `gross_loc` stays an accepted parameter (unused by
+    # this predicate now) for callers not yet threading `code_loc` through.
+    effective_code_loc = code_loc if code_loc is None else code_loc * baton_multiplier
     effective_commit_count = commit_count if commit_count is None else commit_count * baton_multiplier
     effective_surface_count = surface_count if surface_count is None else surface_count * baton_multiplier
 
     brightline_known_true = (
-        (effective_gross_loc is not None and effective_gross_loc >= _BRIGHTLINE_LOC)
+        (effective_code_loc is not None and effective_code_loc >= _BRIGHTLINE_LOC)
         or (effective_commit_count is not None and effective_commit_count >= _BRIGHTLINE_COMMITS)
         or (effective_surface_count is not None and effective_surface_count >= _BRIGHTLINE_SURFACES)
     )
-    brightline_resolved = gross_loc is not None and commit_count is not None and surface_count is not None
+    brightline_resolved = code_loc is not None and commit_count is not None and surface_count is not None
 
     def _row4_decision() -> ReviewScaleDecision:
         multiplier_note = (
@@ -363,7 +373,7 @@ def decide_review_scale(
         return ReviewScaleDecision(
             row=4, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
             reason=(
-                f"big-diff brightline hit (gross_loc={gross_loc}, commits={commit_count}, "
+                f"big-diff brightline hit (code_loc={code_loc}, commits={commit_count}, "
                 f"surfaces={surface_count}{multiplier_note})"
             ),
         )
@@ -371,7 +381,7 @@ def decide_review_scale(
     def _row4_inputs_unresolved() -> ReviewScaleDecision:
         missing = [
             name for name, value in (
-                ("gross_loc", gross_loc), ("commit_count", commit_count), ("surface_count", surface_count),
+                ("code_loc", code_loc), ("commit_count", commit_count), ("surface_count", surface_count),
             ) if value is None
         ]
         return _unresolved(
@@ -408,6 +418,16 @@ def decide_review_scale(
 
     if brightline_known_true:
         return _row4_decision()
+
+    # 2026-08-11 (reverted C7): row 4's unresolved inputs must block the
+    # decision ahead of row 3, not the other way around. Row 3 is a
+    # strictly smaller review obligation than row 4 -- resolving to row 3
+    # while row 4's metrics (`code_loc`/`commit_count`/`surface_count`) are
+    # genuinely unmeasured risks silently under-scoping a session whose
+    # real diff would have tripped row 4's PARTITION-MANDATORY. The
+    # module's own failure direction is toward asking, never toward a
+    # smaller review, so an unresolved row-4 input keeps the whole
+    # decision unresolved rather than falling through to row 3.
     if not brightline_resolved:
         return _row4_inputs_unresolved()
 
@@ -421,6 +441,7 @@ def decide_review_scale(
             row=3, scale="code-reviewer", partition_mandatory=False, commit_message_names_change=False,
             reason="executor dispatched, or >50 LOC code change, or a shared schema/seam touched",
         )
+
     row3_resolved = executor_dispatched is not None and code_loc is not None and shared_schema_touched is not None
     if not row3_resolved:
         missing = [
@@ -1645,6 +1666,100 @@ def chain_partition_uncovered_shas(
         chain_planning_shas=chain_planning_shas,
     )
     return [sha for sha in chain_code_shas if str(sha).lower() not in covered]
+
+
+#: Reporting-layer label for a discharging record whose `execution_basis`
+#: key is absent — 2026-08-11 (`docs/plans/2026-08-11-review-trail-carries-
+#: execution-basis.md`, C4). Absence means unknown (C1's own contract: the
+#: stored enum stays two-valued, `executed` | `read-only`; this is NOT a
+#: third stored value, only a bucket label this reporting function assigns
+#: when the key is missing). Every one of the 1804 pre-C1 records lacks the
+#: key, so this bucket dominates the output today — expected, not a defect
+#: to design around.
+EXECUTION_BASIS_NOT_RECORDED = "not recorded"
+
+#: The two stored `execution_basis` values C1 writes — reused here rather
+#: than re-declared so a future rename of C1's enum has one string to
+#: catch, not two.
+_KNOWN_EXECUTION_BASES = frozenset({"executed", "read-only"})
+
+
+def chain_partition_execution_basis_report(
+    trail_records: Iterable[Mapping[str, Any]],
+    chain_code_shas: Optional[Iterable[str]],
+    chain_dag_shas: Optional[Iterable[str]],
+    resolve_range_shas: Optional[Callable[[str], Any]],
+    narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
+    vouched_shas: Optional[Callable[[Optional[str]], Any]] = None,
+    chain_planning_shas: Optional[Iterable[str]] = None,
+) -> dict[str, int]:
+    """Read-only reporting companion to `chain_partition_verdict_discharged`
+    (C4, 2026-08-11, `docs/plans/2026-08-11-review-trail-carries-execution-
+    basis.md`). Reports, per DISCHARGING trail record (same trust filter
+    `_collect_discharging_range_shas` applies — non-`pending`/non-`waived`
+    verdict AND within-chain membership, i.e. a non-empty contribution from
+    `_record_membership_shas`), a count of how many discharging records
+    carried each `execution_basis` value, plus how many carried none at all
+    (`EXECUTION_BASIS_NOT_RECORDED`).
+
+    THIS FUNCTION NEVER REFUSES ANYTHING. It is a VOICE, not a veto — it
+    does not gate, does not return a bool, and its output feeds only
+    close-ceremony narration (e.g. "this chain discharged on 4 records, 3
+    of them read-only"). `chain_partition_verdict_discharged` itself is
+    UNTOUCHED by this chunk and keeps returning exactly what it returns
+    today; nothing here can change a discharge outcome for any input.
+
+    Every parameter mirrors `chain_partition_verdict_discharged`'s own
+    signature exactly, with the same fail-safe posture: `chain_code_shas`,
+    `chain_dag_shas`, or `resolve_range_shas` being `None` returns `{}`
+    (an empty report — no discharging records can be identified without
+    them) rather than raising.
+
+    Membership-only, not coverage-completeness: unlike
+    `chain_partition_verdict_discharged`, this function does not require
+    `chain_code_shas` to be fully covered — it reports on EVERY record
+    that passes the discharge trust filter and contributes at least one
+    sha, regardless of whether the union across all such records happens
+    to cover every chain code sha. A caller wanting "and did the chain
+    actually discharge" still calls `chain_partition_verdict_discharged`
+    separately; this function answers a different question ("of the
+    records that would count as evidence, what execution basis backed
+    them") and is meaningful to report even when the chain has NOT fully
+    discharged.
+    """
+    if chain_code_shas is None or chain_dag_shas is None or resolve_range_shas is None:
+        return {}
+    chain_code_sha_set = {str(s).lower() for s in chain_code_shas}
+    chain_dag_sha_set = {str(s).lower() for s in chain_dag_shas}
+    chain_planning_sha_set = (
+        {str(s).lower() for s in chain_planning_shas} if chain_planning_shas is not None else None
+    )
+    counts: dict[str, int] = {
+        "executed": 0,
+        "read-only": 0,
+        EXECUTION_BASIS_NOT_RECORDED: 0,
+    }
+    for record in trail_records:
+        raw_verdict = record.get("verdict")
+        if raw_verdict is None:
+            continue
+        verdict = str(raw_verdict).strip().lower()
+        if not verdict or verdict in _NON_DISCHARGING_VERDICTS:
+            continue
+        membership = _record_membership_shas(
+            record, resolve_range_shas, chain_dag_sha_set, chain_code_sha_set,
+            narrow_foreign_shas=narrow_foreign_shas,
+            vouched_shas=vouched_shas,
+            chain_planning_sha_set=chain_planning_sha_set,
+        )
+        if not membership:
+            continue
+        basis = record.get("execution_basis")
+        if basis in _KNOWN_EXECUTION_BASES:
+            counts[basis] += 1
+        else:
+            counts[EXECUTION_BASIS_NOT_RECORDED] += 1
+    return counts
 
 
 def chain_partition_verdict_discharged(

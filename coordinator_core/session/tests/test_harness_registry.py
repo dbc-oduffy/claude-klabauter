@@ -195,6 +195,93 @@ class TestExceptionBoundary:
         assert hr.lookup("anything") is None
 
 
+class TestSelfRecord:
+    """C1 (`docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`)
+    — the O(1) pid-keyed leg."""
+
+    def test_self_record_hit(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        epoch = time.time() - 60
+        ticks = _epoch_to_filetime_ticks(epoch)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": "sess-self",
+            "pid": 4242,
+            "procStart": ticks,
+            "cwd": str(tmp_path),
+        }
+        (sessions_dir / "4242.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((4242, 0.0), "env-hit"),
+        )
+
+        result = hr.self_record()
+        assert result is not None
+        session_id, record = result
+        assert session_id == "sess-self"
+        assert record.pid == 4242
+        assert record.cwd == str(tmp_path)
+
+    def test_self_record_miss_no_claude_pid(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: (None, "env-miss:absent"),
+        )
+
+        assert hr.self_record() is None
+
+    def test_self_record_miss_file_absent(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((9999, 0.0), "env-hit"),
+        )
+
+        assert hr.self_record() is None
+
+    def test_self_record_malformed_yields_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "555.json").write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((555, 0.0), "env-hit"),
+        )
+
+        assert hr.self_record() is None
+
+
+class TestCwdField:
+    def test_cwd_parsed(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"sessionId": "sess-cwd", "pid": 1, "procStart": ticks, "cwd": "/some/dir"}
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-cwd")
+        assert record is not None
+        assert record.cwd == "/some/dir"
+
+    def test_cwd_absent_defaults_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        _write_record(sessions_dir, "1.json", "sess-nocwd", 1, ticks)
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-nocwd")
+        assert record is not None
+        assert record.cwd is None
+
+
 class TestSingleScanInvariant:
     def test_snapshot_performs_exactly_one_directory_scan(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"

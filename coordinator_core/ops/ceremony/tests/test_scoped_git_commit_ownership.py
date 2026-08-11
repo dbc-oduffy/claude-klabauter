@@ -25,7 +25,9 @@ shape only, not for the walk it performed.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,7 @@ import pytest
 from coordinator_core.ops.ceremony import scoped_git_commit
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
+from coordinator_core.session import guard_unlock_sentinel
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -628,3 +631,351 @@ def test_incomplete_walk_live_peer_claim_still_refused(tmp_path, monkeypatch):
 
     assert result["committed"] is False
     assert "peers.txt" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# DR-260 break-past (B5/B6/B7): docs/plans/2026-08-11-kill-on-staleness-and-
+# a-way-past-the-gate.md, mechanism-gate spike record
+# docs/research/spike-verdicts/2026-08-11-dr-260-unlock-at-the-op-level-
+# claim-gate.md.
+#
+# `_unique_sid` mints a fresh, unlikely-to-collide session id per test --
+# `guard_unlock_sentinel.sentinel_path()` resolves under the REAL, SHARED
+# platform temp directory (never `tmp_path`), and this repo's own CLAUDE.md
+# names this box as carrying 50-70 concurrent LLM sessions: a fixed literal
+# session id here would risk colliding with a live peer's own sentinel.
+# ---------------------------------------------------------------------------
+
+
+def _unique_sid(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def _cleanup_sentinel(session_id: str, guard_name: str) -> None:
+    """Best-effort removal of a sentinel this test minted, in case the
+    unlock under test was never actually consumed (e.g. an assertion failed
+    first) -- the shared temp dir has no per-test isolation, so a leaked
+    sentinel would silently grant a LATER, unrelated call for the same
+    session id."""
+    try:
+        guard_unlock_sentinel.sentinel_path(session_id, guard_name).unlink()
+    except OSError:
+        pass
+
+
+def test_unlock_grant_is_consumed_with_owner_session_id_never_the_pipeline_nonce(
+    tmp_path, monkeypatch
+):
+    """B5's whole point (mechanism-gate spike Finding 1): the id handed to
+    `guard_unlock_sentinel.consume()` must be `owner_session_id` -- the
+    caller's real, resolvable identity already in hand at this gate --
+    NEVER the `scoped-git-commit-<uuid4>` nonce minted later, purely for
+    `run_commit_pipeline`'s own bookkeeping, which is fresh every call and
+    could never be pre-minted against by an operator. A test that only
+    checks the outcome (denied without a sentinel, allowed with one) passes
+    even when this identity is wired wrong -- see the spike record's own
+    warning. This test asserts the identity itself.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, "sess-peer", [_touch_line("T", "peers.txt")])
+    _write_meta(repo, "sess-peer", live=True)
+    _write_meta(repo, "sess-caller", live=True)
+
+    captured: list[tuple] = []
+    real_consume = guard_unlock_sentinel.consume
+
+    def _tracking_consume(session_id, guard_name):
+        captured.append((session_id, guard_name))
+        return real_consume(session_id, guard_name)
+
+    monkeypatch.setattr(scoped_git_commit.guard_unlock_sentinel, "consume", _tracking_consume)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["peers.txt"],
+        "message": "no sentinel minted -- consume() still called, still denies",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is False
+    assert captured == [("sess-caller", scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME)]
+
+
+def test_unlock_grant_clears_the_refusal_and_proceeds(tmp_path):
+    """A real, hand-minted DR-260 sentinel for `(owner_session_id,
+    _CLAIM_CONFLICT_GUARD_NAME)` clears a live-claimant refusal and lets the
+    commit land -- end to end, no mocking of `consume()` itself."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "break past a live claimant via DR-260 unlock",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, guard_name)
+
+    assert result["committed"] is True
+    assert "error" not in result
+    assert not sentinel.exists()  # consumed (unlinked), not merely read
+
+
+def test_unlock_is_one_shot_second_attempt_re_refuses(tmp_path):
+    """AC3/(one-shot, DR-260): the same sentinel does not grant twice. A
+    retry after the grant was already spent meets the identical refusal."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        first = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "first attempt -- consumes the sentinel",
+            "session_id": sid_caller,
+        })
+        assert first["committed"] is True
+
+        # Re-dirty the same path so the claim conflict recurs for a SECOND,
+        # otherwise-identical call -- the sentinel is already spent.
+        _dirty_file(repo, "peers.txt", "v3\n")
+        second = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "second attempt -- no sentinel left, re-refused",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, guard_name)
+
+    assert second["committed"] is False
+    assert "peers.txt" in second["error"]
+
+
+def test_unlock_ignores_a_sentinel_minted_for_a_different_session(tmp_path):
+    """Cross-key isolation (spike Q3, leg 6): a sentinel minted for a
+    DIFFERENT session id must not grant this caller's own refusal."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_other = _unique_sid("sess-someone-else")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_other, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "a peer's own unlock does not grant mine",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_other, guard_name)
+
+    assert result["committed"] is False
+    assert "peers.txt" in result["error"]
+
+
+def test_unlock_ignores_a_sentinel_minted_for_a_different_guard(tmp_path):
+    """Cross-key isolation (spike Q3, leg 5): a sentinel minted for the SAME
+    session but a DIFFERENT guard name must not grant this guard."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    other_guard = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME + "-not-this-one"
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, other_guard)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "a different guard's own unlock does not grant this one",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, other_guard)
+
+    assert result["committed"] is False
+    assert "peers.txt" in result["error"]
+
+
+def test_unlock_grant_does_not_relax_a_sibling_unanswerable_path(
+    tmp_path, monkeypatch
+):
+    """A grant clears only `conflicted` -- the UNANSWERABLE-path fail-closed
+    policy is a different concern (claim-index health, not claim
+    ownership) that DR-260's unlock has no bearing on. 'One grant clears
+    one guard once -- it never disables the gate for the invocation'
+    (B5 spec)."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _seed_and_commit_file(repo, "cannot-answer.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+    _dirty_file(repo, "cannot-answer.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    real_lookup = claim_index.lookup
+
+    def _fake_lookup(paths, sessions_dir=None, cwd=None):
+        result = real_lookup(paths, sessions_dir=sessions_dir, cwd=cwd)
+        if "cannot-answer.txt" in result:
+            result["cannot-answer.txt"] = [claim_index.UNANSWERABLE]
+        return result
+
+    monkeypatch.setattr(scoped_git_commit.claim_index, "lookup", _fake_lookup)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt", "cannot-answer.txt"],
+            "message": "grant clears the live conflict, not the unanswerable path",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, guard_name)
+
+    assert result["committed"] is False
+    assert "cannot-answer.txt" in result["error"]
+    assert "peers.txt" not in result["error"]
+
+
+def test_unlock_grant_leaves_a_durable_override_record(tmp_path):
+    """B7: `consume()` writes nothing and the sentinel is gone the moment it
+    succeeds (mechanism-gate spike, Finding 3) -- so the grant must leave
+    its own record, naming the overridden path(s) and the overriding
+    session, or the override is invisible after the fact."""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "grant leaves a durable record",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, guard_name)
+
+    assert result["committed"] is True
+
+    record_path = (
+        repo / "state" / "subagent-share" / sid_caller / "claim-conflict-overrides.jsonl"
+    )
+    assert record_path.is_file()
+    lines = [ln for ln in record_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["guard"] == guard_name
+    assert record["session"] == sid_caller
+    assert record["overridden_paths"] == ["peers.txt"]
+    assert "at" in record
+
+
+def test_override_record_write_failure_does_not_convert_grant_into_refusal(
+    tmp_path, monkeypatch
+):
+    """HARD CONSTRAINT (DR-260's own negative spec): whatever records the
+    grant must not be able to raise inside `consume()`'s caller. A crash in
+    the recording path must never turn an already-decided grant back into a
+    refusal -- that would fail a hard-deny guard OPEN via a path meant only
+    to add observability, which is the one direction it must never fail
+    in. (It is also never allowed to fabricate a record it could not
+    actually write -- asserted below via the record's absence.)"""
+    repo = _init_repo(tmp_path)
+    sid_caller = _unique_sid("sess-caller")
+    sid_peer = _unique_sid("sess-peer")
+    _seed_and_commit_file(repo, "peers.txt", "v1\n")
+    _dirty_file(repo, "peers.txt", "v2\n")
+
+    _write_touched(repo, sid_peer, [_touch_line("T", "peers.txt")])
+    _write_meta(repo, sid_peer, live=True)
+    _write_meta(repo, sid_caller, live=True)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated record-write failure")
+
+    monkeypatch.setattr(scoped_git_commit.json, "dumps", _boom)
+
+    guard_name = scoped_git_commit._CLAIM_CONFLICT_GUARD_NAME
+    sentinel = guard_unlock_sentinel.sentinel_path(sid_caller, guard_name)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+    try:
+        result = _call({
+            "worktree_root": str(repo),
+            "paths": ["peers.txt"],
+            "message": "record write fails -- grant must still proceed",
+            "session_id": sid_caller,
+        })
+    finally:
+        _cleanup_sentinel(sid_caller, guard_name)
+
+    assert result["committed"] is True
+    record_path = (
+        repo / "state" / "subagent-share" / sid_caller / "claim-conflict-overrides.jsonl"
+    )
+    assert not record_path.exists()

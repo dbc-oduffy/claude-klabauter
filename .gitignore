@@ -14,6 +14,13 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
+# --- Coordinator working state, never OSS payload ---
+# No publish row ships `state/` here. When it appears it is a stray session
+# writing its own orientation cache or session-hierarchy JSON into the mirror
+# (observed 2026-08-10 and again 2026-08-11) -- internal content that must not
+# reach a public repo via a blanket `git add`.
+state/
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp

@@ -1247,6 +1247,7 @@ class TestTypeToGlobDerivedGate:
         "kr-suggestion":           "record-shaped (state/kr-suggestions/*.yaml) — reader (coordinator_core/goals/reassess_krs.py) globs this directory directly, mirroring its existing state/goals/*.yaml glob, rather than going through this query engine; not yet wired, out of scope for this fix",
         "integration-summary":     "record-shaped (docs/plans/*.integration-summary.md) — not yet wired, out of scope for this fix",
         "lessons-outbox":          "record-shaped (state/lessons-outbox/*.yaml) — not yet wired, out of scope for this fix",
+        "peer-set-entry":          "record-shaped (state/peers/*.{yaml,yml}), whole-document-yaml, one file per peer — genuinely query-servable in principle, same shape as bug/debt/goal, but its schema `applies_to` is a brace-extension glob (`*.{yaml,yml}`, added in the 1.1.0 .yml widen) that this module's `_collect_files`/`Path.glob()` cannot express: Python's glob has no brace-expansion syntax, so wiring the derived string verbatim would silently match zero files rather than collect .yaml+.yml, and narrowing to `*.yaml` alone would disagree with build_type_to_glob's derived value and fail test_no_glob_disagreement_on_overlap. Zero on-disk state/peers/ records exist in this repo (decentralized, hand-authored per repo — archive/specs/2026-08/2026-08-11-decentralize-code-comparison.md). Wiring needs either a brace-glob-aware collection path or two globs unioned at collection time (the handoff-ledger/cutover **-walker precedent) — out of scope for this fix.",
         "plan-coverage-check":     "record-shaped (docs/plans/*.plan-coverage-check.md) — not yet wired, out of scope for this fix",
         "prior-art-check":         "record-shaped (docs/plans/*.prior-art-check.md) — not yet wired, out of scope for this fix",
         "problem-set":             "record-shaped (docs/problems/*.md) — not yet wired, out of scope for this fix",
@@ -1254,7 +1255,7 @@ class TestTypeToGlobDerivedGate:
         "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in example-doctrine-repo's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
         "review-sidecar":          "record-shaped (docs/plans/*.review.md) — not yet wired, out of scope for this fix",
         "run-report":              "record-shaped, wildcard-dir glob (state/subagent-share/*/*.md) — not yet wired, out of scope for this fix",
-        "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator-claude/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
+        "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
         "workstream":              "record-shaped (state/workstreams/*.yaml) — not yet wired, out of scope for this fix",
         "workstream-event":        "record-shaped (state/workstreams/events/*.yaml) — not yet wired, out of scope for this fix",
     }
@@ -1666,7 +1667,7 @@ class TestArbitraryDepthDoubleStarGlob:
         (two_level / "b.md").write_text("---\nstatus: open\n---\nBody.\n", encoding="utf-8")
 
         results = _walk_glob_segments(tmp_path, self._SEGMENTS)
-        names = sorted(str(p.relative_to(tmp_path)) for p in results)
+        names = sorted(p.relative_to(tmp_path).as_posix() for p in results)
         assert names == [
             "state/roadmap/ns/cutovers/a.md",
             "state/roadmap/ns/sub/cutovers/b.md",
@@ -1680,7 +1681,7 @@ class TestArbitraryDepthDoubleStarGlob:
         (d / "c.md").write_text("---\nstatus: open\n---\nBody.\n", encoding="utf-8")
 
         results = _walk_glob_segments(tmp_path, self._SEGMENTS)
-        names = sorted(str(p.relative_to(tmp_path)) for p in results)
+        names = sorted(p.relative_to(tmp_path).as_posix() for p in results)
         assert names == ["state/roadmap/cutovers/c.md"]
 
     def test_zero_and_multi_level_both_collected_together(self, tmp_path: Path):
@@ -1692,7 +1693,7 @@ class TestArbitraryDepthDoubleStarGlob:
         (nested / "deep.md").write_text("---\nstatus: open\n---\nBody.\n", encoding="utf-8")
 
         results = _walk_glob_segments(tmp_path, self._SEGMENTS)
-        names = sorted(str(p.relative_to(tmp_path)) for p in results)
+        names = sorted(p.relative_to(tmp_path).as_posix() for p in results)
         assert names == [
             "state/roadmap/a/b/c/cutovers/deep.md",
             "state/roadmap/cutovers/top.md",

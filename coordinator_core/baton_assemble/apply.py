@@ -1612,7 +1612,9 @@ def apply(
     `title`, when supplied, is forwarded to `brief()` so d1's scaffold
     directive carries `--title=<title>`; omitted entirely otherwise."""
     from coordinator_core.baton_assemble import TransportFailure, brief, resolve_repo_root
+    from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 
+    repo_root_was_cwd_derived = repo_root is None
     root = repo_root or resolve_repo_root()
     if root is None:
         return _finalize_report(
@@ -1630,6 +1632,20 @@ def apply(
                 ),
             },
         )
+
+    # C3 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+    # the C1 foreign-repo gate. `apply()` always passes an explicit `root` to
+    # `brief()` below (it must, to keep both computing off the SAME resolved
+    # root) -- so brief()'s own cwd-derived refusal check never fires from
+    # this call chain, and the refusal decision has to be made HERE, against
+    # apply()'s own `repo_root` parameter, mirroring the `root = repo_root or
+    # resolve_repo_root()` gating shape used at every other site in this plan.
+    # brief() still independently records the SAME verdict into its own
+    # envelope's `gates["repo_identity"]` (see baton_assemble.brief) -- this
+    # call is only for the refusal decision, not a second source of truth.
+    repo_identity_gate = compute_repo_identity_gate(root, resolved_sid)
+    if repo_root_was_cwd_derived and repo_identity_gate["verdict"] == "MISMATCH":
+        return _finalize_report(APPLY_EXIT_TRANSPORT_FAIL, {"error": repo_identity_gate["message"]})
 
     with _session_identity(resolved_sid):
         try:
@@ -1713,6 +1729,13 @@ def apply(
         # Present unconditionally, including as [] -- same reasoning as
         # `replayed` above and `commits` below; see `_collect_degraded`.
         report["degraded"] = _collect_degraded(report)
+
+        # C3 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+        # the MATCH/UNRESOLVED verdict this run's own gate above computed --
+        # states plainly the check could not run (UNRESOLVED) rather than
+        # implying it passed, mirroring `build_envelope`'s `gates["repo_
+        # identity"]` shape used by `brief()`'s own envelope.
+        report["gates"] = {"repo_identity": repo_identity_gate}
 
         commits = _collect_directive_commits(report)
         if exit_code in (APPLY_EXIT_OK, apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT):

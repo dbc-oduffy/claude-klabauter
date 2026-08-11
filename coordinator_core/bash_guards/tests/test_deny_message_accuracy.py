@@ -759,34 +759,28 @@ class TestHeadTailPlumbingRewriteMessageAccuracy:
         rewrite_cmd = hso["updatedInput"]["command"]
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
 
-    def test_longer_chain_advisory_names_the_actual_segment_count_reason(self):
+    def test_longer_chain_silent_not_advised(self):
         # Reproduces the exact PreToolUse advisory this dispatch's own Bash
-        # calls tripped mid-session (`cd X && grep ... | head -100`, a
-        # 3-segment chain) -- the message must say "longer chain", never
-        # misattribute this to an unrecognized upstream generator.
+        # calls used to trip mid-session (`cd X && grep ... | head -100`, a
+        # 3-segment chain) -- this branch has already computed that no
+        # rewrite would help (see guard_head_tail_rewrite.py's comment at
+        # this branch, backlinking the fleet-wide fire-volume memo), so it
+        # is now silent rather than a nag with no offer.
         cmd = "cd /tmp && grep -n foo file.py | head -100"
-        advisory = _advisory_text(
-            _hso(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12"))
+        assert (
+            guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12")
+            is None
         )
-        assert "longer chain than this rewrite's conservative two-stage" in advisory
-        # Wrong-reason check. The discriminator used to be the phrase "no
-        # known translation on file", which was retired 2026-07-29: it
-        # framed a structural impossibility (reproducing an unrecognized
-        # upstream costs MORE forks, so no rewrite could help) as a mere
-        # gap in this guard's translation table. Both branches now state
-        # the real cost, so the discriminator is the branch-specific
-        # wording -- kept as a live negative, not a phrase that no longer
-        # appears anywhere and would pass tautologically.
-        assert "not one this guard can reproduce in Python" not in advisory
 
-    def test_unrecognized_upstream_generator_advisory_names_that_generator(self):
+    def test_unrecognized_upstream_generator_silent_not_advised(self):
+        # Same silencing as the longer-chain case above -- no rewrite
+        # possible for an upstream generator this guard cannot reproduce,
+        # so no advisory either.
         cmd = "docker ps | head -n 20"
-        advisory = _advisory_text(
-            _hso(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12"))
+        assert (
+            guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12")
+            is None
         )
-        assert "docker ps" in advisory
-        assert "not one this guard can reproduce in Python" in advisory
-        assert "longer chain than this rewrite's conservative two-stage" not in advisory
 
     def test_unrecognized_count_form_advisory_names_the_actual_arguments(self):
         cmd = "find . -name '*.py' | head -c 100"

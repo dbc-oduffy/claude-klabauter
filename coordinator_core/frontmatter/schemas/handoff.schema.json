@@ -521,7 +521,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Fan-in merge edges \u2014 additional parent handoff paths beyond the primary predecessor. Optional; requires explicit PM direction. Each entry is a path string to a predecessor handoff. Cross-field rules enforce: no duplicate entries within the array; no entry duplicating the primary predecessor field."
+      "description": "Fan-in merge edges \u2014 additional parent handoff paths beyond the primary predecessor. Optional. Each entry is a path string to a predecessor handoff. Cross-field rules enforce: no duplicate entries within the array; no entry duplicating the primary predecessor field. Population is ENGINE-DERIVED, not PM-directed (amended by roadmap stub sedge-02, 2026-08-11): baton_assemble resolves the fan-in legs via _resolve_held_handoff_for_session and writes this field at successor-scaffold time (d1) from the same resolved list it uses to stamp each leg's own continued_into up-edge (d6*). The removed 'requires explicit PM direction' sentence already misdescribed that up-edge half before this field was ever populated; it is removed rather than left to contradict the engine. An EM may still supply legs by hand via coordinator-doc-new --additional-predecessor."
     },
     "forked_from": {
       "type": "string",

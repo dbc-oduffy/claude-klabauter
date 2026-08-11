@@ -124,6 +124,60 @@ through unnormalized. Fixed in `coordinator_core/cartography/symbols.py` (`_json
 sorts sets/frozensets to lists, `repr()`s bytes) with regression coverage in
 `coordinator_core/cartography/tests/test_symbols.py`.
 
+## C10 — projection cold-start replay cost, uncompacted and compacted (2026-08-11)
+
+sat-01's AC3 (see `state/roadmap/sovereign-tracker-2026-07-17/MEASUREMENT-2026-07-28-ac3-read-events-requantified.md`)
+measured `tracker_store.read_events`'s cold-start cost only. `tracker_projection.render_status`
+(the fold C5's compaction snapshot claims to bound) sits on top of that read and had never been
+measured. `coordinator_core/benchmarks/measure_render_status.py` (`run_c10_measurement`, N=10,
+warmup=2 — two independent runs shown below, taken minutes apart on a live, ~50-70-concurrent-
+session machine, not an idle baseline) produces the AC16/AC17 numbers.
+
+Fixture: 500 events/shard × 3 shards background ("noise", no `axis` field, skipped in one
+dict-membership check) + 300 `manual_close` transition events for one target item
+(`bench-item-0001`) written raw (uncompacted) or folded into one `kind: "snapshot"` event plus a
+5-event unsnapshotted tail (compacted). **Stated record count: 1,800 uncompacted / 1,506
+compacted, at 3 shards** (AC16).
+
+| run | point | events | shards | min ms | mean ms | stdev |
+|---|---|---|---|---|---|---|
+| 1 | uncompacted baseline | 1 800 | 3 | 301.4 | 313.9 | 7.8 |
+| 1 | uncompacted growth | 15 300 | 3 | 359.6 | 391.0 | 18.8 |
+| 1 | compacted | 1 506 | 3 | 293.0 | 335.7 | 26.5 |
+| 2 | uncompacted baseline | 1 800 | 3 | ~301–345 | — | — |
+| 2 | uncompacted growth | 15 300 | 3 | 391.9 | 460.2 | 52.6 |
+| 2 | compacted | 1 506 | 3 | 311.0 | 335.4 | 19.4 |
+
+Budget band: **84.0 ms** (`tracker.render_status` has no manifest override — resolves via the
+COMPUTE_ONLY tier default, `target_ms: 70`, matching `tracker.read_events`'s own unlisted status).
+
+**AC16 — uncompacted vs budget, and the breach point.** `301.4ms` (run 1) / `~301-345ms` (run 2)
+is well over the 84ms band — **`extrapolated_breach_total_events_at_shard_count.total_events:
+"already breached at baseline"` both runs**, exactly as sat-01's AC3 re-measurement found for
+`read_events` alone: the binding constraint is cold-start/import cost, not event count. This
+module's baseline is ~2.4x `read_events`' own re-measured ~125ms floor
+(`MEASUREMENT-2026-07-28-ac3-read-events-requantified.md`) — isolated by timing a bare
+`import coordinator_core.tracker_projection` subprocess against a bare
+`import coordinator_core.tracker_store` one: **~333ms vs ~79ms**, so most of the extra ~180ms
+`render_status` pays over `read_events` alone is `tracker_projection`'s own import chain
+(`tracker_entities` and what it pulls in), not the fold loop. This is a real, reportable
+observation about `coordinator_core/tracker_projection.py`'s import cost — flagged here, not
+fixed here (out of scope for C10 per its brief).
+
+**AC17 — compacted delta is near-zero, as predicted, not a tuning failure.** `compaction_delta_ms:
+-8.4` (run 1) / `-8.9` (run 2) — compacted measured marginally FASTER in both runs, but
+`compaction_delta_noise_dominated: True` both times (noise floor 68–93ms, an order of magnitude
+larger than the delta). The honest read: compaction has **no measurable effect** on cold-start
+`render_status` latency at this scale, exactly as predicted — `read_events` still parses every
+line of every shard regardless of the snapshot, and that parse/IO plus the import-chain cost above
+dominates the cold start completely. Compaction's real value (bounding per-item fold arithmetic as
+event count grows per-item, and keeping shard files append-only/mergeable) is not visible at this
+measurement's timescale and was never claimed to be a latency lever by C5 correctly read. Sat-04
+should look at the import chain, not compaction, if `tracker.render_status`-shaped latency ever
+needs to move.
+
+Reproduce: `python -m coordinator_core.benchmarks.measure_render_status`.
+
 ## Reproduce
 
 ```bash

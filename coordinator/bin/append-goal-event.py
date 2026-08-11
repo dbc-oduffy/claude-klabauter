@@ -93,6 +93,7 @@ from cc_invoke import (  # noqa: E402
     _resolve_claude_klabauter_root,
     _timeout_exceeded_message,
 )
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[str, object]:
@@ -286,22 +287,23 @@ def _build_params(parsed: dict[str, object]) -> dict[str, object]:
 
 
 def _resolve_repo_root() -> str:
-    """Resolve the repo root from PWD via git (mirrors the bash body's own resolution)."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        proc = None
-    if proc is None or proc.returncode != 0 or not proc.stdout.strip():
+    """Resolve the repo root via the checked resolver (repo_identity).
+
+    READER classification (DR-277 / plan C5): a MISMATCH is advisory only --
+    warn to stderr and proceed with the resolved root rather than refuse. An
+    UNRESOLVED verdict NEVER refuses (AC4) -- it just means the check could
+    not run; the resolved root (or lack thereof) is still honored below.
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+    if not root:
         print(
             f"append-goal-event.sh: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,
         )
         sys.exit(2)
-    return proc.stdout.strip()
+    return root
 
 
 def main(argv: list[str]) -> int:

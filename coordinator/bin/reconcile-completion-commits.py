@@ -134,7 +134,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 import tempfile
 
@@ -144,7 +143,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cc_invoke  # noqa: E402
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _SESSION_ID_ENV_TIERS = (
     "COORDINATOR_SESSION_ID",
@@ -166,26 +165,21 @@ def _resolve_session_id_env() -> str:
     return ""
 
 
-def _resolve_repo_root() -> str | None:
-    """Resolve the current git worktree root from PWD.
+def _resolve_repo_root() -> tuple[str | None, str | None]:
+    """Resolve the current git worktree root via the checked resolver.
 
-    Mirrors strangler-facade.sh's `git -C "$PWD" rev-parse --show-toplevel`
-    (standalone-repo assumption; no explicit repo-root positional arg).
-    Returns None on failure.
+    WRITER script: this entry mutates the resolved repo (`commits:` /
+    `late_commits:` frontmatter). Returns (root, mismatch_message) — on a
+    positive MISMATCH, root is None and mismatch_message is the pre-rendered
+    refusal text (DR-277 carve-out: prevents a write into a foreign tree).
+    UNRESOLVED never refuses (DR-277, AC4).
     """
-    try:
-        result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
-    return root
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        return None, verdict["message"]
+    if not root:
+        return None, None
+    return root, None
 
 
 def legacy_reconcile_commits() -> None:
@@ -521,12 +515,15 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    repo_root = _resolve_repo_root()
+    repo_root, mismatch_message = _resolve_repo_root()
     if repo_root is None:
-        print(
-            f"reconcile-completion-commits.py: cannot resolve git repo root from {os.getcwd()}",
-            file=sys.stderr,
-        )
+        if mismatch_message:
+            print(mismatch_message, file=sys.stderr)
+        else:
+            print(
+                f"reconcile-completion-commits.py: cannot resolve git repo root from {os.getcwd()}",
+                file=sys.stderr,
+            )
         return 2
 
     # ---------------------------------------------------------------------

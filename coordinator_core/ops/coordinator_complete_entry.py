@@ -863,8 +863,25 @@ def _which_render_rollup_shim() -> str:
     return which_path_ordered("coordinator-render-rollup.sh", extensions=[]) or ""
 
 
-def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
-    """AC4 — fail-open at every stage; never raises, never aborts the write."""
+def _resolve_governing_deliverable_id(repo_root: str, governing_plan_slug: str) -> str:
+    """Reads the governing plan file's own `deliverable_id:` frontmatter line.
+
+    sedge-18 (`state/handoffs/2026-08-06_170018_roadmap-sedge-18.md`) —
+    Contested-block resolution: this is the SAME plan-file read
+    `_resolve_rollup_sentence` already performs for its own (unrelated)
+    rollup-sentence purpose, factored out here so both callers share one
+    PARSING implementation rather than each hand-rolling the
+    `deliverable_id:` line-scan logic. This dedupes the LOGIC, not the file
+    READ: `main()` calls this function and `_resolve_rollup_sentence`
+    separately per invocation, and `_resolve_rollup_sentence` calls this
+    same helper again internally — the plan file is still opened and parsed
+    twice per run, exactly as before the extraction. A follow-up that
+    threads a resolved `dlv_id` into `_resolve_rollup_sentence` as a
+    parameter would close that gap; not done here. Fail-open at every
+    stage, mirroring `_resolve_rollup_sentence`: any guard miss (no
+    `governing_plan_slug`, no plan file, no `deliverable_id:` line) returns
+    `""`, never raises.
+    """
     if not governing_plan_slug:
         return ""
     plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
@@ -874,7 +891,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
         with open(plan_file, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
-        print(f"skip: _resolve_rollup_sentence: with open(plan_file, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: _resolve_governing_deliverable_id: with open(plan_file, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return ""
 
     dlv_id = ""
@@ -887,6 +904,18 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
                 raw = raw[1:-1]
             dlv_id = raw
             break
+    return dlv_id
+
+
+def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
+    """AC4 — fail-open at every stage; never raises, never aborts the write."""
+    if not governing_plan_slug:
+        return ""
+    plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
+    if not os.path.isfile(plan_file):
+        return ""
+
+    dlv_id = _resolve_governing_deliverable_id(repo_root, governing_plan_slug)
     if not dlv_id:
         return ""
 
@@ -942,6 +971,7 @@ def _write_entry(
     loe_block: str,
     rollup_sentence: str,
     yyyymmdd: str,
+    deliverable_id: str,
 ) -> bool:
     """Writes (or idempotent-preserving re-writes) the completion-entry
     scaffold at `entry_path`. Returns `True` when the file was written,
@@ -957,13 +987,22 @@ def _write_entry(
     a placeholder — robust to an EM who filled in, say, the title and
     prose but hasn't yet resolved `nature`. Purely mechanical/computed
     fields this CLI itself owns (`created` once set, `commits` — always
-    `[]`, `status`, `chain_terminal`, `authored_by`, `chain`, the `loe:`
-    block, the rollup sentence) are recomputed fresh on every call
+    `[]`, `status`, `chain_terminal`, `authored_by`, `chain`, `deliverable_id`,
+    the `loe:` block, the rollup sentence) are recomputed fresh on every call
     regardless of authoring state, exactly as before this fix — only the
     three EM-owned surfaces are sacred. `created` is the one exception:
     once an entry exists, its original `created` date is preserved rather
     than bumped to today, since re-running this scaffolder across
     midnight must not misdate an already-in-progress entry.
+
+    `deliverable_id` (sedge-18) — the spine's exit join key, stamped
+    ceremony-internal (ninth parameter) rather than by a later cascade
+    pass, per the roadmap's `## Spine reach: the exit` finding that
+    cascade-written forward edges populate in the single digits regardless
+    of schema strictness while ceremony-internal writers (`continued_into`,
+    `closed_reason`) reach 100%. `""` renders as an explicit `null`, never
+    an omitted line — this stub covers population only, not backfill of
+    pre-existing zero-population entries.
     """
     existing = _read_existing_scaffold_state(entry_path)
 
@@ -992,6 +1031,11 @@ def _write_entry(
         # splicing into a double-quoted YAML scalar (nit F4).
         _chain_slug_esc = chain_slug.replace('"', '\\"')
         lines.append(f'chain: "{_chain_slug_esc}"')
+    if deliverable_id:
+        _dlv_id_esc = deliverable_id.replace('"', '\\"')
+        lines.append(f'deliverable_id: "{_dlv_id_esc}"')
+    else:
+        lines.append("deliverable_id: null")
     lines.append("commits: []")
     lines.append("status: pending-release")
     lines.append(f"chain_terminal: {'true' if chain_terminal else 'false'}")
@@ -1092,6 +1136,7 @@ def main(argv: List[str]) -> int:
     chain_terminal = canonicalize(disposition) == PREDECESSOR_CONSUMED
 
     rollup_sentence = _resolve_rollup_sentence(repo_root, governing_plan_slug)
+    deliverable_id = _resolve_governing_deliverable_id(repo_root, governing_plan_slug)
 
     wrote = _write_entry(
         entry_path,
@@ -1102,6 +1147,7 @@ def main(argv: List[str]) -> int:
         loe_block,
         rollup_sentence,
         yyyymmdd,
+        deliverable_id,
     )
 
     print(entry_path)

@@ -43,6 +43,12 @@ from pathlib import Path
 
 from coordinator_core.win_portability import no_console_creationflags
 
+_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
+_LIB_DIR = os.path.join(_BIN_DIR, "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from repo_identity import resolve_checked_repo_root  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Constants and patterns
@@ -86,17 +92,21 @@ def _extract_target_wiki(text: str) -> str | None:
 
 
 def _detect_from_repo() -> str:
-    """Detect from_repo registry shortname from cwd git root basename."""
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, check=True,
-            **no_console_creationflags()
-        )
-        root = Path(result.stdout.strip())
-        return root.name
-    except Exception:
+    """Detect from_repo registry shortname from the checked-resolver repo root's
+    basename. WRITER (AC10): both cmd_dry_run (JSON classification report via
+    output_path.write_text) and cmd_apply (per-entry YAML via
+    out_path.write_text, plus git rm) write real artifacts into the resolved
+    root, and both call this before their first write. A positive MISMATCH
+    refuses HERE, before any write lands — the DR-277 carve-out ("prevents a
+    write into a foreign tree") licenses the hard deny. UNRESOLVED never
+    refuses (DR-277, AC4)."""
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if repo_root is None:
         return 'unknown'
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+        sys.exit(1)
+    return Path(repo_root).name
 
 
 def _make_filename(entry: dict, idx: int, seen_slugs: set) -> str:

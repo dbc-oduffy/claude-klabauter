@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
@@ -57,6 +56,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 import halted_marker  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def legacy_emit() -> None:
@@ -73,32 +73,25 @@ def legacy_emit() -> None:
 
 
 def _resolve_repo_root() -> str:
-    """Resolve the repo root from CWD via git (mirrors the pre-port bash body's
-    own strangle_route resolution — standalone-repo assumption, no worktrees).
-    """
-    try:
-        claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
-        from coordinator_core.win_portability import no_console_creationflags
+    """Resolve the repo root via the checked resolver (coordinator/bin/lib/repo_identity.py).
 
-        proc = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except (OSError, RuntimeError, ImportError) as exc:
-        print(f"emit-cockpit-snapshot: cannot resolve git repo root: {exc}", file=sys.stderr)
+    WRITER script: this entry mutates the resolved repo (artifact.emit), so a
+    positive MISMATCH refuses before any write lands -- the DR-277 carve-out
+    ("prevents a write into a foreign tree") is what licenses the hard deny
+    here. UNRESOLVED never refuses (DR-277, AC4) -- a degenerate/absent
+    anchor must not turn this into a fleet-wide outage.
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
         sys.exit(1)
-    resolved = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not resolved:
+    if not root:
         print(
             f"emit-cockpit-snapshot: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,
         )
         sys.exit(1)
-    return resolved
+    return root
 
 
 def _parse_args(argv: list[str]) -> dict[str, object]:

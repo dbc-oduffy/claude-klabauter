@@ -239,3 +239,130 @@ def test_cli_missing_subcommand_exits_nonzero():
         **no_console_creationflags(),
     )
     assert proc.returncode != 0
+
+
+def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
+    """Review: coordinator:code-reviewer af8ffeae P2 finding 1 — repeated
+    --additional-predecessor flags accumulate and EVERY accumulated rung reaches the
+    cascade's comparison.
+
+    Negative-spec: this must exercise the real CLI, never a locally-reconstructed
+    argparse parser — a parser rebuilt in the test body asserts that argparse's
+    `append` action works (it does) and would keep passing if the flag were deleted
+    from the CLI outright. Three mutually-divergent rungs are used so the raise has to
+    enumerate all of them: a CLI that dropped every flag but the last would still exit
+    5, and only the all-three-ids assertion distinguishes accumulation from that."""
+    plan = tmp_path / "plan.md"
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    _write_frontmatter(plan, deliverable_id="dlv-accum-plan-777")
+    _write_frontmatter(first, deliverable_id="dlv-accum-first-888")
+    _write_frontmatter(second, deliverable_id="dlv-accum-second-999")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _CLI,
+            "resolve",
+            "--plan-file",
+            str(plan),
+            "--additional-predecessor",
+            str(first),
+            "--additional-predecessor",
+            str(second),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env(),
+        **no_console_creationflags(),
+    )
+
+    assert proc.returncode == 5
+    assert "dlv-accum-plan-777" in proc.stderr
+    assert "dlv-accum-first-888" in proc.stderr
+    assert "dlv-accum-second-999" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_additional_predecessor_flag_absent_defaults_to_empty_list():
+    """Flag omitted -> args.additional_predecessor defaults to []."""
+    proc = subprocess.run(
+        [sys.executable, _CLI, "resolve"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env(),
+        **no_console_creationflags(),
+    )
+    today = datetime.date.today().strftime("%Y%m%d")
+    assert proc.returncode == 0, proc.stderr
+    stdout_lines = proc.stdout.strip().splitlines()
+    assert stdout_lines[0].startswith(f"DLVR_ID=dlv-{today}-handoff-")
+    assert stdout_lines[1] == "INITIATIVE_ID="
+
+
+def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_path):
+    """Pass-through from the CLI flag to resolve_deliverable_and_initiative's
+    additional_predecessors kwarg, including a divergence case that exits non-zero
+    (mirrors the plan/predecessor divergent-join CLI test above, but sourced from
+    --additional-predecessor instead of --predecessor)."""
+    plan = tmp_path / "plan.md"
+    extra = tmp_path / "extra.md"
+    _write_frontmatter(plan, deliverable_id="dlv-plan-side-333")
+    _write_frontmatter(extra, deliverable_id="dlv-extra-side-444")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _CLI,
+            "resolve",
+            "--plan-file",
+            str(plan),
+            "--additional-predecessor",
+            str(extra),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env(),
+        **no_console_creationflags(),
+    )
+
+    assert proc.returncode == 5
+    assert "divergent deliverable_id join" in proc.stderr
+    assert "dlv-plan-side-333" in proc.stderr
+    assert "dlv-extra-side-444" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_additional_predecessor_reaches_cascade_kwarg_when_agreeing(tmp_path):
+    """Same pass-through, agreeing case: no divergence, carry proceeds normally,
+    confirming the additional-predecessor value actually reached the kwarg (a plan
+    value alone would also exit 0, so this pins that the extra rung was read and
+    compared, not merely accepted and ignored)."""
+    plan = tmp_path / "plan.md"
+    extra = tmp_path / "extra.md"
+    _write_frontmatter(plan, deliverable_id="dlv-agree-555")
+    _write_frontmatter(extra, deliverable_id="dlv-agree-555")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            _CLI,
+            "resolve",
+            "--plan-file",
+            str(plan),
+            "--additional-predecessor",
+            str(extra),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env(),
+        **no_console_creationflags(),
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    stdout_lines = proc.stdout.strip().splitlines()
+    assert stdout_lines == ["DLVR_ID=dlv-agree-555", "INITIATIVE_ID="]

@@ -140,7 +140,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from coordinator_core.frontmatter.body_blocks import _compile_heading_re
 from coordinator_core.frontmatter.primitives import insert_fm_field, serialize_yaml_scalar
 from coordinator_core.handoff_creation_guard import (
     HandoffArchivedTwinError,
@@ -169,7 +168,10 @@ from coordinator_core.ops.queue_family import (
     normalize_family,
 )
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.session_ledger import SESSION_LEDGER_BLOCK_LINES
+from coordinator_core.session_ledger import (
+    SESSION_LEDGER_BLOCK_LINES,
+    SESSION_LEDGER_HEADING_RE,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -478,8 +480,14 @@ async def _handler(
     # param rather than through coordinator-doc-new, so it does not inherit
     # C1's scaffolder-side emission. Append the canonical block when the
     # composed body doesn't already carry one — never duplicate it.
-    if not _compile_heading_re("Session Ledger").search(body):
-        body = body.rstrip("\n") + "\n\n" + "\n".join(SESSION_LEDGER_BLOCK_LINES)
+    # Review: code-reviewer 49e8b242 P2 — was frontmatter.body_blocks._compile_heading_re,
+    # which near-missed the parser's own grammar; now the canonical detector shared
+    # with the parser and every other detection site.
+    # Review: code-reviewer 49e8b242 P3 — aligned empty-body handling with
+    # handoff_author_fork.py's shape (no leading blank lines when body is empty).
+    if not SESSION_LEDGER_HEADING_RE.search(body):
+        ledger_block = "\n".join(SESSION_LEDGER_BLOCK_LINES)
+        body = body.rstrip("\n") + "\n\n" + ledger_block if body else ledger_block
 
     created_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     filename = _fork_handoff_filename(title)

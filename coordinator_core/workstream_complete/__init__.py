@@ -86,8 +86,9 @@ for the literal tuple; grouped here by which submodule names each CLI:
         -> judgment_points[] construction (this module's own 2 pre-existing
         points; `judgments.py`'s 29 preserved points import the same
         constructors independently).
-    coordinator_core.pickup_assemble.resolve_repo_root -> AC8's zero-spawn
-        `.git` read-model repoint (see Negative-spec for what this replaces).
+    coordinator_core.pickup_assemble.resolve_repo_root -> AC8's shared-resolver
+        repoint (see Negative-spec for what this replaces, and for the
+        "zero-spawn" claim that repoint did NOT earn).
 
 Negative-spec:
     - Do NOT add a mutating code path here. A finding that "the assembler
@@ -105,10 +106,21 @@ Negative-spec:
     - Do NOT re-implement `wsc-session-disposition.py`'s 3-detector chain
       here — it is loaded and called, not ported a second time.
     - `resolve_repo_root` is now `coordinator_core.pickup_assemble.
-      resolve_repo_root` (AC8) — the zero-spawn in-process `.git` read-model,
-      not a local `subprocess.run(["git", "rev-parse", ...])` call. Convert
-      #2 shipped the plain-subprocess version and flagged this repoint as
-      "out of scope for this chunk" in its own docstring; C3 closes it.
+      resolve_repo_root` (AC8), not a local `subprocess.run(["git",
+      "rev-parse", ...])` call. Convert #2 shipped the plain-subprocess
+      version and flagged this repoint as "out of scope for this chunk" in
+      its own docstring; C3 closes it.
+      **CORRECTED 2026-08-11 (C5, docs/plans/2026-08-11-ceremony-closes-
+      against-a-foreign-repo.md): this repoint is NOT "zero-spawn," and the
+      text here claimed it was.** `pickup_assemble.resolve_repo_root` itself
+      runs `git rev-parse --show-toplevel` through `_run_git` — the repoint
+      relocated the one spawn into the shared resolver, it did not remove it.
+      The AC8 spawn-budget accounting in `docs/plans/2026-08-01-wsc-
+      completeness-gate-and-pickup-successor.md` § C3 was computed off this
+      false premise and understates the true cost by one spawn per call, at
+      both call sites (`apply.py::_lazy_repo_root` and this module's
+      `root = repo_root or resolve_repo_root()`). Reported, not re-baselined:
+      the resolver's behaviour is deliberately unchanged.
       Same public `Optional[Path] -> Optional[Path]` signature, so this is a
       straight import substitution — no caller-visible behavior change (no
       test asserted anything about the subprocess mechanics itself, only the
@@ -193,6 +205,9 @@ from typing import Any, Mapping, NamedTuple, Optional
 
 from coordinator_core.ops import list_review_trail_records
 from coordinator_core.ops.review_brightline_gate import classify_surface
+from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
+from coordinator_core.coverage import _is_planning_artifact_path  # review finding P2: planning-artifact LOC de-weight
+from coordinator_core.ops.review_brightline_gate import _PLANNING_LOC_WEIGHT  # review finding P2: same de-weight, same constant
 
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
 from coordinator_core.contract.decision_object.judgment import (
@@ -214,7 +229,8 @@ from coordinator_core.ops.deliverable_equivalence import (
 )
 from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.fleet._common import handoff_archive_dest
-from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: zero-spawn `.git` read-model
+from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
+from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
 
 from coordinator_core.workstream_complete import chain_partition_verdict_store
@@ -2550,7 +2566,14 @@ def _resolve_numstat_row_path(path: str) -> str:
 def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
     """Sums added+deleted over `git --numstat` rows, folding each row's path
     into `surfaces`. Binary rows (`-`/`-`) contribute 0 LOC but still count
-    as a touched surface."""
+    as a touched surface.
+
+    Naming trap (review finding, 2026-08-11): the `gross_loc` this feeds is
+    the RAW, unfiltered sum — `_is_noise_path` is not applied here;
+    `code_loc` (`_accumulate_code_loc_numstat`) is this module's
+    noise-excluded sibling. `backlog_grind_assemble/readers_mise.py`'s own
+    `gross_loc` means the OPPOSITE — already noise-excluded — so the same
+    name carries two different contracts across these two modules."""
     gross = 0
     for line in text.splitlines():
         match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
@@ -2563,6 +2586,40 @@ def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
             gross += int(deleted)
         surfaces.add(classify_surface(_resolve_numstat_row_path(path)))
     return gross
+
+
+def _accumulate_code_loc_numstat(text: str) -> int:
+    """Sums added+deleted over `git --numstat` rows, EXCLUDING noise paths
+    (`_is_noise_path`) — the `code_loc` counterpart to `_accumulate_numstat`,
+    which sums every row unconditionally into `gross_loc`. C5 (2026-08-11):
+    reuses the SAME predicate C1 wired into `review_brightline_gate.
+    _session_scoped`/`_compute_session_oracle_single` rather than a second
+    definition of "code LOC" — a fully-noise row contributes 0 to `code_loc`
+    while still counting toward `gross_loc` via `_accumulate_numstat`,
+    matching this module's existing "gross_loc stays an accepted parameter,
+    code_loc is the reviewable measure" split (see `decide_review_scale`'s
+    own docstring).
+
+    Review finding P2 (2026-08-11): a non-noise row also gets the same
+    planning-artifact de-weight `_compute_chain_oracle` already applies to
+    `chain_loc` (`_PLANNING_LOC_WEIGHT`) — a plan/research/problem-framing
+    document is real review obligation, not noise, but is not the same
+    review cost per line as code. Reuses the shared predicate and constant
+    rather than defining a second weighting."""
+    total = 0
+    for line in text.splitlines():
+        match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
+        if not match:
+            continue
+        added, deleted, path = match.groups()
+        resolved_path = _resolve_numstat_row_path(path)
+        if _is_noise_path(resolved_path):
+            continue
+        row_loc = (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
+        if _is_planning_artifact_path(resolved_path):
+            row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
+        total += row_loc
+    return total
 
 
 def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], list[str]]]:
@@ -2607,18 +2664,25 @@ def _measure_session_review_scale_inputs(
     session_start_time: Any,
     session_id: str = "",
     uncommitted_paths: Optional[list[str]] = None,
-) -> tuple[Optional[int], Optional[int], Optional[int]]:
-    """Measures `(gross_loc, commit_count, surface_count)` — the three
-    disk-derivable row-4 brightline inputs `decide_review_scale` reads —
-    over THIS session's own change set. Any element is `None` when
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+    """Measures `(gross_loc, code_loc, commit_count, surface_count)` — the
+    four disk-derivable row-4 brightline inputs `decide_review_scale` reads
+    — over THIS session's own change set. Any element is `None` when
     genuinely unresolvable (no `session_id`, no git, an unreadable range) —
-    never a zeroed triple standing in for a failed measurement, which would
-    read as a resolved, trivially-small diff and move the verdict toward
-    reviewing LESS (the same failure direction
+    never a zeroed quadruple standing in for a failed measurement, which
+    would read as a resolved, trivially-small diff and move the verdict
+    toward reviewing LESS (the same failure direction
     `backlog_grind_assemble.readers_mise._measure_range`'s own docstring
-    guards against; this function mirrors its shape). A `(0, 0, 0)` returned
-    after a SUCCESSFUL measurement is a different thing and is honest: the
-    session genuinely owns no commits and no dirty files.
+    guards against; this function mirrors its shape). A `(0, 0, 0, 0)`
+    returned after a SUCCESSFUL measurement is a different thing and is
+    honest: the session genuinely owns no commits and no dirty files.
+
+    `code_loc` (C5, 2026-08-11) is `gross_loc`'s noise-excluded sibling —
+    computed from the SAME already-fetched `git show`/`git diff --numstat`
+    text via `_accumulate_code_loc_numstat`, never a second git spawn. This
+    is the single production reachability point for `code_loc`: no other
+    caller in this module measures it, and `decide_review_scale`'s row 4
+    now reads it (C2) rather than `gross_loc`.
 
     Both halves are session-scoped, because Step 6's review-scale question
     is asked BEFORE `d-run-wsc-tail` commits and a measurement over landed
@@ -2647,17 +2711,19 @@ def _measure_session_review_scale_inputs(
     same bucketing the `review-brightline-gate` CLI this verdict names."""
     shas = _session_owned_shas(root, session_id)
     if shas is None:
-        return None, None, None
+        return None, None, None, None
     commit_count = len(shas)
 
     gross_loc = 0
+    code_loc = 0
     surfaces: set[str] = set()
 
     if shas:
         committed = _run_git_read_only(["show", "--numstat", "--format=", *shas], root)
         if committed is None:
-            return None, None, None
+            return None, None, None, None
         gross_loc += _accumulate_numstat(committed, surfaces)
+        code_loc += _accumulate_code_loc_numstat(committed)
 
     if uncommitted_paths is None:
         uncommitted_paths = [
@@ -2674,21 +2740,24 @@ def _measure_session_review_scale_inputs(
 
     split = _split_tracked(root, uncommitted_paths)
     if split is None:
-        return None, None, None
+        return None, None, None, None
     tracked, untracked = split
     if tracked:
         dirty = _run_git_read_only(["diff", "--numstat", "HEAD", "--", *tracked], root)
         if dirty is None:
-            return None, None, None
+            return None, None, None, None
         gross_loc += _accumulate_numstat(dirty, surfaces)
+        code_loc += _accumulate_code_loc_numstat(dirty)
     for rel_path in untracked:
         added = _count_lines(root / rel_path)
         if added is None:
-            return None, None, None
+            return None, None, None, None
         gross_loc += added
+        if not _is_noise_path(rel_path):
+            code_loc += added
         surfaces.add(classify_surface(rel_path))
 
-    return gross_loc, commit_count, len(surfaces)
+    return gross_loc, code_loc, commit_count, len(surfaces)
 
 
 # ---------------------------------------------------------------------------
@@ -3007,11 +3076,29 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     failure — callers (the CLI `main`) degrade that to `EXIT_TRANSPORT_FAIL`.
     """
     decisions = decisions or {}
+    repo_root_was_cwd_derived = repo_root is None
     root = repo_root or resolve_repo_root()
     if root is None:
         raise TransportFailure("could not resolve a git worktree root")
 
     gate = compute_session_shape_gate(root)
+
+    # C2 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+    # the C1 foreign-repo gate needs `gate.sid`, itself resolved from THIS
+    # same possibly-suspect `root` via `compute_session_shape_gate` above.
+    # This is NOT a cycle to "fix" by reordering: `resolve_session_id` is a
+    # pure env read that ignores the root it is passed, so `gate.sid` is
+    # uncontaminated by whether `root` itself is the wrong repo.
+    #
+    # Gated ONLY when `root` was cwd-derived (`repo_root` not supplied) — an
+    # explicitly-passed `repo_root` is an unambiguous statement of caller
+    # intent that never touched cwd, so refusing it would regress a caller
+    # with no defect (plan Anti-scope). An explicitly-supplied `repo_root`
+    # still gets the gate CALLED and its verdict RECORDED below — just never
+    # refused on.
+    repo_identity_gate = compute_repo_identity_gate(root, gate.sid)
+    if repo_root_was_cwd_derived and repo_identity_gate["verdict"] == "MISMATCH":
+        raise TransportFailure(repo_identity_gate["message"])
     handoff_governing_plan_field = _governing_plan_field_from_consumed_handoff(root, gate)
     handoff_deliverable_id = _deliverable_id_from_consumed_handoff(root, gate)
     governing_plan, governing_plan_source = directives_lessons_plan.resolve_governing_plan_with_source(
@@ -3099,7 +3186,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             row["path"] for row in classified_session_files if row["session_authored"]
         ]
 
-    measured_gross_loc, measured_commit_count, measured_surface_count = (
+    measured_gross_loc, measured_code_loc, measured_commit_count, measured_surface_count = (
         _measure_session_review_scale_inputs(
             root,
             session_start_time,
@@ -3116,10 +3203,21 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     resolved_surface_count = decisions.get("surface_count")
     if resolved_surface_count is None:
         resolved_surface_count = measured_surface_count
+    # C5 (2026-08-11): `code_loc` is now PRODUCED here, mirroring the
+    # gross_loc/commit_count/surface_count backfill above — a caller-
+    # supplied `decisions["code_loc"]` still always wins. Before this,
+    # `decide_review_scale`'s row 4 (pointed at `code_loc` by C2) received a
+    # bare `decisions.get("code_loc")` with no producer at this call site,
+    # so row 4 resolved `_row4_inputs_unresolved` in production instead of
+    # ever tripping — a live regression C2 alone shipped (see this plan's
+    # C5 stub).
+    resolved_code_loc = decisions.get("code_loc")
+    if resolved_code_loc is None:
+        resolved_code_loc = measured_code_loc
 
     review_scale_decision = directives_review.decide_review_scale(
         gross_loc=resolved_gross_loc,
-        code_loc=decisions.get("code_loc"),
+        code_loc=resolved_code_loc,
         commit_count=resolved_commit_count,
         surface_count=resolved_surface_count,
         executor_dispatched=decisions.get("executor_dispatched"),
@@ -3319,6 +3417,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
             "review_scale": review_scale_decision._asdict(),
             "stage_paths_candidates": stage_paths_candidates,
+            "repo_identity": repo_identity_gate,
         },
         directives=directives,
         judgment_points=judgment_points,

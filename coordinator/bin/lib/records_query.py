@@ -128,50 +128,36 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import cc_invoke  # noqa: E402
 from cc_invoke import route_mutation  # noqa: E402
-
-
-def _no_console_kw() -> dict:
-    """Lazily resolve claude_klabauter_root onto sys.path, then splat the canonical
-    no-console-window kwarg. ``{}`` on any resolution failure (fail-open,
-    matches this function's own ``except OSError: pass`` posture)."""
-    try:
-        cc_invoke.ensure_engine_on_path(__file__)
-        from coordinator_core.win_portability import no_console_creationflags
-
-        return no_console_creationflags()
-    except Exception:
-        return {}
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def _resolve_repo_root() -> str:
-    """Resolve the CALLER's repo root — mirrors every sibling trampoline's shape
-    (prune-closed-bugs.py, sweep-boot.py, emit-cockpit-snapshot.py): `git
-    rev-parse --show-toplevel` from cwd, falling back to os.getcwd() on any
-    git failure. route_mutation's third positional is `repo_root` (the
-    caller's repo), never claude-klabauter's own checkout — see cc_invoke.py's
-    route()/route_mutation() docstrings.
+    """Resolve the CALLER's repo root via the checked resolver
+    (`repo_identity.resolve_checked_repo_root`) — route_mutation's third
+    positional is `repo_root` (the caller's repo), never claude-klabauter's own
+    checkout — see cc_invoke.py's route()/route_mutation() docstrings.
+
+    Classification: READER (AC10). On MISMATCH — positive evidence the cwd
+    names a DIFFERENT real repo than the harness anchor — warn to stderr and
+    proceed with the resolved root anyway; a wrong-repo *read* is misleading,
+    not destructive, and DR-277
+    (docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md) keeps
+    guards advisory by default. UNRESOLVED (no sid, no registry record, no
+    git root at all, ...) NEVER refuses either — falls back to os.getcwd()
+    exactly as the predecessor's git-failure branch did.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **_no_console_kw(),
-        )
-        resolved = (proc.stdout or "").strip()
-        if proc.returncode == 0 and resolved:
-            return resolved
-    except OSError:
-        pass
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict.get("verdict") == "MISMATCH":
+        print(verdict.get("message", "records_query: repo-identity MISMATCH"), file=sys.stderr)
+    if root:
+        return root
     return os.getcwd()
 
 

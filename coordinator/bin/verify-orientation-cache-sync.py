@@ -50,39 +50,32 @@ bin/regenerate-orientation-cache.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-
-_SUBPROCESS_TIMEOUT_SECS = 10
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def _resolve_repo_root() -> str:
-    """Mirror `git rev-parse --show-toplevel 2>/dev/null || pwd`."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
-    from coordinator_core.win_portability import no_console_creationflags
+    """Resolve the repo root via the checked resolver (coordinator/bin/lib/repo_identity.py).
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    READER script (AC10): this entry dispatches into the verify op, which is
+    read-only (no write path anywhere in this trampoline or the op it calls —
+    it only sys.exit()s on verify outcomes). On a positive MISMATCH, warn to
+    stderr and proceed with the resolved root rather than refuse — DR-277
+    exists to prevent a write into a foreign tree, and there is no write here
+    to protect. UNRESOLVED never refuses either (DR-277, AC4).
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+    if not root:
         return os.getcwd()
-    if result.returncode != 0 or not result.stdout.strip():
-        return os.getcwd()
-    return result.stdout.strip()
+    return root
 
 
 def _resolve_state_root() -> str:

@@ -135,3 +135,192 @@ def test_divergent_join_does_not_pick_a_winner(tmp_path):
         )
 
     assert mint_calls == []
+
+
+# ---------------------------------------------------------------------------
+# N-rung widening (sedge-01, succession-edge-cardinality roadmap): the cases
+# below exercise `additional_predecessors` and `equivalence_map`, added
+# alongside the original 6 (unedited above) rather than folded into them --
+# AC7 requires those 6 pass byte-identically, so they stay untouched.
+# ---------------------------------------------------------------------------
+
+
+def _tracking_mint(mint_calls):
+    def _mint(**kwargs):
+        mint_calls.append(kwargs)
+        return mint(**kwargs)
+
+    return _mint
+
+
+def test_ac2_divergence_at_three_plus_enumerates_every_pair(tmp_path):
+    """AC2: a raise from 3+ diverging rungs enumerates every diverging
+    (path, id) pair, not merely the first two."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    extra_a = tmp_path / "extra_a.md"
+    extra_b = tmp_path / "extra_b.md"
+    _write_frontmatter(plan, deliverable_id="dlv-rung-plan")
+    _write_frontmatter(predecessor, deliverable_id="dlv-rung-predecessor")
+    _write_frontmatter(extra_a, deliverable_id="dlv-rung-extra-a")
+    _write_frontmatter(extra_b, deliverable_id="dlv-rung-extra-a")  # agrees with extra_a
+
+    with pytest.raises(DivergentDeliverableIdError) as excinfo:
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            str(plan),
+            str(predecessor),
+            additional_predecessors=[str(extra_a), str(extra_b)],
+        )
+
+    message = str(excinfo.value)
+    assert "dlv-rung-plan" in message
+    assert "dlv-rung-predecessor" in message
+    assert "dlv-rung-extra-a" in message
+    assert str(plan) in message
+    assert str(predecessor) in message
+    assert str(extra_a) in message
+    assert str(extra_b) in message
+
+
+def test_ac3_mint_never_called_on_divergent_path_at_any_arity(tmp_path):
+    """AC3: generalizes test (vi) to N rungs -- mint is never called
+    (transiently or otherwise) on any divergent path at any arity."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    extra = tmp_path / "extra.md"
+    _write_frontmatter(plan, deliverable_id="dlv-n-plan-side")
+    _write_frontmatter(predecessor, deliverable_id="dlv-n-plan-side")
+    _write_frontmatter(extra, deliverable_id="dlv-n-extra-side")
+
+    mint_calls: list = []
+
+    with pytest.raises(DivergentDeliverableIdError):
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            _tracking_mint(mint_calls),
+            str(plan),
+            str(predecessor),
+            additional_predecessors=[str(extra)],
+        )
+
+    assert mint_calls == []
+
+
+def test_agreement_at_n_stays_byte_identical(tmp_path):
+    """AC4: every rung (plan, predecessor, 2 additional predecessors) naming
+    the SAME deliverable_id -> no raise, same carry/initiative precedence as
+    the 2-rung agreement case."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    extra_a = tmp_path / "extra_a.md"
+    extra_b = tmp_path / "extra_b.md"
+    _write_frontmatter(plan, deliverable_id="dlv-n-agree-abc123", initiative="init-plan")
+    _write_frontmatter(predecessor, deliverable_id="dlv-n-agree-abc123", initiative="init-pred")
+    _write_frontmatter(extra_a, deliverable_id="dlv-n-agree-abc123")
+    _write_frontmatter(extra_b, deliverable_id="dlv-n-agree-abc123")
+
+    dlvr_id, initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        str(plan),
+        str(predecessor),
+        additional_predecessors=[str(extra_a), str(extra_b)],
+    )
+
+    assert dlvr_id == "dlv-n-agree-abc123"
+    assert initiative_id == "init-plan"
+
+
+def test_ordering_independence_of_the_raise(tmp_path):
+    """Divergence is caught regardless of the order the diverging legs are
+    listed in `additional_predecessors`."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    extra_a = tmp_path / "extra_a.md"
+    extra_b = tmp_path / "extra_b.md"
+    _write_frontmatter(plan, deliverable_id="dlv-order-shared")
+    _write_frontmatter(predecessor, deliverable_id="dlv-order-shared")
+    _write_frontmatter(extra_a, deliverable_id="dlv-order-shared")
+    _write_frontmatter(extra_b, deliverable_id="dlv-order-DIFFERENT")
+
+    for ordering in ([str(extra_a), str(extra_b)], [str(extra_b), str(extra_a)]):
+        with pytest.raises(DivergentDeliverableIdError) as excinfo:
+            resolve_deliverable_and_initiative(
+                read_frontmatter_field,
+                mint,
+                str(plan),
+                str(predecessor),
+                additional_predecessors=ordering,
+            )
+        message = str(excinfo.value)
+        assert "dlv-order-shared" in message
+        assert "dlv-order-DIFFERENT" in message
+
+
+def test_ac5_equivalence_map_consulted_declared_fork_no_false_positive(tmp_path):
+    """AC5: a declared fork pair (equivalence_map maps the loser id to the
+    winner id) does NOT false-positive as a divergence, and the returned/
+    minted id stays the RAW winning value -- canonicalize() is read/compare-
+    side only, never written back."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    extra = tmp_path / "extra.md"
+    _write_frontmatter(plan, deliverable_id="dlv-fork-winner")
+    _write_frontmatter(predecessor, deliverable_id="dlv-fork-winner")
+    _write_frontmatter(extra, deliverable_id="dlv-fork-loser")
+
+    dlvr_id, _initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        str(plan),
+        str(predecessor),
+        additional_predecessors=[str(extra)],
+        equivalence_map={"dlv-fork-loser": "dlv-fork-winner"},
+    )
+
+    # Raw winning value, never canonicalized on the way out.
+    assert dlvr_id == "dlv-fork-winner"
+
+
+def test_equivalence_map_absent_row_still_raises(tmp_path):
+    """A fork with NO declared entry in the equivalence map still diverges --
+    absence is never treated as a silent merge (deliverable_equivalence.py's
+    own negative-spec)."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    _write_frontmatter(plan, deliverable_id="dlv-unforked-a")
+    _write_frontmatter(predecessor, deliverable_id="dlv-unforked-b")
+
+    with pytest.raises(DivergentDeliverableIdError):
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            str(plan),
+            str(predecessor),
+            equivalence_map={"dlv-some-other-loser": "dlv-some-other-winner"},
+        )
+
+
+def test_ac6_unreadable_additional_predecessor_leg_degrades_silently(tmp_path):
+    """AC6: an additional-predecessor path that is not a readable file
+    degrades silently to no contribution (matching the plan/predecessor
+    rungs' own isfile()-false-to-empty-string degrade) -- no raise, no
+    KeyError, no special-cased exception for this arity."""
+    plan = tmp_path / "plan.md"
+    predecessor = tmp_path / "predecessor.md"
+    missing_extra = tmp_path / "does-not-exist.md"
+    _write_frontmatter(plan, deliverable_id="dlv-degrade-shared", initiative="init-degrade")
+    _write_frontmatter(predecessor, deliverable_id="dlv-degrade-shared")
+
+    dlvr_id, initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        str(plan),
+        str(predecessor),
+        additional_predecessors=[str(missing_extra)],
+    )
+
+    assert dlvr_id == "dlv-degrade-shared"
+    assert initiative_id == "init-degrade"

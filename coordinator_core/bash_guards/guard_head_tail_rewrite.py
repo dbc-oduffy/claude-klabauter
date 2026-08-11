@@ -410,19 +410,15 @@ def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
         return None  # not this shape at all -- a genuine clean, not a decline
 
     if len(segments) != 2:
-        return _advisory(
-            "Advisory: this pipeline pipes into 'Select-Object -First'/"
-            "'-Last' as part of a longer chain than this rewrite's "
-            "conservative two-stage 'generator | Select-Object' shape "
-            "covers, so no rewrite is offered -- and for a chain this long "
-            "none would help: reproducing the upstream stages inside a "
-            "python3 -c would mean running them as subprocesses anyway "
-            "(python3 + shell + each upstream stage), which costs MORE "
-            "forks than the chain you wrote, not fewer. Shortening the "
-            "chain, or asking for less of its output, is the real saving "
-            "here. %s"
-            % operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")
-        )
+        # This branch has already computed that no rewrite would help (a
+        # chain longer than the conservative two-stage shape this rewrite
+        # covers means reproducing the upstream stages would cost MORE forks
+        # than the chain as written, not fewer) -- an advisory with no offer
+        # is a nag, not a service. Same disposition `check_multiprobe_banner_
+        # rewrite` already takes on its own no-applicable-rewrite exit.
+        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
+        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
         return None  # not the `generator | Select-Object` shape this check owns
@@ -456,21 +452,15 @@ def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
         kind = "grep" if parsed else None
 
     if kind is None or parsed is None:
-        return _advisory(
-            "Advisory: '... | %s' truncates a subprocess's output via "
-            "ANOTHER subprocess. No rewrite is offered here because none "
-            "would help, not because a translation is merely missing from "
-            "file: this pipeline's upstream stage ('%s') is not one this "
-            "guard can reproduce in Python, so a python3 -c would have to "
-            "RUN it as a subprocess -- python3 plus a shell plus the "
-            "upstream stage, more forks than the two you wrote, not fewer. "
-            "%s"
-            % (
-                ht_tokens[0],
-                " ".join(up_tokens),
-                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
-            )
-        )
+        # This branch has already computed that no rewrite would help: the
+        # upstream stage is not one this guard can reproduce in Python, so a
+        # python3 -c would have to RUN it as a subprocess anyway -- more
+        # forks than the pipeline as written, not fewer. An advisory with no
+        # offer is a nag, not a service. Same disposition `check_multiprobe_
+        # banner_rewrite` already takes on its own no-applicable-rewrite exit.
+        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
+        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        return None
 
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
         return None
@@ -548,18 +538,15 @@ def check_head_tail_plumbing_rewrite(
 
     segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
     if len(segments) != 2:
-        return _advisory(
-            "Advisory: this pipeline pipes into 'head'/'tail' as part of a "
-            "longer chain than this rewrite's conservative two-stage "
-            "'generator | head-or-tail' shape covers, so no rewrite is "
-            "offered -- and for a chain this long none would help: "
-            "reproducing the upstream stages inside a python3 -c would mean "
-            "running them as subprocesses anyway (python3 + shell + each "
-            "upstream stage), which costs MORE forks than the chain you "
-            "wrote, not fewer. Shortening the chain, or asking for less of "
-            "its output, is the real saving here. %s"
-            % operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")
-        )
+        # This branch has already computed that no rewrite would help (a
+        # chain longer than the conservative two-stage shape this rewrite
+        # covers means reproducing the upstream stages would cost MORE forks
+        # than the chain as written, not fewer) -- an advisory with no offer
+        # is a nag, not a service. Same disposition `check_multiprobe_banner_
+        # rewrite` already takes on its own no-applicable-rewrite exit.
+        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
+        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
         return None  # not the `generator | head-or-tail` shape this check owns
@@ -599,20 +586,15 @@ def check_head_tail_plumbing_rewrite(
         kind = "grep" if parsed else None
 
     if kind is None or parsed is None:
-        return _advisory(
-            "Advisory: '... | %s' truncates a subprocess's output via ANOTHER "
-            "subprocess. No rewrite is offered here because none would help, "
-            "not because a translation is merely missing from file: this "
-            "pipeline's upstream stage ('%s') is not one this guard can "
-            "reproduce in Python, so a python3 -c would have to RUN it as a "
-            "subprocess -- python3 plus a shell plus the upstream stage, more "
-            "forks than the two you wrote, not fewer. %s"
-            % (
-                ht_tokens[0],
-                " ".join(up_tokens),
-                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
-            )
-        )
+        # This branch has already computed that no rewrite would help: the
+        # upstream stage is not one this guard can reproduce in Python, so a
+        # python3 -c would have to RUN it as a subprocess anyway -- more
+        # forks than the pipeline as written, not fewer. An advisory with no
+        # offer is a nag, not a service. Same disposition `check_multiprobe_
+        # banner_rewrite` already takes on its own no-applicable-rewrite exit.
+        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
+        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        return None
 
     # Fail open when the upstream `find`/`ls` root does not resolve on THIS
     # host -- an unquoted Windows path (`find C:\Users\x\tmp`) is

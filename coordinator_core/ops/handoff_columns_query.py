@@ -31,11 +31,19 @@ Self-registration: importing this module calls
 ``import coordinator_core.ops`` (the default, non-lazy path) picks it up.
 
 Row shape: one row per record, carrying the repo-relative ``path`` plus
-EXACTLY ``status``, ``deployment_state``, ``predecessor``, ``shipped_in`` —
-five keys, nothing else. The full-frontmatter bulk records.query's own
-``format=json`` returns is precisely what cockpit asked to stop receiving
-(~91% of the payload unused by their consumer) — this op is the narrow
-replacement, not a second copy of the wide one.
+EXACTLY ``status``, ``deployment_state``, ``predecessor``, ``shipped_in``,
+``baton_class`` — six keys, nothing else. The full-frontmatter bulk
+records.query's own ``format=json`` returns is precisely what cockpit asked
+to stop receiving (~91% of the payload unused by their consumer) — this op
+is the narrow replacement, not a second copy of the wide one.
+
+``baton_class`` (``continuation`` | ``deflection`` | ``intention`` | ``None``)
+is served here, by this producer, rather than re-derived on cockpit's side,
+because cockpit's own fleet-board code explicitly forbids re-deriving it —
+the sole canonical derivation is `coordinator_core.frontmatter.baton_class
+.baton_class`, and this op is cockpit's only intended consumer of handoff
+columns. Requested via cross-repo memo
+cross-repo/inbox/2026-08-11-example-cockpit-repo-em-baton-class-has-no-producer-in-either-leg.md.
 
 Wire bridging: the CLI-facing param is ``archive`` (C4's choice, mirroring
 ``--archive`` as a bare flag) — this handler maps it onto C2's
@@ -47,9 +55,11 @@ provided -> ``main_worktree_root(repo_root)``; repo_root absent -> a
 well-formed empty payload, no raise (never a 500 for an unknown worktree).
 
 Negative-spec: does NOT reimplement ``_TYPE_TO_GLOB``, ``_ARCHIVE_GLOB_FOR_TYPE``,
-the ``--where``/``--since`` grammar, or the four-column computation — all
-four are imported/called, never mirrored. Does NOT emit any frontmatter key
-beyond the four columns plus ``path``.
+the ``--where``/``--since`` grammar, the four-column computation, or the
+``baton_class`` derivation itself — all are imported/called, never mirrored.
+Does NOT emit any frontmatter key beyond the four columns plus ``baton_class``
+plus ``path``. Does NOT write ``baton_class`` to any on-disk frontmatter —
+it is derived on read, per call, never persisted.
 
 Spec backlink: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
 """
@@ -60,6 +70,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.frontmatter.baton_class import baton_class
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.emit.sections.handoff_columns import compute_handoff_columns_batch
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -72,11 +83,14 @@ from coordinator_core.ops.records_query import (
 
 _LOG = logging.getLogger(__name__)
 
-# Only the four columns' four keys plus the path identifier — see module
-# docstring's "Row shape" section. Kept as a named tuple of keys (rather than
-# inlined at each call site) so the row-shape contract is grep-able in one
-# place and the row-shape test can assert against it directly if desired.
-_COLUMN_KEYS: tuple[str, ...] = ("status", "deployment_state", "predecessor", "shipped_in")
+# The four columns' keys, plus baton_class, plus the path identifier — see
+# module docstring's "Row shape" section. Kept as a named tuple of keys
+# (rather than inlined at each call site) so the row-shape contract is
+# grep-able in one place and the row-shape test can assert against it
+# directly if desired.
+_COLUMN_KEYS: tuple[str, ...] = (
+    "status", "deployment_state", "predecessor", "shipped_in", "baton_class",
+)
 
 
 def _empty_payload() -> dict:
@@ -113,8 +127,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         ``{"records": [{"path": ..., "status": ..., "deployment_state": ...,
-        "predecessor": ..., "shipped_in": {"sha": ..., "date": ...} | None},
-        ...]}`` — one row per matching handoff record, five keys each,
+        "predecessor": ..., "shipped_in": {"sha": ..., "date": ...} | None,
+        "baton_class": "continuation" | "deflection" | "intention" | None},
+        ...]}`` — one row per matching handoff record, six keys each,
         nothing else.
 
     Absent ``repo_root`` -> well-formed empty payload, no raise (mirrors
@@ -149,8 +164,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         [rec["frontmatter"] for rec in records], worktree_root,
     )
 
+    # baton_class resolved over the DISTINCT `kind` values only, per
+    # frontmatter.baton_class's own docstring instruction to callers wanting
+    # to avoid repeated schema-file I/O in a tight loop — one dict
+    # comprehension over the corpus's distinct kinds (not O(records) reads
+    # of the ~60KB vendored schema), then joined back per record below.
+    distinct_kinds = {rec["frontmatter"].get("kind") for rec in records}
+    baton_class_by_kind = {kind: baton_class(kind) for kind in distinct_kinds}
+
     rows = [
-        {"path": rec["path"], **cols}
+        {
+            "path": rec["path"],
+            **cols,
+            "baton_class": baton_class_by_kind[rec["frontmatter"].get("kind")],
+        }
         for rec, cols in zip(records, columns)
     ]
     return {"records": rows}

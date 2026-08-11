@@ -2386,7 +2386,22 @@ class TestComputeScopeLiveness:
         5146e5a025e5.yaml`: every other test in this class stubs
         `live_session_ids`, which cannot catch a total delegation no-op.
         Forces one session dead via an old `last_activity` and no
-        `stable_pid` in its meta.json (Layer-2 recency, unmocked)."""
+        `stable_pid` in its meta.json (Layer-2 recency, unmocked).
+
+        RED AT HEAD, and correctly so (re-cut 2026-08-11,
+        docs/plans/2026-08-11-kill-on-staleness-and-a-way-past-the-gate.md
+        § B2): this test's own `core.init` gives "dead-peer" a real, live
+        PID witness (the test process itself), and Layer 1 (PPID-
+        authoritative) outranks the doctored Layer-2 recency this test
+        relies on to force death — so `live_session_ids` still reports
+        "dead-peer" live and its claim is never released here. This is a
+        real defect, NOT this plan's to fix: `liveness.py` is anti-scope
+        for this plan (PM ruling), and the defect is owned by
+        `state/bug-backlog/2026-08-11-session-live-layer-1-ppid-witness-perman-6c1272db353f.yaml`
+        (P1). Do NOT edit this test to pass — its redness is the correct,
+        documented state. B1's actual release-path deliverable is pinned
+        separately, without going through any liveness verdict at all, by
+        `TestReleaseCommittedClaims::test_b1_stale_peer_claim_on_a_clean_path_releases`."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("dead-peer", cwd=str(repo))
@@ -3596,10 +3611,12 @@ class TestReleaseCommittedClaims:
 
     def test_peer_agent_dir_not_back_pointed_at_sid_is_untouched(self, tmp_path):
         """The worst failure this helper could have: silently pruning a
-        peer's record. A peer's .agents dir, back-pointed at a DIFFERENT
-        session, must never be touched by a release call for this sid --
-        release_committed_claims is structurally incapable of releasing a
-        peer's claim."""
+        peer's record. A peer's .agents dir, back-pointed at a DIFFERENT,
+        FRESH (non-stale) session, must never be touched by a release call
+        for this sid -- since B1, this function CAN release a peer's claim,
+        but only a STALE one (see the `test_b1_*` cases below); "peer-owner"
+        here is created moments before the call, so its touched.txt is well
+        within the recency window and this pins the negative case."""
         repo = _make_repo(tmp_path)
         core.init("s-releaser", cwd=str(repo))
         core.init("peer-owner", cwd=str(repo))
@@ -3637,6 +3654,110 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rel10", ["untouched.py"], cwd=str(repo))
         assert touched.stat().st_mtime_ns == mtime_before
+
+    def test_b1_stale_peer_claim_on_a_clean_path_releases(self, tmp_path):
+        """B1's actual deliverable (docs/plans/2026-08-11-kill-on-staleness-
+        and-a-way-past-the-gate.md): a claim taken by a session that has
+        gone quiet is released on the release path once the path it
+        claimed is clean, WITHOUT going through any liveness verdict --
+        `stale-peer` here is aged purely via `touched.txt` mtime, never
+        `liveness.is_session_live`/`live_session_ids`."""
+        repo = _make_repo(tmp_path)
+        core.init("s-committer", cwd=str(repo))
+        core.init("stale-peer", cwd=str(repo))
+
+        (repo / "shared.py").write_text("z")
+        scope.touch("s-committer", "shared.py", cwd=str(repo))
+        scope.touch("stale-peer", "shared.py", cwd=str(repo))
+
+        peer_touched = _sdir(repo, "stale-peer") / "touched.txt"
+        old = time.time() - (scope._PEER_CLAIM_STALE_AFTER_SECONDS + 1)
+        os.utime(peer_touched, (old, old))
+
+        subprocess.run(["git", "add", "shared.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit shared"], cwd=repo, check=True
+        )
+
+        from coordinator_core.session import claim_index
+
+        sessions_dir = core.sessions_dir(cwd=str(repo))
+        before = claim_index.lookup(["shared.py"], sessions_dir=sessions_dir)
+        assert before == {"shared.py": ["s-committer", "stale-peer"]}
+
+        scope.release_committed_claims("s-committer", ["shared.py"], cwd=str(repo))
+
+        peer_lines = peer_touched.read_text(encoding="utf-8").splitlines()
+        verb, _ts, path = scope.parse_touch_event(peer_lines[-1])
+        assert (verb, path) == ("R", "shared.py")
+        after = claim_index.lookup(["shared.py"], sessions_dir=sessions_dir)
+        assert after == {"shared.py": []}
+
+    def test_b1_live_peer_claim_on_a_clean_path_is_untouched(self, tmp_path):
+        """The negative case pinned alongside B1: a peer WITHIN the recency
+        window is never released by this path, regardless of the fact that
+        the path it claimed is now clean -- only staleness triggers this,
+        never mere cleanliness."""
+        repo = _make_repo(tmp_path)
+        core.init("s-committer2", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+
+        (repo / "shared2.py").write_text("z")
+        scope.touch("s-committer2", "shared2.py", cwd=str(repo))
+        scope.touch("live-peer", "shared2.py", cwd=str(repo))
+        # No mtime aging -- "live-peer"'s touched.txt stays fresh.
+
+        subprocess.run(["git", "add", "shared2.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit shared2"], cwd=repo, check=True
+        )
+
+        peer_touched = _sdir(repo, "live-peer") / "touched.txt"
+        before = peer_touched.read_bytes()
+
+        scope.release_committed_claims("s-committer2", ["shared2.py"], cwd=str(repo))
+
+        assert peer_touched.read_bytes() == before
+
+    def test_b1_stale_peer_dispatched_agent_claim_also_releases(self, tmp_path):
+        """A stale peer's OWN dispatched-agent fan-out is reaped alongside
+        its session-level claim -- an agent has no staleness identity of
+        its own (mirrors compute_scope Step 3b's back-pointed attribution),
+        so it is judged by its em-session-id owner's staleness."""
+        repo = _make_repo(tmp_path)
+        core.init("s-committer3", cwd=str(repo))
+        core.init("stale-em", cwd=str(repo))
+
+        (repo / "agent_shared.py").write_text("z")
+        scope.touch("s-committer3", "agent_shared.py", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-of-stale-em"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text(
+            "stale-em\n", encoding="utf-8"
+        )
+        agent_touched = agent_dir / "touched.txt"
+        agent_touched.write_text("agent_shared.py\n", encoding="utf-8")
+
+        # Age BOTH the owning session's own touched.txt (the staleness
+        # signal this path consults) and the agent's, past the boundary.
+        em_touched = _sdir(repo, "stale-em") / "touched.txt"
+        old = time.time() - (scope._PEER_CLAIM_STALE_AFTER_SECONDS + 1)
+        os.utime(em_touched, (old, old))
+        os.utime(agent_touched, (old, old))
+
+        subprocess.run(["git", "add", "agent_shared.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit agent_shared"], cwd=repo, check=True
+        )
+
+        scope.release_committed_claims(
+            "s-committer3", ["agent_shared.py"], cwd=str(repo)
+        )
+
+        agent_lines = agent_touched.read_text(encoding="utf-8").splitlines()
+        assert scope.parse_touch_event(agent_lines[-1])[0] == "R"
 
 
 class TestCrossDialectClaimCancellation:

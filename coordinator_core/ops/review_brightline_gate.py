@@ -851,17 +851,39 @@ def _compute_session_oracle_single(
         cwd=cwd,
     )
     filtered_shas = [line for line in shas_out.splitlines() if line.strip()]
-    commits = len(filtered_shas)
 
-    if commits == 0:
+    if not filtered_shas:
         return {"loc": 0, "commits": 0, "surfaces": set()}
 
-    diff_out, _rc2 = _run_git(["show", "--stat", "--format=", *filtered_shas], cwd=cwd)
-    loc, _matched = _sum_loc(diff_out)  # matched=False (empty diff) degrades to loc=0
+    # Metric-wide noise exclusion (AC2) — same shape as `_compute_chain_oracle`:
+    # `--numstat` (not `--stat`) so a per-file noise path can be dropped
+    # before LOC/surfaces accumulate, and a fully-noise commit contributes to
+    # NEITHER loc, commits, nor surfaces, rather than only loc.
+    show_out, _rc2 = _run_git(["show", "--numstat", "--format=%H", *filtered_shas], cwd=cwd)
+    per_commit = _parse_show_numstat(show_out)
 
-    stat_lines = [ln for ln in diff_out.splitlines() if _STAT_LINE_RE.match(ln)]
-    paths = [ln.split()[0] for ln in stat_lines if ln.split()]
-    surfaces = {_classify_surface(p) for p in paths}
+    loc = 0
+    commits = 0
+    surfaces: Set[str] = set()
+    for sha in filtered_shas:
+        files = per_commit.get(sha, [])
+        non_noise = [(a, d, p) for a, d, p in files if not _is_noise_path(p)]
+        if not non_noise:
+            continue
+        commits += 1
+        for added, deleted, path in non_noise:
+            a = int(added) if added.isdigit() else 0
+            d = int(deleted) if deleted.isdigit() else 0
+            line_loc = a + d
+            # Review finding P2, 2026-08-11: planning-artifact LOC is
+            # de-weighted here too, same as `_compute_chain_oracle`'s
+            # `chain_loc` (see that function's AC8 comment) — a large plan
+            # doc must not read at code's full per-line weight when it
+            # feeds this session's `code_loc`.
+            if _is_planning_artifact_path(path):
+                line_loc = int(line_loc * _PLANNING_LOC_WEIGHT)
+            loc += line_loc
+            surfaces.add(_classify_surface(path))
 
     return {"loc": loc, "commits": commits, "surfaces": surfaces}
 
@@ -1253,7 +1275,13 @@ def _session_scoped(range_: str, session_id: str) -> int:
         )
         return 0
 
-    diff_out, rc2 = _run_git(["show", "--stat", "--format=", *filtered_shas])
+    # Metric-wide noise exclusion (AC1) — same shape as `_compute_chain_oracle`:
+    # `--numstat` (not `--stat`) so a per-file noise path can be dropped
+    # before loc/files/surfaces accumulate, and a fully-noise commit
+    # contributes to NEITHER loc, files, commits, nor surfaces, rather than
+    # only loc. Reuses `_parse_show_numstat` (the chain-oracle parser) rather
+    # than a fourth diffstat parser.
+    show_out, rc2 = _run_git(["show", "--numstat", "--format=%H", *filtered_shas])
     if rc2 != 0:
         print(
             f"{_PROG}: warning: git show failed over filtered SHAs — "
@@ -1261,18 +1289,38 @@ def _session_scoped(range_: str, session_id: str) -> int:
             file=sys.stderr,
         )
 
-    loc, matched = _sum_loc(diff_out)
-    if not matched:
-        return 1  # die-silent gate (loc=) — see module negative-spec
+    per_commit = _parse_show_numstat(show_out)
+    total_raw_rows = sum(len(rows) for rows in per_commit.values())
+    if total_raw_rows == 0:
+        return 1  # die-silent gate (loc=/files=) — see module negative-spec
 
-    stat_lines = [ln for ln in diff_out.splitlines() if _STAT_LINE_RE.match(ln)]
-    if not stat_lines:
-        return 1  # die-silent gate (files=) — see module negative-spec
+    loc = 0
+    commits = 0
+    files_set: Set[str] = set()
+    surfaces_set: Set[str] = set()
+    for sha in filtered_shas:
+        rows = per_commit.get(sha, [])
+        non_noise = [(a, d, p) for a, d, p in rows if not _is_noise_path(p)]
+        if not non_noise:
+            continue
+        commits += 1
+        for added, deleted, path in non_noise:
+            a = int(added) if added.isdigit() else 0
+            d = int(deleted) if deleted.isdigit() else 0
+            line_loc = a + d
+            # Review finding P2, 2026-08-11: planning-artifact LOC is
+            # de-weighted here too, same as `_compute_chain_oracle`'s
+            # `chain_loc` (see that function's AC8 comment) — this is the
+            # `--session-id` CLI path's own accumulator, not merely a
+            # producer for it.
+            if _is_planning_artifact_path(path):
+                line_loc = int(line_loc * _PLANNING_LOC_WEIGHT)
+            loc += line_loc
+            files_set.add(path)
+            surfaces_set.add(_classify_surface(path))
 
-    paths = [ln.split()[0] for ln in stat_lines if ln.split()]
-    files = len(set(paths))
-    surfaces = len({_classify_surface(p) for p in paths})
-    commits = filtered_count
+    files = len(files_set)
+    surfaces = len(surfaces_set)
 
     verdict = _verdict(loc, commits, surfaces)
     print(

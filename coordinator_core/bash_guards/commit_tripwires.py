@@ -15,7 +15,7 @@ error. **Confirmed dead on this machine at port time**: the
 ``check-machine-path-leak.sh`` filename no longer exists anywhere in
 ``coordinator/bin/`` (only the renamed ``.py`` does) -- the settings.json
 HARD-BLOCK guard was firing on nobody. Separately, this machine's
-``~/.claude/plugins/coordinator-claude/coordinator/bin/`` mirror is empty, so
+``~/.claude/plugins/coordinator/bin/`` mirror is empty, so
 even ``check-schema-version-bump.sh``/``check-bin-sh-polyglot.sh`` (which still
 exist as ``.sh`` in the example-doctrine-repo source repo) were unreachable via
 ``_find_bin_script``'s fallback rung on this install -- all three delegates
@@ -664,6 +664,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
         from coordinator_core.authz.registration_quad import (
             _KNOWN_UNCLASSIFIED_OPS_DEBT,
             check_registration_quad,
+            prune_known_incomplete,
         )
     except Exception:
         return None
@@ -676,13 +677,21 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
     # matching the docstring's stated posture and the module-import guards above.
     try:
         violations = check_registration_quad()
-        relevant = [
-            pruned
-            for v in violations
-            if v.op_key in op_keys
-            for pruned in (_prune_baselined_classification(v, _KNOWN_UNCLASSIFIED_OPS_DEBT),)
-            if pruned is not None
-        ]
+        relevant = []
+        for v in violations:
+            if v.op_key not in op_keys:
+                continue
+            pruned = _prune_baselined_classification(v, _KNOWN_UNCLASSIFIED_OPS_DEBT)
+            if pruned is None:
+                continue
+            # Also drop any surfaces recorded in the fuller
+            # `_KNOWN_INCOMPLETE_REGISTRATIONS` ledger (registration_quad.py,
+            # 2026-08-11) -- forgives exactly the recorded gap, never the op
+            # wholesale (see that ledger's own module-level comment).
+            pruned = prune_known_incomplete(pruned)
+            if pruned is None:
+                continue
+            relevant.append(pruned)
     except Exception:
         return None
     if not relevant:

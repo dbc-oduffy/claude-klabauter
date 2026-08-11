@@ -1,17 +1,19 @@
 """
 coordinator_core.ops.tests.test_handoff_columns_query — tests for "handoff.columns" (C3).
 
-Purpose: Verify the row shape (path plus exactly the four cockpit columns),
-archive-coverage opt-in, comment-contamination cleanliness (AC5), and the
-O(1) git-log subprocess-spawn budget for a multi-record corpus.
+Purpose: Verify the row shape (path plus exactly the four cockpit columns
+plus ``baton_class``), archive-coverage opt-in, comment-contamination
+cleanliness (AC5), the ``baton_class`` derivation (real kind resolves,
+absent/unknown kind yields None), and the O(1) git-log subprocess-spawn
+budget for a multi-record corpus.
 
 Import guard: ``import coordinator_core.ops`` MUST precede all test functions
 so that ALL op registrations fire before any test assertion (mirrors
 test_records_query.py's own import-guard convention).
 
 Coverage:
-  (a) row shape is exactly the five keys: path, status, deployment_state,
-      predecessor, shipped_in — nothing else.
+  (a) row shape is exactly the six keys: path, status, deployment_state,
+      predecessor, shipped_in, baton_class — nothing else.
   (b) an archived record with deployment_state=shipped appears by default
       (archive coverage defaults ON for this op — Review: unlike
       records.query's AC2 default-off floor, this op has exactly one
@@ -108,6 +110,7 @@ def tmp_repo(tmp_path: Path):
             ---
             status: open
             deployment_state: awaiting_gate
+            kind: session-handoff
             ---
             Live handoff body.
         """),
@@ -134,7 +137,7 @@ def tmp_repo(tmp_path: Path):
 
 
 class TestRowShape:
-    def test_row_carries_exactly_five_keys(self, tmp_repo):
+    def test_row_carries_exactly_six_keys(self, tmp_repo):
         git_dir, _worktree = tmp_repo
         result = _handler(params={"archive": False}, repo_root=git_dir)
         records = result["records"]
@@ -142,7 +145,34 @@ class TestRowShape:
         row = records[0]
         assert set(row.keys()) == {
             "path", "status", "deployment_state", "predecessor", "shipped_in",
+            "baton_class",
         }
+
+
+# ---------------------------------------------------------------------------
+# baton_class derivation
+# ---------------------------------------------------------------------------
+
+
+class TestBatonClassDerivation:
+    def test_known_kind_resolves_to_its_class(self, tmp_repo):
+        git_dir, _worktree = tmp_repo
+        result = _handler(params={"archive": False}, repo_root=git_dir)
+        row = result["records"][0]
+        assert row["path"].endswith("hoff-live.md")
+        # kind: session-handoff -> baton_class: continuation, per the
+        # vendored handoff.schema.json's x-baton-class.mapping.
+        assert row["baton_class"] == "continuation"
+
+    def test_absent_kind_yields_none_not_a_raise(self, tmp_repo):
+        git_dir, _worktree = tmp_repo
+        result = _handler(params={"archive": True}, repo_root=git_dir)
+        matching = [
+            row for row in result["records"] if "hoff-archived-shipped" in row["path"]
+        ][0]
+        # The archived fixture carries no `kind:` key — must resolve to
+        # None, never raise.
+        assert matching["baton_class"] is None
 
 
 # ---------------------------------------------------------------------------

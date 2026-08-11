@@ -103,8 +103,8 @@ from coordinator_core.lifecycle import git_common_dir
 # statement about tool choice with no framing of declining to dispatch. The
 # two alternatives kept here are far more diagnostic on their own.
 _TELL_CITES_DIRECTIVE = re.compile(
-    r"\bAgentTool\b"
-    r"|unless the user (?:requested|asks for) it",
+    r"\bAgent\s?Tool\b"
+    r"|unless (?:the )?(?:user|you) (?:requested|asks? for|request(?:ed)?) it",
     re.IGNORECASE,
 )
 
@@ -149,12 +149,19 @@ _TELL_ASKS_PERMISSION = re.compile(
 _POSSESSIVE_PM_ATTRIBUTION = re.compile(
     r"\byour\s+(?:standing\s+)?[^.?!\n]{0,60}?\b(?:instruction|rule|directive|order|policy)\b"
     r"|\bas you(?:'ve| have)?\s+instructed\b"
-    r"|\byou(?:'ve| have)\s+instructed\b",
+    r"|\byou(?:'ve| have)\s+instructed\b"
+    # Bare "yours to X" possessive, e.g. "that's yours to resolve" — no noun
+    # co-occurs, so this alternative stands alone as the attribution cue.
+    r"|\byours\s+to\s+\w+"
+    # Agentless-passive framing: "this session was started with a standing
+    # instruction..." names no author at all, punting the authorship
+    # question up rather than inventing a PM — recurrence 5's exact shape.
+    r"|\b(?:this\s+)?(?:session|conversation)\s+was\s+started\s+with\s+a\s+standing\s+\w+",
     re.IGNORECASE,
 )
 
 _TELL_C_DISPATCH_TERM = re.compile(
-    r"dispatch\w*|delegat\w*|fan[- ]?out\w*|spawn\w*|sub-?agent\w*|agent[- ]?tool\w*",
+    r"dispatch\w*|delegat\w*|fan[- ]?out\w*|spawn\w*|sub-?agent\w*|agent[-\s]?tool\w*",
     re.IGNORECASE,
 )
 
@@ -549,9 +556,6 @@ def op(payload: dict) -> dict | None:
 
     if not message_trips_tell(_final_message_text(payload)):
         return None
-
-    if _session_has_dispatched(payload):
-        return None  # evidence of dispatch this session falsifies the tell
 
     if not _claim_fire(sentinel):
         return None  # lost the race to another concurrent Stop for this session

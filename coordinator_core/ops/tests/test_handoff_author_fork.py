@@ -1012,6 +1012,39 @@ class TestArtifactWrite:
             f"expected inline-sequence or null for {key!r}, got: {value_part!r}"
         )
 
+    def test_session_ledger_block_appended_when_absent(self, tmp_path, monkeypatch):
+        """AC2 (Review: code-reviewer 49e8b242 P2): a caller-supplied body with no
+        '## Session Ledger' heading gets the canonical block appended exactly once.
+
+        This test FAILS if the append block in handoff_author_fork.py is deleted —
+        verified by hand: removing the append (and its guard) drops the count to 0.
+        """
+        repo_root, result = self._invoke_fork(
+            tmp_path, monkeypatch, extra_params={"body": "## Some Other Section\n\ncontent"}
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert content.count("## Session Ledger") == 1, (
+            f"expected exactly one '## Session Ledger' heading, "
+            f"got {content.count('## Session Ledger')}; content: {content!r}"
+        )
+
+    def test_session_ledger_block_not_duplicated_when_present(self, tmp_path, monkeypatch):
+        """AC2 (Review: code-reviewer 49e8b242 P2): a caller-supplied body that
+        already carries a '## Session Ledger' heading is left with exactly one
+        (no duplicate append)."""
+        repo_root, result = self._invoke_fork(
+            tmp_path,
+            monkeypatch,
+            extra_params={"body": "## Session Ledger\n\n<!-- pre-existing -->\n"},
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert content.count("## Session Ledger") == 1, (
+            f"expected exactly one '## Session Ledger' heading (no duplicate), "
+            f"got {content.count('## Session Ledger')}; content: {content!r}"
+        )
+
     def test_predecessor_none_in_frontmatter(self, tmp_path, monkeypatch):
         """Fork handoff has 'predecessor: none' in frontmatter (not a continuation)."""
         repo_root, result = self._invoke_fork(tmp_path, monkeypatch)

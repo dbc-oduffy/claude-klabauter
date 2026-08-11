@@ -327,7 +327,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("")
         print("  Note on MISMATCH false-positives:")
         print("    publish-time-transform.sh rewrites dev-tree plugin paths to")
-        print("    publish-tree form at publish time (e.g. plugins/coordinator-claude/coordinator/")
+        print("    publish-tree form at publish time (e.g. plugins/coordinator/")
         print("    → plugins/coordinator/). Files whose source contains such paths will")
         print("    report MISMATCH by design — the publish-tree version is the intended")
         print("    OSS-facing shape. To distinguish real drift from path-rewrite delta:")

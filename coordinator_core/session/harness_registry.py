@@ -9,7 +9,25 @@ Public surface (pinned contract — do not change without updating consumers):
     def registry_dir() -> Path | None
     def snapshot() -> dict[str, RegistryRecord]
     def lookup(session_id: str) -> RegistryRecord | None
-    class RegistryRecord: pid: int; start_epoch: float
+    def self_record() -> tuple[str, RegistryRecord] | None
+    class RegistryRecord: pid: int; start_epoch: float; cwd: str | None
+
+`self_record()` (added `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
+§ C1, spike-verified anchor; cite `example-doctrine-repo@642195ba` / follow-up
+`example-doctrine-repo@88929bea` — the wrongful-takeover shape this module's
+negative-spec defends against) is the O(1) leg over the pid-keyed
+`<registry_dir>/<CLAUDE_PID>.json` file: it resolves `CLAUDE_PID` via
+`coordinator_core.session.core._resolve_claude_pid_from_env` (the one
+shared resolver, never a bare `os.environ.get`) and parses that single
+file via `_parse_one` — ONE `read_text`, no `glob`, no `snapshot()` call.
+It returns `_parse_one`'s own `tuple[str, RegistryRecord] | None` shape
+(the `str` is `sessionId`) so a caller has a `sessionId` to trust-check
+against, not just a bare record. Like every other function in this
+module, `self_record()` NEVER calls `core.stable_pid_alive` — it is a
+pure parser with no verdict arm; the trust check belongs to the caller
+(`pickup_assemble.compute_repo_identity_gate`), never here. This module's
+central invariant and negative-spec (below) apply to `self_record()`
+identically to `snapshot()`/`lookup()`.
 
 `registry_dir()` resolves `<claude-config>/sessions` by routing through
 `coordinator_core._settings_home.claude_config_dir()` — NEVER hand-roll
@@ -98,17 +116,26 @@ _SANITY_BAND_FUTURE_SEC = 3600
 
 @dataclass(frozen=True)
 class RegistryRecord:
-    """A parsed `(pid, start_epoch)` pair — NOT a liveness verdict.
+    """A parsed `(pid, start_epoch, cwd)` triple — NOT a liveness verdict.
 
     `start_epoch` is a Unix epoch (seconds, float) already converted from the
     registry's raw Windows-FILETIME `procStart` and already validated inside
     the sanity band. Consumers pair this with `pid` through
     `core.stable_pid_alive`'s tolerant birth-instant compare — never a bare
     `pid_exists`/`kill -0` check.
+
+    `cwd` is the session's CURRENT harness-level working directory as last
+    recorded by the harness — the value `/cd` moves, not a launch-immutable
+    fact — or `None` if the raw record omits it. Like `pid`/`start_epoch`,
+    this is a parsed value only; it carries no repo-identity verdict of its
+    own. Consumers compose a verdict over it (e.g.
+    `pickup_assemble.compute_repo_identity_gate`'s containment + plausibility
+    check) — this module stays a pure parser.
     """
 
     pid: int
     start_epoch: float
+    cwd: str | None = None
 
 
 def _filetime_to_epoch(raw) -> float | None:
@@ -182,7 +209,10 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
     if start_epoch is None:
         return None
 
-    return session_id, RegistryRecord(pid=pid, start_epoch=start_epoch)
+    raw_cwd = data.get("cwd")
+    cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None
+
+    return session_id, RegistryRecord(pid=pid, start_epoch=start_epoch, cwd=cwd)
 
 
 def snapshot() -> dict[str, RegistryRecord]:
@@ -223,5 +253,51 @@ def lookup(session_id: str) -> RegistryRecord | None:
     """
     try:
         return snapshot().get(session_id)
+    except Exception:
+        return None
+
+
+def self_record() -> tuple[str, RegistryRecord] | None:
+    """Return this session's own registry record, or None.
+
+    The O(1) leg: reads `<registry_dir>/<CLAUDE_PID>.json` directly, via
+    `_parse_one` — ONE `read_text`, no `glob`, no `snapshot()` scan. This is
+    what keeps a caller's zero-spawn claim true (a single Windows FILETIME
+    file read only). `CLAUDE_PID` is resolved via the ONE shared resolver,
+    `coordinator_core.session.core._resolve_claude_pid_from_env` — never a
+    bare `os.environ.get('CLAUDE_PID')` — so an absent, non-integer, or
+    non-positive value is rejected by that resolver's own established
+    validation rather than growing a second, divergent parse here.
+
+    Returns `_parse_one`'s own `tuple[str, RegistryRecord] | None` shape
+    (the `str` is `sessionId`) — NOT a bare `RegistryRecord` — so a caller
+    performing a trust check (e.g. `pickup_assemble.compute_repo_identity_
+    gate`'s AC10 cross-check) has a `sessionId` to compare against on this
+    pid-keyed leg. Routing through `_parse_one` also guarantees this leg's
+    FILETIME sanity band and non-int-pid/pid<=0 rejections cannot diverge
+    from `snapshot()`'s fallback leg — the split-brain this module's
+    docstring forbids.
+
+    Absent `CLAUDE_PID`, an unresolvable registry dir, an unreadable file,
+    or a malformed record each yield None — this module's established
+    fail-open-never-fail-dead bias. Like every other function here, this
+    NEVER calls `core.stable_pid_alive` — no verdict arm, pure parser only.
+    Never raises: any unexpected internal exception is caught at this
+    boundary and degrades to None (AC11-shaped boundary, matching
+    `snapshot()`/`lookup()`).
+    """
+    try:
+        from coordinator_core.session.core import _resolve_claude_pid_from_env
+
+        match, _reason = _resolve_claude_pid_from_env()
+        if match is None:
+            return None
+        pid, _create_time = match
+
+        directory = registry_dir()
+        if directory is None:
+            return None
+
+        return _parse_one(directory / f"{pid}.json")
     except Exception:
         return None

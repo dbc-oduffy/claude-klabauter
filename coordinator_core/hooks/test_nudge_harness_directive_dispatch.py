@@ -100,6 +100,87 @@ def test_tell_c_misattribution_trips(text):
     assert m.message_trips_tell(text) is True
 
 
+def test_recurrence_5_regression_verbatim():
+    """Recurrence 5 (2026-08-11): a provenance-punt, not a misattribution —
+    the EM never asserts a PM authored the restriction, it hands the
+    authorship question up while still declining to dispatch on the
+    unassigned instruction. Verbatim utterance; both prior tells missed it
+    by roughly one token (see module banner / this file's widened patterns)."""
+    text = (
+        "this session was started with a standing instruction not to use "
+        "the Agent tool unless you request it. That's yours to resolve, "
+        "not mine to assume around."
+    )
+    assert m.message_trips_tell(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # "Agent tool" with a space, and "unless you request it" (dropping
+        # "the user") must both trip Tell A on their own, independent of
+        # Tell C's misattribution machinery.
+        "I should not call the Agent tool unless you request it.",
+        "Not calling the Agent Tool unless you request it.",
+    ],
+)
+def test_tell_a_widened_spacing_and_pronoun_trip(text):
+    assert m.message_trips_tell(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Control: "agent" and "tool" appear, but not as the directive's
+        # fixed noun phrase — must not trip Tell A's widened pattern.
+        "We built a small automation tool; the agent liked it.",
+        # Control: "unless you ..." without the requested/asked-for/request
+        # verb must not trip the widened pronoun alternative.
+        "Unless you object, I'll proceed with the plan as written.",
+    ],
+)
+def test_tell_a_widened_patterns_stay_silent_on_controls(text):
+    assert m.message_trips_tell(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Bare "yours to X" possessive, co-occurring with a dispatch term and
+        # a restriction cue in the same sentence.
+        "That's yours to decide, so I didn't dispatch anyone for this.",
+        # Agentless-passive framing, co-occurring with a dispatch term and a
+        # restriction cue in the same sentence.
+        "This session was started with a standing rule not to dispatch "
+        "subagents here.",
+    ],
+)
+def test_tell_c_widened_patterns_trip(text):
+    assert m.message_trips_tell(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Control: "yours to X" with no dispatch term anywhere in the
+        # sentence — a genuine, unrelated handoff of an unrelated decision.
+        "This bug is yours to triage; I already fixed the crash in the "
+        "parser.",
+        # Control: agentless-passive framing about something other than a
+        # dispatch restriction — must not trip merely for naming a standing
+        # instruction.
+        "This session was started with a standing goal to ship the release "
+        "by Friday.",
+        # Control: agentless-passive + dispatch term in DIFFERENT sentences
+        # must not bleed across the sentence boundary.
+        "This session was started with a standing instruction to keep PRs "
+        "small. Also dispatched a reviewer for the diff.",
+    ],
+)
+def test_tell_c_widened_patterns_stay_silent_on_controls(text):
+    assert m.message_trips_tell(text) is False
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -300,8 +381,13 @@ def test_ordinary_final_turn_is_silent(repo):
 
 
 # ---------------------------------------------------------------------------
-# Dispatch-evidence suppression — a non-empty dispatched-agents.txt (written by
-# track_dispatched_agents.py) falsifies the "EM has not dispatched" premise.
+# Dispatch-evidence no longer suppresses — a past dispatch anywhere earlier in
+# the session used to permanently disarm this backstop via
+# `_session_has_dispatched`, even though the failure is per-decision, not
+# per-session (recurrence 5, 2026-08-11: the tell fired mid-session AFTER an
+# earlier dispatch, and the disarmed check ate it). The op now relies solely
+# on the once-per-session `_claim_fire` sentinel to bound repetition — a prior
+# dispatch is no longer evidence that THIS turn's tell is a false read.
 # ---------------------------------------------------------------------------
 
 
@@ -322,7 +408,9 @@ def _write_dispatched_agents(repo, session_id, content):
     (d / "dispatched-agents.txt").write_text(content, encoding="utf-8")
 
 
-def test_suppressed_when_dispatched_agents_file_present_and_nonempty(tmp_path):
+def test_fires_even_when_dispatched_agents_file_present_and_nonempty(tmp_path):
+    """Regression for recurrence 5: an earlier dispatch this session must not
+    permanently disarm a later, independent tell."""
     repo = tmp_path / "repo"
     os.makedirs(repo)
     _git_init(repo)
@@ -330,7 +418,7 @@ def test_suppressed_when_dispatched_agents_file_present_and_nonempty(tmp_path):
     _write_dispatched_agents(repo, session_id, "abcdef012345\tsonnet\texecutor\t1234567890\n")
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     result = m.op(_payload(repo, t, session_id=session_id))
-    assert result is None
+    assert result is not None
 
 
 def test_fires_when_dispatched_agents_file_absent(tmp_path):
@@ -354,10 +442,9 @@ def test_fires_when_dispatched_agents_file_present_but_empty(tmp_path):
     assert result is not None
 
 
-def test_suppression_reads_git_common_dir_not_worktree_local(tmp_path):
-    """A worktree session's dispatch evidence lives under the MAIN repo's
-    .git, not the worktree-local one — the check must follow git_common_dir,
-    not this module's worktree-local `_resolve_git_dir` walk."""
+def test_dispatch_evidence_in_worktree_common_dir_still_does_not_suppress(tmp_path):
+    """Same shape as the retired suppression test, inverted: dispatch evidence
+    under the MAIN repo's git-common-dir must still not suppress a tell."""
     main_repo = tmp_path / "main"
     os.makedirs(main_repo)
     _git_init(main_repo)
@@ -370,13 +457,11 @@ def test_suppression_reads_git_common_dir_not_worktree_local(tmp_path):
     )
 
     session_id = "sess-worktree-dispatch"
-    # Evidence lives under the MAIN repo's .git/coordinator-sessions/, as
-    # track_dispatched_agents.py (keyed off git_common_dir) actually writes it.
     _write_dispatched_agents(main_repo, session_id, "abcdef012345\tsonnet\texecutor\t1234567890\n")
 
     t = _transcript(wt, "Want me to dispatch an executor for this?")
     result = m.op(_payload(wt, t, session_id=session_id))
-    assert result is None
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------

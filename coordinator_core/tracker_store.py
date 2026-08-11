@@ -56,6 +56,12 @@ Negative-spec:
     ``locked_rmw`` internally on its own shard; a second acquisition on
     the same target in the same process deadlocks until ``LockTimeout``
     (``locked_write.py:38-41``).
+  - Do NOT implement ``append_events`` by looping ``append_event``.
+    ``append_events`` acquires ``locked_rmw`` exactly once for the whole
+    batch; nothing inside it may call ``append_event``. Looping
+    ``append_event`` for a multi-event cascade gives N lock acquisitions
+    and an observable partial cascade, which is the bug this primitive
+    exists to prevent.
 """
 
 from __future__ import annotations
@@ -207,14 +213,28 @@ def _id_not_bare_digit_string(event_id: object) -> bool:
     return not event_id.strip().isdigit()
 
 
-def append_event(event: dict, *, repo_root: Path) -> dict:
-    """Append *event* to THIS MACHINE'S shard under an exclusive same-host lock.
+def _next_clock(prior_wall_ms: int, prior_counter: int, *, now_ms: int) -> tuple[int, int]:
+    """Bump ``(wall_ms, counter)`` off the given prior pair.
 
-    Wraps ``locked_rmw`` over this machine's shard only, treating the
-    read-assign-append cycle (duplicate check, sequence bump, logical-clock
-    bump, serialize, write) as one atomic operation under a single lock
-    acquisition — never a split counter-then-append.
+    The shared rule behind ``append_event``'s single-event bump and
+    ``append_events``' per-event chaining: ``wall_ms`` never regresses
+    below the prior pair's ``wall_ms``, and ``counter`` resets to 0 unless
+    this event lands in the same millisecond as the prior pair, in which
+    case it increments. ``append_event`` calls this once, chaining off the
+    shard tail; ``append_events`` calls this once per batch event,
+    chaining event *k* off event *k-1*'s OWN just-assigned pair (only the
+    first batch event chains off the shard tail) — see ``append_events``'
+    docstring for why that distinction matters.
     """
+    wall_ms = max(now_ms, prior_wall_ms)
+    counter = (prior_counter + 1) if wall_ms == prior_wall_ms else 0
+    return wall_ms, counter
+
+
+def _validate_event_fields(event: dict) -> None:
+    """Pre-lock field validation shared by ``append_event`` and
+    ``append_events``: ``id`` present, ``observed_at`` present, and ``id``
+    not visibly a bare digit string (DR-241 bound (i))."""
     if "id" not in event or not event["id"]:
         raise TrackerStoreError("event is missing required field: id")
     if "observed_at" not in event or not event["observed_at"]:
@@ -226,6 +246,17 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
             "bound (i)) — passing this check does not verify full "
             "global uniqueness"
         )
+
+
+def append_event(event: dict, *, repo_root: Path) -> dict:
+    """Append *event* to THIS MACHINE'S shard under an exclusive same-host lock.
+
+    Wraps ``locked_rmw`` over this machine's shard only, treating the
+    read-assign-append cycle (duplicate check, sequence bump, logical-clock
+    bump, serialize, write) as one atomic operation under a single lock
+    acquisition — never a split counter-then-append.
+    """
+    _validate_event_fields(event)
 
     target = shard_path(repo_root)
     assigned: dict = {}
@@ -277,9 +308,7 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
             tail_wall_ms = 0
             tail_counter = 0
 
-        now_ms = _now_ms()
-        wall_ms = max(now_ms, tail_wall_ms)
-        counter = (tail_counter + 1) if wall_ms == tail_wall_ms else 0
+        wall_ms, counter = _next_clock(tail_wall_ms, tail_counter, now_ms=_now_ms())
 
         new_event = dict(event)
         new_event["machine"] = machine_slug()
@@ -294,6 +323,139 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
 
     locked_rmw(target, _mutate, repo_root=repo_root, missing_ok=True)
     return assigned["event"]
+
+
+def append_events(events: list[dict], *, repo_root: Path) -> list[dict]:
+    """Append *events* to THIS MACHINE'S shard under ONE exclusive same-host
+    lock — the F2 transactional primitive. NOT composable from
+    ``append_event``: looping it would take N lock acquisitions and expose
+    an observable partial cascade (see the module-docstring negative-spec
+    bullet).
+
+    Two textually separate passes:
+
+    1. Pre-lock (pure functions of the batch, before ``locked_rmw`` is
+       acquired): every event is field-validated exactly as
+       ``append_event`` validates a single event, and intra-batch
+       duplicate ids are rejected. An invalid batch writes nothing and
+       never touches the lock.
+    2. In-lock (inside the single ``_mutate``, because it depends on the
+       shard tail): own-shard collision detection for every id in the
+       batch — a batch id colliding with an EXISTING shard id, or with
+       another event already accepted earlier in this same batch's
+       in-lock pass — raises ``TrackerStoreDuplicateIdError`` and writes
+       nothing (AC3). ``sequence`` is assigned ``tail+1, tail+2, …
+       tail+N`` in input order within the one ``_mutate`` return.
+
+    The clock rule: event *k* chains its ``(wall_ms, counter)`` off event
+    *k-1*'s OWN just-assigned pair, NOT off the original shard tail for
+    every event — chaining every event off the original tail would give
+    all N events an identical pair, a silent collision invisible to a
+    happy-path test. Only the FIRST batch event chains off the shard
+    tail, exactly as ``append_event`` does today. Both functions share
+    the bump rule via ``_next_clock``.
+
+    Any exception raised inside ``_mutate`` — including
+    ``locked_write.MutateAbort`` — propagates out of ``append_events``
+    unchanged; ``locked_rmw`` honours ``MutateAbort`` as a clean no-write
+    abort (no partial write, no shard mutation). ``append_events`` does
+    not swallow or re-wrap either case.
+
+    Atomicity comes free from ``locked_rmw``'s existing ``os.replace``
+    crash-safety — the obligation here is to do all N assignments in ONE
+    ``_mutate`` return, never to call ``locked_rmw`` twice (see the
+    module-docstring negative-spec bullet).
+
+    Empty *events* is a no-op returning ``[]`` — the lock is never
+    acquired.
+    """
+    if not events:
+        return []
+
+    # Pass 1 — pre-lock, pure functions of the batch.
+    for event in events:
+        _validate_event_fields(event)
+
+    seen_batch_ids: set = set()
+    for event in events:
+        event_id = event["id"]
+        if event_id in seen_batch_ids:
+            raise TrackerStoreDuplicateIdError(
+                f"event id {event_id!r} appears more than once in this batch"
+            )
+        seen_batch_ids.add(event_id)
+
+    target = shard_path(repo_root)
+    assigned: dict = {}
+
+    def _mutate(old_text: str) -> str:
+        lines = _split_lines(old_text)
+
+        # Own-shard duplicate detection: one extra pass over data already
+        # read into memory for the sequence bump, exactly as
+        # append_event's own pass — see that function's comment. The loop
+        # always visits lines[-1] last, so tail_parsed/tail_parse_error
+        # below reflect that line's parse result without a second
+        # json.loads call.
+        tail_parsed: object = None
+        tail_parse_error: json.JSONDecodeError | None = None
+        for line in lines:
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError as exc:
+                tail_parsed = None
+                tail_parse_error = exc
+                continue
+            tail_parsed = existing
+            tail_parse_error = None
+            if isinstance(existing, dict) and existing.get("id") in seen_batch_ids:
+                raise TrackerStoreDuplicateIdError(
+                    f"event id {existing.get('id')!r} already appears in this shard"
+                )
+
+        if lines:
+            if tail_parse_error is not None:
+                raise TrackerStoreError(
+                    f"malformed tail line in shard {target}: {tail_parse_error}"
+                ) from tail_parse_error
+            tail = tail_parsed
+            if not isinstance(tail, dict):
+                raise TrackerStoreError(
+                    f"malformed tail line in shard {target}: not a JSON object"
+                )
+            tail_sequence = tail.get("sequence", 0)
+            if not isinstance(tail_sequence, int):
+                tail_sequence = 0
+            tail_clock = tail.get("logical_clock") or {}
+            tail_wall_ms = tail_clock.get("wall_ms", 0) if isinstance(tail_clock, dict) else 0
+            tail_counter = tail_clock.get("counter", 0) if isinstance(tail_clock, dict) else 0
+        else:
+            tail_sequence = 0
+            tail_wall_ms = 0
+            tail_counter = 0
+
+        machine = machine_slug()
+        wall_ms, counter = tail_wall_ms, tail_counter
+        new_lines: list[str] = []
+        assigned_events: list[dict] = []
+        for offset, event in enumerate(events, start=1):
+            wall_ms, counter = _next_clock(wall_ms, counter, now_ms=_now_ms())
+            new_event = dict(event)
+            new_event["machine"] = machine
+            new_event["sequence"] = tail_sequence + offset
+            new_event["logical_clock"] = {"wall_ms": wall_ms, "counter": counter}
+            assigned_events.append(new_event)
+            new_lines.append(json.dumps(new_event, sort_keys=True) + "\n")
+
+        assigned["events"] = assigned_events
+
+        appended = "".join(new_lines)
+        if old_text and not old_text.endswith("\n"):
+            return old_text + "\n" + appended
+        return old_text + appended
+
+    locked_rmw(target, _mutate, repo_root=repo_root, missing_ok=True)
+    return assigned["events"]
 
 
 def read_events(*, repo_root: Path) -> list[dict]:

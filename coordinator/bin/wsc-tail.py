@@ -173,7 +173,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -182,8 +181,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cc_invoke  # noqa: E402
-
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _SESSION_ID_ENV_TIERS = (
     "COORDINATOR_SESSION_ID",
@@ -199,26 +197,6 @@ def _resolve_session_id() -> str:
         if val:
             return val
     return ""
-
-
-def _resolve_repo_root() -> str | None:
-    """Resolve the current git worktree root from PWD.
-
-    Returns None on failure (caller maps this to exit 1).
-    """
-    try:
-        result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            creationflags=_NO_WINDOW,
-        )
-    except OSError:
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
-    return root
 
 
 def legacy_wsc_tail() -> None:
@@ -715,13 +693,17 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    repo_root = _resolve_repo_root()
+    repo_root, _repo_verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         print(
             f"wsc-tail.py: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,
         )
         return 1
+    if _repo_verdict["verdict"] == "MISMATCH":
+        # DR-277: READER (no write into resolved root) -- warn and proceed
+        # rather than refuse. UNRESOLVED never refuses either (AC4).
+        print(_repo_verdict["message"], file=sys.stderr)
 
     # Directory pathspec pre-flight (2026-08-03, example-retrieval-repo-em memo
     # `cross-repo/inbox/2026-08-03-example-retrieval-repo-em-wsc-tail-exits-zero-without-

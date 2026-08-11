@@ -113,16 +113,32 @@ Fail-open paths (all return None, in order):
   - no target path in tool_input.
   - resolved target path is not one of the five protected surfaces.
 
+C4 addendum — advisory repo-identity recording
+------------------------------------------------
+`check()` also calls C1's `coordinator_core.pickup_assemble.compute_repo_identity_gate`
+and logs its verdict (MATCH/MISMATCH/UNRESOLVED) via
+`_write_repo_identity_advisory_log`, best-effort, to
+`<repo-root>/.git/coordinator-sessions/<session_id>/repo-identity-gate.log`.
+**This is READ-ONLY and ADVISORY ONLY — see DR-277
+(`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`).** This
+site clears no DR-277 carve-out, so the verdict is recorded and never
+consulted by the allow/deny decision below, on MISMATCH or any other
+verdict. Do not "finish the job" by wiring a refusal off it.
+
 Spec backlink: example-doctrine-repo
   coordinator/hooks/scripts/guard-doctrine-surface-edits.py
+Spec backlink (C4 addendum): docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.pickup_assemble import compute_repo_identity_gate
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
@@ -283,6 +299,48 @@ def _deny_reason(target: str, is_local_config: bool = False) -> str:
     )
 
 
+def _write_repo_identity_advisory_log(
+    repo_root: "str | None", session_id: str, gate_result: Dict[str, Any]
+) -> None:
+    """Best-effort, non-blocking record of C1's `compute_repo_identity_gate`
+    verdict (plan `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
+    § C4).
+
+    **DR-277 (`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`):
+    this guard is advisory-by-default and clears no hard-deny carve-out for
+    the repo-identity gate, so the verdict computed here is recorded ONLY —
+    it is NEVER consulted by `check()`'s allow/deny decision, on MISMATCH or
+    on any other verdict.** Do not "finish the job" by adding a refusal path
+    off `gate_result["verdict"]`; that would harden this advisory guard into
+    exactly the kind of unratified block DR-277 forbids. If a hard block on
+    repo identity is ever wanted here, it needs its own named DR-277
+    carve-out, not a quiet upgrade of this log call.
+
+    Wrapped so any failure (including no resolvable repo root or session id)
+    can NEVER flip the ALLOW/DENY decision — mirrors
+    `block_subagent_plan_body_write._write_block_log`'s `|| true` posture.
+    """
+    if not repo_root or not session_id:
+        return
+    try:
+        from datetime import datetime, timezone
+
+        log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(log_dir / "repo-identity-gate.log", "a", encoding="utf-8") as fh:
+            fh.write(
+                f"{ts} | gates.repo_identity | verdict={gate_result['verdict']} | "
+                f"{gate_result['message']}\n"
+            )
+    except OSError as exc:
+        print(
+            "guard_doctrine_surface_edits: repo-identity advisory-log write "
+            f"failed (decision unaffected): {exc}",
+            file=sys.stderr,
+        )
+
+
 def _sentinel_write_deny_reason() -> str:
     return (
         "[doctrine-surface guard] BLOCKED: this file is the PM's approval to "
@@ -315,6 +373,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     repo_root = _git_root()
+
+    # C4 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+    # record C1's repo-identity gate verdict as an advisory
+    # `gates.repo_identity` fact. Read-only, ADVISORY ONLY — see the
+    # DR-277 note in `_write_repo_identity_advisory_log`'s docstring. The
+    # verdict is NEVER read again below and never participates in the
+    # allow/deny decision this function returns.
+    session_id = payload.get("session_id") or ""
+    if repo_root:
+        repo_identity_gate = compute_repo_identity_gate(Path(repo_root), session_id or None)
+        _write_repo_identity_advisory_log(repo_root, session_id, repo_identity_gate)
 
     # The sentinel itself is unwritable through the file-write tools, and this
     # check runs BEFORE the approval lookup below -- deliberately, because

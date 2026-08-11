@@ -14,12 +14,15 @@ Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § C2
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.session import harness_registry as hr
 from coordinator_core.session_ledger.aggregate_chain_loe import main, resolve_state_root
 
 
@@ -147,3 +150,128 @@ def test_resolve_state_root_is_scoped_to_passed_cwd_not_ambient_cwd(tmp_path, mo
 
     assert result == repo_b.resolve() / "state"
     assert result != repo_a.resolve() / "state"
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md) —
+# main()'s wiring of coordinator_core.pickup_assemble.compute_repo_identity_gate.
+# AC6: a REAL anchor/root divergence, constructed via CLAUDE_CONFIG_DIR +
+# CLAUDE_PID overrides and a real registry file on disk — never by
+# monkeypatching compute_repo_identity_gate's own return value. Reuses the
+# fixture-construction pattern from
+# coordinator_core/pickup_assemble/tests/test_repo_identity_gate.py (the one
+# leg monkeypatched there, too, is `_resolve_claude_pid_from_env`'s
+# psutil-name-match check — inherently OS-process-identity bound and
+# unconstructible as a real fixture inside a test process not named
+# "claude"; every other input is real files on disk).
+# ---------------------------------------------------------------------------
+
+
+def _epoch_to_filetime_ticks(epoch: float) -> int:
+    return int((epoch + hr._FILETIME_EPOCH_OFFSET_SEC) * hr._FILETIME_TICKS_PER_SEC)
+
+
+def _write_registry_record(sessions_dir, filename, session_id, pid, cwd, epoch=None):
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    if epoch is None:
+        epoch = time.time() - 60
+    payload = {
+        "sessionId": session_id,
+        "pid": pid,
+        "procStart": _epoch_to_filetime_ticks(epoch),
+        "cwd": str(cwd),
+    }
+    (sessions_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+    return epoch
+
+
+def test_main_refuses_on_real_repo_identity_mismatch(tmp_path, monkeypatch, capsys):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    repo_root = _init_repo(repo_root)
+    h = repo_root / "state" / "handoffs" / "term.md"
+    _write_handoff(h)
+
+    foreign_root = tmp_path / "foreign-repo"
+    foreign_root.mkdir(parents=True)
+    (foreign_root / ".git").mkdir()
+
+    config_dir = tmp_path / "claude-config"
+    sessions_dir = config_dir / "sessions"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-mismatch")
+    # The registry's own real record names foreign_root as the session's
+    # anchor cwd — a real divergence from repo_root, the ceremony's
+    # `--terminal-handoff`-resolved root below.
+    _write_registry_record(sessions_dir, "4242.json", "sess-mismatch", 4242, foreign_root)
+    monkeypatch.setattr(
+        "coordinator_core.session.core._resolve_claude_pid_from_env",
+        lambda: ((4242, 0.0), "env-hit"),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": True,
+    )
+
+    monkeypatch.chdir(repo_root)
+    rc = main(["--terminal-handoff", "state/handoffs/term.md"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "repo-identity" in err
+    assert "MISMATCH" in err
+    assert "sess-mismatch" in err
+
+
+def test_main_does_not_refuse_on_repo_identity_match(tmp_path, monkeypatch, capsys):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    repo_root = _init_repo(repo_root)
+    h = repo_root / "state" / "handoffs" / "term.md"
+    _write_handoff(h)
+
+    config_dir = tmp_path / "claude-config"
+    sessions_dir = config_dir / "sessions"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CLAUDE_PID", "5252")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-match")
+    # The registry's real record anchors the session inside repo_root itself
+    # — a genuine, on-disk MATCH.
+    _write_registry_record(sessions_dir, "5252.json", "sess-match", 5252, repo_root)
+    monkeypatch.setattr(
+        "coordinator_core.session.core._resolve_claude_pid_from_env",
+        lambda: ((5252, 0.0), "env-hit"),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": True,
+    )
+
+    monkeypatch.chdir(repo_root)
+    rc = main(["--terminal-handoff", "state/handoffs/term.md"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "gates:" in out
+    assert 'repo_identity: "MATCH"' in out
+
+
+def test_main_no_registry_record_is_unresolved_never_refuses(tmp_path, monkeypatch, capsys):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    repo_root = _init_repo(repo_root)
+    h = repo_root / "state" / "handoffs" / "term.md"
+    _write_handoff(h)
+
+    config_dir = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-unresolved")
+    monkeypatch.setattr(
+        "coordinator_core.session.core._resolve_claude_pid_from_env",
+        lambda: (None, "env-miss:absent"),
+    )
+
+    monkeypatch.chdir(repo_root)
+    rc = main(["--terminal-handoff", "state/handoffs/term.md"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'repo_identity: "UNRESOLVED"' in out

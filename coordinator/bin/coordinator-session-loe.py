@@ -41,10 +41,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 
-from coordinator_core.win_portability import no_console_creationflags
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _SESSION_ID_ENV_TIERS = (
     "COORDINATOR_SESSION_ID",
@@ -95,18 +97,17 @@ def _resolve_session_id() -> str:
 
 
 def _resolve_git_root() -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
+    """Resolve the repo root via the checked resolver (repo_identity).
+
+    READER classification (DR-277 / plan C5): MISMATCH is advisory only --
+    warn to stderr and proceed with the resolved root. UNRESOLVED never
+    refuses (AC4). Returns None only when no root at all resolves (caller
+    maps this to "not inside a git repo", exit 1 -- matching pre-existing
+    behavior).
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
     return root
 
 

@@ -44,7 +44,7 @@ Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-al
   (this file replaces scripts/setup.sh + scripts/setup.ps1 — one cross-platform
   naked-Python installer instead of a bash/PowerShell twin pair, per the
   project's pure-Python-shop mandate; DR-047/DR-059).
-Spec backlink: ~/.claude/plugins/coordinator/docs/wiki/agent-install-contract.md
+Spec backlink: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/agent-install-contract.md
 Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLABAUTER_ROOT ladder)
   and `_resolve_coordinator_claude_root` (coordinator-claude sibling ladder) —
   the bash `coordinator-claude-klabauter-root.sh` reference this docstring previously

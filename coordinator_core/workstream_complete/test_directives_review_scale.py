@@ -131,13 +131,21 @@ def test_row3_shared_schema_touched():
 
 
 def test_row4_gross_loc_over_brightline():
+    """C5, 2026-08-11: row 4 reads `code_loc`, not `gross_loc` (C2) -- a
+    `gross_loc` bump alone (code_loc still small) must NOT trip row 4."""
     decision = decide_review_scale(
         **{**_RESOLVED_SMALL, "gross_loc": 500},
         chain_disposition=_SINGLE_SESSION,
     )
-    assert decision.row == 4
-    assert decision.scale == "partitioned"
-    assert decision.partition_mandatory is True
+    assert decision.row == 2
+
+    decision_code_loc = decide_review_scale(
+        **{**_RESOLVED_SMALL, "code_loc": 500},
+        chain_disposition=_SINGLE_SESSION,
+    )
+    assert decision_code_loc.row == 4
+    assert decision_code_loc.scale == "partitioned"
+    assert decision_code_loc.partition_mandatory is True
 
 
 def test_row4_commit_count_over_brightline():
@@ -158,7 +166,7 @@ def test_row4_surface_count_over_brightline():
 
 def test_row4_outranks_row3_even_when_row3_would_also_fire():
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": 500, "executor_dispatched": True},
+        **{**_RESOLVED_SMALL, "code_loc": 500, "executor_dispatched": True},
         chain_disposition=_SINGLE_SESSION,
     )
     assert decision.row == 4
@@ -226,7 +234,7 @@ def test_row6_outranks_row4_when_both_fire_on_the_same_call():
 
 def test_row4_outranks_row6_when_session_diff_itself_is_big():
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": 500},
+        **{**_RESOLVED_SMALL, "code_loc": 500},
         chain_disposition=_CHAIN_TERMINAL,
         chain_partition_verdict=_CHAIN_VERDICT_SINGLE_REVIEWER_OK,
     )
@@ -333,7 +341,7 @@ def test_non_chain_terminal_row_selections_unchanged_by_hoist():
     )
     assert row3.row == 3
     row4 = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": 500},
+        **{**_RESOLVED_SMALL, "code_loc": 500},
         chain_disposition=_SINGLE_SESSION,
     )
     assert row4.row == 4
@@ -371,11 +379,11 @@ def test_unresolved_when_chain_terminal_and_verdict_is_unrecognized_string():
 
 def test_unresolved_never_defaults_to_row5_staff_eng_finding_3():
     """The exact staff-engineer finding-3 case: the chain-scoped verdict HAS
-    resolved (and is non-mandatory) but a row-4 input (gross_loc) has not
-    — row 4 outranks row 5 and cannot be ruled out, so the outcome must be
-    unresolved, never row 5."""
+    resolved (and is non-mandatory) but a row-4 input (code_loc, C5's
+    row-4 input since C2) has not — row 4 outranks row 5 and cannot be
+    ruled out, so the outcome must be unresolved, never row 5."""
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": None},
+        **{**_RESOLVED_SMALL, "code_loc": None},
         chain_disposition=_CHAIN_TERMINAL,
         chain_partition_verdict=_CHAIN_VERDICT_SINGLE_REVIEWER_OK,
     )
@@ -407,11 +415,12 @@ def test_unresolved_never_defaults_to_row5_when_surface_count_absent():
 
 def test_known_true_brightline_input_still_resolves_row4_even_with_other_inputs_absent():
     """A single input that is ALREADY known to trip the brightline
-    (gross_loc >= threshold) resolves row 4 even though a sibling input
-    (surface_count) is unresolved — short-circuit on a known-true OR
-    branch, not a blanket "any None anywhere means unresolved" rule."""
+    (code_loc >= threshold, C5's row-4 input since C2) resolves row 4 even
+    though a sibling input (surface_count) is unresolved — short-circuit on
+    a known-true OR branch, not a blanket "any None anywhere means
+    unresolved" rule."""
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": 500, "surface_count": None},
+        **{**_RESOLVED_SMALL, "code_loc": 500, "surface_count": None},
         chain_disposition=_SINGLE_SESSION,
     )
     assert decision.resolved is True
@@ -436,21 +445,34 @@ def test_unresolved_when_row3_inputs_absent_after_row4_ruled_out():
     assert decision.row is None
 
 
-def test_known_true_row3_input_still_resolves_even_with_code_loc_absent():
+def test_known_true_row3_input_absent_code_loc_now_blocks_on_row4_c5_finding():
+    """C5, 2026-08-11 FINDING, restored 2026-08-11 (C7's reorder reverted per
+    reviewer finding P1): since C2 pointed row 4's brightline at `code_loc`
+    (previously `gross_loc`), an unresolved `code_loc` blocks row 4's own
+    resolution check -- which runs BEFORE row 3 is ever evaluated -- even
+    when `executor_dispatched=True` is independently known and would
+    resolve row 3 outright. This is deliberate, not the C5-era regression it
+    first looked like: row 3 is a strictly smaller review obligation than
+    row 4, so resolving to row 3 while row 4's metrics are genuinely
+    unmeasured would fail toward LESS review -- exactly the direction this
+    module's negative-spec forbids. C7 briefly reordered this to fail open
+    toward row 3; that reorder is reverted. An unresolved code_loc leaves
+    the whole decision unresolved (asks), never falls through to row 3."""
     decision = decide_review_scale(
         **{**_RESOLVED_SMALL, "executor_dispatched": True, "code_loc": None},
         chain_disposition=_SINGLE_SESSION,
     )
-    assert decision.resolved is True
-    assert decision.row == 3
+    assert decision.resolved is False
+    assert decision.row is None
+    assert "code_loc" in decision.reason
 
 
 def test_unresolved_reason_names_the_unresolved_inputs():
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": None, "commit_count": None, "surface_count": None},
+        **{**_RESOLVED_SMALL, "code_loc": None, "commit_count": None, "surface_count": None},
         chain_disposition=_SINGLE_SESSION,
     )
-    assert "gross_loc" in decision.reason
+    assert "code_loc" in decision.reason
     assert "commit_count" in decision.reason
     assert "surface_count" in decision.reason
 
@@ -507,7 +529,7 @@ def test_baton_count_one_behaves_identically_to_none():
 def test_baton_count_multiplier_trips_brightline_that_raw_metrics_do_not():
     # 260 * 2 = 520 >= 500 -- would NOT trip on its own.
     decision = decide_review_scale(
-        **{**_RESOLVED_SMALL, "gross_loc": 260},
+        **{**_RESOLVED_SMALL, "code_loc": 260},
         chain_disposition=_SINGLE_SESSION,
         baton_count=2,
     )
@@ -635,7 +657,7 @@ def test_measure_session_review_scale_inputs_resolves_over_uncommitted_diff(tmp_
     (tmp_path / "new_work.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
         tmp_path, session_start_time, _SESSION_ID
     )
     assert commit_count == 0
@@ -644,7 +666,7 @@ def test_measure_session_review_scale_inputs_resolves_over_uncommitted_diff(tmp_
 
     decision = decide_review_scale(
         gross_loc=gross_loc,
-        code_loc=0,
+        code_loc=code_loc,
         commit_count=commit_count,
         surface_count=surface_count,
         executor_dispatched=False,
@@ -662,17 +684,22 @@ def test_measure_session_review_scale_inputs_none_when_session_id_unresolved():
     reason — never a default verdict, never a silent single-reviewer
     fallthrough, and above all never the whole shared worktree scored as
     this session's own diff."""
-    gross_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
         Path("."), None, ""
     )
-    assert (gross_loc, commit_count, surface_count) == (None, None, None)
+    assert (gross_loc, code_loc, commit_count, surface_count) == (None, None, None, None)
 
     decision = decide_review_scale(
         gross_loc=gross_loc,
-        code_loc=None,
+        code_loc=code_loc,
         commit_count=commit_count,
         surface_count=surface_count,
-        executor_dispatched=True,
+        # C7, 2026-08-11: `executor_dispatched=None`, not True. Rows 1-3 are now
+        # evaluated before row 4's metrics can block, so a known-true row-3 input
+        # would resolve this decision on its own and the test would stop
+        # exercising what its docstring claims. Leaving it unknown is what keeps
+        # the unresolvable-MEASUREMENT case the thing under test.
+        executor_dispatched=None,
         shared_schema_touched=False,
         chain_disposition=_SINGLE_SESSION,
     )
@@ -709,11 +736,12 @@ def test_measure_session_review_scale_inputs_counts_committed_and_uncommitted_to
         # `classify_session_authored_files` derivation — that heuristic is
         # itself under test elsewhere, and letting this assertion depend on
         # it couples `gross_loc == 2` to a module this test does not guard.
-        gross_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
             root, session_start_time, _SESSION_ID, uncommitted_paths=["c.py"]
         )
         assert commit_count == 1
         assert gross_loc == 2
+        assert code_loc == 2
         assert surface_count is not None and surface_count >= 1
 
 
@@ -740,25 +768,29 @@ def test_measure_session_review_scale_inputs_excludes_peer_work_on_a_shared_work
         _run_git(["add", "mine.py"], str(root))
         _commit_as(root, "my commit", _SESSION_ID)
 
-        gross_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
             root, session_start_time, _SESSION_ID, uncommitted_paths=[]
         )
         assert commit_count == 1
         assert gross_loc == 1
+        assert code_loc == 1
 
-        peer_loc, peer_commits, _ = wsc._measure_session_review_scale_inputs(
+        peer_loc, peer_code_loc, peer_commits, _ = wsc._measure_session_review_scale_inputs(
             root, session_start_time, _PEER_SESSION_ID, uncommitted_paths=[]
         )
         assert peer_commits == 1
         assert peer_loc == 40
+        assert peer_code_loc == 40
 
 
 # ---------------------------------------------------------------------------
 # (review-integrator, slice B) `_split_tracked`/`_count_lines` direct unit
 # coverage, and the `None`-propagation contract slice A introduced: a git or
 # file-read failure inside either helper must surface as the FULL
-# `(None, None, None)` triple from `_measure_session_review_scale_inputs`,
-# never a partially-populated or zeroed one standing in for a failure.
+# `(None, None, None, None)` quadruple from
+# `_measure_session_review_scale_inputs` (C5, 2026-08-11: extended to
+# include `code_loc`), never a partially-populated or zeroed one standing
+# in for a failure.
 # ---------------------------------------------------------------------------
 
 
@@ -821,7 +853,7 @@ def test_measure_session_review_scale_inputs_propagates_none_on_split_tracked_gi
         finally:
             wsc._run_git_read_only = original
 
-        assert result == (None, None, None)
+        assert result == (None, None, None, None)
 
 
 def test_measure_session_review_scale_inputs_propagates_none_on_unreadable_untracked_file():
@@ -840,7 +872,7 @@ def test_measure_session_review_scale_inputs_propagates_none_on_unreadable_untra
         result = wsc._measure_session_review_scale_inputs(
             root, session_start_time, _SESSION_ID, uncommitted_paths=["missing_untracked.py"]
         )
-        assert result == (None, None, None)
+        assert result == (None, None, None, None)
 
 
 def test_measure_session_review_scale_inputs_no_owned_commits_and_none_session_start_time():
@@ -859,7 +891,7 @@ def test_measure_session_review_scale_inputs_no_owned_commits_and_none_session_s
         _init_git_repo(root)
 
         result = wsc._measure_session_review_scale_inputs(root, None, _SESSION_ID)
-        assert result == (0, 0, 0)
+        assert result == (0, 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------

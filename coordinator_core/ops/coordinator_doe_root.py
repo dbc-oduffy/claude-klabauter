@@ -550,7 +550,7 @@ _REMEDIATION = (
     "  Remediate (choose one):\n"
     "    machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c\n"
+    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c\n"
 )
 
 

@@ -49,6 +49,7 @@ import os
 import sys
 
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
+from coordinator_core.ops.deliverable_equivalence import canonicalize
 
 # Accepted `kind` values for a genuine roadmap stub, at the session-state
 # parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
@@ -220,6 +221,9 @@ def resolve_deliverable_and_initiative(
     plan_file: str | None,
     predecessor: str | None,
     slug_suffix: str = "handoff",
+    *,
+    additional_predecessors: list[str] | None = None,
+    equivalence_map: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Run the carry-or-mint cascade. Returns (deliverable_id, initiative_id).
 
@@ -234,6 +238,42 @@ def resolve_deliverable_and_initiative(
     Reading both does not change which value wins when they agree or when only one is
     present: the plan rung still takes precedence over the predecessor rung, byte-
     identical to the prior first-hit-wins cascade in every non-divergent case.
+
+    N-rung widening (sedge-01, `succession-edge-cardinality` roadmap): `additional_
+    predecessors` — every fan-in leg beyond the primary predecessor — is compared
+    against the plan/predecessor rungs for divergence too, but participates in
+    divergence detection ONLY. The carry/mint WINNER is still `plan_dlvr_id or
+    predecessor_dlvr_id`, unchanged from the 2-rung cascade — an additional-
+    predecessor rung never becomes the carried id, it only ever proves (or fails to
+    prove) that every rung agrees. Each entry is expected already-RESOLVED (archive-
+    aware, qualified) by the caller — this function does no path resolution itself,
+    mirroring its existing `plan_file`/`predecessor` contract. A rung whose path is
+    not `os.path.isfile()` degrades silently to "" (empty/absent), exactly as the
+    plan and predecessor rungs already do above — an unreadable/archived additional-
+    predecessor path already fails loud further upstream, in the caller's own path
+    resolution, not here (R5 of the sedge-01 EM ruling).
+
+    Known uncovered leg (R3 of the sedge-01 EM ruling, deliberately out of reach, scope
+    clarified 2026-08-11): `baton_assemble.resolve_lineage`'s `is_plan_input` branch
+    discovers a SECOND set of ledger-sourced extra predecessor paths
+    (`_resolve_held_handoff_for_session`'s return) only AFTER this function is called.
+    Those legs are NOT included in `additional_predecessors` and are therefore
+    invisible to THIS FUNCTION'S divergence check ONLY — a named, accepted gap, not a
+    silent one. They are NOT dropped from `resolve_lineage`'s own
+    `lineage["additional_predecessors"]` output, which resolves and appends them
+    separately, after this function returns — see that assignment's own comment.
+
+    `equivalence_map` ({loser_id: winner_id}, from `deliverable_equivalence.
+    load_equivalence_map`) is consulted ONLY to decide whether two rungs' RAW ids
+    are the same declared entity — every comparison canonicalizes both sides via
+    `deliverable_equivalence.canonicalize()` before comparing. This is read/compare-
+    side ONLY: the returned `deliverable_id` (and the id handed to `mint(...)`) stays
+    the RAW winning value, and the raise message below reports RAW ids/paths, never
+    canonicalized ones — mirrors `execute_plan_assemble/close_out_and_stamp.py`'s own
+    canonicalize-both-sides-never-write-back discipline. `None`/omitted degrades to
+    `{}` (every id canonicalizes to itself), i.e. today's raw-comparison behaviour —
+    no fallback of this function's own is layered on top of `load_equivalence_map`'s
+    existing missing-artifact degrade.
     """
     plan_active = bool(plan_file and os.path.isfile(plan_file))
     predecessor_active = bool(predecessor and os.path.isfile(predecessor))
@@ -243,14 +283,46 @@ def resolve_deliverable_and_initiative(
         read_frontmatter_field(predecessor, "deliverable_id") if predecessor_active else ""
     )
 
-    if plan_dlvr_id and predecessor_dlvr_id and plan_dlvr_id != predecessor_dlvr_id:
+    _equivalence_map = equivalence_map or {}
+
+    # Every rung of the cascade, in plan -> predecessor -> fan-in order. Each
+    # additional-predecessor rung degrades to "" when its path is not a readable
+    # file (R5) -- the SAME degrade the plan/predecessor rungs already apply above,
+    # not a new one invented for this arity.
+    rungs: list[tuple[str | None, str]] = [
+        (plan_file, plan_dlvr_id),
+        (predecessor, predecessor_dlvr_id),
+    ]
+    for _extra_path in additional_predecessors or []:
+        _extra_id = (
+            read_frontmatter_field(_extra_path, "deliverable_id")
+            if _extra_path and os.path.isfile(_extra_path)
+            else ""
+        )
+        rungs.append((_extra_path, _extra_id))
+
+    present_rungs = [(path, raw_id) for path, raw_id in rungs if raw_id]
+    canonical_values = {canonicalize(raw_id, _equivalence_map) for _, raw_id in present_rungs}
+
+    if len(canonical_values) > 1:
+        # Windows-portability fix (discovered live re-running this stub's own
+        # test on a Windows host): `path` is already a plain path STRING, not
+        # a value that benefits from `!r`'s quoting -- reprising it double-
+        # escapes a Windows backslash-separated path (`repr()` renders each
+        # `\` as `\\`), which breaks a caller's plain `path in message`
+        # substring check on Windows only (POSIX paths have no backslash to
+        # escape, so this was invisible there). `raw_id` keeps `!r` -- ids
+        # never contain path separators.
+        diverging = "; ".join(
+            f"{path} names deliverable_id {raw_id!r}" for path, raw_id in present_rungs
+        )
         raise DivergentDeliverableIdError(
-            f"plan {plan_file!r} names deliverable_id {plan_dlvr_id!r}, but predecessor "
-            f"handoff {predecessor!r} names deliverable_id {predecessor_dlvr_id!r} — the "
-            "two rungs of the carry-or-mint cascade disagree. Per DR-207 DD#1: mint once "
-            "at the earliest artifact and carry it verbatim; the EARLIEST artifact's id "
-            "wins — resolve by hand which artifact came first. This function will not "
-            "auto-pick a winner (see DivergentDeliverableIdError's own docstring)."
+            f"{len(present_rungs)} rungs of the carry-or-mint cascade disagree on "
+            f"deliverable_id: {diverging} — the rungs of the carry-or-mint cascade "
+            "disagree. Per DR-207 DD#1: mint once at the earliest artifact and carry "
+            "it verbatim; the EARLIEST artifact's id wins — resolve by hand which "
+            "artifact came first. This function will not auto-pick a winner (see "
+            "DivergentDeliverableIdError's own docstring)."
         )
 
     dlvr_id = plan_dlvr_id or predecessor_dlvr_id

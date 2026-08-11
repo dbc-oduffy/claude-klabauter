@@ -252,7 +252,8 @@ from coordinator_core.ceremony_common.apply_halt import (
     build_ceremony_halt_exit_codes,
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
-from coordinator_core.pickup_assemble import resolve_repo_root  # zero-spawn `.git` read-model
+from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
+from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
@@ -708,6 +709,7 @@ def _execute_directives(
     judgment_points: list[dict[str, Any]],
     decisions: dict[str, Any],
     repo_root: Optional[Path] = None,
+    sid: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -770,8 +772,10 @@ def _execute_directives(
     is called — a no-op for every directive id other than the two live
     gates it knows about, and itself verdict-aware for the coverage gate
     (a `VERDICT=WARN` exit-0 is not a confirmed pass). `repo_root` is
-    resolved once, lazily, via `resolve_repo_root()` (the same zero-spawn
-    `.git` read-model `brief()` itself uses) the first time a landed
+    resolved once, lazily, via `resolve_repo_root()` (the same resolver
+    `brief()` itself uses — NOT zero-spawn: it runs `git rev-parse
+    --show-toplevel` through `pickup_assemble._run_git`, one subprocess
+    spawn per resolution) the first time a landed
     directive actually needs it, when the caller did not supply one — never
     up front, so a caller exercising directives that never touch a gate
     pays no resolution cost. The memo write is wrapped in a bare
@@ -781,7 +785,24 @@ def _execute_directives(
     next pass re-walks the gate," never to a reported apply failure —
     memoisation is a performance optimization, and a miss is always the
     safe direction (see the module-level "Gate verdict memo" docstring in
-    `directives_review.py`)."""
+    `directives_review.py`).
+
+    Foreign-repo gate (C2, docs/plans/2026-08-11-ceremony-closes-against-a-
+    foreign-repo.md): mirrors `brief()`'s own `compute_repo_identity_gate`
+    call at THIS mutating dispatch site, once per call (cached via
+    `_repo_identity_checked`, computed the first time a landed directive
+    resolves `gate_root`) — `apply` is where the reported near-miss would
+    actually have written. `sid` needs no re-derivation here for the same
+    ordering reason `brief()` documents at its own call site:
+    `resolve_session_id` is a pure env read that ignores the root it is
+    passed. Gated ONLY when `repo_root` was NOT supplied to this call
+    (cwd-derived) — an explicitly-supplied `repo_root` is caller intent
+    that never touched cwd and is never refused on here, matching `brief()`.
+    MISMATCH raises `TransportFailure`; the caller (`apply()`) catches it
+    and degrades to `WorkstreamApplyExitCode.TRANSPORT_FAIL`, the same
+    contract `brief()`'s own MISMATCH raise already has one layer up."""
+    _repo_root_was_cwd_derived = repo_root is None
+    _repo_identity_checked: list[bool] = [False]
     jp_by_id = _judgment_points_by_id(judgment_points)
     directive_ids = {d["id"] for d in directives}
     # `depends_on` is a UNION namespace (judgment-point id OR sibling
@@ -876,6 +897,11 @@ def _execute_directives(
 
         gate_root = _lazy_repo_root()
         if gate_root is not None:
+            if not _repo_identity_checked[0]:
+                _repo_identity_checked[0] = True
+                repo_identity_gate = compute_repo_identity_gate(gate_root, sid)
+                if _repo_root_was_cwd_derived and repo_identity_gate["verdict"] == "MISMATCH":
+                    raise TransportFailure(repo_identity_gate["message"])
             try:
                 directives_review.record_gate_verdict_if_passed(
                     gate_root, directive, result.get("exit_code", 0), result.get("stdout", "")
@@ -1057,7 +1083,14 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 "results": [],
             }
 
-    return _execute_directives(directives, judgment_points, effective_decisions)
+    sid = envelope.get("preflight", {}).get("session_shape", {}).get("sid")
+    try:
+        return _execute_directives(directives, judgment_points, effective_decisions, sid=sid)
+    except TransportFailure as exc:
+        return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
+            "error": str(exc),
+            "landed": [],
+        }
 
 
 def main(argv: list[str]) -> int:

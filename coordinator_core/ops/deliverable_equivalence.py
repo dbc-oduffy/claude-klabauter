@@ -1,15 +1,21 @@
 """
-coordinator_core.ops.deliverable_equivalence — shared deliverable-id equivalence read-model.
+coordinator_core.ops.deliverable_equivalence — shared deliverable-id equivalence read-model,
+plus (sedge-06) the additive close-out ledger loader/validator over the same artifact.
 
-Purpose: ONE join-key canonicalization mechanism shared by all four raw-comparison
-consumers named in the fork-remediation audit (`deliverable_status.py`,
-`deliverable_rollup.py`, `migrate_handoff_vocabulary.py`, and — transitively, via its
-in-process call into `deliverable_rollup._handler` — `coordinator_render_rollup.py`).
-Each of those consumers today compares raw `deliverable_id` strings for equality; when a
-deliverable has been forked (minted twice for the same underlying work, per DD#1's
-declared-winner tiebreak), that raw comparison silently treats the two legs as unrelated
-entities. This module lets every reader treat a declared fork pair as one entity without
-touching what any of those legs' own records carry on disk.
+Purpose: ONE join-key canonicalization mechanism shared by the fork-remediation
+consumer set. Correcting the module's own long-stale claim (it used to name only 4
+consumers): the research corpus for sedge-06
+(`state/roadmap/sedge-2026-08-06/research-corpus/ledger-widening.md` §4) enumerates the
+REAL count by grep + enclosing-function read as **8 production modules, 12–14 call
+sites** — `deliverable_status.py`, `deliverable_rollup.py`, `migrate_handoff_vocabulary.py`,
+`commit_anchors.py`, `draft_plan_aging.py`, `review_brightline_gate.py`,
+`close_out_and_stamp.py`, and `workstream_complete/__init__.py` — plus two pass-through
+callers (`coordinator_render_rollup.py`, `promote_shipped_in_flight_stubs.py`). Each of
+those consumers compares raw `deliverable_id` strings for equality; when a deliverable
+has been forked (minted twice for the same underlying work, per DD#1's declared-winner
+tiebreak), that raw comparison silently treats the two legs as unrelated entities. This
+module lets every reader treat a declared fork pair as one entity without touching what
+any of those legs' own records carry on disk.
 
 Reads the declared equivalence artifact at `state/deliverable-equivalence.yaml`
 (relative to the worktree root), authored by chunk C3b:
@@ -26,6 +32,26 @@ this loader only guards against a malformed artifact silently masquerading as a 
 (see `_build_equivalence_map`'s duplicate-loser handling below).
 
 Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b, AC9, AC12)
+
+Second responsibility — the close-out ledger (sedge-06)
+---------------------------------------------------------
+The SAME on-disk artifact (`state/deliverable-equivalence.yaml`) also carries a second,
+unrelated top-level block, `ledger:`, keyed by `deliverable_id` rather than `loser` — a
+close-out verdict transcription, not a fork-equivalence declaration. It shares only the
+file with the fork-equivalence half above; the two are deliberately two row KINDS in one
+file (`entries:` for forks, `ledger:` for close-out rows) rather than one row shape
+carrying both key spaces, because a ledger keyed by `loser` could only ever describe the
+19 forked deliverables — the overwhelming majority of deliverables were never forked, so
+a one-wide-row shape structurally cannot hold the ledger's population. Two row kinds also
+keeps the fork-adjudication invariants (unique `loser`; no `winner` also a `loser`)
+undiluted by an unrelated key space.
+`load_deliverable_ledger` is this responsibility's own loader, with its own memo
+(`_reset_deliverable_ledger_cache`, distinct from `_reset_equivalence_map_cache` — see
+its docstring for the memo-interaction hazard) and its own validator
+(`validate_deliverable_ledger_rows` / `DeliverableLedgerValidationError`), documented at
+each definition below. This second responsibility does NOT change `load_equivalence_map`
+or `canonicalize` in any way — their signature, body, and `Dict[str, str]` return type
+are byte-for-byte unchanged by this addition.
 
 Negative-spec (hard-won, load-bearing — do not narrow this back):
   - **Join-key transform only. NEVER a field mutation.** No caller of `canonicalize()` may
@@ -52,13 +78,19 @@ Negative-spec (hard-won, load-bearing — do not narrow this back):
     for every `x` and every well-formed map `m`. No caller needs to re-canonicalize a
     result — but doing so is harmless, which is the AC12 idempotence-by-construction
     property this module ships for its own read-path.
+  - **The close-out ledger (`ledger:`) is never on the cockpit emission wire.** Nothing
+    in this module, or in sedge-06's stub, puts a ledger column into
+    `state/cockpit-emission.json` or a `contract/cockpit_schema` entity. That is a
+    separate, later, unbundled move requiring external negotiation (research corpus §6) —
+    not decided or done here.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -246,3 +278,630 @@ def canonicalize(raw_id: Optional[str], equivalence_map: Dict[str, str]) -> Opti
     if raw_id is None:
         return None
     return equivalence_map.get(raw_id, raw_id)
+
+
+# ---------------------------------------------------------------------------
+# Close-out ledger (sedge-06) — a SECOND, additive read-model over the same
+# artifact, keyed by `deliverable_id` rather than `loser`. Own memo, own
+# validator, own exception type. Does not touch load_equivalence_map/
+# canonicalize or their module globals above.
+# ---------------------------------------------------------------------------
+
+#: Closed enum for a ledger row's `status` column.
+LEDGER_STATUS_VALUES = frozenset({"open", "shipped", "superseded", "abandoned"})
+
+#: Closed enum for `closure_evidence.join_provenance`, mirroring
+#: `close_out_and_stamp.DeliverableJoinStats`'s four-valued `join_provenance`
+#: (`JOIN_PROVENANCE_JOINED`, `JOIN_PROVENANCE_NO_JOIN_KEY`,
+#: `JOIN_PROVENANCE_NO_JOIN_CANDIDATES`, `JOIN_PROVENANCE_KEY_MISMATCH` — read directly
+#: from coordinator_core/execute_plan_assemble/close_out_and_stamp.py before shipping
+#: this enum, not guessed at).
+LEDGER_JOIN_PROVENANCE_VALUES = frozenset(
+    {"joined", "no_join_key", "no_join_candidates", "key_mismatch"}
+)
+
+
+class DeliverableLedgerValidationError(ValueError):
+    """Raised by `validate_deliverable_ledger_rows` on any malformed ledger row.
+
+    Purpose: the close-out ledger inverts the loader's own WARN-and-skip discipline.
+    WARN-and-skip is tolerable for `loser`/`winner` (an absent/dropped fork-equivalence
+    entry degrades to today's raw-id comparison — a safe, well-understood fallback). It
+    is the WORSE failure mode for an authoritative close-out column: a silently-dropped
+    ledger row reads as "no such verdict" rather than "a verdict exists but this file's
+    encoding of it is broken" (research corpus §7's caveat). So a present-but-malformed
+    ledger row must fail loud, not degrade quietly — this exception is that loud failure.
+    """
+
+
+_RESOLVED_DELIVERABLE_LEDGER: Optional[List[Dict[str, Any]]] = None
+_DELIVERABLE_LEDGER_RESOLVED: bool = False
+_LEDGER_RESOLVED_FOR_ROOT: Optional[Path] = None
+
+
+def _reset_deliverable_ledger_cache() -> None:
+    """Test-only helper: clear the ``load_deliverable_ledger`` process-scope memo.
+
+    Deliberately separate from `_reset_equivalence_map_cache` and its globals —
+    the two loaders read the same file but are two independent read-models with
+    independent memoization state, per sedge-06's D2 (same module, but the ledger
+    is its own responsibility, not a mutation of the fork-equivalence one).
+    """
+    global _RESOLVED_DELIVERABLE_LEDGER, _DELIVERABLE_LEDGER_RESOLVED, _LEDGER_RESOLVED_FOR_ROOT
+    _RESOLVED_DELIVERABLE_LEDGER = None
+    _DELIVERABLE_LEDGER_RESOLVED = False
+    _LEDGER_RESOLVED_FOR_ROOT = None
+
+
+def load_deliverable_ledger(worktree_root: Path) -> List[Dict[str, Any]]:
+    """Load the close-out ledger's full rows, memoized per-process.
+
+    Purpose: reads the SAME artifact `load_equivalence_map` reads
+    (`<worktree_root>/state/deliverable-equivalence.yaml`) but projects its `ledger:`
+    top-level list instead of `entries:`, returning full rows (not a `{loser: winner}`
+    projection — there is no existing seam a ledger column could arrive at readers
+    through for free; see the module docstring's "Second responsibility" section).
+
+    Degradation, same non-raising discipline as `load_equivalence_map`'s ABSENCE path
+    (a missing artifact, missing `ledger:` key, or unparsable YAML is not this
+    function's business to raise on — that is `validate_deliverable_ledger_rows`'s job,
+    for the MALFORMED-but-present case only): missing artifact -> `[]`; read/parse
+    exception -> logged WARNING -> `[]`; parsed-but-not-a-dict, or `ledger` missing/not
+    a list -> `[]` silently. This function does NOT validate row shape — callers that
+    need loud-failure-on-malformed-row semantics call
+    `validate_deliverable_ledger_rows` themselves on the returned rows.
+
+    Memoization hazard (research corpus Constraint 7 / Open-question 3 — read before
+    calling this from a session that also WRITES the ledger): this memo is per-process
+    and root-insensitive, exactly like `load_equivalence_map`'s. A process that writes
+    `ledger:` rows to the artifact and then calls this function again in the SAME
+    process gets the stale pre-write memo, not the freshly-written rows. Call
+    `_reset_deliverable_ledger_cache()` after any in-process write before re-reading.
+    This is a distinct memo from `load_equivalence_map`'s — writing the ledger does not
+    invalidate the fork-equivalence memo and vice versa, since the two loaders share a
+    file but not a cache.
+    """
+    global _RESOLVED_DELIVERABLE_LEDGER, _DELIVERABLE_LEDGER_RESOLVED, _LEDGER_RESOLVED_FOR_ROOT
+
+    if _DELIVERABLE_LEDGER_RESOLVED:
+        assert _RESOLVED_DELIVERABLE_LEDGER is not None
+        if _LEDGER_RESOLVED_FOR_ROOT is not None and worktree_root != _LEDGER_RESOLVED_FOR_ROOT:
+            logger.warning(
+                "deliverable_equivalence: load_deliverable_ledger called with "
+                "worktree_root %s but the memoized ledger was resolved for %s; "
+                "returning the memoized ledger for the FIRST root, not this one. Call "
+                "_reset_deliverable_ledger_cache() between roots if this is a test "
+                "iterating multiple worktrees.",
+                worktree_root,
+                _LEDGER_RESOLVED_FOR_ROOT,
+            )
+        return _RESOLVED_DELIVERABLE_LEDGER
+
+    artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
+
+    if not artifact_path.is_file():
+        ledger_rows: List[Dict[str, Any]] = []
+    else:
+        try:
+            content = artifact_path.read_text(encoding="utf-8")
+            parsed = yaml.safe_load(content)
+        except Exception as exc:  # noqa: BLE001 — a bad artifact degrades, not raises
+            logger.warning(
+                "deliverable_equivalence: could not read/parse %s for the close-out "
+                "ledger: %s; falling back to an empty ledger.",
+                artifact_path,
+                exc,
+            )
+            parsed = None
+
+        if not isinstance(parsed, dict):
+            ledger_rows = []
+        else:
+            ledger = parsed.get("ledger")
+            if not isinstance(ledger, list):
+                ledger_rows = []
+            else:
+                ledger_rows = [row for row in ledger]
+
+    _RESOLVED_DELIVERABLE_LEDGER = ledger_rows
+    _DELIVERABLE_LEDGER_RESOLVED = True
+    _LEDGER_RESOLVED_FOR_ROOT = worktree_root
+    return ledger_rows
+
+
+def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
+    """Raise `DeliverableLedgerValidationError` on the first malformed ledger row.
+
+    Purpose: the MALFORMED-row counterpart to `load_deliverable_ledger`'s ABSENT-data
+    degradation. Where the fork-equivalence loader's `_build_equivalence_map` WARNs and
+    skips a bad row (safe, because absence there degrades to raw-id comparison), a
+    close-out verdict has no such safe fallback — a present-but-broken row must not be
+    silently dropped, or its verdict quietly disappears while looking like "no verdict
+    was ever asserted" (research corpus §7 / Constraint 6). So this function raises
+    loudly rather than filtering.
+
+    Validates, per row:
+      - required keys present: `deliverable_id`, `status`, `adjudicator`,
+        `evidence_source`.
+      - `deliverable_id` is a non-blank string, unique across the whole `rows` list.
+      - `status` is one of `LEDGER_STATUS_VALUES`.
+      - `closed_at` is present (non-null) iff `status != "open"`.
+      - `superseded_by` is present (non-null) iff `status == "superseded"`. This is
+        supersession, NOT fork-equivalence — never treat it as an identity join the way
+        `winner` is; a wrong `superseded_by` value must never collapse two distinct
+        deliverables the way a wrong `winner` entry could (research corpus Constraint 3).
+      - `closure_evidence`, if present and non-null, is a mapping whose
+        `join_provenance` (if present) is one of `LEDGER_JOIN_PROVENANCE_VALUES`, and
+        whose `realizing_commits` (if present) is a list of strings.
+
+    Raises `DeliverableLedgerValidationError` naming the offending row's
+    `deliverable_id` (or its index, when the key itself is what's missing/invalid) and
+    the specific rule violated. Never warns-and-skips.
+    """
+    seen_ids: Dict[str, int] = {}
+    for index, row in enumerate(rows):
+        row_ref = f"index {index}"
+        if not isinstance(row, dict):
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row at {row_ref} is not a mapping: {row!r}"
+            )
+
+        deliverable_id = row.get("deliverable_id")
+        if not isinstance(deliverable_id, str) or not deliverable_id.strip():
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row at {row_ref} has a missing/invalid "
+                f"'deliverable_id': {row!r}"
+            )
+        row_ref = f"deliverable_id {deliverable_id!r}"
+
+        if deliverable_id in seen_ids:
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row {row_ref} duplicates the deliverable_id first "
+                f"seen at index {seen_ids[deliverable_id]} — deliverable_id must be "
+                f"unique across the ledger block"
+            )
+        seen_ids[deliverable_id] = index
+
+        status = row.get("status")
+        if status not in LEDGER_STATUS_VALUES:
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row {row_ref} has invalid 'status' {status!r}; "
+                f"must be one of {sorted(LEDGER_STATUS_VALUES)}"
+            )
+
+        adjudicator = row.get("adjudicator")
+        if not isinstance(adjudicator, str) or not adjudicator.strip():
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row {row_ref} has a missing/invalid 'adjudicator' "
+                f"— every close-out verdict must name who/what asserted it"
+            )
+
+        evidence_source = row.get("evidence_source")
+        if not isinstance(evidence_source, str) or not evidence_source.strip():
+            raise DeliverableLedgerValidationError(
+                f"deliverable ledger row {row_ref} has a missing/invalid "
+                f"'evidence_source' — every close-out verdict must name where the "
+                f"assertion came from"
+            )
+
+        closed_at = row.get("closed_at")
+        if status == "open":
+            if closed_at not in (None,):
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has status 'open' but a "
+                    f"non-null 'closed_at' ({closed_at!r}); 'closed_at' must be "
+                    f"absent/null when status is 'open'"
+                )
+        else:
+            if not isinstance(closed_at, str) or not closed_at.strip():
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has status {status!r} but a "
+                    f"missing/invalid 'closed_at' — required whenever status != 'open'"
+                )
+
+        superseded_by = row.get("superseded_by")
+        if status == "superseded":
+            if not isinstance(superseded_by, str) or not superseded_by.strip():
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has status 'superseded' but a "
+                    f"missing/invalid 'superseded_by' — required when status is "
+                    f"'superseded'"
+                )
+        else:
+            if superseded_by is not None:
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has status {status!r} but a "
+                    f"non-null 'superseded_by' ({superseded_by!r}); 'superseded_by' is "
+                    f"only meaningful when status is 'superseded'"
+                )
+
+        closure_evidence = row.get("closure_evidence")
+        if closure_evidence is not None:
+            if not isinstance(closure_evidence, dict):
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has a 'closure_evidence' that "
+                    f"is not a mapping: {closure_evidence!r}"
+                )
+            join_provenance = closure_evidence.get("join_provenance")
+            if (
+                join_provenance is not None
+                and join_provenance not in LEDGER_JOIN_PROVENANCE_VALUES
+            ):
+                raise DeliverableLedgerValidationError(
+                    f"deliverable ledger row {row_ref} has invalid "
+                    f"'closure_evidence.join_provenance' {join_provenance!r}; must be "
+                    f"one of {sorted(LEDGER_JOIN_PROVENANCE_VALUES)}"
+                )
+            realizing_commits = closure_evidence.get("realizing_commits")
+            if realizing_commits is not None:
+                if not isinstance(realizing_commits, list) or not all(
+                    isinstance(sha, str) for sha in realizing_commits
+                ):
+                    raise DeliverableLedgerValidationError(
+                        f"deliverable ledger row {row_ref} has a "
+                        f"'closure_evidence.realizing_commits' that is not a list of "
+                        f"strings: {realizing_commits!r}"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# sedge-07 — Step (1): read-only ledger seed, and Step (2): ledger-first /
+# frontmatter-fallback dual read with hard-error mismatch.
+#
+# Neither of these touches load_equivalence_map/canonicalize/load_deliverable_
+# ledger/validate_deliverable_ledger_rows above — they consume those as a pure
+# overlay, per this module's own "Second responsibility" docstring section.
+#
+# Parser choice (named per the sedge-07 dispatch brief): both the seed and the
+# dual reader read frontmatter via `backfill_deliverable_spine.extract_fm_field`
+# (rest-of-line, first-fence-block only), NEVER
+# `coordinator_core.ops._fm_util.extract_frontmatter_scalar` (first-token-only).
+# The two are NOT interchangeable per each module's own docstring; using both
+# across the seeder and the reader would reintroduce a value-divergence class
+# at the parser layer, exactly the defect class this stub exists to close. One
+# parser, used everywhere in this section.
+# ---------------------------------------------------------------------------
+
+
+def _is_immutable_path_local(path: str) -> bool:
+    """Local reimplementation of `backfill_deliverable_spine.is_immutable_path`'s
+    archive predicate — deliberately NOT imported from that module.
+
+    Belt-and-braces only: nothing in this section ever opens a file in write
+    mode, so no artifact is ever at risk of a write regardless of this
+    predicate's answer. It exists because the research corpus (§4) measured
+    that `_stamp_file` has no immutability guard of its own — the entire
+    protection over there is a caller-side branch in `backfill_deliverable_
+    spine.main`, and the subagent archive-write guard does not intercept an
+    in-process `open()`/`os.replace()` call from an op. A function that reused
+    `is_immutable_path` by import would inherit a predicate with no
+    enforcement teeth of its own; reimplementing it here keeps the "zero
+    writes to archive/" property visibly local to the one section of this
+    module that walks the archived corpus, rather than resting on an imported
+    helper's good behaviour elsewhere.
+    """
+    norm = path.replace(os.sep, "/")
+    return "/archive/handoffs/" in norm or "/archive/completed/" in norm
+
+
+def seed_deliverable_ledger_rows(worktree_root: Path) -> List[Dict[str, Any]]:
+    """Step (1) — read-only seed of close-out ledger rows from the artifact corpus.
+
+    Walks the board-relevant corpus via `backfill_deliverable_spine.
+    enumerate_corpus`/`classify_artifact` (reusable read-side helpers per the
+    research corpus §1), reads each artifact's frontmatter `deliverable_id` via
+    `extract_fm_field` (see the parser-choice note above this function), and
+    routes every non-empty raw id through `deliverable_equivalence.canonicalize`
+    against the FULL 19-entry equivalence map (`load_equivalence_map`) so a
+    declared fork loser seeds under its winner's id, never its own.
+
+    Hard prohibitions (each with a named reason in the research corpus §1):
+      - Does NOT import or call `backfill_deliverable_spine.group_corpus` — it
+        buckets every already-`deliverable_id`-bearing artifact into
+        `already_threaded` and EXCLUDES it, which is precisely where all 19
+        fork legs live, and it calls `canonicalize()` nowhere in that module.
+      - Does NOT call `_find_group_id` — first-wins-in-list-order with no
+        divergence check, an independent fork-recreation vector.
+      - Does NOT call `_stamp_file` or mint anything (`mint_deliverable_id.
+        mint()` is never imported here) — a seeder that mints is a seeder
+        that forks (D1 carry-not-remint).
+
+    Winners are NOT 1:1 with losers (research corpus §0): distinct canonical
+    ids seeded here are fewer than 19 by construction (`dlv-pickup-skill-
+    code-driven-branch-result-acd867` alone absorbs three losers). This is
+    expected deduplication, not a merge defect — a single ledger row is
+    emitted per DISTINCT canonical id, with every artifact path that
+    canonicalized to it folded into that row's `evidence_source`.
+
+    The two null-loser forks (`dlv-qsub-02`/`dlv-qsub-03`) are NOT seeded by
+    this function and cannot be: `canonicalize()` only redirects a WRONG-BUT-
+    PRESENT raw id, and both of their losing artifacts carry `deliverable_id:
+    null` — there is no wrong id here to route through the equivalence map,
+    only a missing one. See this stub's completion notes (Q3) for the full
+    disposition; they remain covered only by
+    `state/audits/2026-08-01-null-deliverable-id-plans.md`.
+
+    Every emitted row carries `status: "open"` (a seed transcribes existing
+    artifact-borne identity; it asserts no close-out verdict),
+    `adjudicator` naming this function as the seeding mechanism, and
+    `evidence_source` naming the artifact path(s) (`;`-joined, repo-relative,
+    forward-slash-normalized, sorted) the canonical id was observed on. Every
+    row also carries `closed_at: None` and `superseded_by: None` so the
+    returned rows pass `validate_deliverable_ledger_rows` unmodified — an
+    "open" row is REQUIRED to carry a null `closed_at`/`superseded_by` by that
+    validator's own rules.
+
+    Zero writes: this function never opens a file in any mode but read
+    (`"r"`), never calls `os.replace`, and never imports `_stamp_file`. Every
+    archived artifact (`_is_immutable_path_local`) is still READ for its
+    `deliverable_id` (research corpus §4 confirms archived deliverables can
+    be seeded read-only with no write-back — the value is already on disk)
+    but the archive-ness of a path plays no role in whether this function
+    writes to it, because this function never writes to ANY path.
+    """
+    # Deferred import: `backfill_deliverable_spine` is a large module with its
+    # own CLI surface; importing at call time (not module scope) avoids a
+    # module-load-order coupling between the two ops modules for the common
+    # case where a caller only wants the fork-equivalence half of this file.
+    from coordinator_core.ops.backfill_deliverable_spine import (  # noqa: PLC0415
+        classify_artifact,
+        enumerate_corpus,
+        extract_fm_field,
+    )
+
+    equivalence_map = load_equivalence_map(worktree_root)
+    corpus = enumerate_corpus(str(worktree_root))
+
+    winners: Dict[str, List[str]] = {}
+    for path in corpus:
+        # classify_artifact / _is_immutable_path_local are consulted for
+        # completeness (every corpus entry is a real, classified artifact)
+        # but neither gates whether this function reads or seeds it — see
+        # this function's own "Zero writes" docstring section.
+        classify_artifact(path)
+        _is_immutable_path_local(path)
+
+        raw_id = extract_fm_field(path, "deliverable_id")
+        if not raw_id:
+            continue
+
+        canonical_id = canonicalize(raw_id, equivalence_map)
+        if not canonical_id:
+            continue
+
+        rel_path = os.path.relpath(path, str(worktree_root)).replace(os.sep, "/")
+        winners.setdefault(canonical_id, []).append(rel_path)
+
+    rows: List[Dict[str, Any]] = []
+    for canonical_id in sorted(winners):
+        evidence_paths = sorted(set(winners[canonical_id]))
+        rows.append(
+            {
+                "deliverable_id": canonical_id,
+                "status": "open",
+                "closed_at": None,
+                "superseded_by": None,
+                "adjudicator": (
+                    "coordinator_core.ops.deliverable_equivalence."
+                    "seed_deliverable_ledger_rows (sedge-07)"
+                ),
+                "evidence_source": "; ".join(evidence_paths),
+            }
+        )
+    return rows
+
+
+class DeliverableDualReadMismatchError(RuntimeError):
+    """Raised by `dual_read_deliverable_id` when the ledger and the artifact's own
+    frontmatter give two genuinely different (canonicalized) answers for the same
+    artifact's `deliverable_id`.
+
+    Departure from the only dual-read precedent in this repo
+    (`ownership_index.build_ownership_index`), argued rather than cited: that
+    module deliberately chose `_LOG.warning` over a raise, and its own
+    rationale is sound FOR ITS OWN SHAPE — the claim-store decision is final
+    either way, so its frontmatter `claimed_by`/`consumed_by` mirror is
+    informationally redundant, and a disagreement there is staleness, not
+    ambiguity, because there is only ONE live writer (the claim store) plus a
+    demoted mirror. Mid-transition `deliverable_id` is a structurally
+    different shape: it has TWO genuinely live writers — the artifact
+    frontmatter (written by every existing carry/mint call site) and the new
+    ledger (seeded here, and appended to by later stubs) — not one store plus
+    a redundant mirror. A warn-and-continue posture over a second live writer
+    is the EXACT mechanism that produced the 19-row fork population this
+    roadmap exists to close (two independently-authored producers of the same
+    join key, silently diverging — see `DivergentDeliverableIdError`'s own
+    docstring for the sibling failure mode on the plan/predecessor axis).
+    Warning here, rather than raising, would reproduce that defect, not
+    merely fail to catch a rare edge case. That is why `dual_read_deliverable_
+    id` departs from `build_ownership_index`'s mismatch-response precedent
+    while still following its store-first / frontmatter-fallback / three-way-
+    outcome STRUCTURE (see that function's own docstring for what IS carried
+    forward).
+    """
+
+
+_LEDGER_OUTCOME_HIT = "hit"
+_LEDGER_OUTCOME_GENUINE_MISS = "genuine_miss"
+_LEDGER_OUTCOME_UNREADABLE = "ledger_unreadable"
+
+#: Public re-export of the three-way outcome vocabulary `dual_read_deliverable_id`
+#: and `dual_read_deliverable_ids_for_corpus` return — hit / genuine-miss /
+#: ledger-unreadable are REQUIRED to stay distinguishable by the caller (research
+#: corpus §6): collapsing "unreadable" into "miss" makes the migration invisibly
+#: revert to frontmatter-only reads with no signal that it has done so.
+DUAL_READ_OUTCOME_VALUES = frozenset(
+    {_LEDGER_OUTCOME_HIT, _LEDGER_OUTCOME_GENUINE_MISS, _LEDGER_OUTCOME_UNREADABLE}
+)
+
+
+def _ledger_artifact_readable(worktree_root: Path) -> bool:
+    """True unless `state/deliverable-equivalence.yaml` is PRESENT but could not be
+    read/parsed as a YAML mapping.
+
+    A MISSING artifact is the normal steady state before the ledger exists at
+    all (mirrors `load_equivalence_map`'s own missing-artifact-is-not-an-error
+    contract) — this returns True for that case, not "unreadable". Only a
+    present-but-broken file (I/O error, unparsable YAML, or a parsed document
+    that is not a mapping) returns False. This is a DELIBERATELY separate
+    read from `load_deliverable_ledger`'s own memoized load: that function's
+    ABSENT/malformed degradation collapses every failure mode to `[]`, with no
+    signal left over for a caller that needs to tell "empty ledger" apart from
+    "broken ledger file" (research corpus §6's `errors` arm requirement).
+    """
+    artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
+    if not artifact_path.is_file():
+        return True
+    try:
+        content = artifact_path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(content)
+    except Exception:  # noqa: BLE001 — any read/parse failure means "unreadable"
+        return False
+    return isinstance(parsed, dict)
+
+
+def _ledger_evidence_index(ledger_rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """repo-relative artifact path -> `deliverable_id`, built from every ledger
+    row's `;`-joined `evidence_source` field (the shape `seed_deliverable_ledger_
+    rows` emits). A row with a non-string `deliverable_id`/`evidence_source` is
+    skipped — this index is a read convenience only, not a second validator;
+    `validate_deliverable_ledger_rows` is the loud-failure path for a malformed
+    row, called separately by whichever caller needs that guarantee.
+    """
+    index: Dict[str, str] = {}
+    for row in ledger_rows:
+        deliverable_id = row.get("deliverable_id")
+        evidence_source = row.get("evidence_source")
+        if not isinstance(deliverable_id, str) or not isinstance(evidence_source, str):
+            continue
+        for raw_path in evidence_source.split(";"):
+            path = raw_path.strip()
+            if path:
+                index[path] = deliverable_id
+    return index
+
+
+def dual_read_deliverable_id(
+    worktree_root: Path,
+    artifact_path: str,
+    equivalence_map: Dict[str, str],
+    read_frontmatter_field=None,
+) -> Tuple[Optional[str], str]:
+    """Step (2), per-record — ledger-first, frontmatter-fallback read of ONE
+    artifact's canonical `deliverable_id`. HARD-ERRORS (raises, never warns) on
+    a ledger/frontmatter disagreement — see `DeliverableDualReadMismatchError`'s
+    own docstring for the full departure argument from `ownership_index.
+    build_ownership_index`'s WARN precedent; do not cite that function as
+    supporting this raise, it does the opposite, and it is cited here only for
+    the store-first / fallback / three-way-outcome STRUCTURE this function
+    follows, not the mismatch response.
+
+    Structured like `ownership_index.build_ownership_index`'s own data flow
+    (store call -> join to the walked corpus -> index): the ledger IS the
+    store here (via `load_deliverable_ledger` + `_ledger_evidence_index`,
+    joined on `artifact_path`'s repo-relative form), frontmatter is the
+    fallback/mirror leg, read via `extract_fm_field` (see this section's
+    parser-choice note) and canonicalized via `equivalence_map` before any
+    comparison — never compared raw, mirroring `resolve_deliverable_and_
+    initiative`'s own canonicalize-both-sides-before-comparing discipline.
+
+    Returns `(deliverable_id, outcome)`, `outcome` one of
+    `DUAL_READ_OUTCOME_VALUES`:
+      - `"hit"` — the ledger names a `deliverable_id` for this artifact path
+        (frontmatter agrees, or is silent). The ledger's id is returned.
+      - `"genuine_miss"` — the ledger is READABLE but has no row whose
+        `evidence_source` names this artifact path. Falls back to the
+        artifact's own (canonicalized) frontmatter `deliverable_id`, which may
+        itself be `None`.
+      - `"ledger_unreadable"` — `state/deliverable-equivalence.yaml` is
+        PRESENT but could not be read/parsed. This is NEVER silently
+        collapsed into `"genuine_miss"` (research corpus §6) — a caller that
+        needs to know whether it is reading a real migrated steady state or a
+        broken store must see this distinctly. Also falls back to frontmatter
+        (there is nothing else to fall back to), but the outcome tag makes
+        that fallback visible rather than indistinguishable from an ordinary
+        miss.
+
+    Raises `DeliverableDualReadMismatchError` when the ledger DOES name a
+    `deliverable_id` for this path AND the artifact's own canonicalized
+    frontmatter value is present and DIFFERENT — the hard-error case this
+    stub (AC5) mandates. A ledger hit with an ABSENT frontmatter value (the
+    artifact never carried `deliverable_id` in the first place, or it was
+    removed) is not a mismatch — there is nothing on the frontmatter side to
+    disagree with the ledger's answer, so this returns `"hit"` cleanly.
+    """
+    if read_frontmatter_field is None:
+        from coordinator_core.ops.backfill_deliverable_spine import (  # noqa: PLC0415
+            extract_fm_field as read_frontmatter_field,
+        )
+
+    raw_fm_id = read_frontmatter_field(artifact_path, "deliverable_id") or None
+    fm_canonical = canonicalize(raw_fm_id, equivalence_map) if raw_fm_id else None
+
+    if not _ledger_artifact_readable(worktree_root):
+        return fm_canonical, _LEDGER_OUTCOME_UNREADABLE
+
+    ledger_rows = load_deliverable_ledger(worktree_root)
+    evidence_index = _ledger_evidence_index(ledger_rows)
+
+    rel_path = os.path.relpath(artifact_path, str(worktree_root)).replace(os.sep, "/")
+    ledger_id = evidence_index.get(rel_path)
+
+    if ledger_id is None:
+        return fm_canonical, _LEDGER_OUTCOME_GENUINE_MISS
+
+    if fm_canonical is not None and fm_canonical != ledger_id:
+        raise DeliverableDualReadMismatchError(
+            f"deliverable_id dual-read mismatch for {artifact_path!r}: ledger "
+            f"names {ledger_id!r}, artifact frontmatter (canonicalized) names "
+            f"{fm_canonical!r} — two live writers of the same join key have "
+            "diverged; refusing to silently pick one (see "
+            "DeliverableDualReadMismatchError's own docstring)."
+        )
+
+    return ledger_id, _LEDGER_OUTCOME_HIT
+
+
+def dual_read_deliverable_ids_for_corpus(
+    worktree_root: Path,
+    artifact_paths: List[str],
+    equivalence_map: Dict[str, str],
+    read_frontmatter_field=None,
+) -> Tuple[Dict[str, Tuple[Optional[str], str]], List[str]]:
+    """Step (2), batch/corpus level — modeled on `ownership_index.
+    build_ownership_index`'s own `(result, scan_errors)` return shape.
+
+    Op-fail-vs-read-fail (the corpus-level open question this stub's baton
+    carries forward — answered here, not silently defaulted): `dual_read_
+    deliverable_id` raises PER RECORD, because a single record's identity
+    being genuinely unresolvable is exactly the case where a caller that
+    proceeds anyway is a caller that guesses (AC5's hard-error mandate). But
+    raising THAT SAME exception out of a corpus-wide walk would take an entire
+    emission/report down on one bad row — the corpus's own measured hazard.
+    This wrapper is the split-by-altitude answer: it calls the per-record
+    function for every path, CATCHES `DeliverableDualReadMismatchError` per
+    record into `errors` (a list of the exception's own message strings, one
+    per mismatched path) rather than letting it propagate, and continues the
+    walk — so one broken row never aborts every other row's read. No emit-
+    path caller is wired to this wrapper in this stub; that wiring, and
+    whether it should re-raise on ANY error rather than just collect them, is
+    a later stub's decision and must re-derive against this seam rather than
+    assume this wrapper's choice.
+
+    Returns `(results, errors)`: `results` maps EVERY input path that did not
+    raise to its own `(deliverable_id, outcome)` pair (see `dual_read_
+    deliverable_id`'s docstring for `outcome`'s three values); a path that
+    raised is present in `errors` (as a message string) and ABSENT from
+    `results` — mirroring `build_ownership_index`'s own "an error is reported,
+    not silently folded into a false-negative result" discipline.
+    """
+    results: Dict[str, Tuple[Optional[str], str]] = {}
+    errors: List[str] = []
+    for artifact_path in artifact_paths:
+        try:
+            results[artifact_path] = dual_read_deliverable_id(
+                worktree_root, artifact_path, equivalence_map, read_frontmatter_field
+            )
+        except DeliverableDualReadMismatchError as exc:
+            errors.append(str(exc))
+    return results, errors

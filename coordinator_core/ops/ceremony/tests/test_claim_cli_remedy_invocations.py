@@ -21,6 +21,23 @@ function's usage-error path.
 Metavariables (``<path>``, ``<root>``, ...) are positional-argument slots,
 not resolvable arguments: this test counts them as one argument each and
 never tries to substitute a real value for them.
+
+SECOND REMEDY CLASS (2026-08-11, B6 of docs/plans/2026-08-11-kill-on-
+staleness-and-a-way-past-the-gate.md): ``_CLAIM_CONFLICT_REMEDY`` now also
+names DR-260's operator-granted unlock as an escape, via a backtick-quoted
+``guard-unlock <guard_name>`` marker -- deliberately NOT a
+``session-claim-cli`` invocation, because DR-260 has no minting CLI, by
+design (the operator hand-writes the sentinel file; see
+``guard_unlock_sentinel``'s own module docstring and the mechanism-gate
+spike record's Finding 2). A remedy naming a CLI command that does not
+exist was exactly the regression this file's own module docstring
+describes -- the fix here is the same discipline applied to the new class:
+never assert this marker is invisible to the check (an exemption), assert
+instead that the guard name it names is the SAME string
+``scoped_git_commit._check_claim_conflicts`` actually calls
+``guard_unlock_sentinel.consume()`` with (``_CLAIM_CONFLICT_GUARD_NAME``) --
+so a rename on one side without the other is caught here, the identical
+shape of regression the CLI-invocation checks above already guard against.
 """
 
 from __future__ import annotations
@@ -47,6 +64,19 @@ _CLI_REPO_PATH = "coordinator/bin/session-claim-cli"
 #: `list-claims-by-session` with no args) is prose, not an invocation, and
 #: is deliberately not matched here.
 _INVOCATION_RE = re.compile(r"`(session-claim-cli [^`]+)`")
+
+#: The file-shaped remedy class (B6): a backtick-quoted ``guard-unlock
+#: <guard_name>`` marker naming DR-260's operator-granted sentinel unlock --
+#: never a CLI invocation, so it is matched by its OWN regex rather than
+#: `_INVOCATION_RE` above, and cross-checked below against the actual guard
+#: name the wiring uses rather than the CLI's `_dispatch` arities.
+_UNLOCK_MARKER_RE = re.compile(r"`guard-unlock ([^` ]+)`")
+
+
+def _extract_unlock_markers(text: str) -> List[str]:
+    """Return every guard name named by a `` `guard-unlock <guard_name>` ``
+    marker in *text*, in order."""
+    return _UNLOCK_MARKER_RE.findall(text)
 
 
 def _extract_invocations(text: str) -> Iterator[Tuple[str, str, List[str]]]:
@@ -227,3 +257,33 @@ def test_remedy_invocations_parse_against_cli_dispatch(
             f"at least {min_arity} -- this invocation exits 2 on the "
             "usage-error path"
         )
+
+
+def test_claim_conflict_remedy_names_a_reachable_guard_unlock() -> None:
+    """B6: `_CLAIM_CONFLICT_REMEDY`'s `` `guard-unlock <name>` `` marker
+    must name the SAME guard name `_check_claim_conflicts` actually calls
+    `guard_unlock_sentinel.consume()` with -- never a hand-copied literal
+    that can independently drift from the wiring (the exact regression
+    class this file's own module docstring describes for the CLI-shaped
+    remedies, applied here to the file-shaped one)."""
+    markers = _extract_unlock_markers(sgc._CLAIM_CONFLICT_REMEDY)
+    assert markers, (
+        "_CLAIM_CONFLICT_REMEDY: no `guard-unlock <name>` marker found -- "
+        "B5's break-past mechanism has no named remedy pointing at it"
+    )
+    assert markers == [sgc._CLAIM_CONFLICT_GUARD_NAME], (
+        f"_CLAIM_CONFLICT_REMEDY names guard(s) {markers!r}, but "
+        f"_check_claim_conflicts wires the unlock to "
+        f"{sgc._CLAIM_CONFLICT_GUARD_NAME!r} -- these must be the identical "
+        "string or the refusal text is pointing an operator at a guard "
+        "name that does not match what consume() is actually keyed on"
+    )
+
+
+def test_unanswerable_remedy_names_no_guard_unlock_marker() -> None:
+    """The DR-260 break-past only ever clears a live-claimant CONFLICT
+    (see `_check_claim_conflicts`'s own docstring/B5 spec) -- it has no
+    bearing on an UNANSWERABLE claim-index read, a different failure class
+    entirely. `_UNANSWERABLE_CLAIM_REMEDY` must not claim an escape this
+    mechanism does not actually grant."""
+    assert not _extract_unlock_markers(sgc._UNANSWERABLE_CLAIM_REMEDY)

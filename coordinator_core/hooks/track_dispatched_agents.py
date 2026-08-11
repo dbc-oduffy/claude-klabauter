@@ -5,7 +5,7 @@ Purpose: Records agent IDs dispatched by the EM into two session-runtime files:
     .git/coordinator-sessions/<session_id>/dispatched-agents.txt   (tab-delimited log)
     .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
 
-Ported from the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
+Ported from the retired ~/.claude/plugins/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``). Faithful port of all write logic and
 conditionals — same 3-pass agent-id extraction (now pre-resolved to flat scalar
 input by the manifest), same 4-source model cascade (now pre-resolved), same
@@ -67,7 +67,7 @@ Negative-spec:
     - Always returns without blocking the harness — advisory bookkeeping only.
 
 Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C4
-Source: retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
+Source: retired ~/.claude/plugins/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
 """
 

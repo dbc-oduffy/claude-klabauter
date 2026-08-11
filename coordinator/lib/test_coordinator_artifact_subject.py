@@ -76,7 +76,7 @@ _CLASSIFICATION_CASES = [
     ("claude-klabauter install script -> engine", "claude-klabauter/install.sh", "engine", 0),
     (
         "coordinator commands/install.md -> doctrine",
-        "plugins/coordinator/commands/install.md",
+        "plugins/coordinator-claude/coordinator/commands/install.md",
         "doctrine",
         0,
     ),
@@ -104,7 +104,7 @@ _CLASSIFICATION_CASES = [
     # --- Clear doctrine cases (at least one required by spec) ---
     (
         "skills/** file -> doctrine",
-        "plugins/coordinator/skills/handoff/SKILL.md",
+        "plugins/coordinator-claude/coordinator/skills/handoff/SKILL.md",
         "doctrine",
         0,
     ),
@@ -116,14 +116,14 @@ _CLASSIFICATION_CASES = [
     ),
     (
         "hooks/ file -> doctrine",
-        "plugins/coordinator/hooks/block-blanket-git-add.sh",
+        "plugins/coordinator-claude/coordinator/hooks/block-blanket-git-add.sh",
         "doctrine",
         0,
     ),
     ("CLAUDE.md -> doctrine", "CLAUDE.md", "doctrine", 0),
     (
         "agents/ file -> doctrine",
-        "plugins/coordinator/agents/code-reviewer.md",
+        "plugins/coordinator-claude/coordinator/agents/code-reviewer.md",
         "doctrine",
         0,
     ),
@@ -153,7 +153,7 @@ _CLASSIFICATION_CASES = [
     # before the narrowed engine MCP pattern fires.
     (
         "coordinator-plugin mcp-server wiki -> doctrine (not engine)",
-        "plugins/coordinator/docs/wiki/mcp-server-configuration.md",
+        "plugins/coordinator-claude/coordinator/docs/wiki/mcp-server-configuration.md",
         "doctrine",
         0,
     ),
@@ -166,7 +166,7 @@ _CLASSIFICATION_CASES = [
     # --- Install-chain edge cases (slug variants) ---
     (
         "skills/repo-setup -> doctrine",
-        "plugins/coordinator/skills/repo-setup/SKILL.md",
+        "plugins/coordinator-claude/coordinator/skills/repo-setup/SKILL.md",
         "doctrine",
         0,
     ),

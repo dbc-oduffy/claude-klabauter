@@ -415,6 +415,24 @@ _SYNTHETIC_TYPES: frozenset[str] = frozenset({'handoff-ledger', 'research-claim'
 # first-class `_TYPE_TO_GLOB` entry of its own: nothing outside this opt-in
 # path needs to query archived plans independently of their live
 # counterpart, so it is named only here.
+# NEGATIVE-SPEC — do NOT widen these globs to absorb a single repo's stray
+# archive location. Fleet-verified 2026-08-11 by example-cockpit-repo-em, who ran
+# `handoff.columns` across all six coordinator repos on this disk and compared
+# served rows against on-disk handoff files: example-doctrine-repo 550/550, claude-klabauter
+# 431/431, example-retrieval-repo 371/371, example-market-data-repo 194/194, example-cockpit-repo
+# 169/169 — five of six exact on the globs above. The sixth, example-store-repo, served
+# 18 of 25 because seven handoffs sit in a FLAT `state/handoffs/archive/`
+# alongside the canonical month-bucketed `archive/handoffs/<YYYY-MM>/` (verified
+# on disk here, both locations present; claude-klabauter's own tree is clean). That is
+# residue from a one-off manual audit in their repo (example-store-repo `838853f`),
+# not a third live fleet convention.
+#
+# The fix belongs in their tree — move the files — and cockpit has already routed
+# it there and declined to touch it themselves. Widening this map would bake a
+# location nothing else in the fleet uses into a shared surface, and would make
+# every future stray directory look like this map's problem to absorb. If
+# example-store-repo asks for the glob change directly, that is the standing answer,
+# and cockpit's independent read agrees with it.
 _ARCHIVE_GLOB_FOR_TYPE: dict[str, str] = {
     'handoff':         _TYPE_TO_GLOB['handoff-archived'],
     'cross-repo-memo': _TYPE_TO_GLOB['archived-memo'],

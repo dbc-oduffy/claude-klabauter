@@ -18,6 +18,7 @@ import importlib.machinery
 import importlib.util
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ import pytest
 
 from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
+from coordinator_core.session import harness_registry as hr
 from coordinator_core.testing.doe_root import resolve_doe_root
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.workstream_complete import apply as wsc_apply
@@ -804,12 +806,15 @@ def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_
 def test_review_scale_resolved_false_triviality_but_missing_metric_stays_unresolved(monkeypatch, tmp_path):
     """(e) the Staff Engineer finding 3: triviality resolves False (chain-scoped verdict
     is `single-reviewer-ok`, ruling out row 6) AND a row-4 metric
-    (`gross_loc`) is absent -> the unresolved outcome, never row 5. A
+    (`code_loc`) is absent -> the unresolved outcome, never row 5. A
     resolved-false chain verdict must not be read as "safe to fall through
-    to row 5 regardless of what else is unknown"."""
+    to row 5 regardless of what else is unknown". (2026-08-11, C7: updated
+    from `gross_loc=None` to `code_loc=None` -- since C2, row 4 reads
+    `code_loc`, not `gross_loc`, so nulling `gross_loc` alone no longer
+    leaves row 4's inputs unresolved.)"""
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
     decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict="single-reviewer-ok", gross_loc=None),
+        decisions=_review_scale_decisions(chain_partition_verdict="single-reviewer-ok", code_loc=None),
         repo_root=tmp_path,
     )
     review_scale = decision_object["gates"]["review_scale"]
@@ -4640,3 +4645,387 @@ def test_predecessor_distill_fate_point_emitted_and_no_exception_when_handoff_un
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "predecessor-distill-fate" in jp_ids
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md) —
+# `compute_repo_identity_gate` wired into `brief()` (Site 1) and
+# `apply.py::_execute_directives` (Site 2).
+#
+# AC6: every MISMATCH/UNRESOLVED/MATCH case below is constructed with REAL
+# files on disk (a fabricated `<claude-config>/sessions/` registry dir, real
+# `.git`-marked directories) — never by monkeypatching `compute_repo_
+# identity_gate`'s own return value. Construction pattern reused verbatim
+# from `coordinator_core/pickup_assemble/tests/test_repo_identity_gate.py`.
+# ---------------------------------------------------------------------------
+
+
+def _wsc_epoch_to_filetime_ticks(epoch: float) -> int:
+    return int((epoch + hr._FILETIME_EPOCH_OFFSET_SEC) * hr._FILETIME_TICKS_PER_SEC)
+
+
+def _wsc_write_registry_record(sessions_dir, filename, session_id, pid, cwd, epoch=None):
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    if epoch is None:
+        epoch = time.time() - 60
+    payload = {
+        "sessionId": session_id,
+        "pid": pid,
+        "procStart": _wsc_epoch_to_filetime_ticks(epoch),
+        "cwd": str(cwd),
+    }
+    (sessions_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+    return epoch
+
+
+def _wsc_make_real_repo(root) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+
+
+def _wsc_patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
+    if hit:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((pid, create_time), "env-hit"),
+        )
+    else:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: (None, "env-miss:absent"),
+        )
+
+
+def _wsc_patch_stable_pid_alive(monkeypatch, alive=True):
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": alive,
+    )
+
+
+def _wsc_gate_with_sid(sid: str) -> wsc.SessionShapeGate:
+    return wsc.SessionShapeGate(
+        sid=sid,
+        disposition="single-session",
+        consumed_handoff="",
+        diagnostics=[],
+        consumed_handoff_paths=(),
+        detection={},
+    )
+
+
+def test_brief_repo_identity_mismatch_refuses_when_repo_root_is_cwd_derived(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _wsc_make_real_repo(repo_root)
+    _wsc_make_real_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-wsc-mismatch"
+    _wsc_write_registry_record(sessions_dir, "9001.json", sid, 9001, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9001)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    # `root` came from `resolve_repo_root()`'s cwd default -- never pass
+    # `repo_root` here, per the gate's cwd-derived-only contract.
+    monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
+
+    with pytest.raises(wsc.TransportFailure):
+        wsc.brief(decisions={})
+
+
+def test_brief_repo_identity_unresolved_does_not_refuse_and_records_verdict(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    _wsc_make_real_repo(repo_root)
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9002, hit=False)
+
+    sid = "sess-wsc-unresolved"
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
+
+    decision_object = wsc.brief(decisions={})
+    assert decision_object["gates"]["repo_identity"]["verdict"] == "UNRESOLVED"
+
+
+def test_brief_repo_identity_match_records_verdict(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    _wsc_make_real_repo(repo_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-wsc-match"
+    _wsc_write_registry_record(sessions_dir, "9003.json", sid, 9003, repo_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9003)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
+
+    decision_object = wsc.brief(decisions={})
+    assert decision_object["gates"]["repo_identity"]["verdict"] == "MATCH"
+
+
+def test_brief_explicit_repo_root_never_refused_but_records_informational_verdict(monkeypatch, tmp_path):
+    # A MISMATCH-shaped registry record -- an explicitly-supplied `repo_root`
+    # must still emit `gates.repo_identity` (informational) but never raise.
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _wsc_make_real_repo(repo_root)
+    _wsc_make_real_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-wsc-explicit"
+    _wsc_write_registry_record(sessions_dir, "9004.json", sid, 9004, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9004)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+
+    decision_object = wsc.brief(decisions={}, repo_root=repo_root)
+    assert decision_object["gates"]["repo_identity"]["verdict"] == "MISMATCH"
+
+
+def _wsc_landing_directive() -> dict[str, Any]:
+    return {"id": "d-x", "cli": "wsc-tail", "args": [], "depends_on": None, "already_satisfied": False}
+
+
+def _wsc_stub_dispatch_directive(monkeypatch) -> None:
+    monkeypatch.setattr(
+        wsc_apply,
+        "_dispatch_directive",
+        lambda directive, args=None: {
+            "id": directive["id"],
+            "cli": directive["cli"],
+            "args": list(args if args is not None else directive.get("args", [])),
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
+
+
+def test_apply_execute_directives_repo_identity_mismatch_refuses_when_cwd_derived(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _wsc_make_real_repo(repo_root)
+    _wsc_make_real_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-apply-mismatch"
+    _wsc_write_registry_record(sessions_dir, "9101.json", sid, 9101, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9101)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    monkeypatch.setattr(wsc_apply, "resolve_repo_root", lambda: repo_root)
+    _wsc_stub_dispatch_directive(monkeypatch)
+
+    with pytest.raises(wsc.TransportFailure):
+        wsc_apply._execute_directives([_wsc_landing_directive()], [], {}, repo_root=None, sid=sid)
+
+
+def test_apply_execute_directives_repo_identity_unresolved_does_not_refuse(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    _wsc_make_real_repo(repo_root)
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9102, hit=False)
+
+    monkeypatch.setattr(wsc_apply, "resolve_repo_root", lambda: repo_root)
+    _wsc_stub_dispatch_directive(monkeypatch)
+
+    exit_code, report = wsc_apply._execute_directives(
+        [_wsc_landing_directive()], [], {}, repo_root=None, sid="sess-apply-unresolved"
+    )
+    assert "d-x" in report["landed"]
+
+
+def test_apply_execute_directives_repo_identity_match_records_and_lands(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    _wsc_make_real_repo(repo_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-apply-match"
+    _wsc_write_registry_record(sessions_dir, "9103.json", sid, 9103, repo_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9103)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    monkeypatch.setattr(wsc_apply, "resolve_repo_root", lambda: repo_root)
+    _wsc_stub_dispatch_directive(monkeypatch)
+
+    exit_code, report = wsc_apply._execute_directives(
+        [_wsc_landing_directive()], [], {}, repo_root=None, sid=sid
+    )
+    assert "d-x" in report["landed"]
+
+
+def test_apply_execute_directives_explicit_repo_root_never_refused(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _wsc_make_real_repo(repo_root)
+    _wsc_make_real_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    sid = "sess-apply-explicit"
+    _wsc_write_registry_record(sessions_dir, "9104.json", sid, 9104, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _wsc_patch_pid_env(monkeypatch, 9104)
+    _wsc_patch_stable_pid_alive(monkeypatch)
+
+    _wsc_stub_dispatch_directive(monkeypatch)
+
+    exit_code, report = wsc_apply._execute_directives(
+        [_wsc_landing_directive()], [], {}, repo_root=repo_root, sid=sid
+    )
+    assert "d-x" in report["landed"]
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-11-review-trail-carries-execution-basis.md) —
+# `_dc_review.chain_partition_execution_basis_report` is a VOICE, not
+# a veto: it must report execution basis per discharging record without
+# ever changing what `chain_partition_verdict_discharged` discharges.
+# ---------------------------------------------------------------------------
+
+
+def _c4_resolve_range_shas(sha_range: str):
+    """Trivial stub resolver: `"<sha>..<sha>"` resolves to `{sha}` alone —
+    every fixture record below uses this exact single-commit range shape,
+    matching `coverage.SAFE_RANGE`'s accepted `..`/`...` separator."""
+    head, _sep, tail = sha_range.partition("..")
+    return {tail or head}
+
+
+_C4_CHAIN_SHA = "a" * 40
+
+
+def _c4_record(verdict: str, execution_basis=None, scope_kind="diff"):
+    record = {
+        "verdict": verdict,
+        "sha_range": f"{_C4_CHAIN_SHA}~1..{_C4_CHAIN_SHA}",
+        "scope_kind": scope_kind,
+    }
+    if execution_basis is not None:
+        record["execution_basis"] = execution_basis
+    return record
+
+
+def test_execution_basis_report_counts_executed_read_only_and_not_recorded():
+    records = [
+        _c4_record("ok", execution_basis="executed"),
+        _c4_record("ok", execution_basis="read-only"),
+        _c4_record("ok"),  # field absent — pre-C1 shape
+    ]
+    report = _dc_review.chain_partition_execution_basis_report(
+        records,
+        chain_code_shas=[_C4_CHAIN_SHA],
+        chain_dag_shas=[_C4_CHAIN_SHA],
+        resolve_range_shas=_c4_resolve_range_shas,
+    )
+    assert report == {
+        "executed": 1,
+        "read-only": 1,
+        _dc_review.EXECUTION_BASIS_NOT_RECORDED: 1,
+    }
+
+
+def test_execution_basis_report_skips_non_discharging_verdicts():
+    records = [
+        _c4_record("pending", execution_basis="executed"),
+        _c4_record("waived", execution_basis="executed"),
+    ]
+    report = _dc_review.chain_partition_execution_basis_report(
+        records,
+        chain_code_shas=[_C4_CHAIN_SHA],
+        chain_dag_shas=[_C4_CHAIN_SHA],
+        resolve_range_shas=_c4_resolve_range_shas,
+    )
+    assert report == {"executed": 0, "read-only": 0, _dc_review.EXECUTION_BASIS_NOT_RECORDED: 0}
+
+
+def test_execution_basis_report_empty_when_chain_inputs_unresolved():
+    records = [_c4_record("ok", execution_basis="executed")]
+    assert _dc_review.chain_partition_execution_basis_report(
+        records, chain_code_shas=None, chain_dag_shas=[_C4_CHAIN_SHA], resolve_range_shas=_c4_resolve_range_shas,
+    ) == {}
+    assert _dc_review.chain_partition_execution_basis_report(
+        records, chain_code_shas=[_C4_CHAIN_SHA], chain_dag_shas=None, resolve_range_shas=_c4_resolve_range_shas,
+    ) == {}
+    assert _dc_review.chain_partition_execution_basis_report(
+        records, chain_code_shas=[_C4_CHAIN_SHA], chain_dag_shas=[_C4_CHAIN_SHA], resolve_range_shas=None,
+    ) == {}
+
+
+@pytest.mark.parametrize("verdict", ["ok", "warn", "blocked", "waived", "pending"])
+def test_execution_basis_report_never_changes_discharge_outcome(verdict):
+    """Regression, the load-bearing test for this chunk: adding
+    `execution_basis` (present, absent, or any value) to a record must not
+    move `chain_partition_verdict_discharged`'s verdict for any of the five
+    real verdict values — the gate gained a VOICE, not a veto."""
+    for execution_basis in (None, "executed", "read-only", "some-future-value"):
+        records = [_c4_record(verdict, execution_basis=execution_basis)]
+        without_basis = _dc_review.chain_partition_verdict_discharged(
+            [_c4_record(verdict)],
+            chain_code_shas=[_C4_CHAIN_SHA],
+            chain_dag_shas=[_C4_CHAIN_SHA],
+            resolve_range_shas=_c4_resolve_range_shas,
+        )
+        with_basis = _dc_review.chain_partition_verdict_discharged(
+            records,
+            chain_code_shas=[_C4_CHAIN_SHA],
+            chain_dag_shas=[_C4_CHAIN_SHA],
+            resolve_range_shas=_c4_resolve_range_shas,
+        )
+        assert with_basis == without_basis
+        # Table from the plan's problem statement (§ Problem): ok/warn/blocked
+        # discharge, waived/pending do not — unchanged by this chunk.
+        expected = verdict in {"ok", "warn", "blocked"}
+        assert with_basis is expected
+
+
+# AC5's "validate" clause (docs/plans/2026-08-11-review-trail-carries-
+# execution-basis.md, C4 body): the 1804-and-growing on-disk
+# `state/review-trail/` corpus must continue to validate (not merely stay
+# byte-unchanged) through the emit-side collector, which applies the
+# quarantine rules (verdict set, timestamp format, required fields). This
+# plan adds no key the collector reads — `collect()`'s per-record dict is
+# an explicit field-by-field whitelist, so an unknown `execution_basis` key
+# on a real record cannot affect quarantine either way (see § Anti-scope's
+# schema-surfaces entry: the cockpit-emit record shape and the on-disk
+# record shape are already two different surfaces).
+#
+# Pinned against OBSERVED current behaviour (2026-08-11), per this chunk's
+# own instruction — not an assumed count. `state/review-trail/` is a live,
+# actively-written corpus on a shared branch; a future re-run growing past
+# these totals (more records landing) is expected and not itself evidence
+# of a regression, only a divergence from this pin that should be re-based
+# against a fresh `git show <merge-base>` baseline rather than treated as a
+# failure of this plan's field addition.
+def test_real_review_trail_corpus_quarantine_count_unchanged_by_execution_basis_field():
+    from coordinator_core.ops.emit.context import EmitContext
+    from coordinator_core.ops.emit.sections.review_trail import collect
+
+    repo_root = Path(__file__).resolve().parents[2]
+    ctx = EmitContext(
+        repo_root=repo_root,
+        coordinator_root=repo_root,
+        central_state_root=repo_root / "state",
+        git_branch="test",
+        git_sha="0" * 40,
+        git_sha_short="00000000",
+        observed_at="2026-01-01T00:00:00Z",
+        hostname="test",
+        repo_name="test/test",
+    )
+    valid, malformed = collect(ctx)
+    # Observed baseline, 2026-08-11 (this chunk's dispatch): 2011 valid,
+    # 1534 malformed. This plan's C1 (execution_basis field addition) does
+    # not touch this collector or its whitelist, so re-running collect()
+    # is itself the "before" and "after" — the field simply is not read.
+    assert len(malformed) >= 1534
+    assert len(valid) >= 2011
+    # No key this plan adds is projected into the collected record shape.
+    for record in valid:
+        assert "execution_basis" not in record

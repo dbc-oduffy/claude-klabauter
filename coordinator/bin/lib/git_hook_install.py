@@ -424,16 +424,25 @@ def _has_line(text: str, exact_line: str) -> bool:
 
 
 def _git_root() -> Optional[str]:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except Exception:
-        return None
-    root = (out.stdout or "").strip()
+    """Resolve the cwd's repo root via the checked resolver
+    (`repo_identity.resolve_checked_repo_root`).
+
+    Classification: READER (AC10). This is a self-heal default (`root=None`
+    in `ensure_post_commit_hook`/`ensure_prepare_commit_msg_hook`/`_ensure_hook`)
+    that installs/repairs a hook into whichever repo the resolved root names —
+    a hook installer "must never fail loudly enough to block a commit" (see
+    this module's own docstring), so on MISMATCH — positive evidence the cwd
+    names a DIFFERENT real repo than the harness anchor — this warns to
+    stderr and proceeds with the resolved root anyway, per DR-277
+    (docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md).
+    UNRESOLVED never refuses either; it just yields None, exactly as the
+    predecessor's git-failure branch did.
+    """
+    from repo_identity import resolve_checked_repo_root
+
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict.get("verdict") == "MISMATCH":
+        print(verdict.get("message", "git_hook_install: repo-identity MISMATCH"), file=sys.stderr)
     return root or None
 
 

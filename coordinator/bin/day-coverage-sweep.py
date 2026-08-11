@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,33 +58,11 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _USAGE = "Usage: day-coverage-sweep.py <YYYY-MM-DD>"
-
-
-def _resolve_repo_root() -> str | None:
-    """Resolve the current git worktree root from PWD (standalone-repo assumption,
-    mirrors reconcile-completion-commits.py's ``_resolve_repo_root``)."""
-    try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except (OSError, RuntimeError, ImportError):
-        return None
-    root = result.stdout.strip()
-    if result.returncode != 0 or not root:
-        return None
-    return root
 
 
 def _import_day_coverage_sweep():
@@ -109,10 +86,14 @@ def main(argv: list[str]) -> int:
         print(_USAGE, file=sys.stderr)
         return 1
 
-    repo_root = _resolve_repo_root()
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         print(f"day-coverage-sweep.py: cannot resolve git repo root from {os.getcwd()}", file=sys.stderr)
         return 2
+    if verdict["verdict"] == "MISMATCH":
+        # DR-277: this is a READER (no write into resolved root) -- warn and
+        # proceed rather than refuse. UNRESOLVED never refuses either (AC4).
+        print(verdict["message"], file=sys.stderr)
 
     try:
         sweep = _import_day_coverage_sweep()

@@ -30,6 +30,7 @@ from coordinator_core.dispatch.provision import _build_sidecar_text
 from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.subagent_sandbox.provision_report import _build_doc_text
 from coordinator_core.subagent_sandbox.provision_report import _build_run_report_doc_text
+from coordinator_core.subagent_sandbox.provision_report import _build_review_findings_doc_text
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_run_report_legacy_doc_text,
 )
@@ -875,9 +876,9 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
     ("doc_type", "expected_sections"),
     [
         ("run-report", ["## Divergence from plan", "## Completion"]),
-        ("review-findings", ["## Findings"]),
+        ("review-findings", ["## Execution capability", "## Findings"]),
         ("assessment", ["## Questions"]),
-        ("staff-eng-review", ["## Verdict", "## Rationale", "## Findings"]),
+        ("staff-eng-review", ["## Verdict", "## Rationale", "## Execution capability", "## Findings"]),
     ],
 )
 def test_type_argument_selects_expected_template_shape(
@@ -934,6 +935,50 @@ def test_staff_eng_review_emits_findings_last_so_the_extractor_scopes_correctly(
         < text.index("## Findings")
         < text.index("## Exit interview")
     )
+
+
+def test_review_findings_emits_execution_capability_before_findings() -> None:
+    """`## Execution capability` must precede `## Findings` -- the same
+    ordering hazard as staff-eng-review's Verdict/Rationale (C6, extending
+    the review-trail-carries-execution-basis convention)."""
+    text = _build_review_findings_doc_text(
+        "coordinator:code-reviewer", "2026-08-11T00:00:00Z", "sess-order-rf"
+    )
+    assert text.index("## Execution capability") < text.index("## Findings")
+    assert "none — this verdict rests on reading only" in text
+
+
+def test_staff_eng_review_emits_execution_capability_before_findings() -> None:
+    text = _build_staff_eng_review_doc_text(
+        "coordinator:staff-eng", "2026-08-11T00:00:00Z", "sess-order-ser"
+    )
+    assert (
+        text.index("## Verdict")
+        < text.index("## Rationale")
+        < text.index("## Execution capability")
+        < text.index("## Findings")
+    )
+    assert "none — this verdict rests on reading only" in text
+
+
+def test_run_report_emits_execution_capability_after_observations() -> None:
+    text = _build_run_report_doc_text(
+        "coordinator:executor", "2026-08-11T00:00:00Z", "sess-order-rr"
+    )
+    assert (
+        text.index("## Observations")
+        < text.index("## Execution capability")
+        < text.index("## Divergence from plan")
+    )
+    assert "none — this verdict rests on reading only" in text
+
+
+def test_run_report_legacy_shape_excludes_execution_capability() -> None:
+    """The frozen legacy back-compat shape must NOT gain the new heading."""
+    text = _build_run_report_legacy_doc_text(
+        "coordinator:executor", "2026-08-11T00:00:00Z", "sess-legacy-untouched"
+    )
+    assert "## Execution capability" not in text
 
 
 def test_run_report_templates_are_untouched_by_the_findings_convergence() -> None:

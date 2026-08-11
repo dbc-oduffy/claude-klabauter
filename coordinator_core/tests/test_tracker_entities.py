@@ -22,29 +22,49 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coordinator_core import tracker_entities, tracker_store
 from coordinator_core.tracker_entities import (
+    ALIAS_NAMESPACES,
     EVENT_KINDS,
     RESERVED_PROJECT_ID,
     TrackerEntityError,
     emit_item_created,
     emit_item_project_added,
     emit_item_project_retracted,
+    emit_person_alias_added,
+    emit_person_alias_retracted,
+    emit_person_created,
+    emit_person_merged,
     emit_project_created,
     item_created,
     item_project_added,
     mint_item_id,
+    mint_person_id,
+    normalize_alias,
+    person_alias_added,
+    person_alias_retracted,
     project_created,
+    reject_invalid_namespace,
     reject_reserved_project,
 )
 
 _ITEM_ID_RE = re.compile(r"^[a-z0-9-]+$")
 
 
-def test_event_kinds_is_exactly_the_closed_six():
+def test_event_kinds_closed_set_extended():
+    """AC1: sat-05's C1 widened the closed EVENT_KINDS enum from six to ten
+    members (the four new person kinds), and it stayed CLOSED — nothing
+    else was added alongside them. Asserted against the frozenset's full
+    membership, not merely `in` checks, so an accidental eleventh member
+    would fail this test the same way a missing one would.
+
+    Subsumes the pre-C1 `test_event_kinds_is_exactly_the_closed_six` (this
+    is a widened rename of that test, not an additional duplicate — see
+    the C5a report for why the two were folded into one)."""
     assert EVENT_KINDS == {
         "item_created",
         "project_created",
@@ -52,6 +72,10 @@ def test_event_kinds_is_exactly_the_closed_six():
         "item_project_retracted",
         "item_person_added",
         "item_person_retracted",
+        "person_created",
+        "person_alias_added",
+        "person_alias_retracted",
+        "person_merged",
     }
 
 
@@ -403,3 +427,150 @@ def test_ac17_item_project_retracted_raises_for_foreign_repo_item(repo_root):
         emit_item_project_retracted("itm-not-created-here", "proj-alpha", repo_root=repo_root)
 
     assert tracker_store.read_events(repo_root=repo_root) == []
+
+
+# --- sat-05 C5a: person/alias/merge emission-layer tests ---
+
+
+def test_person_created_mints_immutable_uuid(repo_root):
+    """AC2: `mint_person_id` mints a UUID4 string, and `emit_person_created`
+    stores it verbatim as `person_id` — the id is never re-derived or
+    re-minted by the emitter."""
+    person_id = mint_person_id()
+    assert re.match(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        person_id,
+    ), person_id
+
+    stored = emit_person_created(person_id, display_name="Ada Lovelace", repo_root=repo_root)
+    assert stored["kind"] == "person_created"
+    assert stored["person_id"] == person_id
+    assert stored["display_name"] == "Ada Lovelace"
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    assert len(events) == 1
+    assert events[0]["person_id"] == person_id
+
+
+def test_alias_collision_across_persons_refused(repo_root):
+    """AC3: the same (namespace, normalized_value) pair claimed by a second,
+    different person_id is refused at write time. The error message must
+    name BOTH the existing owner and the rejected new claimant, so a
+    reader debugging the collision does not need to re-query the store."""
+    person_a = mint_person_id()
+    person_b = mint_person_id()
+    emit_person_created(person_a, display_name="Ada", repo_root=repo_root)
+    emit_person_created(person_b, display_name="Bea", repo_root=repo_root)
+
+    emit_person_alias_added(person_a, "email", "ada@example.com", repo_root=repo_root)
+
+    with pytest.raises(TrackerEntityError) as excinfo:
+        emit_person_alias_added(person_b, "email", "ada@example.com", repo_root=repo_root)
+
+    message = str(excinfo.value)
+    assert person_a in message
+    assert person_b in message
+
+
+def test_email_alias_case_and_whitespace_insensitive():
+    """AC4/DEC-44: `email` (and `git_author`) are stripped AND casefolded —
+    identity for those namespaces is case-insensitive, since the same
+    mailbox/git identity commonly appears with varying case across
+    sources."""
+    assert normalize_alias("email", "  Ada@Example.COM  ") == "ada@example.com"
+    assert normalize_alias("git_author", " Ada@Example.COM ") == "ada@example.com"
+
+    payload = person_alias_added("person-x", "email", "  Ada@Example.COM  ")
+    assert payload["raw_value"] == "  Ada@Example.COM  "
+    assert payload["normalized_value"] == "ada@example.com"
+
+
+def test_display_alias_case_sensitive():
+    """AC4/DEC-44 asymmetry: `display` (and `transcript_name`) are stripped
+    ONLY, never casefolded. This is deliberate, not an oversight — a
+    human-facing display form's case is part of its identity (e.g. "Ada"
+    vs "ADA" are visually and semantically distinct as DISPLAYED text, in
+    a way an email mailbox's case never is), so normalize_alias must not
+    "fix" this into case-insensitivity for these two namespaces."""
+    assert normalize_alias("display", "  Ada Lovelace  ") == "Ada Lovelace"
+    assert normalize_alias("transcript_name", "  ADA LOVELACE  ") == "ADA LOVELACE"
+    assert normalize_alias("display", "ada") != normalize_alias("display", "ADA")
+
+
+def test_invalid_namespace_refused_by_add_and_retract():
+    """Both `person_alias_added` and `person_alias_retracted` route through
+    the shared `reject_invalid_namespace` guard, mirroring
+    `reject_invalid_role`'s existing shape for item_person."""
+    assert "bogus" not in ALIAS_NAMESPACES
+
+    with pytest.raises(TrackerEntityError):
+        person_alias_added("person-x", "bogus", "value")
+    with pytest.raises(TrackerEntityError):
+        person_alias_retracted("person-x", "bogus", "value")
+    with pytest.raises(TrackerEntityError):
+        reject_invalid_namespace("bogus", action="add")
+
+
+def test_merge_idempotent_replay_refused(repo_root):
+    """AC5/DEC-43: replaying the identical `person_merged(from, into,
+    actor)` call a second time is refused — the store ends up with exactly
+    ONE tombstone naming `from_id`, not two."""
+    person_a = mint_person_id()
+    person_b = mint_person_id()
+    emit_person_created(person_a, display_name="Ada", repo_root=repo_root)
+    emit_person_created(person_b, display_name="Ada (dup)", repo_root=repo_root)
+
+    emit_person_merged(person_b, person_a, "test-actor", repo_root=repo_root)
+
+    with pytest.raises(TrackerEntityError):
+        emit_person_merged(person_b, person_a, "test-actor", repo_root=repo_root)
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    merge_events = [e for e in events if e["kind"] == "person_merged"]
+    assert len(merge_events) == 1
+    assert merge_events[0]["from_id"] == person_b
+    assert merge_events[0]["into_id"] == person_a
+
+
+def test_merge_cycle_rejected_and_nothing_appended(repo_root):
+    """AC7/DEC-42: merging `into_id` back onto a person that already
+    resolves, through the existing merge chain, to `from_id` would close a
+    cycle and is refused. The assertion is on the EVENT COUNT staying
+    unchanged across the raise, not merely that it raised — a guard that
+    appends and THEN raises is the exact defect this test exists to
+    catch."""
+    person_a = mint_person_id()
+    person_b = mint_person_id()
+    person_c = mint_person_id()
+    emit_person_created(person_a, display_name="A", repo_root=repo_root)
+    emit_person_created(person_b, display_name="B", repo_root=repo_root)
+    emit_person_created(person_c, display_name="C", repo_root=repo_root)
+
+    # a -> b -> c
+    emit_person_merged(person_a, person_b, "test-actor", repo_root=repo_root)
+    emit_person_merged(person_b, person_c, "test-actor", repo_root=repo_root)
+
+    before = tracker_store.read_events(repo_root=repo_root)
+    before_count = len(before)
+
+    # c -> a would close the cycle a -> b -> c -> a.
+    with pytest.raises(TrackerEntityError):
+        emit_person_merged(person_c, person_a, "test-actor", repo_root=repo_root)
+
+    after = tracker_store.read_events(repo_root=repo_root)
+    assert len(after) == before_count
+
+
+def test_no_path_literal_in_module():
+    """AC12: no `state/` or `sovereign-tracker` PATH literal appears in
+    `tracker_entities.py`. This is narrower than a bare substring grep for
+    "sovereign-tracker" — the shipped module legitimately says
+    "sovereign-tracker" in prose (its module docstring and a `kind`-field
+    docstring, describing the subsystem in English), and prose in a
+    docstring is not a path literal. A future reader must not "tighten"
+    this back into a bare-token grep that would false-positive on that
+    prose — the assertion below is scoped to the PATH forms `state/` and
+    `state/sovereign-tracker`, not the bare word."""
+    source = Path(tracker_entities.__file__).read_text(encoding="utf-8")
+    assert "state/sovereign-tracker" not in source
+    assert "state/" not in source

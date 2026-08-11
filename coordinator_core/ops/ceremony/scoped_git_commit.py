@@ -147,10 +147,12 @@ costs nothing.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -167,6 +169,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
 )
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
+from coordinator_core.session import guard_unlock_sentinel
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
@@ -322,6 +325,23 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
 #: worse than no escape under this repo's north star, not better: it sends
 #: the reader hunting for a mechanism, and what they find instead is the
 #: bypass.
+#: DR-260 (docs/decisions/DR-260-a-reachable-one-shot-operator-unlock-bea.md)
+#: guard name this seam is keyed on -- the second half of the
+#: `(session_id, guard_name)` pair `guard_unlock_sentinel.consume()` is
+#: called with in `_check_claim_conflicts`, below. NOT path-scoped: DR-260's
+#: grant clears the whole claim-conflict refusal for one call, not one path
+#: within it -- see that function's own docstring and the mechanism-gate
+#: spike record (`docs/research/spike-verdicts/2026-08-11-dr-260-unlock-at-
+#: the-op-level-claim-gate.md`) this wiring is proven against.
+#:
+#: Named as a bare module constant (not inlined at the `consume()` call
+#: site) so `_CLAIM_CONFLICT_REMEDY`'s own `guard-unlock` mention and the
+#: actual wiring can never independently drift -- `test_scoped_git_commit.py`
+#: asserts the two are the identical string, and
+#: `test_claim_cli_remedy_invocations.py` asserts the remedy text names
+#: THIS constant's value, never a hand-copied literal.
+_CLAIM_CONFLICT_GUARD_NAME = "scoped_git_commit_claim_conflict"
+
 _CLAIM_CONFLICT_REMEDY = (
     "this is a path-touch claim (a session recorded touching this file), not "
     "an artifact claim -- inspect it with `session-claim-cli who-claims-path "
@@ -329,7 +349,14 @@ _CLAIM_CONFLICT_REMEDY = (
     "show it); the claim clears when that session ends, so either re-run this "
     "commit then, or drop the affected path(s) from the pathspec and commit "
     "the rest now -- there is no rank-based override, an EM re-running the "
-    "same pathspec meets this same refusal"
+    "same pathspec meets this same refusal; separately, a human operator, "
+    "from a terminal outside this session, can grant a one-shot break-past "
+    "of THIS refusal via DR-260's `guard-unlock scoped_git_commit_claim_conflict` "
+    "sentinel (see coordinator/docs/wiki/guard-unlock-channel.md for how to "
+    "construct and grant it) -- it cannot be granted by this agent, and "
+    "creating it from inside this session is a doctrine violation, not a "
+    "shortcut; the session id this call's refusal was evaluated under is "
+    "named alongside this reason"
 )
 _UNANSWERABLE_CLAIM_REMEDY = (
     "re-run once the claim index rebuild is unblocked; if `session-claim-cli "
@@ -621,6 +648,35 @@ def _check_claim_conflicts(
     if not unanswerable and not conflicted:
         return None
 
+    # DR-260 break-past (B5): a live-claimant refusal on ANY path (never the
+    # UNANSWERABLE-path fail-closed policy above -- that guards claim-index
+    # health, a different concern DR-260's unlock has no bearing on) can be
+    # cleared by an operator-granted one-shot sentinel for THIS (session,
+    # guard) pair. `caller_sid` IS `owner_session_id` -- `_handler` calls
+    # this function with nothing else (see this module's docstring, "Resolved
+    # ONCE, here" comment at its own call site) -- never the
+    # `scoped-git-commit-<uuid4>` nonce minted lower down for the commit
+    # mechanism, which is fresh per invocation and could never be pre-minted
+    # against by an operator (the identity footgun the mechanism-gate spike
+    # exists to name -- see that record's Finding 1).
+    #
+    # `consume()` never raises (its own contract) -- a grant here only ever
+    # clears `conflicted`, so an UNANSWERABLE path from a degraded claim
+    # index still refuses below regardless of the grant; the loop that
+    # builds `reasons` further down only ever sees whatever remains after
+    # this clears.
+    if conflicted and guard_unlock_sentinel.consume(caller_sid, _CLAIM_CONFLICT_GUARD_NAME):
+        overridden_paths = sorted({path for path, _ in conflicted})
+        _LOG.warning(
+            "ceremony.scoped_git_commit: claim-conflict refusal for %s cleared "
+            "by an operator-granted DR-260 unlock (session=%s, guard=%s)",
+            overridden_paths, caller_sid, _CLAIM_CONFLICT_GUARD_NAME,
+        )
+        _record_claim_conflict_override(worktree_root, caller_sid, overridden_paths)
+        conflicted = []
+        if not unanswerable:
+            return None
+
     # Observability: a silently-degraded index should be visible before it
     # becomes an incident (C2 spec) -- one log line per unanswerable path.
     for path in unanswerable:
@@ -639,8 +695,9 @@ def _check_claim_conflicts(
         )
     for path, holders in conflicted:
         reasons.append(
-            "%r: claimed by live session(s) %s -- %s"
-            % (path, ", ".join(sorted(holders)), _CLAIM_CONFLICT_REMEDY)
+            "%r: claimed by live session(s) %s -- %s (this call's own "
+            "session id, for constructing the unlock sentinel: %s)"
+            % (path, ", ".join(sorted(holders)), _CLAIM_CONFLICT_REMEDY, caller_sid)
         )
 
     return {
@@ -649,6 +706,71 @@ def _check_claim_conflicts(
         "pushed": None,
         "error": "ceremony.scoped_git_commit: rejected -- " + "; ".join(reasons),
     }
+
+
+#: `_record_claim_conflict_override`'s durable-record filename, per session
+#: -- mirrors `coordinator_core.guard_advisory_counter`'s own per-session
+#: `state/subagent-share/<session_id>/*.jsonl` convention (guard name +
+#: timestamp) rather than importing that module directly: its own docstring
+#: pins its record shape to a PM-ruled minimum ("do not widen this record
+#: shape without a fresh PM ruling") that has no room for the overridden
+#: PATH LIST this record needs -- the one fact `consume()` itself destroys
+#: the moment it succeeds (unlinks the sentinel, returns a bare bool; see
+#: the mechanism-gate spike record's Finding 3). A second, differently-
+#: shaped file under the same per-session convention, not a reuse of that
+#: module's write path.
+_CLAIM_CONFLICT_OVERRIDE_LOG = "claim-conflict-overrides.jsonl"
+
+
+def _record_claim_conflict_override(
+    worktree_root: str, session_id: str, overridden_paths: List[str]
+) -> None:
+    """Append a durable record of a DR-260 grant that just cleared a
+    claim-conflict refusal (B7).
+
+    `guard_unlock_sentinel.consume()` writes nothing and logs nothing --
+    the sentinel it consumed is unlinked, and the grant is otherwise
+    invisible the instant it succeeds (mechanism-gate spike record, Finding
+    3). Without this, an override is indistinguishable after the fact from
+    the bug it exists to route around.
+
+    HARD CONSTRAINT (DR-260's own negative spec, carried by the spike
+    record): must never raise into `_check_claim_conflicts` -- a crash
+    there would fail a hard-deny guard OPEN, the one direction it must
+    never fail in. Every failure mode here (unwritable directory, disk
+    full, an unresolvable `worktree_root`) is caught and swallowed; nothing
+    this function does can turn a grant back into a refusal, nor a refusal
+    into a grant -- it runs strictly AFTER `_check_claim_conflicts` has
+    already decided to proceed.
+    """
+    try:
+        record = {
+            "guard": _CLAIM_CONFLICT_GUARD_NAME,
+            "session": session_id,
+            "overridden_paths": list(overridden_paths),
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        # Serialized BEFORE any filesystem touch: a `json.dumps` failure
+        # (unexpected content, not that this record shape can ever produce
+        # one) must not leave behind an empty, half-written record file --
+        # either a complete line lands, or nothing does.
+        line = json.dumps(record) + "\n"
+        record_path = (
+            Path(worktree_root)
+            / "state"
+            / "subagent-share"
+            / session_id
+            / _CLAIM_CONFLICT_OVERRIDE_LOG
+        )
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        with record_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        _LOG.debug(
+            "ceremony.scoped_git_commit: claim-conflict override record "
+            "write failed; grant proceeds, record lost",
+            exc_info=True,
+        )
 
 
 def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:

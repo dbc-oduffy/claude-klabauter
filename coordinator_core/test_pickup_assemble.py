@@ -5273,6 +5273,63 @@ class TestSplitArtifactArgs:
         assert pa.split_artifact_args("   ") == ["   "]
 
 
+class TestSplitArtifactArgsBulletLines:
+    # 2026-08-11 defect: the PM's literal pasted argument — leading
+    # whitespace, `- ` bullets, newline-separated, two Windows paths — was
+    # silently collapsing to a single decision object (the second memo only,
+    # the first path dropped with no error).
+    def test_pm_pasted_bullet_list_yields_two_paths(self):
+        # abs-path-ok: verbatim PM-supplied invocation string under test, not
+        # a filesystem citation this repo's own code would ever construct.
+        raw = (
+            "- X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "landed-enum-is-live-declining-deprecate.md\n"
+            "  - X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "problem-set-deliverable-id-is-vendored-vendor-first.md"
+        )
+        assert pa.split_artifact_args(raw) == [
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "landed-enum-is-live-declining-deprecate.md",
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "problem-set-deliverable-id-is-vendored-vendor-first.md",
+        ]
+
+    def test_star_bullets_and_no_indentation_also_split(self):
+        assert pa.split_artifact_args("* /a/m1.md\n* /b/m2.md") == [
+            "/a/m1.md",
+            "/b/m2.md",
+        ]
+
+    def test_mixed_bullet_lines_and_inline_and_both_split(self):
+        assert pa.split_artifact_args("- /a/m1.md\n- /b/m2.md AND /c/m3.md") == [
+            "/a/m1.md",
+            "/b/m2.md",
+            "/c/m3.md",
+        ]
+
+    def test_unbulleted_multiline_paste_is_untouched(self):
+        # No bullet marker on any line — this is the pre-existing hard-line-
+        # wrap-inside-ONE-path signal `_sanitize_artifact_path_str` already
+        # tolerates; reinterpreting every newline as an artifact boundary
+        # would fragment a single wrapped path instead.
+        raw = "state/handoffs/long-name-that-wr\n  apped-mid-token.md"
+        assert pa.split_artifact_args(raw) == [raw]
+
+    def test_trailing_aside_is_not_swallowed_as_a_path(self):
+        assert pa.split_artifact_args(
+            "/a/m1.md AND /b/m2.md -- please read m1 first"
+        ) == ["/a/m1.md", "/b/m2.md"]
+
+    def test_aside_stripped_before_bullet_reassembly(self):
+        raw = "- /a/m1.md\n- /b/m2.md -- read these in order"
+        assert pa.split_artifact_args(raw) == ["/a/m1.md", "/b/m2.md"]
+
+    def test_single_path_with_no_aside_is_unaffected(self):
+        assert pa.split_artifact_args("state/handoffs/h1.md") == [
+            "state/handoffs/h1.md"
+        ]
+
+
 class TestSplitArtifactArgsBraceExpansion:
     def test_single_group_expands_to_n_paths(self):
         assert pa.split_artifact_args("dir/prefix-{a,b,c}-suffix.md") == [
@@ -5349,6 +5406,35 @@ class TestMultiArtifactBrief:
         assert len(results) == 2
         assert results[0].exit_code == pa.EXIT_OK
         assert results[1].exit_code == pa.EXIT_BUSINESS_FAIL
+
+    def test_bullet_list_grab_resolves_both_not_dropped(self, tmp_path):
+        # 2026-08-11 defect regression: a pasted `- `-bulleted, newline-
+        # separated grab used to collapse to ONE brief (the last artifact),
+        # silently dropping the first. Both must resolve, per-artifact.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        _seed_memo(repo, "m1.md")
+
+        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
+        results = pa.brief_multi(raw, repo_root=repo)
+
+        assert len(results) == 2
+        assert results[0].decision_object["artifact"]["classification"] == "handoff"
+        assert results[1].decision_object["artifact"]["classification"] == "memo"
+
+    def test_bullet_list_with_one_unresolvable_fails_loud_not_dropped(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        raw = "- state/handoffs/h1.md\n- state/handoffs/does-not-exist.md"
+        results = pa.brief_multi(raw, repo_root=repo)
+
+        assert len(results) == 2
+        assert results[0].exit_code == pa.EXIT_OK
+        assert results[1].exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in results[1].decision_object
 
     def test_cli_main_emits_json_array_for_multi(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"

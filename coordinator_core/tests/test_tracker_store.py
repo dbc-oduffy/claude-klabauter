@@ -86,8 +86,10 @@ from coordinator_core import tracker_store as ts  # noqa: E402
 from coordinator_core.tracker_store import (  # noqa: E402
     EVENTS_DIR_RELPATH,
     OBSERVED_SET_UNKNOWN,
+    TrackerStoreDuplicateIdError,
     TrackerStoreError,
     append_event,
+    append_events,
     fold_observed_set,
     max_sequence,
     read_events,
@@ -95,7 +97,7 @@ from coordinator_core.tracker_store import (  # noqa: E402
     resolve_observed_set_for_event,
     shard_path,
 )
-from coordinator_core.locked_write import LockTimeout  # noqa: E402,F401
+from coordinator_core.locked_write import LockTimeout, MutateAbort  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # Shared git-repo factory (mirrors test_locked_write.py's _make_git_repo)
@@ -841,12 +843,19 @@ class TestAC4PlacementAndDurablePlaneIsolation:
 # sat entirely outside it. Landing DR-241's C5 affirmation with no
 # enforcing guard behind those two modules would be prose with no
 # mechanism — the posture DR-241's own D1 records as refused.
+# sat-03 (2026-08-11) added tracker_transitions.py, a new top-level module
+# emitting transition/reopen/snapshot events via append_event/append_events.
+# Backed by a fresh DR-241 bound-by-bound affirmation, not a bare widening —
+# see docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+# § Amendment (2026-08-11) — sat-03's transition-event vocabulary affirmed
+# bound-by-bound.
 _ALLOWED_TRACKER_STORE_REFERENCERS = frozenset(
     {
         "coordinator_core/ops/tracker/fold_observed_set.py",
         "coordinator_core/ops/session/boot_sweep.py",
         "coordinator_core/tracker_entities.py",
         "coordinator_core/tracker_projection.py",
+        "coordinator_core/tracker_transitions.py",
     }
 )
 
@@ -2441,3 +2450,232 @@ class TestFoldObservedSetAC7EndToEndRevertProperty:
             "a marker whose claimed peer bytes were reverted must resolve to "
             "unknown even though the marker record itself survives untouched"
         )
+
+
+# ---------------------------------------------------------------------------
+# append_events — C9a (chunk C9's store-suite third): AC1/AC3 batch primitive,
+# AC2 atomicity negative control.
+#
+# Coverage requirements (per plan
+# docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md § C9):
+#   AC1/AC3 — contiguous sequence run tail+1..tail+N; constant-clock batch
+#             proves the chain-off-prior-event rule, not chain-off-original-
+#             tail; intra-batch duplicate id and batch-vs-shard duplicate id
+#             both write nothing.
+#   AC2     — real negative control: a partial-raise inside _mutate leaves
+#             the shard byte-identical to before; MutateAbort propagates as
+#             a clean no-write abort; a successful call writes all N lines.
+#             Exercised on both lock backends reachable from this host.
+# ---------------------------------------------------------------------------
+
+
+class TestAppendEventsAC1AC3ContiguousSequenceAndClock:
+    def test_batch_assigns_contiguous_sequence_run_from_tail(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+
+        batch = [
+            _event(f"evt-batch-{i}", f"2026-01-01T00:01:{i:02d}Z") for i in range(5)
+        ]
+        assigned = append_events(batch, repo_root=repo)
+
+        assert [e["sequence"] for e in assigned] == [2, 3, 4, 5, 6]
+        assert max_sequence(repo_root=repo) == 6
+
+        on_disk = _read_raw_lines(shard_path(repo))
+        assert [r["sequence"] for r in on_disk] == [1, 2, 3, 4, 5, 6]
+
+    def test_constant_clock_batch_chains_off_prior_event_not_original_tail(
+        self, tmp_path, monkeypatch
+    ):
+        # The discriminating case: with the wall clock pinned CONSTANT, the
+        # correct rule (event k chains off event k-1's own just-assigned
+        # pair) still produces N strictly-increasing (wall_ms, counter)
+        # pairs via the counter bump alone. The broken rule this test would
+        # catch — chaining every event off the ORIGINAL shard tail — would
+        # instead compute the identical (wall_ms, counter) pair for every
+        # single batch member, a silent collision invisible to any
+        # moving-clock happy-path test.
+        repo = _make_git_repo(tmp_path / "repo")
+        monkeypatch.setattr(ts, "_now_ms", lambda: 5_000_000)
+
+        batch = [
+            _event(f"evt-const-{i}", f"2026-01-01T00:02:{i:02d}Z") for i in range(4)
+        ]
+        assigned = append_events(batch, repo_root=repo)
+
+        clocks = [e["logical_clock"] for e in assigned]
+        tuples = [(c["wall_ms"], c["counter"]) for c in clocks]
+
+        assert len(set(tuples)) == len(tuples), (
+            f"(wall_ms, counter) pairs collided under a constant clock: {tuples} — "
+            "this is exactly what chaining off the ORIGINAL tail instead of "
+            "the prior batch event would produce"
+        )
+        assert tuples == sorted(tuples), "clock pairs not strictly increasing"
+        assert all(b > a for a, b in zip(tuples, tuples[1:])), (
+            "clock pairs not STRICTLY increasing across the batch"
+        )
+        # All at the same pinned wall_ms; only the counter distinguishes them.
+        assert all(wall_ms == 5_000_000 for wall_ms, _ in tuples)
+        assert [c for _, c in tuples] == [0, 1, 2, 3]
+
+    def test_empty_batch_is_a_noop_returning_empty_list(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        assert append_events([], repo_root=repo) == []
+        assert not shard_path(repo).exists()
+
+
+class TestAppendEventsAC3DuplicateIdsWriteNothing:
+    def test_intra_batch_duplicate_id_raises_and_writes_nothing(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+
+        batch = [
+            _event("evt-dup", "2026-01-01T00:00:00Z"),
+            _event("evt-dup", "2026-01-01T00:00:01Z"),
+        ]
+        with pytest.raises(TrackerStoreDuplicateIdError):
+            append_events(batch, repo_root=repo)
+
+        assert not shard_path(repo).exists()
+
+    def test_batch_id_colliding_with_existing_shard_id_raises_and_writes_nothing(
+        self, tmp_path
+    ):
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-existing", "2026-01-01T00:00:00Z"), repo_root=repo)
+        before = shard_path(repo).read_bytes()
+
+        batch = [
+            _event("evt-new", "2026-01-01T00:00:01Z"),
+            _event("evt-existing", "2026-01-01T00:00:02Z"),
+        ]
+        with pytest.raises(TrackerStoreDuplicateIdError):
+            append_events(batch, repo_root=repo)
+
+        assert shard_path(repo).read_bytes() == before, (
+            "a batch colliding with an existing shard id must write nothing"
+        )
+
+
+class TestAppendEventsAC2AtomicityNegativeControl:
+    """The negative control: force a raise partway through _mutate and prove
+    the shard is byte-identical to before, on every lock backend reachable
+    from this host. A happy-path-only test proves nothing about atomicity —
+    see this class's own test names for what each one forces."""
+
+    def test_successful_call_writes_all_n_lines(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        batch = [_event(f"evt-ok-{i}", f"2026-01-01T00:03:{i:02d}Z") for i in range(4)]
+        append_events(batch, repo_root=repo)
+        assert len(_read_raw_lines(shard_path(repo))) == 4
+
+    def test_raise_partway_through_mutate_leaves_shard_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+        before = shard_path(repo).read_bytes()
+
+        _orig_locked_rmw = ts.locked_rmw
+
+        def _boom_locked_rmw(target, mutate, **kwargs):
+            def _boom_mutate(old_text):
+                # Exercise the real assignment/serialization path partway,
+                # then blow up before locked_rmw's caller ever sees new
+                # text to write — the negative control.
+                mutate(old_text)
+                raise RuntimeError("simulated partial failure inside _mutate")
+
+            return _orig_locked_rmw(target, _boom_mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _boom_locked_rmw)
+
+        batch = [_event(f"evt-boom-{i}", f"2026-01-01T00:04:{i:02d}Z") for i in range(3)]
+        with pytest.raises(RuntimeError, match="simulated partial failure"):
+            append_events(batch, repo_root=repo)
+
+        after = shard_path(repo).read_bytes()
+        assert after == before, "shard bytes changed despite a raise inside _mutate"
+
+    def test_mutate_abort_propagates_as_clean_no_write_abort(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+        before = shard_path(repo).read_bytes()
+
+        _orig_locked_rmw = ts.locked_rmw
+
+        def _abort_locked_rmw(target, mutate, **kwargs):
+            def _abort_mutate(old_text):
+                mutate(old_text)
+                raise MutateAbort("simulated clean abort")
+
+            return _orig_locked_rmw(target, _abort_mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _abort_locked_rmw)
+
+        batch = [_event("evt-abort-1", "2026-01-01T00:05:00Z")]
+        with pytest.raises(MutateAbort):
+            append_events(batch, repo_root=repo)
+
+        after = shard_path(repo).read_bytes()
+        assert after == before, "shard bytes changed despite a MutateAbort"
+
+    @pytest.mark.skipif(
+        not _FCNTL_AVAILABLE, reason="POSIX fcntl.flock backend not reachable on this host"
+    )
+    def test_atomicity_on_posix_fcntl_backend(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+        before = shard_path(repo).read_bytes()
+
+        from coordinator_core import locked_write as lw
+
+        assert lw._FCNTL_AVAILABLE, "POSIX backend must be the active locked_rmw backend here"
+
+        _orig_locked_rmw = ts.locked_rmw
+
+        def _boom_locked_rmw(target, mutate, **kwargs):
+            def _boom_mutate(old_text):
+                mutate(old_text)
+                raise RuntimeError("simulated partial failure (posix backend)")
+
+            return _orig_locked_rmw(target, _boom_mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _boom_locked_rmw)
+
+        batch = [_event("evt-posix-1", "2026-01-01T00:06:00Z")]
+        with pytest.raises(RuntimeError, match="simulated partial failure"):
+            append_events(batch, repo_root=repo)
+
+        assert shard_path(repo).read_bytes() == before
+
+    @pytest.mark.skipif(
+        not _MSVCRT_AVAILABLE, reason="Windows msvcrt.locking backend not reachable on this host"
+    )
+    def test_atomicity_on_windows_msvcrt_backend(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+        before = shard_path(repo).read_bytes()
+
+        from coordinator_core import locked_write as lw
+
+        assert lw._MSVCRT_AVAILABLE, "Windows backend must be the active locked_rmw backend here"
+
+        _orig_locked_rmw = ts.locked_rmw
+
+        def _boom_locked_rmw(target, mutate, **kwargs):
+            def _boom_mutate(old_text):
+                mutate(old_text)
+                raise RuntimeError("simulated partial failure (msvcrt backend)")
+
+            return _orig_locked_rmw(target, _boom_mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _boom_locked_rmw)
+
+        batch = [_event("evt-msvcrt-1", "2026-01-01T00:07:00Z")]
+        with pytest.raises(RuntimeError, match="simulated partial failure"):
+            append_events(batch, repo_root=repo)
+
+        assert shard_path(repo).read_bytes() == before

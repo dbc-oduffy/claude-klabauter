@@ -6201,3 +6201,142 @@ class TestSessionIdFallbackEvidence:
         assert shipped is False
         assert missing == ["C2b"]
         assert join_provenance == "session_fallback_partial"
+
+
+# ===========================================================================
+# C4a -- repo-identity gate wiring (compute_repo_identity_gate)
+# ===========================================================================
+
+
+import json as _json
+import time as _time
+
+from coordinator_core.pickup_assemble import (
+    _REPO_IDENTITY_MATCH,
+    _REPO_IDENTITY_MISMATCH,
+    _REPO_IDENTITY_UNRESOLVED,
+)
+from coordinator_core.session import harness_registry as _hr
+
+
+def _epoch_to_filetime_ticks(epoch: float) -> int:
+    return int((epoch + _hr._FILETIME_EPOCH_OFFSET_SEC) * _hr._FILETIME_TICKS_PER_SEC)
+
+
+def _write_registry_record(sessions_dir, filename, session_id, pid, cwd, epoch=None):
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    if epoch is None:
+        epoch = _time.time() - 60
+    payload = {
+        "sessionId": session_id,
+        "pid": pid,
+        "procStart": _epoch_to_filetime_ticks(epoch),
+        "cwd": str(cwd),
+    }
+    (sessions_dir / filename).write_text(_json.dumps(payload), encoding="utf-8")
+    return epoch
+
+
+def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
+    if hit:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((pid, create_time), "env-hit"),
+        )
+    else:
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: (None, "env-miss:absent"),
+        )
+
+
+class TestRepoIdentityGateWiring:
+    """C4a -- wires `compute_repo_identity_gate` where `close_out_and_stamp`
+    resolves its `root`. Every verdict is constructed with REAL registry
+    records on disk (AC6) -- never by monkeypatching the gate's own return
+    value, mirroring `pickup_assemble/tests/test_repo_identity_gate.py`'s
+    own construction pattern."""
+
+    def _setup_registry(self, monkeypatch, sessions_dir, pid, sid, cwd):
+        monkeypatch.setattr(_hr, "registry_dir", lambda: sessions_dir)
+        _write_registry_record(sessions_dir, f"{pid}.json", sid, pid, cwd)
+        _patch_pid_env(monkeypatch, pid)
+        monkeypatch.setattr(
+            "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+            lambda pid, stored_start_epoch="": True,
+        )
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    def test_mismatch_refuses_on_cwd_derived_root(self, tmp_path, monkeypatch):
+        """No explicit `repo_root` -- `close_out_and_stamp` must resolve its
+        own root via cwd, so a real anchor/root divergence must refuse via
+        this module's own `EXIT_BUSINESS_FAIL`/`{"error": ...}` vocabulary,
+        carrying the gate's own message."""
+        root = tmp_path / "repo"
+        foreign = tmp_path / "foreign"
+        root.mkdir()
+        _init_repo(root)
+        foreign.mkdir()
+        (foreign / ".git").mkdir()
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        sessions_dir = tmp_path / "sessions"
+        self._setup_registry(monkeypatch, sessions_dir, 4101, "sess-c4a-1", foreign)
+
+        monkeypatch.chdir(root)
+        exit_code, result = coas.close_out_and_stamp("plan.md")
+
+        assert exit_code == coas.EXIT_BUSINESS_FAIL
+        assert "error" in result
+        assert str(foreign) in result["error"] or "sess-c4a-1" in result["error"]
+        assert result["dry_run"] is False
+
+    def test_mismatch_does_not_refuse_when_repo_root_explicit(self, tmp_path, monkeypatch):
+        """The same real divergence, but the caller supplied `repo_root`
+        explicitly (as `_run_close_out` always does) -- must proceed
+        normally, carrying the MISMATCH verdict informationally."""
+        root = tmp_path / "repo"
+        foreign = tmp_path / "foreign"
+        root.mkdir()
+        _init_repo(root)
+        foreign.mkdir()
+        (foreign / ".git").mkdir()
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        sessions_dir = tmp_path / "sessions"
+        self._setup_registry(monkeypatch, sessions_dir, 4102, "sess-c4a-2", foreign)
+
+        exit_code, result, _ = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["gates"]["repo_identity"]["verdict"] == _REPO_IDENTITY_MISMATCH
+
+    def test_match_emits_informational_gate_entry(self, tmp_path, monkeypatch):
+        root = tmp_path / "repo"
+        root.mkdir()
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        sessions_dir = tmp_path / "sessions"
+        self._setup_registry(monkeypatch, sessions_dir, 4103, "sess-c4a-3", root)
+
+        exit_code, result, _ = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["gates"]["repo_identity"]["verdict"] == _REPO_IDENTITY_MATCH
+
+    def test_unresolved_never_refuses(self, tmp_path, monkeypatch):
+        """No registry record at all -- UNRESOLVED, never a refusal, even
+        on the cwd-derived (no explicit `repo_root`) path (DR-277)."""
+        root = tmp_path / "repo"
+        root.mkdir()
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(_hr, "registry_dir", lambda: sessions_dir)
+        _patch_pid_env(monkeypatch, 4104, hit=False)
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-c4a-4")
+
+        monkeypatch.chdir(root)
+        exit_code, result = coas.close_out_and_stamp("plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["gates"]["repo_identity"]["verdict"] == _REPO_IDENTITY_UNRESOLVED

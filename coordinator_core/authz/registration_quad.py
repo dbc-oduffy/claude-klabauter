@@ -318,6 +318,120 @@ def check_registration_quad(
 
 
 # ---------------------------------------------------------------------------
+# Known-incomplete-registrations allowlist — DEBT LEDGER, NOT AN EXEMPTION POLICY.
+#
+# Frozen 2026-08-11, measured by calling check_registration_quad() directly on
+# HEAD (70 live QuadViolation entries at the time). Owning bug-backlog entry:
+# state/bug-backlog/2026-08-11-check-registration-quad-is-red-on-70-ops-0c14fa26f522.yaml
+#
+# This exists ONLY to restore the gate's signal (a check red-by-default on 70
+# pre-existing ops enforces nothing) — it forgives exactly the recorded gap per
+# op, nothing more: an op on this list that is ALSO missing a surface NOT
+# recorded here still trips the gate (see `_prune_known_incomplete` below,
+# which subtracts only the recorded surfaces from `surfaces_missing`). This is
+# distinct from `_KNOWN_UNCLASSIFIED_OPS_DEBT` above (a narrower,
+# classification-only ledger from a separate, earlier debt-backlog entry with
+# its own never-grows guard) — this ledger additionally covers ops missing
+# `_OP_KEY_SCOPE` and/or `OP_MODULE_MAP`, which that older ledger has no shape
+# for.
+#
+# Nothing should ever be ADDED to this mapping. An entry comes OFF it only by
+# landing the real registration surface(s) it names (with, for
+# OP_CLASSIFICATION specifically, the five-question affirmation
+# `classification.py`'s own convention requires) and deleting the entry — never
+# by an executor's local judgment call. The remaining 70 ops (67 missing only
+# OP_CLASSIFICATION, tracked by `_KNOWN_UNCLASSIFIED_OPS_DEBT` above; the 6
+# below needing a fuller registration) still need that real work; this ledger
+# buys back the gate's legibility, it does not do the work.
+# ---------------------------------------------------------------------------
+_KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {
+    "install.detect_cmd_autorun_coverage": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
+    "install.strip_cmd_autorun_guard": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
+    "install.write_cmd_autorun_guard": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
+    "distill.curate_clusters": ("OP_MODULE_MAP",),
+    "memo.fate_backfill": ("OP_MODULE_MAP",),
+    "updatedocs.gates": ("OP_MODULE_MAP",),
+}
+
+
+def prune_known_incomplete(
+    violation: QuadViolation, baseline: Mapping[str, tuple[str, ...]] | None = None
+) -> QuadViolation | None:
+    """Drop from `violation.surfaces_missing` exactly the surfaces recorded for its
+    `op_key` in `baseline` (default `_KNOWN_INCOMPLETE_REGISTRATIONS`), returning
+    `None` if nothing punishable remains.
+
+    Forgives only the recorded gap, never the op wholesale: an op on the baseline
+    that is ALSO missing a surface not listed for it there is still reported for
+    that residual surface. An op not on the baseline at all is returned unchanged
+    (same object, no copy) — mirrors
+    `coordinator_core.bash_guards.commit_tripwires._prune_baselined_classification`'s
+    contract exactly, generalized from a single fixed surface (OP_CLASSIFICATION)
+    to an arbitrary per-op surface set.
+    """
+    if baseline is None:
+        baseline = _KNOWN_INCOMPLETE_REGISTRATIONS
+    allowed = baseline.get(violation.op_key)
+    if not allowed:
+        return violation
+    kept_missing = tuple(s for s in violation.surfaces_missing if s not in allowed)
+    if not kept_missing:
+        return None
+    if kept_missing == violation.surfaces_missing:
+        return violation
+    kept_files = tuple((s, p) for s, p in violation.missing_surface_files if s in kept_missing)
+    return dataclasses.replace(
+        violation,
+        surfaces_missing=kept_missing,
+        missing_surface_files=kept_files,
+    )
+
+
+def filter_known_violations(
+    violations: list[QuadViolation],
+    *,
+    classification_baseline: "frozenset[str] | None" = None,
+    incomplete_baseline: Mapping[str, tuple[str, ...]] | None = None,
+) -> list[QuadViolation]:
+    """Combined gate-consumer filter: apply both known-debt allowlists
+    (`_KNOWN_UNCLASSIFIED_OPS_DEBT` for the classification-only ledger,
+    `_KNOWN_INCOMPLETE_REGISTRATIONS` for the fuller one) to a raw
+    `check_registration_quad()` result, returning only the violations that
+    survive both prunes. This is what makes the gate GREEN on today's known
+    debt and RED on anything new or changed — see module docstring § Known
+    coverage limitation and the `_KNOWN_INCOMPLETE_REGISTRATIONS` comment
+    above for why two separate ledgers exist rather than one.
+
+    Both pytest guard (`test_registration_quad.py`) and the commit-time
+    tripwire (`commit_tripwires.py`) should route through this rather than
+    re-deriving the two-prune sequence locally.
+    """
+    if classification_baseline is None:
+        classification_baseline = _KNOWN_UNCLASSIFIED_OPS_DEBT
+    if incomplete_baseline is None:
+        incomplete_baseline = _KNOWN_INCOMPLETE_REGISTRATIONS
+
+    result: list[QuadViolation] = []
+    for v in violations:
+        kept_missing = tuple(
+            s
+            for s in v.surfaces_missing
+            if not (s == "OP_CLASSIFICATION" and v.op_key in classification_baseline)
+            and s not in incomplete_baseline.get(v.op_key, ())
+        )
+        if not kept_missing:
+            continue
+        if kept_missing == v.surfaces_missing:
+            result.append(v)
+            continue
+        kept_files = tuple((s, p) for s, p in v.missing_surface_files if s in kept_missing)
+        result.append(
+            dataclasses.replace(v, surfaces_missing=kept_missing, missing_surface_files=kept_files)
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Known-debt baseline — the 65 op-keys registered but missing an OP_CLASSIFICATION
 # entry, measured at integration time (2026-07-25, full-walk discovery). See module
 # docstring for the three-tier-convention citation, owning debt-backlog entry, and

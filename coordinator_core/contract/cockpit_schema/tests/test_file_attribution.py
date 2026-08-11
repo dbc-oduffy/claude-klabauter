@@ -35,7 +35,7 @@ VALID = {
     "repo": ".example-doctrine-mirror-repo",
     "coordinator_root_path": ".",
     "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    "file_path": "plugins/coordinator-claude/coordinator/bin/emit-cockpit-snapshot.sh",
+    "file_path": "plugins/coordinator/bin/emit-cockpit-snapshot.sh",
     "edited_count": 3,
     "read_count": 2,
     "referenced_count": 1,

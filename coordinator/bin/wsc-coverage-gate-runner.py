@@ -234,6 +234,8 @@ from coordinator_core.ops.list_review_trail_records import (  # noqa: E402
 )
 from coordinator_core.workstream_complete.directives_review import (  # noqa: E402
     CHAIN_VERDICT_PARTITION_MANDATORY as _CHAIN_VERDICT_PARTITION_MANDATORY,
+    EXECUTION_BASIS_NOT_RECORDED,
+    chain_partition_execution_basis_report,
     chain_partition_uncovered_shas,
     classify_untrusted_trail_ranges,
     verify_trail_range_termination,
@@ -1730,6 +1732,36 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 else []
             )
             discharged = bool(chain_code_shas) and bool(chain_dag_shas) and not uncovered
+        # Read-only narration companion (chunk C4b, docs/plans/2026-08-11-
+        # review-trail-carries-execution-basis.md, AC4). Never read by
+        # `discharged`/`uncovered` above or by any HALT/return-code decision
+        # below — informational only, mirrors the same inputs the
+        # `chain_partition_uncovered_shas` call above already assembled.
+        # Wrapped defensively: `chain_partition_execution_basis_report` is a
+        # C4 companion this call site did not author, so a malformed trail
+        # record must degrade to omitting this line rather than take the
+        # gate down.
+        try:
+            basis_report = chain_partition_execution_basis_report(
+                trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
+                narrow_foreign_shas=_resolve_foreign_session_shas,
+                vouched_shas=_resolve_vouched_shas,
+                chain_planning_shas=_resolve_chain_planning_shas(args.from_handoff),
+            )
+        except Exception:
+            basis_report = None
+        if basis_report:
+            _basis_total = sum(basis_report.values())
+            if _basis_total:
+                _basis_parts = ", ".join(
+                    f"{basis_report.get(_label, 0)} {_label}"
+                    for _label in ("executed", "read-only", EXECUTION_BASIS_NOT_RECORDED)
+                )
+                print(
+                    f"EXECUTION-BASIS: chain discharged on {_basis_total} "
+                    f"record(s): {_basis_parts}",
+                    file=sys.stderr,
+                )
         if chain_owes_no_code_review:
             print(
                 "NOTE: PARTITION-MANDATORY code-discharge check vacuously "

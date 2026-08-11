@@ -24,14 +24,24 @@ Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (A
 
 from __future__ import annotations
 
+import builtins
+import os
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.deliverable_equivalence import (
+    DeliverableDualReadMismatchError,
+    DeliverableLedgerValidationError,
+    _reset_deliverable_ledger_cache,
     _reset_equivalence_map_cache,
     canonicalize,
+    dual_read_deliverable_id,
+    dual_read_deliverable_ids_for_corpus,
+    load_deliverable_ledger,
     load_equivalence_map,
+    seed_deliverable_ledger_rows,
+    validate_deliverable_ledger_rows,
 )
 
 
@@ -44,8 +54,10 @@ def _reset_memo():
     _reset_equivalence_map_cache's own docstring).
     """
     _reset_equivalence_map_cache()
+    _reset_deliverable_ledger_cache()
     yield
     _reset_equivalence_map_cache()
+    _reset_deliverable_ledger_cache()
 
 
 def _write_artifact(worktree_root: Path, entries: list[dict]) -> Path:
@@ -278,3 +290,402 @@ def test_missing_or_blank_loser_or_winner_is_skipped_with_warning(tmp_path, capl
     assert any(
         "missing/invalid" in record.message for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Close-out ledger (sedge-06) — load_deliverable_ledger, its own memo, and
+# validate_deliverable_ledger_rows.
+# ---------------------------------------------------------------------------
+
+
+def _write_artifact_with_ledger(
+    worktree_root: Path, entries: list[dict], ledger_rows: list[dict]
+) -> Path:
+    """Write an artifact carrying BOTH `entries:` and `ledger:` — the additive-
+    compatibility fixture shape."""
+    import yaml as _yaml
+
+    state_dir = worktree_root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = state_dir / "deliverable-equivalence.yaml"
+    artifact_path.write_text(
+        _yaml.safe_dump({"entries": entries, "ledger": ledger_rows}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def _well_formed_row(**overrides) -> dict:
+    row = {
+        "deliverable_id": "dlv-example",
+        "status": "shipped",
+        "closed_at": "2026-08-01",
+        "governing_plan": "docs/plans/2026-08-01-example.md",
+        "closure_evidence": {
+            "realizing_commits": ["abc123"],
+            "join_provenance": "joined",
+        },
+        "superseded_by": None,
+        "adjudicator": "sedge-06 test fixture",
+        "evidence_source": "test fixture",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_load_deliverable_ledger_returns_full_rows(tmp_path):
+    """The second loader returns full rows, not a projection."""
+    row = _well_formed_row()
+    _write_artifact_with_ledger(tmp_path, [], [row])
+
+    rows = load_deliverable_ledger(tmp_path)
+
+    assert rows == [row]
+
+
+def test_load_deliverable_ledger_missing_artifact_returns_empty_list(tmp_path):
+    assert load_deliverable_ledger(tmp_path) == []
+
+
+def test_load_deliverable_ledger_missing_ledger_key_returns_empty_list(tmp_path):
+    _write_artifact(tmp_path, [{"loser": "dlv-a", "winner": "dlv-b"}])
+
+    assert load_deliverable_ledger(tmp_path) == []
+
+
+def test_load_deliverable_ledger_unparsable_yaml_returns_empty_list(tmp_path, caplog):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "deliverable-equivalence.yaml").write_text(
+        "entries: [this is: not, valid: yaml: at all", encoding="utf-8"
+    )
+
+    with caplog.at_level("WARNING"):
+        rows = load_deliverable_ledger(tmp_path)
+
+    assert rows == []
+
+
+def test_load_equivalence_map_unaffected_by_ledger_block(tmp_path):
+    """Additive-compatibility pin: an artifact carrying BOTH `entries:` and `ledger:`
+    still yields the same {loser: winner} map from load_equivalence_map as one with
+    only `entries:` — the ledger block must not change the fork-equivalence loader's
+    behaviour at all."""
+    _write_artifact_with_ledger(
+        tmp_path,
+        [{"loser": "dlv-old", "winner": "dlv-new", "evidence": "test"}],
+        [_well_formed_row()],
+    )
+
+    equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {"dlv-old": "dlv-new"}
+
+
+def test_deliverable_ledger_memoization_reads_at_most_once(tmp_path):
+    _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-first")])
+    first = load_deliverable_ledger(tmp_path)
+    assert first == [_well_formed_row(deliverable_id="dlv-first")]
+
+    _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-second")])
+    second = load_deliverable_ledger(tmp_path)
+
+    assert second == first
+
+
+def test_reset_deliverable_ledger_cache_forces_reread(tmp_path):
+    _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-first")])
+    first = load_deliverable_ledger(tmp_path)
+    assert first == [_well_formed_row(deliverable_id="dlv-first")]
+
+    _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-second")])
+    _reset_deliverable_ledger_cache()
+    second = load_deliverable_ledger(tmp_path)
+
+    assert second == [_well_formed_row(deliverable_id="dlv-second")]
+
+
+def test_validate_deliverable_ledger_rows_accepts_well_formed_rows():
+    validate_deliverable_ledger_rows([_well_formed_row(), _well_formed_row(deliverable_id="dlv-2")])
+
+
+def test_validate_deliverable_ledger_rows_accepts_open_row():
+    validate_deliverable_ledger_rows(
+        [_well_formed_row(status="open", closed_at=None, superseded_by=None)]
+    )
+
+
+def test_validate_deliverable_ledger_rows_raises_on_bad_status_enum():
+    with pytest.raises(DeliverableLedgerValidationError, match="status"):
+        validate_deliverable_ledger_rows([_well_formed_row(status="deprecated")])
+
+
+def test_validate_deliverable_ledger_rows_raises_on_duplicate_deliverable_id():
+    with pytest.raises(DeliverableLedgerValidationError, match="duplicat"):
+        validate_deliverable_ledger_rows(
+            [_well_formed_row(deliverable_id="dlv-dup"), _well_formed_row(deliverable_id="dlv-dup")]
+        )
+
+
+def test_validate_deliverable_ledger_rows_raises_on_missing_closed_at_for_non_open():
+    with pytest.raises(DeliverableLedgerValidationError, match="closed_at"):
+        validate_deliverable_ledger_rows([_well_formed_row(status="shipped", closed_at=None)])
+
+
+def test_validate_deliverable_ledger_rows_raises_on_bad_join_provenance():
+    with pytest.raises(DeliverableLedgerValidationError, match="join_provenance"):
+        validate_deliverable_ledger_rows(
+            [
+                _well_formed_row(
+                    closure_evidence={
+                        "realizing_commits": ["abc123"],
+                        "join_provenance": "not-a-real-value",
+                    }
+                )
+            ]
+        )
+
+
+def test_validate_deliverable_ledger_rows_does_not_merely_warn(caplog):
+    """The malformed path must raise, never WARN-and-skip like the fork loader does."""
+    with caplog.at_level("WARNING"):
+        with pytest.raises(DeliverableLedgerValidationError):
+            validate_deliverable_ledger_rows([_well_formed_row(status="bogus")])
+
+    # No row should have been silently accepted/skipped via a WARNING instead of a raise.
+    assert not any("skip" in record.message.lower() for record in caplog.records)
+
+
+def test_validate_deliverable_ledger_rows_raises_on_superseded_without_target():
+    with pytest.raises(DeliverableLedgerValidationError, match="superseded_by"):
+        validate_deliverable_ledger_rows(
+            [_well_formed_row(status="superseded", superseded_by=None)]
+        )
+
+
+# ---------------------------------------------------------------------------
+# sedge-07 — seed_deliverable_ledger_rows (Step 1) and dual_read_deliverable_id
+# / dual_read_deliverable_ids_for_corpus (Step 2).
+# ---------------------------------------------------------------------------
+
+
+def _write_handoff(path: Path, deliverable_id: str | None = None, kind: str = "handoff") -> None:
+    lines = ["---"]
+    if deliverable_id is not None:
+        lines.append(f"deliverable_id: {deliverable_id}")
+    lines.append(f"kind: {kind}")
+    lines.append("---")
+    lines.append("body")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_ledger_only(worktree_root: Path, ledger_rows: list[dict]) -> Path:
+    """Write an artifact carrying an empty `entries:` and the given `ledger:` rows."""
+    import yaml as _yaml
+
+    state_dir = worktree_root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = state_dir / "deliverable-equivalence.yaml"
+    artifact_path.write_text(
+        _yaml.safe_dump({"entries": [], "ledger": ledger_rows}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def test_loaded_equivalence_map_carries_all_19_entries():
+    """AC1, read per the completion-notes reading: AC1's literal wording asks to
+    compare the SEED's row count to 19, but the seed's row count is a corpus-
+    derived deduped count with no reason to equal 19 (winners absorb multiple
+    losers — research corpus §0). AC1's real intent — that the map DRIVING the
+    seed carries all 19 declared entries, not the stale "14" — is discharged
+    directly here against the real repo artifact."""
+    repo_root = Path(__file__).resolve().parents[3]
+    equivalence_map = load_equivalence_map(repo_root)
+    assert len(equivalence_map) == 19
+
+
+def test_seed_known_fork_loser_seeds_as_its_winner(tmp_path):
+    """AC3: a known fork-loser id seeds under its declared WINNER, never its own
+    raw id."""
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    _write_handoff(handoffs_dir / "2026-01-01_000000_example.md", "dlv-loser-example")
+
+    _write_artifact(
+        tmp_path,
+        [{"loser": "dlv-loser-example", "winner": "dlv-winner-example", "evidence": "test"}],
+    )
+
+    rows = seed_deliverable_ledger_rows(tmp_path)
+
+    seeded_ids = {row["deliverable_id"] for row in rows}
+    assert "dlv-winner-example" in seeded_ids
+    assert "dlv-loser-example" not in seeded_ids
+
+
+def test_seed_rows_pass_validate_deliverable_ledger_rows(tmp_path):
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    _write_handoff(handoffs_dir / "2026-01-01_000000_example.md", "dlv-plain-example")
+
+    rows = seed_deliverable_ledger_rows(tmp_path)
+
+    assert rows  # sanity: the fixture actually produced a row
+    validate_deliverable_ledger_rows(rows)  # must not raise
+
+
+def test_seed_makes_zero_writes_against_an_archived_fixture_path(tmp_path, monkeypatch):
+    """AC8: the seed reads an archived artifact's deliverable_id but never opens
+    it (or anything else) in write mode, and never `os.replace`s into
+    `archive/`."""
+    archive_dir = tmp_path / "archive" / "handoffs"
+    archive_dir.mkdir(parents=True)
+    archived = archive_dir / "2026-01-01_000000_roadmap-example.md"
+    _write_handoff(archived, "dlv-archived-example", kind="roadmap-baton")
+
+    real_open = builtins.open
+
+    def _guarded_open(file, mode="r", *args, **kwargs):
+        norm = str(file).replace("\\", "/")
+        if "w" in mode and "/archive/" in norm:
+            raise AssertionError(f"write-mode open() reached an archive/ path: {file}")
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _guarded_open)
+
+    real_replace = os.replace
+
+    def _guarded_replace(src, dst, *args, **kwargs):
+        norm = str(dst).replace("\\", "/")
+        if "/archive/" in norm:
+            raise AssertionError(f"os.replace() reached an archive/ path: {dst}")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", _guarded_replace)
+
+    rows = seed_deliverable_ledger_rows(tmp_path)
+
+    assert any(row["deliverable_id"] == "dlv-archived-example" for row in rows)
+
+
+def test_dual_read_raises_on_divergent_ledger_and_frontmatter(tmp_path, caplog):
+    """AC5: a deliberately divergent ledger/frontmatter pair RAISES, and does not
+    merely warn."""
+    artifact = tmp_path / "handoff.md"
+    _write_handoff(artifact, "dlv-frontmatter-value")
+
+    _write_ledger_only(
+        tmp_path,
+        [
+            _well_formed_row(
+                deliverable_id="dlv-ledger-value",
+                status="open",
+                closed_at=None,
+                superseded_by=None,
+                evidence_source="handoff.md",
+            )
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(DeliverableDualReadMismatchError, match="mismatch"):
+            dual_read_deliverable_id(tmp_path, str(artifact), {})
+
+    # This must be a raise, never a mere warning (departure from
+    # ownership_index.build_ownership_index's WARN precedent, per AC6).
+    assert not any(
+        "mismatch" in record.message.lower() for record in caplog.records
+    )
+
+
+def test_batch_wrapper_collects_mismatch_without_aborting_the_walk(tmp_path):
+    """The corpus-level wrapper catches the per-record raise into its `errors`
+    arm and still returns every OTHER good row (Q1's op-fail-vs-read-fail
+    split-by-altitude answer)."""
+    good_path = tmp_path / "good.md"
+    _write_handoff(good_path, "dlv-good")
+    bad_path = tmp_path / "bad.md"
+    _write_handoff(bad_path, "dlv-frontmatter-bad")
+
+    _write_ledger_only(
+        tmp_path,
+        [
+            _well_formed_row(
+                deliverable_id="dlv-good",
+                status="open",
+                closed_at=None,
+                superseded_by=None,
+                evidence_source="good.md",
+            ),
+            _well_formed_row(
+                deliverable_id="dlv-ledger-bad",
+                status="open",
+                closed_at=None,
+                superseded_by=None,
+                evidence_source="bad.md",
+            ),
+        ],
+    )
+
+    results, errors = dual_read_deliverable_ids_for_corpus(
+        tmp_path, [str(good_path), str(bad_path)], {}
+    )
+
+    assert results[str(good_path)] == ("dlv-good", "hit")
+    assert str(bad_path) not in results
+    assert len(errors) == 1
+    assert "dlv-ledger-bad" in errors[0]
+
+
+def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
+    """hit / genuine_miss / ledger_unreadable must be three distinguishable
+    outcomes, never collapsed (research corpus §6)."""
+    fm_only = tmp_path / "fm_only.md"
+    _write_handoff(fm_only, "dlv-fm-only")
+
+    # genuine_miss: ledger present and READABLE, but no row references this path.
+    _write_ledger_only(
+        tmp_path,
+        [
+            _well_formed_row(
+                deliverable_id="dlv-other",
+                status="open",
+                closed_at=None,
+                superseded_by=None,
+                evidence_source="other.md",
+            )
+        ],
+    )
+    result, outcome = dual_read_deliverable_id(tmp_path, str(fm_only), {})
+    assert outcome == "genuine_miss"
+    assert result == "dlv-fm-only"
+
+    # ledger_unreadable: the artifact is PRESENT but malformed YAML.
+    _reset_deliverable_ledger_cache()
+    (tmp_path / "state" / "deliverable-equivalence.yaml").write_text(
+        "not: [valid: yaml: at all", encoding="utf-8"
+    )
+    result2, outcome2 = dual_read_deliverable_id(tmp_path, str(fm_only), {})
+    assert outcome2 == "ledger_unreadable"
+    assert result2 == "dlv-fm-only"
+
+    # hit: the ledger names an id for this path and frontmatter is silent.
+    no_fm = tmp_path / "no_fm.md"
+    _write_handoff(no_fm, deliverable_id=None)
+    _write_ledger_only(
+        tmp_path,
+        [
+            _well_formed_row(
+                deliverable_id="dlv-hit-value",
+                status="open",
+                closed_at=None,
+                superseded_by=None,
+                evidence_source="no_fm.md",
+            )
+        ],
+    )
+    _reset_deliverable_ledger_cache()
+    result3, outcome3 = dual_read_deliverable_id(tmp_path, str(no_fm), {})
+    assert outcome3 == "hit"
+    assert result3 == "dlv-hit-value"

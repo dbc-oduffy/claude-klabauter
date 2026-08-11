@@ -1425,6 +1425,7 @@ def _scaffold_handoff(
     predecessor: str | None = None,
     predecessor_id: str | None = None,
     category: str | None = None,
+    additional_predecessors: list[str] | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -1457,6 +1458,29 @@ def _scaffold_handoff(
     predecessor:none-by-design (schema_validate.py Rule A3a-3
     _cf_spinoff_predecessor_none) and the recovery baton's 'predecessor' means a
     crashed commit SHA, not a baton path — neither may be threaded here.
+
+    additional_predecessors (--additional-predecessor, repeatable) is the
+    successor-side down-edge of a fan-in succession: the extra parent batons
+    beyond `predecessor`. Carry-through on the same terms as predecessor —
+    neither resolved nor normalized here; the calling engine (baton_assemble's
+    `_build_directives`) renders every entry repo-relative before it arrives,
+    because the schema's cross-field integrity rule
+    (`_cf_additional_predecessors_integrity`) compares by EXACT STRING, so an
+    unnormalized entry would evade the duplicate-of-primary check. Emitted as a
+    YAML block sequence when non-empty; the key is omitted entirely when empty,
+    matching handoff_id/predecessor_id's optional-omit convention above and
+    `pickup_assemble._LIST_FIELD_KEYS`, which already parses this field as a
+    multi-line list.
+
+    Duplicate entries, and an entry equal to `predecessor`, are refused
+    (fail-loud) rather than silently deduped — the same posture as the
+    predecessor_id-without-predecessor refusal below, and for the same reason:
+    the scaffolder must not be able to author frontmatter the validator will
+    then reject. Deduping silently would also hide a genuine caller bug (a
+    fan-in leg resolved twice) behind a clean-looking artifact.
+
+    Spec backlink: roadmap stub sedge-02 (state/roadmap/sedge-2026-08-06/),
+    § Successor-side back-edge on a fan-in.
 
     Supplying predecessor_id WITHOUT predecessor is refused (fail-loud). The two
     are the ID and path representations of one edge, and the referential-integrity
@@ -1520,6 +1544,41 @@ def _scaffold_handoff(
             file=sys.stderr,
         )
         sys.exit(1)
+    # Review: coordinator-code-reviewer — an empty/whitespace-only entry is the
+    # same class of caller bug as a duplicate or a primary-collision (a fan-in
+    # leg silently dropped), so it is refused fail-loud rather than filtered
+    # out, matching this function's stated posture everywhere else here.
+    if additional_predecessors and any(not e or not e.strip() for e in additional_predecessors):
+        print(
+            "coordinator-doc-new: --additional-predecessor was supplied an empty or "
+            "whitespace-only value. additional_predecessors carries the fan-in legs "
+            "beyond --predecessor; a blank entry would be silently dropped rather than "
+            "emitted, which is exactly the silent edge-loss this stub exists to remove. "
+            "Pass a real repo-relative path, or omit the flag for that leg.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _extra_preds = [e.strip() for e in (additional_predecessors or [])]
+    if len(set(_extra_preds)) != len(_extra_preds):
+        print(
+            "coordinator-doc-new: --additional-predecessor was supplied the same path "
+            "more than once. The handoff schema's cross-field rule "
+            "(_cf_additional_predecessors_integrity) forbids duplicate entries, so "
+            "emitting them would author frontmatter the validator rejects. A repeated "
+            "leg usually means the caller resolved one fan-in predecessor twice.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if _predecessor not in ("none", "null") and _predecessor in _extra_preds:
+        print(
+            f"coordinator-doc-new: --additional-predecessor {_predecessor!r} duplicates "
+            "--predecessor. additional_predecessors carries the fan-in legs BEYOND the "
+            "primary; the schema's cross-field rule forbids an entry equal to the "
+            "primary predecessor. Note the rule compares by exact string, not by "
+            "resolved path — pass every entry already normalized repo-relative.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -1542,6 +1601,9 @@ def _scaffold_handoff(
         lines.append(f"origin_handoff_id: {_yaml_quote(origin_handoff_id)}")
     if predecessor_id:
         lines.append(f"predecessor_id: {_yaml_quote(predecessor_id)}")
+    if _extra_preds:
+        lines.append("additional_predecessors:")
+        lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in _extra_preds)
     _authoring_session = _resolve_session_id()
     if _authoring_session != "em-unknown":
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session)}")
@@ -4121,6 +4183,27 @@ Spec backlink (workflow): docs/plans/2026-07-12-workflow-skeleton-stamper-claude
         ),
     )
     parser.add_argument(
+        "--additional-predecessor",
+        dest="additional_predecessors",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=(
+            "(handoff ONLY) Repeatable. Repo-relative path to a fan-in predecessor "
+            "beyond the primary --predecessor — the successor-side down-edge matching "
+            "the up-edges the engine already stamps on every fan-in leg. Carried as-is "
+            "verbatim, on the same terms as --predecessor: never resolved or minted "
+            "here. Omitted -> the field is absent entirely, byte-identical to every "
+            "existing caller that does not pass it. NOT accepted for the spinoff kinds "
+            "(predecessor:none-by-design, schema rule A3a-3) nor for --type recovery, "
+            "whose own 'predecessor:' is a crashed commit SHA and whose scaffold emits "
+            "its own additional_predecessors: [] literal. An entry duplicating another "
+            "entry, or duplicating --predecessor, is refused (schema cross-field rule "
+            "_cf_additional_predecessors_integrity is exact-string, so callers must "
+            "normalize before passing)."
+        ),
+    )
+    parser.add_argument(
         "--predecessor-id",
         dest="predecessor_id",
         default=None,
@@ -4834,6 +4917,25 @@ def main() -> None:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
 
+    # Kind-gate the fan-in down-edge. Mirrors --predecessor's own handoff-only
+    # contract (schema rule A3a-3 _cf_spinoff_predecessor_none makes the spinoff
+    # kinds predecessor:none-by-design, and --type recovery's own scaffold emits
+    # the `additional_predecessors: []` literal itself). Refused rather than
+    # silently ignored: a caller passing fan-in legs to a kind that cannot carry
+    # them has a real bug, and a no-op would drop the edge without saying so --
+    # the exact silent-loss failure this stub exists to remove.
+    if args.additional_predecessors and doc_type != "handoff":
+        print(
+            f"coordinator-doc-new: --additional-predecessor is not accepted for "
+            f"--type {doc_type}. The fan-in down-edge is a handoff-only field, refused "
+            "for every other --type (not only spinoff/recovery): the spinoff kinds are "
+            "predecessor:none-by-design (schema rule A3a-3) and --type recovery "
+            "scaffolds its own additional_predecessors: [] literal — no other kind "
+            "carries a predecessor edge at all.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Generate scaffold content.
     if doc_type == "handoff":
         content = _scaffold_handoff(
@@ -4846,6 +4948,7 @@ def main() -> None:
             predecessor=args.predecessor,
             predecessor_id=args.predecessor_id,
             category=args.category,
+            additional_predecessors=args.additional_predecessors,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

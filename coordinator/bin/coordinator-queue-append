@@ -137,6 +137,7 @@ from coordinator_registry import (  # noqa: E402
 )
 from cc_invoke import route as _cc_route  # noqa: E402
 import cli_shared  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Native schema seam — schema introspection and validation via the
@@ -349,7 +350,27 @@ _machine_local_impl = cli_shared.machine_local_impl
 _resolve_python = cli_shared.resolve_python
 _machine_local_get = cli_shared.machine_local_get
 _machine_local_repos_keys = cli_shared.machine_local_repos_keys
-_current_repo_root = cli_shared.current_repo_root
+
+
+def _current_repo_root() -> str | None:
+    """cwd's git root via the checked resolver (`repo_identity`).
+
+    Was `cli_shared.current_repo_root`, deleted by C2 of the one-checked-resolver
+    plan on the premise that `resolve_from_repo` was its only caller. This alias,
+    `coordinator-lesson-promote`'s twin, and `coordinator-queue-close` were three
+    surviving callers, so the deletion left this file dead at import.
+
+    Classification: READER — a MISMATCH warns and proceeds with the resolved
+    root (identity attribution, not a destructive action), matching
+    `cli_shared.resolve_from_repo`'s disposition under DR-277.
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict.get("verdict") == "MISMATCH":
+        print(
+            verdict.get("message", "coordinator-queue-append: repo-identity MISMATCH"),
+            file=sys.stderr,
+        )
+    return root
 
 
 def _resolve_session_id() -> str:

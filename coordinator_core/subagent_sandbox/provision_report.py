@@ -221,6 +221,8 @@ def _build_run_report_doc_text(
         _frontmatter(agent_type, spawned_at, lead_session_id)
         + "## Run notes\n\n"
         + "## Observations\n\n"
+        + "## Execution capability\n\n"
+        + "<!-- Name what you actually ran to reach these conclusions (tests, a probe, the CLI under review), or the literal `none — this verdict rests on reading only`. Resting on reading alone is a legitimate answer; an unstated basis is not. -->\n\n"
         + "## Divergence from plan\n\n"
         + "<!-- Prose companion to the `divergence` frontmatter field -- leave blank while divergence.diverged is false. -->\n\n"
         + "## Completion\n\n"
@@ -235,6 +237,8 @@ def _build_review_findings_doc_text(
     """``--type review-findings``: per-finding disposition slots."""
     return (
         _frontmatter(agent_type, spawned_at, lead_session_id)
+        + "## Execution capability\n\n"
+        + "<!-- Name what you actually ran to reach this verdict (tests, a probe, the CLI under review), or the literal `none — this verdict rests on reading only`. A verdict resting on reading alone is a legitimate answer; an unstated one is not. -->\n\n"
         + "## Findings\n\n"
         + "<!-- One entry per finding: `- [severity] <finding> — disposition: accepted | rejected | deferred — rationale: ...` -->\n\n"
         + _exit_interview_section()
@@ -283,6 +287,8 @@ def _build_staff_eng_review_doc_text(
         _frontmatter(agent_type, spawned_at, lead_session_id)
         + "## Verdict\n\n"
         + "## Rationale\n\n"
+        + "## Execution capability\n\n"
+        + "<!-- Name what you actually ran to reach this verdict (tests, a probe, the CLI under review), or the literal `none — this verdict rests on reading only`. A verdict resting on reading alone is a legitimate answer; an unstated one is not. -->\n\n"
         + "## Findings\n\n"
         + "<!-- One entry per finding: `- [severity] <finding> — disposition: accepted | rejected | deferred — rationale: ...` -->\n\n"
         + _exit_interview_section()

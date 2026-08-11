@@ -190,12 +190,14 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.ceremony.completion_entry import _slug_from_title as _title_slug
 from coordinator_core.ops.deliverable_carry import resolve_deliverable_and_initiative
+from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
 from coordinator_core.ops.read_frontmatter_field import (
     read_frontmatter_field as _read_frontmatter_field,
 )
 from coordinator_core.ops.render_project_tracker import tracker_is_hand_curated
+from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 from coordinator_core.resolution.facade import resolve_operator_config
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session.scope import project_self_scope
@@ -374,6 +376,40 @@ def _normalize_artifact_path(artifact_path: str) -> str:
         return artifact_path
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     return _repo_rel_handoff_path(f"{date_str}-{artifact_path}.md")
+
+
+def _resolve_additional_predecessor_paths(
+    paths: Optional[list[str]], root: Path, kind: str
+) -> list[str]:
+    """Resolve every fan-in `additional_predecessor_paths` entry to a stable,
+    directly-openable, repo-relative path -- the SAME normalize -> is_file ->
+    archive-aware-fallback -> relative_to treatment `resolve_lineage` already
+    applies to its primary `predecessor` rung, extracted here (sedge-01,
+    `succession-edge-cardinality` roadmap, R2) so it can be called ONCE, ahead
+    of the `kind == "handoff"` deliverable-id cascade, instead of resolving
+    twice per path (once for the cascade's own divergence check, once for
+    `lineage["additional_predecessors"]`).
+
+    A path missing at its named live location is routed through
+    `_resolve_qualified_path_or_raise` -- fail-loud, unchanged by this
+    extraction: an unreadable/archived additional-predecessor path already
+    failed loud here before the hoist, and still does.
+    """
+    resolved: list[str] = []
+    for _extra_path in paths or []:
+        _extra_normalized = _normalize_artifact_path(_extra_path)
+        _extra_fm_path = Path(_extra_normalized)
+        if not _extra_fm_path.is_absolute():
+            _extra_fm_path = root / _extra_normalized
+        if not _extra_fm_path.is_file():
+            # Missing at its named live location -- archive-aware fail-loud
+            # resolution, identical to the primary predecessor.
+            _extra_fm_path = _resolve_qualified_path_or_raise(_extra_normalized, root, kind)
+        try:
+            resolved.append(_extra_fm_path.relative_to(root).as_posix())
+        except ValueError:
+            resolved.append(str(_extra_fm_path))
+    return resolved
 
 
 def _compute_fresh_output_path(
@@ -1771,6 +1807,22 @@ def resolve_lineage(
     else:
         fm = ""
 
+    # Fan-in resolution, HOISTED above the `kind == "handoff"` cascade call
+    # (sedge-01, `succession-edge-cardinality` roadmap, R2): resolved ONCE
+    # here, from `additional_predecessor_paths` as this function received it
+    # -- BEFORE the `is_plan_input` branch below may extend that same local
+    # with ledger-sourced extras (see `resolve_deliverable_and_initiative`'s
+    # own "Known uncovered leg" docstring note: those ledger-sourced extras
+    # are discovered only AFTER the cascade call and are not covered by this
+    # widening). Reused verbatim at `lineage["additional_predecessors"]`
+    # below -- no second walk of the same paths. Ignored for kind="spinoff",
+    # which has no predecessor axis (see this function's own docstring).
+    resolved_additional_predecessors: list[str] = (
+        _resolve_additional_predecessor_paths(additional_predecessor_paths, root, kind)
+        if kind == "handoff"
+        else []
+    )
+
     if kind == "handoff":
         # DR-207 DD#1 cascade: claimed plan -> predecessor artifact -> mint.
         # `resolve_claimed_plan_path` (C1a) is the session->plan link;
@@ -1796,6 +1848,8 @@ def resolve_lineage(
             _mint_deliverable_id,
             _plan_file,
             _predecessor_file,
+            additional_predecessors=resolved_additional_predecessors,
+            equivalence_map=load_equivalence_map(root),
         )
         discovery = _discovery_tier[0] if _discovery_tier else "mint"
     else:
@@ -2000,6 +2054,18 @@ def resolve_lineage(
 
         lineage["plan_ledger_no_claim"] = None
         lineage["predecessor_handoff"] = None
+        # Ledger-sourced additional-predecessor paths discovered by the
+        # `is_plan_input` branch below (`_resolve_held_handoff_for_session`'s
+        # second return value) -- captured into this OUTER local, separate
+        # from `resolved_additional_predecessors` (already resolved above,
+        # ahead of the cascade call), rather than merged into it. See the
+        # `lineage["additional_predecessors"]` assignment below for why: the
+        # two sets are resolved once each, never re-walked, then concatenated
+        # there (sedge-01 R2/R3, EM-clarified 2026-08-11 -- the field itself
+        # must NOT lose these entries, only the widened cascade's own
+        # divergence check is blind to them, since they are discovered only
+        # after that check already ran).
+        _ledger_extra_paths: list[str] = []
         if is_own_handoff_record:
             predecessor = artifact_path
             predecessor_id = own_handoff_id
@@ -2019,9 +2085,7 @@ def resolve_lineage(
                 predecessor_id = None
                 lineage["plan_ledger_no_claim"] = str(exc)
             else:
-                additional_predecessor_paths = list(additional_predecessor_paths or []) + list(
-                    _ledger_additional
-                )
+                _ledger_extra_paths = list(_ledger_additional)
                 predecessor_path = Path(predecessor)
                 if not predecessor_path.is_absolute():
                     predecessor_path = root / predecessor
@@ -2030,10 +2094,11 @@ def resolve_lineage(
                     # the ledger's returned basename may already have moved to
                     # `archive/handoffs/` (`_resolve_held_handoff_for_session`'s
                     # own reason for existing); route it through the same
-                    # archive-aware fail-loud resolution the fan-in loop below
-                    # already applies to `additional_predecessor_paths`, rather
-                    # than letting `_read_frontmatter`'s missing-path silence
-                    # starve `predecessor_id` and defeat
+                    # archive-aware fail-loud resolution
+                    # `_resolve_additional_predecessor_paths` already applies
+                    # to its own entries, rather than letting
+                    # `_read_frontmatter`'s missing-path silence starve
+                    # `predecessor_id` and defeat
                     # `_resolved_predecessor_canonical_kind`'s own roadmap-baton
                     # gate for an archived predecessor.
                     predecessor_path = _resolve_qualified_path_or_raise(predecessor, root, kind)
@@ -2099,30 +2164,29 @@ def resolve_lineage(
             lineage["predecessor_is_live"] = False
 
         # Fan-in predecessors (2026-07-29, N-predecessor succession fix --
-        # see this function's own docstring). Resolved here, right after the
-        # primary predecessor's own resolution, so both share the identical
-        # qualified-path / bare-slug-normalize / archive-fallback treatment
-        # rather than a second hand-rolled walk.
-        resolved_additional: list[str] = []
-        for _extra_path in additional_predecessor_paths or []:
-            _extra_normalized = _normalize_artifact_path(_extra_path)
-            _extra_fm_path = Path(_extra_normalized)
-            if not _extra_fm_path.is_absolute():
-                _extra_fm_path = root / _extra_normalized
-            if not _extra_fm_path.is_file():
-                # Missing at its named live location -- archive-aware
-                # fail-loud resolution, identical to the primary predecessor
-                # (`_resolve_qualified_path_or_raise` above).
-                _extra_fm_path = _resolve_qualified_path_or_raise(_extra_normalized, root, kind)
-            try:
-                resolved_additional.append(_extra_fm_path.relative_to(root).as_posix())
-            except ValueError:
-                resolved_additional.append(str(_extra_fm_path))
-        # `None` when empty, not `[]` -- matches this module's existing
-        # convention for optional array-valued lineage fields (see
-        # `origin_goal_id` below), so "no additional predecessors" and "this
-        # lineage dict does not populate the field" read the same way.
-        lineage["additional_predecessors"] = resolved_additional or None
+        # see this function's own docstring). Two DISJOINT sets, each
+        # resolved exactly once (sedge-01 R2's no-double-walk intent, EM-
+        # clarified 2026-08-11): `resolved_additional_predecessors` was
+        # already computed above, ahead of the `kind == "handoff"` cascade
+        # call, from the paths this function received as its own argument;
+        # `_ledger_extra_paths` is resolved HERE, for the first time, from
+        # the ledger-sourced extras `is_plan_input` discovered above (only
+        # discoverable after that point -- `_resolve_held_handoff_for_session`
+        # runs inside the branch). Neither set overlaps the other, so
+        # concatenating them re-walks nothing. This field is therefore
+        # restored to its pre-widening content in full -- the widened
+        # cascade's own divergence check is the ONLY thing blind to
+        # `_ledger_extra_paths` (it ran before these paths were known; see
+        # `resolve_deliverable_and_initiative`'s "Known uncovered leg"
+        # docstring note), not this field. `None` when empty, not `[]` --
+        # matches this module's existing convention for optional array-valued
+        # lineage fields (see `origin_goal_id` below), so "no additional
+        # predecessors" and "this lineage dict does not populate the field"
+        # read the same way.
+        lineage["additional_predecessors"] = (
+            resolved_additional_predecessors
+            + _resolve_additional_predecessor_paths(_ledger_extra_paths, root, kind)
+        ) or None
 
         # Replay resumption (2026-07-29): pin `output_path` to the successor a
         # prior attempt already recorded on THIS predecessor, rather than
@@ -2507,6 +2571,30 @@ def _build_directives(
             if _pred_id:
                 d1_args.append(f"--predecessor-id={_pred_id}")
 
+        # Successor-side fan-in down-edge (sedge-02). `d6*` already stamps the
+        # UP-edge on every additional predecessor (`continued_into` -> this
+        # successor); without this the successor carries only its primary
+        # parent, so legs 2..N become unreachable from the successor the moment
+        # they are archived -- no ancestry walk starting here can find them.
+        #
+        # Written UNCONDITIONALLY, not behind a judgment point. The values are
+        # the same `lineage["additional_predecessors"]` list `d6*` already acts
+        # on unconditionally, so gating only the down-edge would reintroduce the
+        # very N-up/zero-down asymmetry this edge exists to close -- and an
+        # unresolved gate in an autonomous run silently writes nothing, which is
+        # the pre-existing bug wearing a gate. The heuristic's documented
+        # `claimed_at`-tie arbitrariness affects which leg is PRIMARY, an
+        # ordering question owned by sedge-14; the fan-in SET this writes is
+        # order-independent.
+        #
+        # Every entry goes through `_repo_relative_posix` -- load-bearing, not
+        # cosmetic. `schema_validate._cf_additional_predecessors_integrity`
+        # compares by EXACT STRING, so an absolute entry would slip past the
+        # duplicate-of-primary check that the normalized `_pred_rel` above is
+        # already subject to.
+        for _extra in lineage.get("additional_predecessors") or []:
+            d1_args.append(f"--additional-predecessor={_repo_relative_posix(_extra, root)}")
+
     # d7 -- precondition gate, not a post-step: composes
     # `coordinator_core.ops.handoff_carry_gate.evaluate_gate` (in-process, via
     # `_dispatch_handoff_carry_gate` in apply.py) over the PREDECESSOR's own
@@ -2561,6 +2649,29 @@ def _build_directives(
             "scaffolded it, and `coordinator-doc-new --out` is an unconditional "
             "overwrite, so re-authoring it would destroy that content"
         )
+        # Replay hazard, named rather than papered over (sedge-02). The fan-in
+        # down-edge is written by d1 and ONLY by d1 -- `apply_base
+        # .execute_directives` has no rollback and the `d6*` predecessor
+        # mutations are deliberately emitted last, so a converging post-`d6`
+        # stamp is out of scope by construction. The consequence is real: a run
+        # resumed onto a successor a PRIOR attempt scaffolded without these legs
+        # keeps whatever that attempt wrote, and this run's resolved list is not
+        # applied. That is recoverable by hand and is not silent -- `apply()`
+        # surfaces this string in `report["replayed"]` and on stderr -- but it
+        # is only non-silent if the string SAYS SO, which is what this branch is
+        # for. Naming the exact legs makes the manual fix a copy-paste.
+        _replay_extras = lineage.get("additional_predecessors") or []
+        if _replay_extras:
+            _replay_rel = [_repo_relative_posix(_e, root) for _e in _replay_extras]
+            d1_directive["already_satisfied_reason"] += (
+                "; NOTE this run resolved "
+                f"{len(_replay_rel)} additional predecessor(s) -- "
+                + ", ".join(_replay_rel)
+                + " -- whose successor-side `additional_predecessors:` down-edge d1 "
+                "would have written. Skipping d1 skips that write. Verify the field "
+                "on the resumed successor and add any missing leg by hand; the `d6*` "
+                "up-edges are separate directives and still fire"
+            )
     directives: list[dict[str, Any]] = []
     if d7_directive is not None:
         directives.append(d7_directive)
@@ -3324,9 +3435,23 @@ def brief(
             "handoff brief, or use kind='spinoff'."
         )
     decisions = decisions or {}
+    repo_root_was_cwd_derived = repo_root is None
     root = repo_root or resolve_repo_root()
     if root is None:
         raise TransportFailure("could not resolve a git worktree root")
+
+    # C3 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
+    # the C1 foreign-repo gate, mirroring C2's wiring in
+    # `workstream_complete.brief`. `_resolve_current_session_id()` is a pure
+    # env read that ignores `root`, so it is uncontaminated by whether `root`
+    # itself is the wrong repo. Gated ONLY when `root` was cwd-derived (an
+    # explicitly-passed `repo_root` is an unambiguous statement of caller
+    # intent that never touched cwd) -- MISMATCH still never refuses when
+    # `repo_root` was explicit, but the gate is always CALLED and its
+    # verdict always RECORDED in `gates["repo_identity"]` below.
+    repo_identity_gate = compute_repo_identity_gate(root, _resolve_current_session_id())
+    if repo_root_was_cwd_derived and repo_identity_gate["verdict"] == "MISMATCH":
+        raise TransportFailure(repo_identity_gate["message"])
 
     # Break-glass predecessor excise (2026-08-05): `j-continuation-vs-fork`'s
     # "excise" disposition (see `_build_judgment_points`) is read HERE,
@@ -3492,7 +3617,7 @@ def brief(
     envelope = build_envelope(
         artifact={"path": normalized_artifact_path, "kind": kind, "lineage": lineage},
         preflight={},
-        gates={},
+        gates={"repo_identity": repo_identity_gate},
         directives=directives,
         judgment_points=judgment_points,
         decisions=decisions,

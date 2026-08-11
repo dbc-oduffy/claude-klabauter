@@ -207,11 +207,15 @@ Negative-spec:
       new required scout-authored field (2026-08-04 sizing).
     - Does NOT narrow the reviewed range when a measurement is awkward.
       `PIPELINE.md` § Phase 6's "a partition-mandatory verdict may never be
-      answered by narrowing scope" binds the verdict too: `gross_loc` is the
-      RAW diff-stat sum over the range, with no ceremony-bookkeeping
-      exclusion applied, because every exclusion moves the verdict toward
-      reviewing LESS. Unresolvable inputs surface as a judgment point — the
-      failure direction is toward asking, never toward a smaller review.
+      answered by narrowing scope" binds the verdict too: unresolvable
+      inputs surface as a judgment point — the failure direction is toward
+      asking, never toward a smaller review. `gross_loc` DOES exclude
+      generated/vendored/lifecycle-bookkeeping noise paths as of 2026-08-11
+      (`review_brightline_gate._is_noise_path`, matching the gate's own
+      chain/session oracle contract) — see `_measure_range`'s docstring.
+      That is metric-wide noise exclusion, not scope-narrowing: a deletion
+      or a planning artifact is never exempted, only a fixed, named set of
+      non-reviewable generated/bookkeeping paths.
 """
 from __future__ import annotations
 
@@ -238,7 +242,7 @@ from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatt
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
 from coordinator_core.ops.queue_family import UnknownQueueFamilyError, load_family_records
-from coordinator_core.ops.review_brightline_gate import classify_surface
+from coordinator_core.ops.review_brightline_gate import _is_noise_path, classify_surface
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 from coordinator_core.workstream_complete.directives_review import (
     ReviewScaleDecision,
@@ -713,12 +717,26 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
     never a zeroed dict, which would read as a resolved, trivially-small
     diff and resolve the verdict toward reviewing less.
 
-    `gross_loc` is the RAW added+deleted sum with no noise exclusion (see
-    the module's negative-spec on narrowing). `surface_count` reuses
-    `review_brightline_gate.classify_surface` (the module's public alias
-    for what was `_classify_surface`, review finding 2026-08-04) rather
-    than inventing a second surface taxonomy — the gate this verdict names
-    must be counting the same buckets it does."""
+    `gross_loc` is the added+deleted sum over the range's non-noise files
+    (2026-08-11 metric-wide noise exclusion, matching `_compute_chain_oracle`
+    / `review_brightline_gate._session_scoped`'s contract — see
+    `docs/plans/2026-08-11-brightline-gates-measure-reviewable-chan.md` AC3).
+    Naming trap (review finding, 2026-08-11): `workstream_complete/__init__.py`'s
+    own `gross_loc` (`_accumulate_numstat`) means the OPPOSITE — the raw,
+    unfiltered sum, with `code_loc` as its noise-excluded sibling. This
+    module's `gross_loc` is already noise-excluded; don't assume the two
+    contracts match just because the name does.
+    This SUPERSEDES this docstring's prior "no exclusion" negative-spec: a
+    generated/vendored artifact or lifecycle-bookkeeping file
+    (`review_brightline_gate._is_noise_path`) is dropped entirely, same as
+    the gate's own oracles, rather than counted as reviewable diff. Noise
+    exclusion is not the same predicate as de-weighting a deletion or a
+    planning artifact — see `_is_noise_path`'s own module docstring for the
+    two-category noise list; nothing here exempts a deletion.
+    `surface_count` reuses `review_brightline_gate.classify_surface` (the
+    module's public alias for what was `_classify_surface`, review finding
+    2026-08-04) rather than inventing a second surface taxonomy — the gate
+    this verdict names must be counting the same buckets it does."""
     commits_out = _run_git_read_only(["rev-list", "--count", range_], repo_root)
     if commits_out is None:
         return None
@@ -738,6 +756,8 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         if not match:
             continue
         added, deleted, path = match.groups()
+        if _is_noise_path(path):
+            continue
         if added != "-":
             gross_loc += int(added)
         if deleted != "-":
@@ -878,12 +898,17 @@ def _read_phase_6_review_scale(run_id: Optional[str]) -> ReaderResult:
         Phase-1 inventory record exists. This is what makes a below-
         brightline run resolve to row 3 (single reviewer, carrying the
         row-3 justification) instead of unresolved.
-      - `code_loc`/`shared_schema_touched=None` — honestly unresolved at a
-        static `collect(cadence)` call site, and never consulted: row 3
-        short-circuits on `executor_dispatched is True` before either is
-        read. `None` (not a fabricated `0`/`False`) so that the distinction
-        between "unresolved" and "resolved negative" stays intact if that
-        precedence ever changes.
+      - `code_loc` — PRODUCED (2026-08-11, AC4): `_measure_range`'s
+        `gross_loc` is already the noise-excluded reviewable LOC (see that
+        function's docstring), the exact quantity `code_loc` names, so it is
+        passed straight through rather than measured a second time. Row 3
+        short-circuits on `executor_dispatched is True` before it is ever
+        read, same as before this chunk.
+      - `shared_schema_touched=None` — honestly unresolved at a static
+        `collect(cadence)` call site, and never consulted for the same
+        reason. `None` (not a fabricated `0`/`False`) so that the
+        distinction between "unresolved" and "resolved negative" stays
+        intact if that precedence ever changes.
       - `chain_disposition=SINGLE_SESSION` — imported, not spelled locally.
         Phase 6 is RUN-scoped by definition; the chain-terminal rows 5/6
         belong to `/workstream-complete`'s chain review, which this verdict
@@ -951,7 +976,7 @@ def _read_phase_6_review_scale(run_id: Optional[str]) -> ReaderResult:
 
     decision = decide_review_scale(
         gross_loc=metrics["gross_loc"],
-        code_loc=None,
+        code_loc=metrics["gross_loc"],
         commit_count=metrics["commit_count"],
         surface_count=metrics["surface_count"],
         executor_dispatched=True,

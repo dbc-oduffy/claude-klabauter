@@ -21,9 +21,10 @@ Usage:
     python3 prune-closed-bugs.py [--dry-run] [--repo-root <path>]
 
     --dry-run    preview only (Call 1 result reported; Call 2 skipped, no git-mv).
-    --repo-root  explicit repo root for the git-mv + self-commit (default: `git
-                 rev-parse --show-toplevel` from the CALLING process's cwd, falling
-                 back to cwd itself). This op self-selects candidates AND deletes
+    --repo-root  explicit repo root for the git-mv + self-commit (default: the
+                 checked resolver's answer, `lib.repo_identity.
+                 resolve_checked_repo_root`, from the CALLING process's cwd,
+                 falling back to cwd itself). This op self-selects candidates AND deletes
                  (git-mv) — a cwd-derived root under an in-process ceremony
                  dispatch (no subprocess, no `-C`) silently targets whatever
                  directory the caller happened to be standing in, which for a
@@ -45,7 +46,6 @@ Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (f
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
@@ -53,6 +53,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 from cc_invoke import RouteMutationError, route_mutation  # noqa: E402
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
 def _no_fallback() -> None:
@@ -62,21 +63,17 @@ def _no_fallback() -> None:
 
 
 def _resolve_repo_root() -> str:
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+    """Resolve the repo root via the checked resolver (repo_identity).
 
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-        resolved = (proc.stdout or "").strip()
-        if proc.returncode == 0 and resolved:
-            return resolved
-    except OSError:
-        pass
-    return os.getcwd()
+    READER classification (DR-277 / plan C5): MISMATCH is advisory only --
+    warn to stderr and proceed with the resolved root; UNRESOLVED never
+    refuses (AC4). Falls back to os.getcwd() when no root at all resolves,
+    preserving this script's pre-existing best-effort behavior.
+    """
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+    return root or os.getcwd()
 
 
 def main(argv: list[str] | None = None) -> int:

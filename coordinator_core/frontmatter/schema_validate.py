@@ -6834,7 +6834,26 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
         return 2
 
     resolved = os.path.abspath(file_path)
-    repo_rel = os.path.relpath(resolved, repo_root).replace('\\', '/')
+    try:
+        repo_rel = os.path.relpath(resolved, repo_root).replace('\\', '/')
+    except ValueError:
+        # Windows-only: os.path.relpath raises when the two paths sit on
+        # different mounts ("path is on mount 'C:', start on mount 'X:'"). That
+        # is routine here, not exotic — a repo on X: linting a scratch file
+        # under the default TEMP on C: hits it every time, and the raise
+        # escaped as a bare traceback rather than a diagnostic.
+        #
+        # There is no honest repo-relative rendering of an off-mount path, and
+        # inventing one would feed match_schema a path shape that never
+        # existed. Fall back to the absolute path, forward-slashed to match
+        # what the downstream consumers (_lint_is_sidecar_file, the extension
+        # regex, match_schema) expect. Path-keyed schema matching legitimately
+        # misses on such a path, but match_schema also discriminates on the
+        # record's own `kind`, so a real off-mount handoff still resolves its
+        # schema and validates normally; only a record identifiable by path
+        # alone degrades to "no schema matches" (exit 0). Either way it is a
+        # diagnostic, never a traceback.
+        repo_rel = resolved.replace('\\', '/')
 
     if not os.path.isfile(resolved):
         print(f'lint-frontmatter --file: file not found: {resolved}', file=sys.stderr)

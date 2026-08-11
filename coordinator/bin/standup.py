@@ -118,15 +118,20 @@ def _heading(path: str) -> str:
 
 
 def main() -> int:
-    # Resolve repo root.
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, **_no_console_window(),
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    # Resolve repo root via the checked resolver. READER (AC10): a MISMATCH
+    # verdict is warned to stderr and the resolved root used anyway (DR-277);
+    # UNRESOLVED never refuses either (AC4).
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    from repo_identity import resolve_checked_repo_root  # noqa: E402  (path injected above)
+
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if repo_root is None:
         sys.stderr.write("ERROR: not inside a git repository\n")
         return 1
-    repo_root = result.stdout.strip()
+    if verdict["verdict"] == "MISMATCH":
+        sys.stderr.write(verdict["message"] + "\n")
 
     state_root = _resolve_state_root()
 

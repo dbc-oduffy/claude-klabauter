@@ -335,6 +335,28 @@ def _dispatch_id_resolvable(
     return False
 
 
+def _resolve_sidecar_evidence_path(evidence: str, caller_worktree: Path) -> Optional[Path]:
+    """Return the on-disk sidecar path *evidence* names, or ``None`` if it
+    does not resolve. Shared resolution logic behind ``_sidecar_evidence_exists``
+    (existence check only) and ``_derive_execution_basis_from_sidecar`` (C2 —
+    also needs the resolved path to read its content). Rejects any path
+    outside ``_SIDECAR_EVIDENCE_PREFIXES``, and any absolute/``..``-escaping
+    path, before ever touching the filesystem.
+    """
+    normalized = evidence.strip().replace("\\", "/").lstrip("/")
+    if not normalized.startswith(_SIDECAR_EVIDENCE_PREFIXES):
+        return None
+    if ".." in Path(normalized).parts:
+        return None
+    candidate = caller_worktree / normalized
+    try:
+        if candidate.is_file():
+            return candidate
+    except OSError:
+        return None
+    return None
+
+
 def _sidecar_evidence_exists(evidence: str, caller_worktree: Path) -> bool:
     """True iff *evidence* names a sidecar-shaped path (see
     ``_SIDECAR_EVIDENCE_PREFIXES``) that exists on disk under
@@ -343,16 +365,133 @@ def _sidecar_evidence_exists(evidence: str, caller_worktree: Path) -> bool:
     evidence must live where this repo's own dispatch machinery actually
     writes it, not merely be a path that happens to resolve.
     """
-    normalized = evidence.strip().replace("\\", "/").lstrip("/")
-    if not normalized.startswith(_SIDECAR_EVIDENCE_PREFIXES):
-        return False
-    if ".." in Path(normalized).parts:
-        return False
-    candidate = caller_worktree / normalized
+    return _resolve_sidecar_evidence_path(evidence, caller_worktree) is not None
+
+
+# ---------------------------------------------------------------------------
+# execution_basis derivation from the reviewer's own sidecar (C2,
+# docs/plans/2026-08-11-review-trail-carries-execution-basis.md § C2)
+# ---------------------------------------------------------------------------
+#
+# C1 alone would accept ``execution_basis="executed"`` from anyone typing it
+# on the CLI -- the exact shape of falsification the "reviewer_evidence"
+# section above already closes for the ``reviewer`` field. This section
+# closes it for ``execution_basis`` by deriving the value from the DELEGATE
+# reviewer's OWN sidecar (the artifact ``reviewer_evidence`` already proves
+# exists) instead of trusting a caller-typed flag, wherever that sidecar
+# carries an answer. Follows the same DELEGATE/WAIVED/EM-VERIFIED evidence-
+# class shape as ``_verify_reviewer_evidence`` -- this only ever fires for a
+# DELEGATE reviewer whose ``reviewer_evidence`` resolves to a sidecar file.
+
+#: Section heading the sidecar templates in
+#: ``coordinator_core.subagent_sandbox.provision_report`` scaffold
+#: (``## Execution capability``), and the literal read-only fallback string
+#: example-doctrine-repo's producer side landed at ``2cb87e464``. Matched case-sensitively --
+#: this is a fixed contract string, not free prose to fuzzy-match.
+_EXECUTION_CAPABILITY_HEADING_RE = re.compile(
+    r"^##\s+Execution capability\s*$", re.MULTILINE,
+)
+_NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+_READ_ONLY_FALLBACK_TEXT = "none — this verdict rests on reading only"
+
+#: Strips an HTML comment block (the scaffolded instructional placeholder,
+#: e.g. ``<!-- Name what you actually ran ... -->``) so an untouched
+#: template section reads as empty rather than as "content".
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _derive_execution_basis_from_sidecar_text(text: str) -> Optional[str]:
+    """Parse a sidecar's ``## Execution capability`` section and return
+    ``"executed"`` | ``"read-only"`` | ``None`` (section absent, or present
+    but carrying no real content once the scaffolded HTML-comment
+    placeholder is stripped -- i.e. unparseable/not yet filled in).
+
+    Rule 4 (§ C2): absent-or-unparseable is deliberately NOT a refusal --
+    the caller of this function treats ``None`` as "no derivation available"
+    and this chunk's own asymmetry rule (see the write-path call site)
+    decides what happens next. This is expected to be the OVERWHELMINGLY
+    common case against today's sidecar corpus (state/audits/2026-08-11-
+    review-trail-execution-basis-derivability.md's 0% derivable rate is
+    entirely explained by the section not existing in this repo's templates
+    until C6 landed it) -- not a defect, just the current corpus shape.
+    """
+    heading_match = _EXECUTION_CAPABILITY_HEADING_RE.search(text)
+    if heading_match is None:
+        return None
+    section_start = heading_match.end()
+    next_heading_match = _NEXT_HEADING_RE.search(text, section_start)
+    section_end = next_heading_match.start() if next_heading_match else len(text)
+    section_text = text[section_start:section_end]
+    stripped = _HTML_COMMENT_RE.sub("", section_text).strip()
+    if not stripped:
+        return None
+    if stripped == _READ_ONLY_FALLBACK_TEXT:
+        return "read-only"
+    return "executed"
+
+
+class _SidecarUndetermined:
+    """Sentinel type for Rule 4 (§ C2 correction pass): a reviewer sidecar
+    DID resolve to a file on disk, but its ``## Execution capability``
+    section is absent, empty (scaffold-comment-only), or otherwise
+    unparseable. Distinct from plain ``None`` (Rule 3: no sidecar resolved
+    at all -- not applicable) precisely so
+    ``write_review_trail_entry`` can tell the two apart and apply the
+    correct rule: Rule 3 leaves the caller's ``execution_basis`` value
+    standing; Rule 4 forces it to be OMITTED from the written record.
+
+    Chosen over a bare string sentinel (e.g. ``"undetermined"``) because a
+    string could collide with a real, currently-unenumerated
+    ``execution_basis`` value in the future; a module-private singleton
+    instance cannot. Chosen over a ``(state, value)`` tuple because the
+    three-way return stays a single value callers can `is`-compare, which
+    reads closer to this module's existing ``Optional[...]`` idioms than
+    unpacking a tuple at every call site would.
+    """
+
+
+#: The one instance of `_SidecarUndetermined` ever constructed -- callers
+#: compare against this object with `is`, never construct their own.
+_SIDECAR_UNDETERMINED = _SidecarUndetermined()
+
+
+def _derive_execution_basis_from_sidecar(
+    reviewer: str, reviewer_evidence: Optional[str], caller_worktree: Optional[Path]
+) -> "Optional[str] | _SidecarUndetermined":
+    """Entry point for C2 derivation. Three-way return (§ C2 correction pass):
+
+      - ``None`` -- Rule 3, NOT APPLICABLE: *reviewer* is not a DELEGATE
+        reviewer, or *reviewer_evidence*/``caller_worktree`` is missing, or
+        *reviewer_evidence* does not resolve to an existing sidecar file on
+        disk. There is nothing to derive FROM.
+      - `_SIDECAR_UNDETERMINED` -- Rule 4, UNDETERMINED: a sidecar file DID
+        resolve, but it became unreadable between resolution and read (a
+        narrow race with the file existing at `is_file()` time and vanishing
+        or erroring on `read_text`), or its ``## Execution capability``
+        section is absent/empty/unparseable per
+        `_derive_execution_basis_from_sidecar_text`. Either way a sidecar
+        exists and attests nothing -- distinct from "no sidecar" (Rule 3).
+      - ``"executed"`` / ``"read-only"`` -- Rule 1/2, DERIVED: a real value
+        was read from the section.
+
+    A dispatch-id-shaped evidence value (not a sidecar path) always returns
+    `None` (Rule 3) -- there is no sidecar file to read a section out of.
+    """
+    if reviewer not in _DELEGATE_REVIEWERS:
+        return None
+    if not reviewer_evidence or caller_worktree is None:
+        return None
+    sidecar_path = _resolve_sidecar_evidence_path(reviewer_evidence, caller_worktree)
+    if sidecar_path is None:
+        return None
     try:
-        return candidate.is_file()
+        text = sidecar_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return False
+        return _SIDECAR_UNDETERMINED
+    derived = _derive_execution_basis_from_sidecar_text(text)
+    if derived is None:
+        return _SIDECAR_UNDETERMINED
+    return derived
 
 
 def _compose_reviewer_evidence_message(
@@ -1657,6 +1796,14 @@ def _resolve_workstream(
 # ---------------------------------------------------------------------------
 
 
+#: Valid values for ``execution_basis`` (docs/plans/2026-08-11-review-trail-
+#: carries-execution-basis.md § C1). There is NO ``unknown`` value — absence
+#: of the key already means unknown (AC5 / § Anti-scope); a third explicit
+#: value would be a state that must be kept byte-distinguished from absence
+#: for no named consumer.
+_VALID_EXECUTION_BASES = frozenset({"executed", "read-only"})
+
+
 def _build_json_record(
     sha_range: str,
     reviewer: str,
@@ -1667,6 +1814,7 @@ def _build_json_record(
     session_id: str,
     workstream: Optional[str],
     reviewed_paths: Optional[List[str]] = None,
+    execution_basis: Optional[str] = None,
 ) -> str:
     """Hand-build the JSON record string matching oracle bash string interpolation exactly.
 
@@ -1681,6 +1829,14 @@ def _build_json_record(
     ``scope_kind == "diff"`` and ``reviewed_paths`` is ``None`` (not supplied), the key is
     still emitted, as JSON ``null`` — the same present-as-null discipline the ``workstream``
     key already uses.
+
+    ``execution_basis`` (docs/plans/2026-08-11-review-trail-carries-execution-basis.md
+    § C1) is a further optional key, appended AFTER the ``reviewed_paths`` block (when
+    present) — ONLY when ``execution_basis`` is not ``None``. Unlike ``reviewed_paths``,
+    this key is NOT conditioned on ``scope_kind`` — a plan-scoped or integration-scoped
+    review has an execution basis just as a diff-scoped one does. When ``execution_basis``
+    is ``None`` (not supplied), the key is omitted entirely and the produced bytes are
+    byte-identical to what this function produced before this key existed (AC5).
 
     Oracle: ``printf '%s'`` writes without trailing newline. This function also omits the newline.
 
@@ -1714,6 +1870,8 @@ def _build_json_record(
             "'diff' — value dropped by design (reviewed_paths is diff-only, C9)",
             scope_kind,
         )
+    if execution_basis is not None:
+        record = record[:-1] + f',"execution_basis":"{execution_basis}"}}'
     return record
 
 
@@ -1901,6 +2059,7 @@ def write_review_trail_entry(
     workstream: Optional[str] = None,
     reviewed_paths: Optional[List[str]] = None,
     reviewer_evidence: Optional[str] = None,
+    execution_basis: Optional[str] = None,
     caller_worktree: Optional[Path] = None,
     _timestamp: Optional[str] = None,
 ) -> dict:
@@ -1933,6 +2092,13 @@ def write_review_trail_entry(
                       is truthy; advisory (logs, does not raise) by default — see
                       ``_verify_reviewer_evidence``'s Negative-spec block. Never persisted
                       to the on-disk record.
+        execution_basis — one of ``executed`` | ``read-only``, or ``None`` (default).
+                      Persisted as a further optional key (see ``_build_json_record``),
+                      appended after ``reviewed_paths`` and NOT conditioned on
+                      ``scope_kind``. Absence (``None``) means unknown — absence is
+                      NEVER equivalent to ``read-only``; a record written without this
+                      parameter is byte-identical to what the same call produces today
+                      (AC5, docs/plans/2026-08-11-review-trail-carries-execution-basis.md).
         caller_worktree — the caller's repo worktree root (from main_worktree_root(repo_root)).
         _timestamp  — injectable timestamp string for test isolation (bypasses _compute_timestamp).
 
@@ -1971,6 +2137,12 @@ def write_review_trail_entry(
                     f"character (no '\"', '\\\\', or control characters allowed): {p!r}"
                 )
 
+    if execution_basis is not None and execution_basis not in _VALID_EXECUTION_BASES:
+        raise ValueError(
+            f"review_trail.write: execution_basis {execution_basis!r} is invalid; "
+            f"allowed: {' | '.join(sorted(_VALID_EXECUTION_BASES))}"
+        )
+
     # Resolve session_id (before sha_range concretization — an unresolvable
     # session_id is the more fundamental failure and should surface first,
     # rather than being masked by a git-resolution error on a caller_worktree
@@ -2004,6 +2176,73 @@ def write_review_trail_entry(
     _verify_reviewer_evidence(
         reviewer, verdict, reviewer_evidence, caller_worktree, resolved_session_id
     )
+
+    # Derive execution_basis from the reviewer's own sidecar instead of
+    # trusting whatever the caller typed (C2, docs/plans/2026-08-11-review-
+    # trail-carries-execution-basis.md § C2). See the module-level
+    # "execution_basis derivation" comment block above for the full design.
+    derived_execution_basis = _derive_execution_basis_from_sidecar(
+        reviewer, reviewer_evidence, caller_worktree
+    )
+    if derived_execution_basis is _SIDECAR_UNDETERMINED:
+        # Rule 4 (§ C2 correction pass): a sidecar DID resolve, but its
+        # "## Execution capability" section is absent, empty, or
+        # unparseable -- distinct from Rule 3 below (no sidecar resolves at
+        # all). Deliberately NOT a refusal: the write still SUCCEEDS, but
+        # `execution_basis` is forced to `None` so the key is OMITTED from
+        # the written record rather than persisting whatever the caller
+        # typed as though it were evidenced. This is the DOMINANT case
+        # against today's sidecar corpus (state/audits/2026-08-11-review-
+        # trail-execution-basis-derivability.md: ~92% of records resolve a
+        # sidecar; essentially none yet carry the section), so a discarded
+        # caller value is logged -- not silent -- naming the sidecar so an
+        # EM isn't left wondering why their flag vanished.
+        if execution_basis is not None:
+            logger.warning(
+                "review_trail.write: discarding caller-supplied "
+                "execution_basis %r -- reviewer's sidecar (%r) resolved but "
+                "its '## Execution capability' section attests nothing "
+                "(absent, empty, or unparseable); execution_basis is "
+                "omitted from the written record rather than persisting an "
+                "unevidenced caller value.",
+                execution_basis,
+                reviewer_evidence,
+            )
+        execution_basis = None
+    elif isinstance(derived_execution_basis, str):
+        # Rule 1/2: a real value was read from the sidecar's own section. A
+        # caller-supplied value that CONTRADICTS it is refused -- but under
+        # the SAME env gate as `_verify_reviewer_evidence`
+        # (advisory/non-blocking unless COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE
+        # is truthy), not a stricter one. The sidecar-derived value always
+        # wins over a contradicting caller value -- that is the entire point
+        # of this chunk's title ("derive... instead of trusting whatever the
+        # caller typed") -- the env gate controls only whether the
+        # contradiction RAISES (enforcing) or merely WARNS (advisory,
+        # default) before it is overridden.
+        if execution_basis is not None and execution_basis != derived_execution_basis:
+            contradiction_message = (
+                f"review_trail.write: caller-supplied execution_basis "
+                f"{execution_basis!r} contradicts the reviewer's own sidecar "
+                f"({reviewer_evidence!r}), which derives {derived_execution_basis!r} "
+                "-- the sidecar-derived value is authoritative."
+            )
+            if _evidence_enforcement_enabled():
+                raise ValueError(contradiction_message)
+            logger.warning(
+                "review_trail.write advisory (would refuse if enforcing): %s",
+                contradiction_message,
+            )
+        execution_basis = derived_execution_basis
+    # else (Rule 3): no sidecar resolves at all (waived/em-verified/machine-
+    # provenance reviewers, or a DELEGATE reviewer with no/unresolvable
+    # evidence) -- there is nothing to derive FROM, so the caller's value
+    # stands on the existing justification floor, same as before C2. This
+    # is the REAL asymmetry with Rule 4 above: Rule 3 has no sidecar to
+    # doubt the caller against, so the caller's typed value is the best
+    # information available; Rule 4 has a sidecar that was consulted and
+    # came back empty, so persisting the caller's value would misrepresent
+    # silence as evidence.
 
     # Concretize any symbolic ref (HEAD, a branch, ...) in sha_range to its
     # current concrete SHA — persisting a literal "HEAD" lets the record's
@@ -2074,6 +2313,7 @@ def write_review_trail_entry(
         session_id=resolved_session_id,
         workstream=resolved_workstream,
         reviewed_paths=reviewed_paths,
+        execution_basis=execution_basis,
     )
     # Encode to bytes (ASCII — all values are validated ASCII-safe).
     record_bytes = json_record.encode("utf-8")
@@ -2098,6 +2338,8 @@ def write_review_trail_entry(
     }
     if scope_kind == "diff":
         result["reviewed_paths"] = reviewed_paths
+    if execution_basis is not None:
+        result["execution_basis"] = execution_basis
 
     # Advisory-only, additive: never persisted to the on-disk JSON record
     # (see the "Write-time zero-chain-terminal-credit diagnostic" section
@@ -2151,6 +2393,8 @@ async def _review_trail_write_handler(
         reviewer_evidence (str) — evidence correlating ``reviewer`` with an artifact
                       showing a review occurred; see ``write_review_trail_entry``'s
                       docstring and the module-level "reviewer_evidence" comment block.
+        execution_basis (str) — one of ``executed`` | ``read-only``; see
+                      ``write_review_trail_entry``'s docstring. Absence means unknown.
 
     Returns:
         {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
@@ -2200,6 +2444,7 @@ async def _review_trail_write_handler(
         workstream=params.get("workstream"),
         reviewed_paths=raw_reviewed_paths,
         reviewer_evidence=params.get("reviewer_evidence"),
+        execution_basis=params.get("execution_basis"),
         caller_worktree=caller_worktree,
     )
     return result
