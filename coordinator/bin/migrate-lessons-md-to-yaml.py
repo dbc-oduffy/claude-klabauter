@@ -95,11 +95,19 @@ def _detect_from_repo() -> str:
     """Detect from_repo registry shortname from the checked-resolver repo root's
     basename. WRITER (AC10): both cmd_dry_run (JSON classification report via
     output_path.write_text) and cmd_apply (per-entry YAML via
-    out_path.write_text, plus git rm) write real artifacts into the resolved
-    root, and both call this before their first write. A positive MISMATCH
-    refuses HERE, before any write lands — the DR-277 carve-out ("prevents a
-    write into a foreign tree") licenses the hard deny. UNRESOLVED never
-    refuses (DR-277, AC4)."""
+    out_path.write_text, plus git rm) write real artifacts, and both call this
+    before their first write. A positive MISMATCH refuses HERE, before any
+    write lands — the DR-277 carve-out ("prevents a write into a foreign
+    tree") licenses the hard deny. UNRESOLVED never refuses (DR-277, AC4).
+
+    Review: code-reviewer (nit) — this resolved root only labels the
+    from_repo field; it does NOT scope where cmd_dry_run/cmd_apply actually
+    write. Both write targets (`Path('state') / ...`, and
+    `args.output_dir`, default `'state/lessons'`) are resolved relative to
+    `os.getcwd()`, never to this function's resolved root -- on a MATCH
+    verdict the two coincide by construction, but they are two different
+    notions of "where."
+    """
     repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         return 'unknown'

@@ -785,9 +785,55 @@ def _stamp_file(path: str, deliverable_id: str) -> bool:
     return True
 
 
-_SIZING_SCHEMA_PATH_FOR_STAMP = (
-    Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+_DELIVERABLE_ID_PATTERN = re.compile(
+    r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"
 )
+
+
+def _validate_stamped_deliverable_id(parsed: dict) -> list:
+    """Narrow, op-local validation gate — checks ONLY the shape of the
+    single field this stamp writes (`deliverable_id`), never the whole
+    sizing document against the full `sizing-object.schema.json`.
+
+    Why this exists (same defect class as `handoff_backfill_claim_stamp`'s
+    `_validate_backfilled_fields`, commit 0bb630418): full-document
+    validation via `validate_frontmatter(parsed, <sizing schema path>)`
+    gates a single-field stamp on the WHOLE post-mutation document already
+    satisfying the current schema — including `required: [..., "premise"]`,
+    a field added well after this schema's 1.0.0 baseline. A legacy sizing
+    record that predates `premise` (or any other later-added required
+    field) fails full-document validation on fields this stamp never
+    touches, refusing exactly the pre-backfill record the stamp exists to
+    thread `deliverable_id` onto. Verified against a constructed legacy
+    record (missing `premise`) before this fix landed: full-document
+    validation refused it with `{'field': 'premise', 'error': 'required
+    field missing'}, even though `deliverable_id` itself was well-formed.
+
+    Deliberately does NOT call `coordinator_core.frontmatter.schema_validate`
+    — `schema_validate.py` is a hard external dependency (example-doctrine-repo imports
+    `validate_frontmatter_obj` by path) and its leniency is contract;
+    narrowing that shared path would be a global behaviour change under
+    one caller's remit. This function is local to THIS op and checks
+    nothing beyond the one field THIS stamp actually writes.
+
+    Returns a (possibly empty) list of `{field, error, hint}` dicts, the
+    same shape `validate_frontmatter` returns, so the existing
+    `format_validation_errors`/`MutateAbort` call site needs no change.
+    Empty -> valid.
+    """
+    errors: list = []
+    deliverable_id = parsed.get("deliverable_id")
+    if deliverable_id is not None and (
+        not isinstance(deliverable_id, str) or not _DELIVERABLE_ID_PATTERN.match(deliverable_id)
+    ):
+        errors.append(
+            {
+                "field": "deliverable_id",
+                "error": f"expected null or a string matching ^dlv-...$, got {deliverable_id!r}",
+                "hint": 'deliverable_id must be null or start with "dlv-" (not "dlv-placeholder-replace-with")',
+            }
+        )
+    return errors
 
 
 def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool:
@@ -836,10 +882,6 @@ def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool
         `MutateAbort` rather than silently persisting a broken document.
     """
     import yaml  # noqa: PLC0415 — function-local, mirrors this module's other deferred imports
-    from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
-        format_validation_errors,
-        validate_frontmatter,
-    )
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw  # noqa: PLC0415
 
     def _mutate(old_text: str) -> str:
@@ -879,11 +921,11 @@ def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool
             raise MutateAbort(
                 f"stamp: post-mutation document at {path} did not parse to a YAML mapping"
             )
-        errors = validate_frontmatter(parsed, _SIZING_SCHEMA_PATH_FOR_STAMP)
+        errors = _validate_stamped_deliverable_id(parsed)
         if errors:
-            details = format_validation_errors(errors)
+            details = "; ".join(f"{e['field']}: {e['error']} ({e['hint']})" for e in errors)
             raise MutateAbort(
-                f"stamp: post-mutation schema validation failed for {path}: {details}"
+                f"stamp: post-mutation validation failed for {path}: {details}"
             )
         return new_text
 

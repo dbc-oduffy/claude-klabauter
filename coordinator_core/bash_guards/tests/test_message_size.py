@@ -157,61 +157,40 @@ class TestProseExemptSplit:
 
 
 class TestTailSubtractionByIdentity:
-    def test_matching_env_var_tail_is_subtracted_by_identity(self):
+    """`operator_override_note`'s 2026-08-11 second reshape (same-day,
+    guard-messages-point-to-docs-never-name plan) made its output
+    independent of `env_var`/`reason_placeholder` -- a single fixed string
+    every guard's tail either carries verbatim or doesn't. `_tail_bytes`
+    no longer takes an `override_env_var` argument (nor does
+    `measure_envelope`); this class was rewritten to match, replacing the
+    old per-guard-argument identity tests (which asserted a WRONG env var
+    did not match, and a mismatched `reason_placeholder` did not match --
+    both premises this reshape retires, since there is no longer a
+    per-call-site value to be wrong about)."""
+
+    def test_tail_is_subtracted_by_identity(self):
         tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
         text = "Advisory prose sentence. " + tail
         envelope = _envelope(additional_context=text)
-        result = msz.measure_envelope(envelope, override_env_var="COORDINATOR_ALLOW_TEST_GUARD")
+        result = msz.measure_envelope(envelope)
         assert result.tail_bytes == len(tail.encode("utf-8"))
         assert result.prose_bytes == result.total_bytes - result.exempt_bytes - result.tail_bytes
         assert result.prose_bytes < result.total_bytes
 
-    def test_wrong_env_var_does_not_subtract_the_tail(self):
-        tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
-        text = "Advisory prose sentence. " + tail
-        envelope = _envelope(additional_context=text)
-        result = msz.measure_envelope(envelope, override_env_var="COORDINATOR_ALLOW_SOME_OTHER_GUARD")
-        assert result.tail_bytes == 0
-        assert result.prose_bytes == result.total_bytes - result.exempt_bytes
+    def test_tail_is_identical_regardless_of_env_var_or_reason_placeholder(self):
+        """The direct regression for the reshape: every call to the builder
+        renders the SAME string now, so the tail subtracted is the same
+        regardless of which env var (or reason_placeholder) a guard's call
+        site happens to pass."""
+        flag_tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
+        other_flag_tail = operator_override_note("COORDINATOR_ALLOW_SOME_OTHER_GUARD")
+        reason_tail = operator_override_note("COORDINATOR_QUEUE_PUNT", reason_placeholder="not now, doing X")
+        assert flag_tail == other_flag_tail == reason_tail
 
-    def test_no_override_env_var_leaves_tail_bytes_zero(self):
+    def test_no_override_note_leaves_tail_bytes_zero(self):
         envelope = _envelope(additional_context="Advisory prose sentence, no override offered.")
         result = msz.measure_envelope(envelope)
         assert result.tail_bytes == 0
-
-    def test_reason_placeholder_tail_matched_only_with_matching_placeholder(self):
-        tail = operator_override_note("COORDINATOR_QUEUE_PUNT", reason_placeholder="not now, doing X")
-        text = "Advisory prose sentence. " + tail
-        envelope = _envelope(additional_context=text)
-
-        missed = msz.measure_envelope(envelope, override_env_var="COORDINATOR_QUEUE_PUNT")
-        assert missed.tail_bytes == 0  # flag-shaped VAR=1 render does not match the reason-shaped tail
-
-        matched = msz.measure_envelope(
-            envelope,
-            override_env_var="COORDINATOR_QUEUE_PUNT",
-            override_reason_placeholder="not now, doing X",
-        )
-        assert matched.tail_bytes == len(tail.encode("utf-8"))
-
-
-class TestDiscoverableEnvVarsStaysDerived:
-    """Regression for the 2026-08-11 incident where `_OVERRIDE_ENV_VAR_RE`
-    was an independent, hand-transcribed `KEY=1` pattern that silently
-    decoupled from `operator_override_note`'s reshape (commit ba3bf8a98,
-    which removed the assignment form entirely). Asserts recovery works
-    off a LIVE render of the builder on both branches -- if the regex is
-    ever reverted to transcribing the builder's shape by hand instead of
-    deriving it, this must fail.
-    """
-
-    def test_recovers_env_var_from_flag_shaped_render(self):
-        tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
-        assert msz._discoverable_env_vars(tail) == ["COORDINATOR_ALLOW_TEST_GUARD"]
-
-    def test_recovers_env_var_from_reason_placeholder_shaped_render(self):
-        tail = operator_override_note("COORDINATOR_QUEUE_PUNT", reason_placeholder="not now, doing X")
-        assert msz._discoverable_env_vars(tail) == ["COORDINATOR_QUEUE_PUNT"]
 
 
 class TestBandResolution:

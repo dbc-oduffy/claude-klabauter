@@ -253,7 +253,7 @@ def test_no_handoff_record_carries_old_status_vocabulary():
         if not status_match:
             continue
         value = status_match.group(1).strip()
-        rel_path = str(path.relative_to(_REPO_ROOT))
+        rel_path = path.relative_to(_REPO_ROOT).as_posix()
         if value in _STATUS_VALUES_FORBIDDEN_CORPUS_WIDE:
             violators.append((rel_path, value))
         elif value in _STATUS_VALUES_FORBIDDEN_LIVE_ONLY and not _is_archived_corpus_path(rel_path):
@@ -275,7 +275,7 @@ def test_no_handoff_record_carries_old_deployment_state_vocabulary():
             continue
         ds_match = _DEPLOYMENT_STATE_LINE_RE.search(fm_match.group(1))
         if ds_match and ds_match.group(1).strip() == _OLD_DEPLOYMENT_STATE_VALUE:
-            violators.append(str(path.relative_to(_REPO_ROOT)))
+            violators.append(path.relative_to(_REPO_ROOT).as_posix())
 
     assert violators == [], (
         f"handoff record(s) still carry retired deployment_state: "
@@ -297,7 +297,7 @@ def test_no_handoff_record_carries_old_field_names():
         if not fm_match:
             continue
         fm_text = fm_match.group(1)
-        rel_path = str(path.relative_to(_REPO_ROOT))
+        rel_path = path.relative_to(_REPO_ROOT).as_posix()
         if _is_archived_corpus_path(rel_path):
             continue
         for old_field in _OLD_FIELD_NAMES:

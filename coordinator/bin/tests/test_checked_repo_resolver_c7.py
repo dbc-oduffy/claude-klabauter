@@ -155,7 +155,15 @@ class _WriterMismatchRefusesMixin:
         self.assertEqual(stderr.getvalue(), "")
         fake_cc_invoke.assert_called_once()
 
-    def test_unresolved_with_no_root_never_refuses_beyond_exit2(self):
+    def test_no_git_root_at_all_exits_2_without_dispatching(self):
+        # Review: code-reviewer (P2, EM-ruled) — renamed from
+        # test_unresolved_with_no_root_never_refuses_beyond_exit2, whose name
+        # promised "never refuses" while its body asserted rc == 2 (it does
+        # refuse). "No git root resolved at all" is a distinct condition from
+        # AC4's "UNRESOLVED never refuses" identity-gate rule: there is
+        # nowhere to write, not a mismatched identity, and refusing here is
+        # the deliberate improvement over the pre-port fallback-to-cwd
+        # walkers. This test locks in THAT refusal, not an AC4 violation.
         v = _verdict("UNRESOLVED", None, sid=None)
         with mock.patch.object(
             self.mod, "resolve_checked_repo_root",

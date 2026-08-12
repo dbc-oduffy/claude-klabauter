@@ -460,7 +460,7 @@ EXIT_USAGE = 2
 #: use) -- see `test_apostrophe_chunk_id_registers_and_covers_its_own_
 #: spine_id` for the confirmed live corpus shape this fixes.
 _CHUNK_SUBJECT_RE = re.compile(
-    r"^([A-Za-z0-9._'-]+(?:(?:,\s*|[+/])[A-Za-z0-9._'-]+)*):\s"
+    r"^([A-Za-z0-9._'-]+(?:(?:,\s*|\s*[+/]\s*)[A-Za-z0-9._'-]+)*):\s"
 )
 
 _CHUNK_ID_SHAPE_RE = re.compile(r"^C\d")
@@ -571,15 +571,25 @@ def _extract_chunk_ids(
     single commit legitimately uses when it lands more than one spine row at
     once -- an id-list joined by `,` (optionally `, ` with a trailing space,
     the one spacing variant seen live -- `C2, C7b: ...`), `+`
-    (`C3+C2b: ...`), or `/` (`C8a-doe/C8p: ...`) -- registering EVERY id the
-    list names, e.g. "C8a-doe/C8p: add `landed` to the plan status enum"
-    registers both `C8a-doe` and `C8p` (Defect fix, 2026-07-27: the prior
-    parser understood only `,` as a separator, so a `+`- or `/`-joined
-    subject failed the match ENTIRELY and contributed zero ids -- observed
-    live, `C8p` shipped inside `C8a-doe/C8p: ...` and this oracle reported
-    it uncommitted). Separator set is corpus-derived (`git log --format='%s'`
-    over both example-doctrine-repo and claude-klabauter, 2026-07-27) -- do not widen it
-    past `,`/`+`/`/` without fresh corpus evidence.
+    (`C3+C2b: ...`, or space-padded `C4 + C3b + C5a: ...`), or `/`
+    (`C8a-doe/C8p: ...`, or space-padded `C4b / C5b: ...`) -- registering
+    EVERY id the list names, e.g. "C8a-doe/C8p: add `landed` to the plan
+    status enum" registers both `C8a-doe` and `C8p` (Defect fix, 2026-07-27:
+    the prior parser understood only `,` as a separator, so a `+`- or
+    `/`-joined subject failed the match ENTIRELY and contributed zero ids --
+    observed live, `C8p` shipped inside `C8a-doe/C8p: ...` and this oracle
+    reported it uncommitted). Separator set is corpus-derived (`git log
+    --format='%s'` over both example-doctrine-repo and claude-klabauter, 2026-07-27) --
+    do not widen it past `,`/`+`/`/` without fresh corpus evidence.
+
+    Whitespace around `+`/`/` (Defect fix, 2026-08-06 cross-repo memo
+    `close-out-and-stamp-compound-subject-space-separator`): `_CHUNK_
+    SUBJECT_RE`'s `+`/`/` branches now tolerate optional surrounding
+    whitespace, matching the `,` branch's pre-existing comma-then-space
+    tolerance --
+    prior to this fix `C4 + C3b + C5a: ...` and `C4b + C5b: ...` failed the
+    WHOLE leading-token match (zero ids registered, not a partial miss),
+    since the separator regex required no whitespace at all around `+`/`/`.
 
     Bounding (so ordinary prose subjects don't start registering as chunk
     ids): the id-list must be the LEADING token(s) before the first `: `,
@@ -1515,14 +1525,20 @@ class DeliverableJoinStats:
     ever have been compared against it.
 
     `matched_commit_count` -- how many of those trailered commits carried a
-    value EQUAL to `deliverable_id` (the join's own success condition) --
-    independent of whether `_extract_chunk_ids` went on to register a usable
-    chunk-id from that commit's subject, since "at least one trailer
-    matched" is a fact about the JOIN, not about subject-parsing downstream
-    of it. Greater than zero is `_determine_shipped`'s `"joined"` state;
-    zero (with `trailered_commit_count` greater than zero) is its
-    `"key_mismatch"` state -- trailered candidates exist, just under a
-    different value.
+    value EQUAL to `deliverable_id` (the join's own success condition) AND
+    registered at least one usable chunk-id from that commit's subject via
+    `_extract_chunk_ids` (cross-repo memo fix, 2026-08-08,
+    `trailer-confirmed-and-reporting-shape-accepted` §2: a plan is authored
+    through the ceremony surface before its chunks are ever dispatched, so a
+    trailered plan-authoring/ceremony commit -- subject never chunk-shaped
+    -- is in range on every plan by construction; counting it here reported
+    `"joined"` off commits that could never cover a single spine chunk-id,
+    masking the true "no chunk-shaped evidence exists" state behind an
+    ordinary-looking "N chunk(s) still uncommitted" verdict). Greater than
+    zero is `_determine_shipped`'s `"joined"` state; zero (with
+    `trailered_commit_count` greater than zero) is its `"key_mismatch"`
+    state -- trailered candidates exist, just none of them both matched the
+    deliverable id AND named a real chunk-id.
 
     Computed from the SAME single `git log` call `_committed_chunk_shas`
     already makes for `committed_ids`/`committed_shas` -- no second query."""
@@ -1790,8 +1806,11 @@ def _committed_chunk_shas(
         canonical_trailer_value = canonicalize(trailer_value, equivalence_map) if trailer_value else trailer_value
         if not deliverable_id or canonical_trailer_value != canonical_deliverable_id:
             continue
+        subject_chunk_ids = _extract_chunk_ids(subject, spine_ids)
+        if not subject_chunk_ids:
+            continue
         matched_commit_count += 1
-        for chunk_id in _extract_chunk_ids(subject, spine_ids):
+        for chunk_id in subject_chunk_ids:
             committed.add(chunk_id)
             committed_shas.setdefault(chunk_id, sha)
 

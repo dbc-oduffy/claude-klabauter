@@ -279,28 +279,35 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--review-sha-range",
         dest="review_sha_range",
         default=None,
-        help="review_trail: reviewed sha range (optional; required alongside the other "
-        "--review-* flags for review_trail.write to fire — see module docstring).",
+        help="review_trail: reviewed sha range. Part of a 5-flag all-or-nothing group "
+        "with --review-reviewer/--review-scope/--review-verdict/--review-scope-kind — "
+        "supply all five together or none at all (see module docstring).",
     )
     parser.add_argument(
         "--review-reviewer",
         dest="review_reviewer",
         default=None,
-        help="review_trail: reviewer name (optional; see --review-sha-range). Allowed: "
+        help="review_trail: reviewer name. Part of a 5-flag all-or-nothing group with "
+        "--review-sha-range/--review-scope/--review-verdict/--review-scope-kind — "
+        "supply all five together or none at all. Allowed: "
         f"{' | '.join(sorted(_VALID_REVIEWERS))}.",
     )
     parser.add_argument(
         "--review-scope",
         dest="review_scope",
         default=None,
-        help="review_trail: reviewed scope (optional; see --review-sha-range). Allowed: "
+        help="review_trail: reviewed scope. Part of a 5-flag all-or-nothing group with "
+        "--review-sha-range/--review-reviewer/--review-verdict/--review-scope-kind — "
+        "supply all five together or none at all. Allowed: "
         f"{' | '.join(sorted(_VALID_SCOPES))}.",
     )
     parser.add_argument(
         "--review-verdict",
         dest="review_verdict",
         default=None,
-        help="review_trail: reviewer verdict (optional; see --review-sha-range). Allowed: "
+        help="review_trail: reviewer verdict. Part of a 5-flag all-or-nothing group with "
+        "--review-sha-range/--review-reviewer/--review-scope/--review-scope-kind — "
+        "supply all five together or none at all. Allowed: "
         f"{' | '.join(sorted(_VALID_VERDICTS))}.",
     )
     parser.add_argument(
@@ -313,8 +320,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--review-scope-kind",
         dest="review_scope_kind",
         default=None,
-        help="review_trail: scope kind (optional passthrough; default 'diff' when omitted). "
-        f"Allowed: {' | '.join(sorted(_VALID_SCOPE_KINDS))}.",
+        help="review_trail: scope kind (default 'diff' when omitted). Part of a 5-flag "
+        "all-or-nothing group with --review-sha-range/--review-reviewer/--review-scope/"
+        "--review-verdict — supply all five together or none at all. Allowed: "
+        f"{' | '.join(sorted(_VALID_SCOPE_KINDS))}.",
     )
     parser.add_argument(
         "--review-workstream",
@@ -693,17 +702,17 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    repo_root, _repo_verdict = resolve_checked_repo_root(explicit_root=None)
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         print(
             f"wsc-tail.py: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,
         )
         return 1
-    if _repo_verdict["verdict"] == "MISMATCH":
+    if verdict["verdict"] == "MISMATCH":
         # DR-277: READER (no write into resolved root) -- warn and proceed
         # rather than refuse. UNRESOLVED never refuses either (AC4).
-        print(_repo_verdict["message"], file=sys.stderr)
+        print(verdict["message"], file=sys.stderr)
 
     # Directory pathspec pre-flight (2026-08-03, example-retrieval-repo-em memo
     # `cross-repo/inbox/2026-08-03-example-retrieval-repo-em-wsc-tail-exits-zero-without-

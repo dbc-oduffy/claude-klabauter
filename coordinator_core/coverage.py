@@ -211,6 +211,60 @@ _UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 #: malformed Session-Id.
 _DELIVERABLE_ID_RE = re.compile(r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$")
 
+#: Leg (b) (the deliverable-attribution legacy-history fallback in
+#: `_derive_dag_chain_set` Step 3) fans out from a node's add-commit
+#: Session-Id to EVERY commit that session ever made on HEAD carrying no
+#: (walked) Deliverable-Id. That is correct when the add-commit is really
+#: this node's own author committing it in the ordinary way, but wrong when
+#: the add-commit is a BULK SWEEP — some other session's routine
+#: multi-hundred-file safety/auto commit that happened to include this one
+#: handoff among many unrelated files. A bulk sweep is not evidence that the
+#: sweeping session authored (or should review-inherit) this node's work; it
+#: is evidence the sweep merely passed over the file.
+#:
+#: File-touch-count on the add-commit is the chosen structural signal, not
+#: the commit subject: an ordinary handoff add-commit in this corpus touches
+#: a small number of files (the handoff itself, occasionally an index or a
+#: sibling artifact); the observed sweep commits touch 56-290. Subject-string
+#: matching ("safety-commit", "auto-commit:") is not used deliberately — it
+#: is corpus-specific prose that drifts, whereas file count is intrinsic git
+#: structure available on every commit regardless of author or convention.
+#: `deliverable_id`-on-add-commit was also considered and rejected: legacy
+#: (pre-trailer) add-commits legitimately lack a Deliverable-Id trailer too,
+#: so requiring one would falsely suppress leg (b) for exactly the
+#: genuinely-authored history it exists to keep attributing.
+#:
+#: False-negative risk: a legitimately-authored add-commit that happens to
+#: bundle more than this many files (e.g. a large batched multi-artifact
+#: close) has its leg (b) segment suppressed too, under-crediting that
+#: chain. This is the accepted direction — § "fail toward current
+#: behaviour, not away from it" only binds when suppressing does not corrupt
+#: leg (a) or turn the node INDETERMINATE; under-crediting a legitimately
+#: bulky close is a narrower, correctable-on-review miss, not a fabricated
+#: over-attribution. Leg (a) (Deliverable-Id-stamped commits) is completely
+#: unaffected by this threshold in either direction.
+_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD = 20
+
+
+def _add_commit_touched_file_count(add_sha: str, repo_root: str) -> Optional[int]:
+    """Return the number of files touched by commit `add_sha`, or None if the
+    count cannot be determined (git failure / unparsable output) — the caller
+    treats None the same as "below threshold" (fail toward current
+    behaviour: an unresolvable count must never itself suppress leg (b)).
+
+    Uses `git show --stat --format=` and counts stat lines carrying the
+    `" | "` file/changes separator, which the trailing "N files changed, ..."
+    summary line never contains — avoids an off-by-one from that line.
+    """
+    rc, out, _ = _run(
+        ["git", "show", "--stat", "--format=", add_sha],
+        cwd=repo_root,
+    )
+    if rc != 0:
+        return None
+    return sum(1 for line in out.splitlines() if " | " in line)
+
+
 #: Verdict filter:
 #:   pending  → EXCLUDED (review not complete; counting pending as coverage would allow
 #:              the gate to pass on un-reviewed commits — the latent gap this filter closes).
@@ -597,58 +651,81 @@ def _is_planning_artifact_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _PLANNING_ARTIFACT_PATH_PREFIXES)
 
 
+#: Chunk size for `_commit_touched_paths`' bare-SHA `git log --no-walk`
+#: positional-args batching — mirrors `_TRAILER_LOOKUP_CHUNK`'s rationale
+#: (keeps each spawn's argv comfortably under Windows' ~32K command-line
+#: length ceiling; a 40-hex SHA plus separator is a few bytes, so 300 per
+#: chunk leaves ample headroom). Unscoped whole-chain runs on this repo have
+#: exceeded 1900 SHAs, which previously blew a single unchunked argv past the
+#: ceiling ([WinError 206] "The filename or extension is too long").
+_TOUCHED_PATHS_CHUNK = 300
+
+
 def _commit_touched_paths(
     shas: List[str],
     cwd: str,
     cache: Dict[str, FrozenSet[str]],
 ) -> Tuple[Dict[str, FrozenSet[str]], Optional[str]]:
     """Return ({sha: frozenset(touched paths)}, diagnostic_note) for `shas`, via
-    ONE batched `git log --no-walk --name-only <shas>` call (mirrors
-    _narrow_foreign_session_scope's batched-call + per-invocation-cache shape above). A
-    sha that git cannot resolve, or that resolves with zero touched paths (an
-    empty/root commit), maps to an empty frozenset — the caller
-    (_classify_bookkeeping_shas) treats that as fail-closed CODE, never
+    batched `git log --no-walk --name-only <shas>` calls chunked at
+    `_TOUCHED_PATHS_CHUNK` per spawn (mirrors _bulk_trailer_lookup's
+    batched-call + per-invocation-cache shape above — see that function's
+    docstring for why bare-SHA positional args are safe to chunk arbitrarily,
+    unlike ranges). A sha that git cannot resolve, or that resolves with zero
+    touched paths (an empty/root commit), maps to an empty frozenset — the
+    caller (_classify_bookkeeping_shas) treats that as fail-closed CODE, never
     bookkeeping, per requirement 2's "zero resolvable paths is NOT bookkeeping"
     rule.
 
-    `diagnostic_note` is non-None only when the batched `git log` call itself
-    failed (rc != 0) — in that case EVERY uncached sha in this batch degrades
-    to an empty frozenset (fail-closed CODE), and the note makes that
-    degradation visible to the operator instead of silently reading as "no
-    bookkeeping found". Review: code-reviewer — a non-zero rc previously left
-    the degradation undiagnosable in the same notes channel the
-    bookkeeping-exclusion note already uses.
+    `diagnostic_note` is non-None when ANY chunk's `git log` call fails
+    (rc != 0) — every uncached sha in a FAILED chunk degrades to an empty
+    frozenset (fail-closed CODE); shas in chunks that succeeded still resolve
+    normally. The note reports the total failed-commit count across all
+    chunks so a large unscoped run (that previously died outright on a single
+    oversized argv) degrades visibly per-chunk instead of either crashing or
+    silently reading as "no bookkeeping found" for the whole set. Review:
+    code-reviewer — a non-zero rc previously left the degradation
+    undiagnosable in the same notes channel the bookkeeping-exclusion note
+    already uses; batching preserves that same visibility per chunk.
 
     Cached per sha (not per sha-list) so repeated calls across overlapping
     uncovered-sha sets within one run_coverage_gate invocation reuse work.
     """
     uncached = [sha for sha in shas if sha not in cache]
-    note: Optional[str] = None
+    failed_count = 0
+    first_err = ""
     if uncached:
-        rc, out, err = _run(
-            [
-                "git", "log", "--no-walk",
-                f"--format={_COMMIT_HEADER_SENTINEL}%H", "--name-only",
-            ]
-            + uncached,
-            cwd=cwd,
-        )
-        resolved: Dict[str, Set[str]] = {}
-        if rc == 0:
-            current_sha: Optional[str] = None
-            for line in out.splitlines():
-                if line.startswith(_COMMIT_HEADER_SENTINEL):
-                    current_sha = line[len(_COMMIT_HEADER_SENTINEL):].strip()
-                    resolved.setdefault(current_sha, set())
-                elif current_sha is not None and line.strip():
-                    resolved[current_sha].add(line.strip())
-        else:
-            note = (
-                "coverage: bookkeeping classification skipped — git log failed "
-                f"for {len(uncached)} commit(s): {err.strip() or 'unknown error'}"
+        for i in range(0, len(uncached), _TOUCHED_PATHS_CHUNK):
+            chunk = uncached[i : i + _TOUCHED_PATHS_CHUNK]
+            rc, out, err = _run(
+                [
+                    "git", "log", "--no-walk",
+                    f"--format={_COMMIT_HEADER_SENTINEL}%H", "--name-only",
+                ]
+                + chunk,
+                cwd=cwd,
             )
-        for sha in uncached:
-            cache[sha] = frozenset(resolved.get(sha, set()))
+            resolved: Dict[str, Set[str]] = {}
+            if rc == 0:
+                current_sha: Optional[str] = None
+                for line in out.splitlines():
+                    if line.startswith(_COMMIT_HEADER_SENTINEL):
+                        current_sha = line[len(_COMMIT_HEADER_SENTINEL):].strip()
+                        resolved.setdefault(current_sha, set())
+                    elif current_sha is not None and line.strip():
+                        resolved[current_sha].add(line.strip())
+            else:
+                failed_count += len(chunk)
+                if not first_err:
+                    first_err = err.strip() or "unknown error"
+            for sha in chunk:
+                cache[sha] = frozenset(resolved.get(sha, set()))
+    note: Optional[str] = None
+    if failed_count:
+        note = (
+            "coverage: bookkeeping classification skipped — git log failed "
+            f"for {failed_count} commit(s): {first_err or 'unknown error'}"
+        )
     return {sha: cache[sha] for sha in shas}, note
 
 
@@ -2519,6 +2596,16 @@ class _DagChainResult:
     notes: List[str] = field(default_factory=list)
     ordered_ancestry: List[str] = field(default_factory=list)
     node_attribution: Dict[str, _DagNodeAttribution] = field(default_factory=dict)
+    #: C2 (AC3): commits seen in a coverable node's Session-Id segment but
+    #: EXCLUDED from that node's leg (b) because the add-commit that would
+    #: have seeded leg (b) was judged a bulk sweep (see
+    #: _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD). Never a member of `shas` —
+    #: these are "in range, unattributable to this chain", not "this
+    #: chain's inheritance". Reported so a closer sees they exist and are
+    #: someone else's, rather than the report silently shrinking. Additive
+    #: field — existing callers reading only `shas`/`node_attribution` are
+    #: unaffected.
+    unattributable_shas: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -2561,6 +2648,53 @@ class _DagChainSetContext:
     sid_to_shas: Optional[Dict[str, List[str]]] = None
     did_to_shas: Optional[Dict[str, List[str]]] = None
     sha_to_did: Optional[Dict[str, str]] = None
+
+
+def _resolve_closing_handoff_disk_path(from_handoff_abs: str, repo_root: str) -> str:
+    """Return the actual on-disk path for the closing handoff, following it
+    into ``archive/handoffs/`` (flat or month-nested) when the caller-supplied
+    path has since been swept out of ``state/handoffs/`` by the fleet's
+    routine post-close archival — e.g. a diagnostic re-run of this gate
+    against a handoff path recorded before that handoff's own archival commit
+    landed.
+
+    Latent-bug fix (this dispatch, C2): ``walk_forward``'s edge-target
+    resolution (``dag.resolve_target``) already walks this same
+    state→archive→month-nested search for every ANCESTOR edge it follows, but
+    the START node it is given (``closing_abs`` in ``_derive_dag_chain_set``)
+    was passed through verbatim with no equivalent fallback. When the closing
+    handoff itself had already been archived, ``walk_forward`` could not read
+    its frontmatter at all — the DFS found zero edges, ``ordered_ancestry``
+    collapsed to the single closing node, and every downstream per-node read
+    in this module (``_parse_handoff_deliverable_id``,
+    ``_resolve_add_commit_session_id`` et al) silently degraded to its
+    conservative-None/live-default fallback. The net effect: the entire
+    weak-authorship/leg-(b) split this module exists to perform (AC1-AC4)
+    never engaged, and C2's unattributable-in-range reporting had nothing to
+    report — not because there was nothing foreign, but because the one node
+    that would have surfaced it (the archived ancestor baton) was never
+    walked. Returns the original ``from_handoff_abs`` unchanged whenever it
+    still exists on disk (the overwhelmingly common case) or no archived
+    counterpart can be found — never raises, never widens resolution beyond
+    an exact basename match under ``archive/handoffs/``.
+    """
+    if os.path.exists(from_handoff_abs):
+        return from_handoff_abs
+    basename = os.path.basename(from_handoff_abs)
+    archive_dir = os.path.join(repo_root, "archive", "handoffs")
+    flat_candidate = os.path.join(archive_dir, basename)
+    if os.path.exists(flat_candidate):
+        return flat_candidate
+    if os.path.isdir(archive_dir):
+        try:
+            for entry in sorted(os.listdir(archive_dir), reverse=True):
+                if re.match(r"^\d{4}-\d{2}$", entry):
+                    candidate = os.path.join(archive_dir, entry, basename)
+                    if os.path.exists(candidate):
+                        return candidate
+        except OSError:
+            pass
+    return from_handoff_abs
 
 
 def _derive_dag_chain_set(
@@ -2629,7 +2763,9 @@ def _derive_dag_chain_set(
                             unfilled context, populates it for later callers.
                             See `_DagChainSetContext` for its lifetime rules.
     """
-    closing_abs = os.path.abspath(from_handoff)
+    closing_abs = _resolve_closing_handoff_disk_path(
+        os.path.abspath(from_handoff), repo_root
+    )
     result = _DagChainResult()
 
     # Step 1: walk ancestors from closing handoff.
@@ -2966,6 +3102,11 @@ def _derive_dag_chain_set(
         sid = ""
         authored_sid: Optional[str] = None
         attribution_disagrees = False
+        # Captured in both branches below so the leg (b) bulk-sweep check
+        # (deliverable_id union, further down) has this node's add-commit
+        # regardless of which branch resolved `sid` — see
+        # _add_commit_touched_file_count / _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD.
+        add_sha = ""
 
         if node == closing_abs and closing_session_id:
             # D3 case 3: the closing handoff's session is the currently-active session.
@@ -2985,7 +3126,7 @@ def _derive_dag_chain_set(
             # byte-identity is asserted by
             # test_same_session_author_runner_control_MUST_NOT_CHANGE; if it
             # ever fails, this code is wrong, not the test.
-            _add_sha_obs, authored_sid_raw = _resolve_add_commit_session_id(node)
+            add_sha, authored_sid_raw = _resolve_add_commit_session_id(node)
             if authored_sid_raw:
                 authored_sid = authored_sid_raw
                 if authored_sid_raw != closing_session_id:
@@ -3197,11 +3338,49 @@ def _derive_dag_chain_set(
         # sourced from the same `git log HEAD --no-merges` walk that built
         # sha_to_did) — no separate `_commit_deliverable_id_trailers` spawn
         # needed per node any more (see the batched pre-pass above).
-        legacy_leg = [
+        #
+        # Weak-authorship guard (AC1/AC2): an add-commit that touched more
+        # than _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD files is a bulk sweep,
+        # not this node's authorship record — its Session-Id must not seed
+        # leg (b). Only computed here (lazily, per node with a
+        # deliverable_id) since it is only leg (b) that this guards; leg (a)
+        # is untouched either way. `add_sha` is always populated by this
+        # point for a node that reached here (both branches above resolve
+        # it before `sid` can be truthy).
+        is_bulk_sweep_add = False
+        if add_sha:
+            touched = _add_commit_touched_file_count(add_sha, repo_root)
+            if touched is not None and touched > _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD:
+                is_bulk_sweep_add = True
+
+        candidate_legacy_leg = [
             sha
             for sha in seg
             if not sha_to_did.get(sha) or sha_to_did[sha] not in walked_deliverable_ids
         ]
+
+        if is_bulk_sweep_add:
+            # AC4: fail toward current behaviour — the node itself does NOT
+            # become INDETERMINATE, and leg (a) is untouched. Leg (b) simply
+            # contributes nothing from this add-commit's session.
+            legacy_leg: List[str] = []
+            unattributable = candidate_legacy_leg
+            if unattributable:
+                # AC3/C2: report rather than drop — a distinct note category
+                # ("unattributable-in-range") so a closer can tell "this
+                # chain's inheritance" apart from "in range, foreign".
+                result.notes.append(
+                    f"{node}: add-commit {add_sha} touched more than "
+                    f"{_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD} files (bulk sweep) — "
+                    f"leg (b) suppressed for session {sid!r}; "
+                    f"{len(unattributable)} commit(s) unattributable-in-range "
+                    f"(not this chain's, not dropped): {sorted(unattributable)}"
+                )
+                result.unattributable_shas.extend(
+                    sha for sha in unattributable if sha not in result.unattributable_shas
+                )
+        else:
+            legacy_leg = candidate_legacy_leg
 
         node_shas = set(deliv_seg) | set(legacy_leg)
         for sha in node_shas:
@@ -3342,6 +3521,16 @@ class CoverageResult:
                    (the "state exactly once" property _derive_dag_chain_set's
                    docstring requires). Empty by default, same additive-field
                    property as bookkeeping_shas above.
+    unattributable_shas: DAG-mode only (empty in flat mode), verbatim from
+                   _DagChainResult.unattributable_shas (C2) -- commits seen
+                   in a coverable node's Session-Id segment but excluded
+                   from leg (b) because the seeding add-commit was judged a
+                   bulk sweep. NEVER a member of uncovered_shas/chain_commits
+                   /the verdict -- this is "in range, unattributable to THIS
+                   chain", distinct from "this chain's inheritance", reported
+                   for visibility so it is not mistaken for silently-dropped
+                   work. Empty by default, same additive-field property as
+                   bookkeeping_shas above.
 
     Negative-spec (hard-won):
       - UNCOVERED means "no covering trail record was found" -- it is AGNOSTIC to
@@ -3367,6 +3556,7 @@ class CoverageResult:
     coverage_ratio: float = 0.0
     dag_ordered_ancestry: List[str] = field(default_factory=list)
     dag_node_attribution: Dict[str, "_DagNodeAttribution"] = field(default_factory=dict)
+    unattributable_shas: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -4243,11 +4433,13 @@ def run_coverage_gate(
         # own "state exactly once" note).
         dag_ordered_ancestry = dag_result.ordered_ancestry
         dag_node_attribution = dag_result.node_attribution
+        dag_unattributable_shas = dag_result.unattributable_shas
         dag_closing_abs = os.path.abspath(from_handoff)
     else:
         # --- Flat mode ---
         dag_ordered_ancestry = []
         dag_node_attribution = {}
+        dag_unattributable_shas = []
         dag_closing_abs = ""
         if not range_arg:
             # Default: git merge-base origin/main HEAD..HEAD
@@ -4387,6 +4579,16 @@ def run_coverage_gate(
     planning_shas = [sha for sha in uncovered_shas if sha in planning_set]
     covered_count = len(chain_list) - len(uncovered_shas)
 
+    # C3/AC6: classification skipped for >=1 commit (a chunked `git log`
+    # call still failed even after batching under the Windows argv ceiling —
+    # see _TOUCHED_PATHS_CHUNK/_commit_touched_paths) means the
+    # bookkeeping/planning partition, and therefore the code-partition
+    # coverage_ratio derived from it, rests on incomplete data for this run.
+    # Recorded now, applied below (after the ordinary ratio/threshold
+    # decision) as a hard downgrade to WARN — never a silent COVERED — so a
+    # ratio computed over a corpus that failed to classify cannot read as a
+    # clean finding.
+    classification_skipped = bool(bookkeeping_diagnostic_note)
     if bookkeeping_diagnostic_note:
         notes.append(bookkeeping_diagnostic_note)
 
@@ -4549,6 +4751,24 @@ def run_coverage_gate(
             "re-run this gate."
         )
 
+    if classification_skipped and verdict == "COVERED":
+        # AC6: never let an incomplete-classification run silently pass as
+        # COVERED — the coverage_ratio above was computed over a corpus that
+        # failed to classify for at least one commit, so a clean-looking
+        # ratio here would misreport as a finding. Downgrade to WARN
+        # (exit_code stays 0 — WARN never halts, see the module's own
+        # decision note) rather than fabricate INDETERMINATE for what is a
+        # partial-data condition, not a walk/derivation failure.
+        verdict = "WARN"
+        notes.append(
+            "coverage: "
+            "WARN — bookkeeping/planning classification was skipped for one "
+            "or more commits (see the note above); the coverage_ratio below "
+            "is computed over an INCOMPLETE partition and must not be read "
+            "as a clean finding. Re-run once git log succeeds for the whole "
+            "range."
+        )
+
     vline = (
         f"range={range_label} chain_commits={len(chain_list)} "
         f"covered={covered_count} uncovered={len(uncovered_shas)} "
@@ -4617,4 +4837,5 @@ def run_coverage_gate(
         coverage_ratio=coverage_ratio,
         dag_ordered_ancestry=dag_ordered_ancestry,
         dag_node_attribution=dag_node_attribution,
+        unattributable_shas=dag_unattributable_shas,
     )

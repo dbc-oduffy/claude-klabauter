@@ -87,7 +87,8 @@ _NUDGE_MSG_TEMPLATE = """\
 [nudge] If this write was correct as-is (recovery handoff, /pickup rewrite,
 [nudge] review-marker), ignore this — nothing is blocked.
 [nudge]
-[nudge] Silence in autonomous runs: COORDINATOR_HANDOFF_NUDGE_OFF=1."""
+[nudge] Silence in autonomous runs: an override exists -- see
+[nudge] docs/reference/guard-override-keys.md."""
 
 # ---------------------------------------------------------------------------
 # Blocking helpers (called via asyncio.to_thread)

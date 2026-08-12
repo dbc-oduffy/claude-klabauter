@@ -870,10 +870,13 @@ def _derive_rows_from_dir(
     stat cache when cache_dir is given. Mirrors the pre-cache file loop exactly, adding
     only the per-file cache skip — never changes iteration order or which files are read.
 
-    session_filter narrows to one top-level session (O(1) via string compare against
-    parent_session_id from `_iter_transcript_entries`), and also includes that
-    session's own `subagents/agent-*.jsonl` transcripts — a `--session` scoped run
-    stays scoped to one session's work while still surfacing its subagent touches.
+    session_filter matches in one of two ways (O(1) string compare):
+      - a top-level (parent) session id: narrows to that session AND also includes
+        its own `subagents/agent-*.jsonl` transcripts — a `--session` scoped run
+        stays scoped to one session's work while still surfacing its subagent
+        touches.
+      - a subagent's own session id (`row_session_id`, e.g. `agent-*`): narrows to
+        exactly that subagent transcript's rows.
     Caching adds nothing to a single-session run and is skipped to avoid reading (and
     rewriting) the whole full-corpus cache file for one entry.
     """
@@ -882,7 +885,7 @@ def _derive_rows_from_dir(
         for _cache_key, parent_session_id, row_session_id, fpath in _iter_transcript_entries(
             transcript_dir
         ):
-            if session_filter and parent_session_id != session_filter:
+            if session_filter and parent_session_id != session_filter and row_session_id != session_filter:
                 continue
             try:
                 all_rows.extend(process_transcript(fpath, row_session_id))

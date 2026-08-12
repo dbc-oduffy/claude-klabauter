@@ -7,8 +7,9 @@ finish-strangler per T2-g1 — the pre-facade legacy body is retired, not a fall
 trigger). Windows de-bash campaign (Category B, shape-(b) per-op trampoline):
 replaces the bash forwarder append-plan-session.sh, which sourced
 coordinator/lib/strangler-facade.sh (strangle_route_mutation) + coordinator-session.sh.
-No shell is spawned by this module (`git rev-parse` runs via subprocess.run() with
-an argv list, never through a shell string).
+No shell is spawned by this module (repo-root resolution runs via
+repo_identity.resolve_checked_repo_root(), which shells out to `git rev-parse`
+via subprocess.run() with an argv list, never through a shell string).
 
 Two-state routing model (inherited from cc_invoke.route()/route_mutation()):
   State 2 (seam present + invoke succeeds) -> native op ran.

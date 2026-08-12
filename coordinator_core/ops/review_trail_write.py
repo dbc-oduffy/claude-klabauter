@@ -1303,6 +1303,49 @@ def _guard_foreign_session_range(
         )
         return frozenset()
 
+    # DEFECT 2 fix (2026-08-07 example-doctrine-repo-em memos: case3-remedy-is-not-
+    # performable / review-trail-guard-remedy-unreachable, CONFIRMED-LIVE per
+    # state/audits/2026-08-12-inbox-blitz-dominant-verify-wave-b.md items
+    # 11/12): when sha_range is ALREADY a single commit, "supply a narrower
+    # sha_range" names an action that does not exist — there is no narrower
+    # range than one commit. Detect that shape and name a performable remedy
+    # instead (re-commit through the trailer-emitting path, e.g.
+    # ceremony.scoped_git_commit, so the commit carries a Session-Id trailer,
+    # then retry with the new SHA) rather than repeating advice the sender
+    # already proved unreachable by construction.
+    commit_count_rc, commit_count_out, _commit_count_err = _git_runner(
+        ["git", "rev-list", "--count", sha_range], str(caller_worktree),
+    )
+    is_single_commit = (
+        commit_count_rc == 0 and commit_count_out.strip() == "1"
+    )
+
+    if is_single_commit:
+        raise ForeignSessionRangeRefused(
+            "review_trail.write: sha_range "
+            f"{sha_range!r} is already a single commit and is genuinely "
+            "ambiguous — it is untrailered (or its own Session-Id trailer is "
+            "absent) and the touched-path signal cannot place it in this "
+            f"session's scope. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
+            "There is no narrower range than one commit, so narrowing "
+            "further is not a performable remedy here. Two remedies "
+            "actually resolve this: (1) re-commit the same change through "
+            "the trailer-emitting path (ceremony.scoped_git_commit / the "
+            "normal commit machinery, not a raw git-commit or commit-tree "
+            "invocation) so the commit carries this session's own "
+            "Session-Id trailer, then retry the write against the new SHA; "
+            "or (2) if this is a chain-terminal close reviewing a picked-up "
+            "handoff, run the ceremony close coverage gate against that "
+            "handoff BEFORE this write (wsc-coverage-gate-runner.py "
+            "coverage-gate/brightline-gate --from-handoff) — it mints a "
+            "per-SHA chain-ancestry waiver keyed to this session, though "
+            "that path exists only for baton-ancestor commits with a "
+            "foreign Session-Id trailer (case 1), not for a genuinely "
+            "trailerless one. A PM vouch does NOT apply here — Case 3 never "
+            "consults it (trailerlessness alone is never Case 1, by "
+            "design)."
+        )
+
     raise ForeignSessionRangeRefused(
         "review_trail.write: sha_range "
         f"{sha_range!r} is genuinely ambiguous — it contains an untrailered "

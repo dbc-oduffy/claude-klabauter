@@ -183,6 +183,7 @@ from coordinator_core.pickup_assemble import (
     brief,
     compute_claim_grant,
     resolve_artifact,
+    split_artifact_args,
     validate_decisions_shape,
 )
 from coordinator_core.session.claims import (
@@ -1022,6 +1023,55 @@ def _usage(prog: str) -> int:
     return APPLY_EXIT_TRANSPORT_FAIL
 
 
+def _reject_if_multi_artifact(artifact_path: str, subcmd: str, prog: str) -> Optional[int]:
+    """Fails loud, rather than silently mutating the WRONG artifact, when
+    `artifact_path` names more than one baton (an ` AND `-joined argument, a
+    `{...}` brace group, or a pasted `- `/`* ` bullet list — anything
+    `split_artifact_args` would fan out).
+
+    2026-08-11 defect (same harm class as the `brief`-side fix this mirrors):
+    unlike `brief`, neither `apply` nor `drop` ever called
+    `split_artifact_args` — a multi-artifact argument passed straight into
+    `resolve_artifact` as ONE literal path, where `_sanitize_artifact_path_
+    str`'s hard-line-wrap rejoin could mash a bulleted two-path paste into a
+    single string that happened to suffix-match ONE of the two artifacts.
+    For `brief` that silently returned the wrong SURVEY entry; for `apply`/
+    `drop` the same silent collapse would silently CLAIM, COMMIT, or RELEASE
+    against the wrong artifact while naming none of this to the caller —
+    worse than `brief`'s read-only case, since it mutates.
+
+    `brief` itself is deliberately NOT given this same rejection: its
+    array-fan-out over N independent `brief()` calls is an existing, HARD
+    cross-repo consumer contract (`coordinator/hooks/scripts/pickup-
+    autofire.py` parses exactly that shape) and is read-only, so fanning out
+    is the correct behavior there, not the defect. `apply`/`drop` mutate and
+    were never given a multi-artifact contract at all, so refusing is the
+    right shape for them — one subcommand, one artifact, one object.
+
+    Returns `None` when `artifact_path` names exactly one artifact (the
+    common case — a no-op check). Returns `APPLY_EXIT_TRANSPORT_FAIL` after
+    printing a loud, itemized stderr message when it names more than one —
+    the caller returns this value directly rather than proceeding.
+    """
+    paths = split_artifact_args(artifact_path)
+    if len(paths) <= 1:
+        return None
+    print(
+        f"pickup-assemble {subcmd}: {artifact_path!r} parses as {len(paths)} artifacts, "
+        f"not one — {subcmd} acts on exactly one artifact at a time:",
+        file=sys.stderr,
+    )
+    for i, path in enumerate(paths, start=1):
+        print(f"  {i}. {path}", file=sys.stderr)
+    print(
+        f"       Run `{prog} {subcmd} <artifact-path>` once per artifact above "
+        f"(use `{prog} brief <artifact-path> AND <artifact-path> ...` first if you "
+        "need a read-only survey across all of them before committing to any one).",
+        file=sys.stderr,
+    )
+    return APPLY_EXIT_TRANSPORT_FAIL
+
+
 def main_apply(argv: list[str]) -> int:
     """`main()`'s `apply` dispatch arm — parses argv, calls `apply()`, prints
     the report, returns its exit code. `--decisions` is the crash-resume/
@@ -1031,6 +1081,9 @@ def main_apply(argv: list[str]) -> int:
         return _usage("pickup-assemble")
 
     artifact_path = argv[0]
+    reject = _reject_if_multi_artifact(artifact_path, "apply", "pickup-assemble")
+    if reject is not None:
+        return reject
     tail = argv[1:]
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
@@ -1235,6 +1288,9 @@ def main_drop(argv: list[str]) -> int:
         return _usage_drop("pickup-assemble")
 
     artifact_path = argv[0]
+    reject = _reject_if_multi_artifact(artifact_path, "drop", "pickup-assemble")
+    if reject is not None:
+        return reject
     tail = argv[1:]
     session_id: Optional[str] = None
     i = 0

@@ -1029,6 +1029,36 @@ def test_parity_roots_cover_every_scan_root():
         assert _tracked_launchers((root_rel,)), f"{root_rel} has no tracked launchers"
 
 
+def test_raw_cmdline_entrypoints_matches_substrate_targets():
+    """`gen-launcher-shim.py::_RAW_CMDLINE_ENTRYPOINTS` and
+    `coordinator_core/install/substrate.py::_RAW_CMDLINE_TARGETS` are two
+    independent, mirrored (not imported) copies of the same allowlist --
+    entrypoints whose `.cmd` launcher must preserve `%CMDCMDLINE%` to avoid
+    the caret-eating defect (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-
+    the-caret-in-a-git-rev-6679bf76eb8a.yaml). They cannot be unified into a
+    single shared constant (see both modules' own docstrings: a
+    hyphenated-filename generator module has no ordinary `import` form), so
+    this test is the drift guard in their place -- it fails the moment one
+    set gains or loses a member the other does not also carry.
+
+    Keyed by the shared suffix (`gen`'s set is repo-relative POSIX paths
+    like `coordinator/bin/scoped-git-commit`; `substrate`'s is the bare
+    on-disk target filename, e.g. `scoped-git-commit`), matching how
+    `_RAW_CMDLINE_TARGETS`'s own docstring already describes the
+    comparison.
+    """
+    gen = _load_gen_launcher_shim()
+    from coordinator_core.install.substrate import _RAW_CMDLINE_TARGETS
+
+    gen_basenames = {Path(p).name for p in gen._RAW_CMDLINE_ENTRYPOINTS}
+    assert gen_basenames == set(_RAW_CMDLINE_TARGETS), (
+        f"gen-launcher-shim.py's _RAW_CMDLINE_ENTRYPOINTS (basenames: "
+        f"{sorted(gen_basenames)}) and substrate.py's _RAW_CMDLINE_TARGETS "
+        f"({sorted(_RAW_CMDLINE_TARGETS)}) have drifted -- extend both sets "
+        "together."
+    )
+
+
 def test_parity_guard_is_not_mostly_exemptions():
     """A guard that is largely carve-out is theatre: it reports a green tick
     for a population it has stopped inspecting. This bounds the ratio rather
@@ -1357,5 +1387,13 @@ def test_argv_fidelity_matrix(argv_probe_launchers, leg, label, invocation_args,
     explicitly rather than skipped so a future change to that leg's
     (deliberately still-broken) behavior fails loudly instead of silently."""
     cmd_path, ps1_path = argv_probe_launchers
+    if leg == "cmd" and sys.platform != "win32":
+        # The .cmd leg needs a real cmd.exe to interpret the launcher; pwsh on a
+        # POSIX host cannot execute one, so these rows fail for want of an
+        # interpreter rather than for want of fidelity. Skipping keeps the
+        # known-bad .cmd expectations asserted where they are observable
+        # (Windows) instead of leaving three permanent reds on the primary dev
+        # platform, which is how a whole module's failures stop being read.
+        pytest.skip("cmd leg needs cmd.exe — not observable on a POSIX host")
     launcher = cmd_path if leg == "cmd" else ps1_path
     assert _pwsh_probe(launcher, invocation_args) == expected

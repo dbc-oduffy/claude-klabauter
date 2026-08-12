@@ -270,36 +270,85 @@ def _fold_axis_states(item_id: str, *, repo_root: Path) -> dict[str, str | None]
     `folded_to_state`, and exactly the events whose `id` appears in the
     snapshot's `folded_event_ids` are skipped — nothing else.
 
-    This skip is CONTENT-BOUND, never position-bound. `as_of_applied_at`
-    and `as_of_sequence` on a snapshot event are PROVENANCE ONLY — when the
-    fold ran, and this machine's shard position at fold time — and must
-    NEVER be compared against during replay. Under offline per-machine
-    sharding, machine B can append an event with an `applied_at` earlier
-    than machine A's snapshot; a position-bound cursor would silently drop
-    that late-arriving earlier event after merge and diverge from full
-    replay. An exact-identity skip set cannot skip an event it never
-    folded, so a late arrival folds normally on top of the seed.
+    This skip is CONTENT-BOUND, never position-bound: `folded_event_ids` is
+    an exact-identity set, and an event's membership in it never depends on
+    where that event sorts relative to anything. A late-arriving offline
+    event from another machine whose `applied_at` is earlier than the
+    snapshot's `as_of_applied_at` was never folded, so it is never in the
+    skip set, and folds normally on top of the seed.
+
+    Seed ORDERING is a distinct concern from skipping, and it DOES use
+    `as_of_applied_at` — necessarily so. A snapshot's own `applied_at` is
+    stamped at compaction (fold) time, strictly no earlier than
+    `as_of_applied_at` but with no fixed upper bound; `read_events`' global
+    `(applied_at, observed_at, id)` sort therefore places the snapshot
+    record itself well after any event that lands in the gap between
+    `as_of_applied_at` and the snapshot's own `applied_at` — a peer
+    machine's append, or simply an event appended while the fold ran. That
+    event is correctly unskipped (it was never folded) and would apply
+    normally — but folding it in `read_events`' raw order and THEN hitting
+    the snapshot at its own later position would unconditionally overwrite
+    the axis state, silently discarding it. A snapshot summarizes exactly
+    the folded set as of `as_of_applied_at`, so it is faithful to treat it
+    as a VIRTUAL event positioned AT `as_of_applied_at` rather than at its
+    own `applied_at`: an unfolded event earlier than that boundary is
+    correctly superseded by the seed (it is folded into `folded_to_state`
+    itself, or — if genuinely never folded — sorts before the seed and is
+    then correctly overwritten by it, matching full replay's own
+    last-write-wins order); an unfolded event later than the boundary
+    correctly applies on top of it. Both then equal full replay. Multiple
+    snapshots for one `(item_id, axis)` (C5's re-snapshot trigger) are a
+    normal case, not a corner: each is merged into the same per-axis
+    ordering at its own `as_of_applied_at`, in the same single pass.
     """
     events = tracker_store.read_events(repo_root=repo_root)
 
-    states: dict[str, str | None] = {axis: None for axis in _AXES}
-    skip_ids: dict[str, frozenset[str]] = {axis: frozenset() for axis in _AXES}
-
+    axis_events: dict[str, list[dict]] = {axis: [] for axis in _AXES}
     for event in events:
         if event.get("item_id") != item_id:
             continue
         axis = event.get("axis")
-        if axis not in states:
+        if axis not in axis_events:
             continue
+        axis_events[axis].append(event)
+
+    def _sort_key(event: dict) -> tuple:
         if event.get("kind") == "snapshot":
-            states[axis] = event.get("folded_to_state")
-            skip_ids[axis] = frozenset(event.get("folded_event_ids") or ())
-            continue
-        if event.get("id") in skip_ids[axis]:
-            continue
-        to_state = event.get("to_state")
-        if to_state is not None:
-            states[axis] = to_state
+            # Virtual position: the fold boundary, not the record's own
+            # (later) applied_at. Tie-break components sort a snapshot
+            # BEFORE a real event stamped at the same applied_at — the
+            # seed represents everything already folded through that
+            # instant.
+            return (event.get("as_of_applied_at"), "", "", 0)
+        return (
+            event.get("applied_at"),
+            event.get("observed_at") or "",
+            event.get("id") or "",
+            1,
+        )
+
+    states: dict[str, str | None] = {}
+    for axis, this_axis_events in axis_events.items():
+        skip_ids: set[str] = set()
+        state: str | None = None
+        for event in sorted(this_axis_events, key=_sort_key):
+            if event.get("kind") == "snapshot":
+                state = event.get("folded_to_state")
+                skip_ids |= set(event.get("folded_event_ids") or ())
+                continue
+            if event.get("id") in skip_ids:
+                continue
+            to_state = event.get("to_state")
+            if to_state is None:
+                raise tracker_store.TrackerStoreError(
+                    f"malformed transition event for item {item_id!r} axis "
+                    f"{axis!r}: to_state is None (id={event.get('id')!r}) — "
+                    "emit_transition's to_state is a required str; a null "
+                    "to_state on a non-snapshot event can only be data "
+                    "corruption or an emitter bug, never a legal cascade"
+                )
+            state = to_state
+        states[axis] = state
 
     return states
 

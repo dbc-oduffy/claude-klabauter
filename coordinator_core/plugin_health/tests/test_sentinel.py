@@ -253,6 +253,7 @@ def test_p11_calls_verify_templates_setup_sync_main_in_process_with_no_sibling_o
 ):
     _block_subprocess(monkeypatch)
     plugins_root = tmp_path / "plugins"  # deliberately does NOT exist
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     seen_plugin_root = {}
 
     def _fake_main(argv):
@@ -269,11 +270,14 @@ def test_p11_calls_verify_templates_setup_sync_main_in_process_with_no_sibling_o
 
 
 def test_p11_prefers_coordinator_root_when_given(tmp_path, monkeypatch):
-    """coordinator_root, when given, is preferred as CLAUDE_PLUGIN_ROOT over
-    the plugins_root-derived marketplace path — no on-disk check of either."""
+    """coordinator_root, when it carries the templates/setup marker, is
+    preferred as CLAUDE_PLUGIN_ROOT over the plugins_root-derived
+    marketplace path — marker-verified, not assumed (_doe_payload_root)."""
     _block_subprocess(monkeypatch)
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     plugins_root = tmp_path / "plugins"
-    coordinator_root = tmp_path / "doe-clone" / "coordinator"  # deliberately not on disk
+    coordinator_root = tmp_path / "doe-clone" / "coordinator"
+    (coordinator_root / "templates" / "setup").mkdir(parents=True)
     seen_plugin_root = {}
 
     def _fake_main(argv):
@@ -302,7 +306,46 @@ def test_p11_remediation_does_not_instruct_a_hand_clobber(tmp_path, monkeypatch)
     (note,) = S.probe_p11(tmp_path / "plugins")
     assert "cp coordinator/templates/setup" not in note.message
     assert "cp " not in note.message
-    assert "defanged" in note.message
+    assert "real, but not urgent" in note.message
+
+
+def test_p11_remediation_does_not_promise_the_installer_will_clear_the_drift(
+    tmp_path, monkeypatch
+):
+    """P-11 drift is a DECISION, not a sync, and the remediation must say so.
+
+    The install chain does reach this mirror — substrate.py's
+    `_percolation_and_path_steps` runs as Phase 3 Step 1 and owns
+    templates/setup delivery — but for a drifted destination it classifies the
+    file as operator-customized and PRESERVES it, logging `[machine-local]
+    operator-customized <file> preserved; template at <path> for diff
+    reference`. It cannot distinguish a deliberate local edit from stale
+    content, so it declines to guess.
+
+    Two opposite wrong messages have shipped here in one day, which is why this
+    test pins the shape rather than either wording. The first claimed no
+    install phase touches templates/setup at all (false — the machinery is
+    real). The second concluded from that machinery's existence that
+    re-running the installer is the remedy (also false — it preserves rather
+    than overwrites). Both were plausible from a code read; only the
+    experiment separates them.
+
+    Empirical basis, 2026-08-12: perturbed ~/.claude/setup/.percolate-identity.example,
+    ran install-maximalist.py --non-interactive to completion (rc=0), and the
+    drift survived, with the preserve line in the log.
+    """
+    _block_subprocess(monkeypatch)
+    monkeypatch.setattr(S.verify_templates_setup_sync, "main", lambda *a, **k: 1)
+    (note,) = S.probe_p11(tmp_path / "plugins")
+    # Must not promise a re-install clears it — the failure mode is an operator
+    # running the installer twice and concluding the probe is broken.
+    assert "re-running the coordinator installer" not in note.message
+    assert "WILL NOT CLEAR THIS" in note.message
+    # Must not swing back to claiming the machinery is absent either.
+    assert "no install phase syncs templates/setup" not in note.message
+    # Must still forbid the hand-clobber and name the decision-shaped exit.
+    assert "cp " not in note.message.replace("`cp` over", "")
+    assert "diff" in note.message.lower()
 
 
 def test_p11_main_raising_routes_to_inconclusive_never_silent_green(tmp_path, monkeypatch):
@@ -563,10 +606,13 @@ def test_currency_plugin_root_prefers_doe_root_when_schema_file_present(tmp_path
     assert _currency_plugin_root(doe, tmp_path / "plugins") == doe
 
 
-def test_currency_plugin_root_falls_back_when_doe_root_lacks_schema_file(tmp_path):
+def test_currency_plugin_root_falls_back_when_doe_root_lacks_schema_file(tmp_path, monkeypatch):
     """Marketplace-layout non-regression: the example-doctrine-repo-clone value is only verified
     for the dev-clone layout, so it is used only when it demonstrably carries
-    the schema-version file the probe needs."""
+    the schema-version file the probe needs. coordinator_doe_root() is
+    monkeypatched to None so this stays hermetic against the real machine's
+    own example-doctrine-repo clone (which may itself carry the marker)."""
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     doe = tmp_path / "doe" / "coordinator"
     doe.mkdir(parents=True)
     plugins_root = tmp_path / "plugins"
@@ -575,7 +621,8 @@ def test_currency_plugin_root_falls_back_when_doe_root_lacks_schema_file(tmp_pat
     )
 
 
-def test_currency_plugin_root_falls_back_when_doe_root_is_none(tmp_path):
+def test_currency_plugin_root_falls_back_when_doe_root_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     plugins_root = tmp_path / "plugins"
     assert _currency_plugin_root(None, plugins_root) == (
         plugins_root / "coordinator-claude" / "coordinator"

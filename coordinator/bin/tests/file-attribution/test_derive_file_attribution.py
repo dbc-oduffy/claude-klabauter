@@ -936,6 +936,24 @@ class TestRecursiveSubagentEnumeration(unittest.TestCase):
         file_paths = {r['file_path'] for r in rows}
         self.assertEqual(file_paths, {'/a-touched.py', '/a-child.py'})
 
+    def test_session_filter_on_subagent_own_id_returns_only_its_rows(self):
+        with tempfile.TemporaryDirectory() as tdir:
+            top_a = os.path.join(tdir, 'session-a.jsonl')
+            self._write_read_transcript(top_a, '/a-touched.py', 'u1')
+            sub_dir_a = os.path.join(tdir, 'session-a', 'subagents')
+            os.makedirs(sub_dir_a)
+            self._write_read_transcript(os.path.join(sub_dir_a, 'agent-a-child.jsonl'), '/a-child.py', 'u2')
+
+            top_b = os.path.join(tdir, 'session-b.jsonl')
+            self._write_read_transcript(top_b, '/b-touched.py', 'u3')
+
+            rows = derive_rows('/unused', transcript_dir=tdir, session_filter='agent-a-child')
+
+        file_paths = {r['file_path'] for r in rows}
+        self.assertEqual(file_paths, {'/a-child.py'})
+        session_ids = {r['session_id'] for r in rows}
+        self.assertEqual(session_ids, {'agent-a-child'})
+
     def test_recursive_read_uses_cache_with_distinct_keys_per_nested_file(self):
         # Cache keys must be per-relative-path (not bare fname), or a nested
         # agent-*.jsonl would collide with a top-level file of the same leaf name.

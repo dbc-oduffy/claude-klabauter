@@ -178,7 +178,26 @@ from coordinator_core.contract.cockpit_schema.common import (
 # half-landed.md; example-doctrine-repo re-runs regen-cockpit-schema.py on their side once this
 # lands, regenerating all 58 inlined enum sites plus the standalone envelope
 # from this one literal.
-CONTRACT_VERSION = "3.10.0"
+# MINOR bump 3.10.0 -> 3.11.0 (scan-completeness on RoadmapSummary): adds
+# `scan_incomplete` (boolean) and `scan_errors` (array of string) to
+# RoadmapSummary, propagating a signal assemble_roadmap_dag already produces and
+# roadmap_serve.py already returns, but which the emission leg dropped. Without
+# it an unreadable handoff subtree reaches consumers as a silently-low
+# roll_up.total, and any percentage derived from it renders confidently wrong
+# with no degraded state — the defect example-cockpit-repo-em reported 2026-08-11.
+#
+# Both keys are REQUIRED and key-present-always (`false` / `[]` on a clean
+# scan), deliberately departing from the nullable-never-optional convention the
+# rest of this entity follows: a consumer that cannot distinguish absent from
+# false cannot tell a clean scan from an old producer, which is the exact
+# ambiguity the field exists to remove. claude-central-em ratified both the
+# MINOR classification and the two D9 conditions (required/always-present, and
+# scan_errors items pinned to string) on 2026-08-11, discharged the D21 consumer
+# census (cockpit and rag both pass), and specified the D39 source-first release
+# sequence: claude-klabauter widens and regenerates into example-doctrine-repo's schema/ out-dir, example-doctrine-repo
+# commits the bundle and advances the release tag, claude-klabauter re-vendors, and only
+# then does the emitter begin populating the keys.
+CONTRACT_VERSION = "3.11.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

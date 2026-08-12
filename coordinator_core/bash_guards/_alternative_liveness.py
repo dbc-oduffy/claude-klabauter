@@ -104,6 +104,7 @@ copy).
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import enum
 import functools
@@ -118,6 +119,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -142,7 +144,9 @@ from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
+from coordinator_core.bash_guards import block_subagent_grant_acquisition
 from coordinator_core.bash_guards import check_raw_pid_liveness
+from coordinator_core.bash_guards import guard_powershell_via_bash
 from coordinator_core.bash_guards import guard_branch_set_precedence
 from coordinator_core.bash_guards import guard_grep_via_bash
 from coordinator_core.bash_guards import guard_head_tail_rewrite
@@ -643,6 +647,17 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("rm -rf /", agent_type="coordinator:code-reviewer")
     ),
     "block_subagent_plan_body_bash_write": _trigger_plan_body_bash_write,
+    "block_subagent_grant_acquisition": lambda: block_subagent_grant_acquisition.check(
+        _payload(
+            'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
+        )
+    ),
+    "guard_powershell_via_bash": lambda: guard_powershell_via_bash.check(
+        _payload(
+            'powershell.exe -NoProfile -Command "$p=Get-Process -Id 1"',
+            agent_id=None,
+        )
+    ),
     # -- docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2 --
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
     "guard_branch_set_precedence": _trigger_guard_branch_set_precedence,
@@ -700,6 +715,127 @@ UNTRIGGERED: Dict[str, str] = {
         "reproduce hermetically without importing that fixture machinery "
         "wholesale."
     ),
+}
+
+
+# ---------------------------------------------------------------------------
+# write_guards/ discovery extension (chunk C9, agent-facing-messages-not-
+# apology plan) -- this module previously enumerated ONLY bash_guards/ (via
+# discover_dispatch_check_names/discover_module_guard_names above), so
+# nothing gate-verified that a write_guards/ guard's named alternative
+# stayed reachable. `discover_write_guard_names` reuses
+# `write_guards.engine`'s own `pkgutil.iter_modules([_PKG_DIR])` +
+# `importlib.import_module` walk (via its public `discover_guard_names()`)
+# rather than re-implementing it -- same walk this module's docstring
+# points at, one copy, not a parallel reimplementation that could drift
+# from the engine's own CLASS/MATCHERS/check filtering.
+# ---------------------------------------------------------------------------
+
+
+def discover_write_guard_names() -> List[str]:
+    """Every ``coordinator_core/write_guards/`` module the engine itself
+    would load (valid ``CLASS``/``MATCHERS`` plus a callable top-level
+    ``check``) -- the write_guards/ analogue of ``discover_module_guard_
+    names`` above. A module that fails to import is silently excluded here
+    (mirrors ``write_guards.engine.discover_guard_names``'s own
+    ``import_failed`` split); that failure has its own dedicated CI signal
+    in ``write_guards/tests/test_guard_registry_manifest.py`` and is not
+    this gate's concern -- this gate is about ALTERNATIVE liveness for
+    guards that DO load, not import health."""
+    from coordinator_core.write_guards import engine as _write_guards_engine
+
+    names, _import_failed = _write_guards_engine.discover_guard_names()
+    return sorted(names)
+
+
+def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
+    """Fires the warn-mode schema-validation leg with a `state/handoffs/*.md`
+    write carrying no frontmatter at all -- the simplest deterministic
+    `build_violation_payload_advisory` trigger, needing no example-doctrine-repo
+    sibling checkout (the schema-validation leg matches purely off
+    claude-klabauter's own vendored `_VENDORED_SCHEMAS_DIR`; `_load_doe_registry()`
+    fails open when the example-doctrine-repo root is unresolvable, per that guard's own
+    module docstring). Scratch git repo, never the real working tree --
+    same pattern as this module's own `_scratch_git_repo` bash_guards
+    triggers above."""
+    from coordinator_core.write_guards import (
+        validate_frontmatter_schema_advisory as _wg_advisory,
+    )
+
+    with _scratch_git_repo() as repo:
+        # `os.path.realpath` -- `tempfile.mkdtemp()` on macOS returns a
+        # `/var/...` path that is itself a symlink to `/private/var/...`;
+        # this guard's own `to_repo_relative` does a literal (folded)
+        # prefix match between the resolved repo root and the target's
+        # absolute path, which silently returns None (guard stands down,
+        # no advisory) when the two sides disagree on which symlink form
+        # to use. Resolving once here keeps every path built from `repo`
+        # on the same side of that symlink.
+        repo = os.path.realpath(repo)
+        handoffs_dir = os.path.join(repo, "state", "handoffs")
+        os.makedirs(handoffs_dir, exist_ok=True)
+        rel_path = "state/handoffs/altlive-probe.md"
+        # Pre-create (and NOT git-add) the target file: the guard's own
+        # scaffold-offer branch fires ONLY for a Write to a not-yet-
+        # existing path (`_scaffold_offer_decision`'s `not os.path.exists
+        # (abs_file_path)` gate) and would otherwise fire ahead of the
+        # schema-validation branch this trigger exists to exercise (the
+        # branch carrying this chunk's own copy edit).
+        with open(os.path.join(handoffs_dir, "altlive-probe.md"), "w", encoding="utf-8") as fh:
+            fh.write("placeholder\n")
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "no frontmatter here, on purpose\n",
+            },
+            "cwd": repo,
+        }
+        return _wg_advisory.check(payload)
+
+
+#: write_guards/ analogue of `LIVE_TRIGGERS` above -- kept as a SEPARATE
+#: dict (not merged into `LIVE_TRIGGERS`) so this extension never touches
+#: the bash_guards-scoped registry-integrity tests
+#: (`test_every_dispatch_check_is_registered`/`test_every_module_guard_is_
+#: registered`) or their pinned `EXPECTED_UNTRIGGERED`/`_UNTRIGGERED_PINNED_
+#: MAX` ratchets, per this dispatch's explicit "never relax an existing
+#: pin" instruction. `fire_guard`/`evaluate_guard` still work unmodified
+#: against these keys: `fire_guard` looks a name up in `LIVE_TRIGGERS`
+#: directly, so the gate test below calls the trigger through this dict
+#: itself rather than routing through `fire_guard`.
+WRITE_GUARD_LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
+    "validate_frontmatter_schema_advisory": _trigger_validate_frontmatter_schema_advisory,
+}
+
+#: write_guards/ analogue of `UNTRIGGERED` above. This chunk's own copy
+#: change touched exactly one write_guards module
+#: (`validate_frontmatter_schema_advisory`, wired into `WRITE_GUARD_LIVE_
+#: TRIGGERS` above); constructing a hermetic, non-mutating, hazard-repo-
+#: independent live trigger for each of the other 41 write_guards modules
+#: (each with its own path-shape/frontmatter-shape/repo-state
+#: precondition -- see e.g. `block_cutover_phase_hand_edit`'s STRICT-mode
+#: phase-flip precondition, `guard_settings_json_write`'s settings-repo
+#: precondition) is out of THIS chunk's measured, narrowly-scoped remit
+#: (see this dispatch's own "MEASURED REALITY" framing -- do not go
+#: hunting for a large sweep the measurement did not ask for). Discovery
+#: itself is NOT narrowed: `discover_write_guard_names()` still walks the
+#: whole package, so a FUTURE write_guards module or alternative-signal
+#: change is still counted here, not silently invisible -- only its
+#: trigger construction is deferred, and deferred LOUDLY (this dict, not
+#: a bare `discovered - registered` no-op) rather than never gate-tracked
+#: at all.
+_WRITE_GUARD_UNTRIGGERED_REASON = (
+    "Hermetic live trigger not yet constructed for this write_guards module "
+    "(chunk C9, agent-facing-messages-not-apology plan, 2026-08-12) -- "
+    "discovery covers it (discover_write_guard_names), a live-fire trigger "
+    "does not yet. Close by adding a WRITE_GUARD_LIVE_TRIGGERS row, not by "
+    "deleting this entry."
+)
+WRITE_GUARD_UNTRIGGERED: Dict[str, str] = {
+    name: _WRITE_GUARD_UNTRIGGERED_REASON
+    for name in discover_write_guard_names()
+    if name not in WRITE_GUARD_LIVE_TRIGGERS
 }
 
 
@@ -800,10 +936,19 @@ def fire_guard(guard: str) -> GuardFireResult:
     ``guard_inprocess_search``) because no other registered guard currently
     reads ``CLAUDE_CODE_SESSION_ID`` at all, so the isolation is a no-op for
     them, and staying guard-agnostic here is what makes this robust to the
-    next guard that grows the same kind of session-scoped latch."""
-    trigger = LIVE_TRIGGERS.get(guard)
+    next guard that grows the same kind of session-scoped latch.
+
+    Looks up ``guard`` in ``LIVE_TRIGGERS`` first, then
+    ``WRITE_GUARD_LIVE_TRIGGERS`` (the write_guards/ discovery extension,
+    chunk C9) -- the two registries share disjoint key namespaces (bash_
+    guards module/function names vs. write_guards module names), so no
+    caller-visible ambiguity is introduced by checking both."""
+    trigger = LIVE_TRIGGERS.get(guard) or WRITE_GUARD_LIVE_TRIGGERS.get(guard)
     if trigger is None:
-        raise KeyError("%r is not in LIVE_TRIGGERS (check UNTRIGGERED instead)" % guard)
+        raise KeyError(
+            "%r is not in LIVE_TRIGGERS or WRITE_GUARD_LIVE_TRIGGERS "
+            "(check UNTRIGGERED/WRITE_GUARD_UNTRIGGERED instead)" % guard
+        )
     try:
         envelope = _call_trigger_isolated(trigger)
     except Exception as exc:  # noqa: BLE001 -- isolate one guard's crash from the rest
@@ -843,6 +988,22 @@ class Alternative:
     detail: Any = None
 
 
+#: 2026-08-11 (guard-messages-point-to-docs-never-name plan, chunk C1):
+#: `operator_override_note`'s own 2026-08-11 C2 reshape stopped
+#: interpolating the env-var name into its rendered output at all (see that
+#: function's own docstring), so this regex now finds ZERO matches in the
+#: overwhelming majority of real guard messages -- a guard whose ONLY
+#: offered alternative is its override key would silently drop out of
+#: `extract_alternatives`'s OVERRIDE detection with no gate turning red
+#: (the exact "vacuous, not red" failure this module's own charter treats
+#: as worse than a test failing). Kept, unmodified, as a belt for any
+#: HAND-WRITTEN mention of a bare env var that still slips into rendered
+#: text outside the builder (the class `test_no_handwritten_override_
+#: clauses.py` polices separately) -- but the OVERRIDE alternative this
+#: module actually verifies liveness for is now primarily sourced from the
+#: guard's own call-site ARGUMENT, never the render alone. See
+#: `_source_override_alternatives` below, and `evaluate_guard`'s merge of
+#: the two sources.
 _OVERRIDE_RE = re.compile(r"\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+\b")
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _READ_CALL_RE = re.compile(r"\bRead\([^)]*\)")
@@ -1043,13 +1204,43 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
     return Alternative(AlternativeKind.COMMAND, span, argv)
 
 
-def extract_alternatives(hso: Dict[str, Any]) -> List[Alternative]:
+def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = False) -> List[Alternative]:
     """Extract every alternative a guard's emitted ``hookSpecificOutput``
     names, classified into one of the five ``AlternativeKind`` members.
     Returns an empty list for a message that names NO alternative at all
     (a bare policy statement -- not a gate failure, see module negative-
     spec). Raises ``UnclassifiableAlternative`` for alternative-shaped
-    signal this function cannot classify (a gate failure)."""
+    signal this function cannot classify (a gate failure).
+
+    ``override_route_known`` (2026-08-11, C1 chunk, guard-messages-point-to-
+    docs-never-name plan) -- default ``False``, so every EXISTING caller
+    (notably ``_firing_shape.py``, which must stay guard-agnostic and purely
+    textual -- Axis A/B are orthogonal by that module's own design) sees
+    byte-identical behavior. ``evaluate_guard`` is the one caller that passes
+    ``True``, and only when it has ALREADY resolved a real OVERRIDE route for
+    this guard from the call-site argument (``_source_override_alternatives``).
+
+    WHY THIS EXISTS -- a regression this dispatch measured directly, not a
+    speculative one. Before `operator_override_note`'s C2 reshape, virtually
+    every guard's rendered text contained a ``COORDINATOR_*`` token, so
+    `_OVERRIDE_RE` below ALWAYS populated `alts` with at least one entry --
+    which meant the increasingly speculative fallback further down (``if not
+    alts:``, scanning raw indented lines for a promised-but-unclassified
+    alternative) essentially NEVER ran, for ANY guard, regardless of that
+    guard's own message shape. C2 removed the one signal that was
+    accidentally keeping that fallback dormant fleet-wide -- with it gone,
+    guards whose real alternative is a MULTI-LINE indented rewrite (e.g.
+    `guard_plumbing_and_loops`'s python3 -c body) hit the fallback for the
+    first time, which naively treats each source line as its own one-token
+    "command" and grades every one DEAD (`import` does not resolve on PATH,
+    neither does `for`, `if`, ...). ``override_route_known=True`` restores
+    the exact pre-C2 gating (a known-non-empty ``alts`` state suppresses the
+    fallback) via the SOURCE-derived signal instead of the now-absent
+    render-derived one -- it does not fix the fallback's own line-splitting
+    fragility (a distinct, pre-existing defect this reshape merely
+    unmasked, out of this chunk's scope), it restores the guard against
+    ever reaching it for a reason unrelated to that guard's own message
+    shape."""
     text = hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
     alts: List[Alternative] = []
 
@@ -1095,6 +1286,14 @@ def extract_alternatives(hso: Dict[str, Any]) -> List[Alternative]:
     for marker in _HARNESS_CAPABILITY_MARKERS:
         if marker in text:
             alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, marker, marker))
+
+    if not alts and override_route_known:
+        # See this function's own docstring, "WHY THIS EXISTS" -- a known
+        # OVERRIDE route (sourced from the call site, not this render)
+        # stands in for the render-derived OVERRIDE match that used to keep
+        # `alts` non-empty fleet-wide, suppressing the fallback below for
+        # the SAME reason it was suppressed before C2, not a new exemption.
+        return alts
 
     if not alts:
         # No alternative-shaped signal at all -- legitimate for a
@@ -1681,6 +1880,117 @@ def probe_alternative(alt: Alternative, guard: Optional[str] = None, baseline: O
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# (b2) Override-route sourcing FROM THE CALL SITE (C1, 2026-08-11 plan) --
+# never from the rendered message. See `_OVERRIDE_RE`'s own comment above
+# for why the render alone is no longer sufficient.
+# ---------------------------------------------------------------------------
+
+#: Same shape as `test_override_route_inventory.py`'s own `_resolve_call_
+#: target`/`_same_module_call_graph_calls_override_note` pairing (that
+#: file's job is presence -- DOES a guard call the builder at all; this
+#: module's job is liveness -- with WHAT argument, so the argument can be
+#: behaviourally re-fired) -- deliberately mirrored, not reinvented, so a
+#: reader who already knows that file's mechanism recognizes this one.
+_MAX_OVERRIDE_SOURCE_DEPTH = 3
+
+
+def _resolve_guard_callable(guard: str) -> Optional[Callable]:
+    """Resolve a `LIVE_TRIGGERS`/registry key (a `dispatch_checks`-family
+    function name, or a `block_*`/`guard_*`/`check_*` MODULE name) to the
+    actual callable whose source `_source_override_env_vars` should scan --
+    never a lambda from `LIVE_TRIGGERS` itself (those are throwaway
+    fixture-construction closures, not the guard's own logic)."""
+    for module in _DISPATCH_CHECK_SOURCE_MODULES:
+        fn = getattr(module, guard, None)
+        if inspect.isfunction(fn) and getattr(fn, "__module__", None) == module.__name__:
+            return fn
+    try:
+        module = importlib.import_module("coordinator_core.bash_guards." + guard)
+    except Exception:  # noqa: BLE001 -- a guard name with no importable module resolves to None
+        return None
+    fn = getattr(module, "check", None)
+    return fn if callable(fn) else None
+
+
+def _resolve_static_str(node: ast.AST, module: Any) -> Optional[str]:
+    """Best-effort static resolution of an `operator_override_note` call's
+    first positional argument to a concrete string: a plain literal, or a
+    reference to a same-module constant already bound to a string (the
+    `_OVERRIDE_ENV = "COORDINATOR_..."`-shaped constant every real guard in
+    this package already declares). Declines (returns `None`) rather than
+    guess at anything else -- a dynamically-computed argument is simply not
+    sourced, not approximated."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        val = getattr(module, node.id, None)
+        if isinstance(val, str):
+            return val
+    return None
+
+
+def _source_override_env_vars(fn: Callable, _seen: Optional[set] = None, _depth: int = 0) -> List[str]:
+    """Every `operator_override_note(env_var, ...)` call-site argument this
+    module can statically resolve inside `fn`'s own body OR a same-module
+    helper it calls (depth-limited call-graph walk, mirroring
+    `test_override_route_inventory.py`'s `_same_module_call_graph_calls_
+    override_note`) -- the C1 fix: the override-route liveness gate's ONE
+    source of truth for "what env var does this guard advertise", now that
+    `operator_override_note`'s C2 reshape removed that name from the
+    rendered message entirely. Best-effort and silent on a resolution
+    miss (an unfoldable argument, an unparseable source) -- a guard that
+    cannot be sourced this way simply contributes no OVERRIDE alternative,
+    same as one that genuinely names none."""
+    if _seen is None:
+        _seen = set()
+    if fn in _seen or _depth > _MAX_OVERRIDE_SOURCE_DEPTH:
+        return []
+    _seen.add(fn)
+    try:
+        src = textwrap.dedent(inspect.getsource(fn))
+        tree = ast.parse(src)
+    except (OSError, TypeError, SyntaxError):
+        return []
+    module = inspect.getmodule(fn)
+    found: List[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        name = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", None)
+        if name != "operator_override_note" or not node.args:
+            continue
+        val = _resolve_static_str(node.args[0], module)
+        if val:
+            found.append(val)
+    if module is not None:
+        for name in set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", src)):
+            candidate = getattr(module, name, None)
+            if inspect.isfunction(candidate) and inspect.getmodule(candidate) is module:
+                found.extend(_source_override_env_vars(candidate, _seen, _depth + 1))
+    return found
+
+
+def _source_override_alternatives(guard: str) -> List[Alternative]:
+    """`guard`'s OVERRIDE alternatives, sourced from its own check
+    function's call-site argument to `operator_override_note` -- the
+    replacement for scraping `_OVERRIDE_RE` out of the rendered message
+    (C1). Deduplicated by env-var value (a guard calling the builder more
+    than once with the same key names one route, not two)."""
+    fn = _resolve_guard_callable(guard)
+    if fn is None:
+        return []
+    seen: set = set()
+    alts: List[Alternative] = []
+    for env_var in _source_override_env_vars(fn):
+        if env_var in seen:
+            continue
+        seen.add(env_var)
+        alts.append(Alternative(AlternativeKind.OVERRIDE, env_var, env_var))
+    return alts
+
+
 @dataclass
 class GuardEvaluation:
     guard: str
@@ -1697,11 +2007,28 @@ def evaluate_guard(guard: str) -> GuardEvaluation:
     if not fire.fired or fire.envelope is None:
         return ev
     hso = fire.envelope.get("hookSpecificOutput", {})
+    # Resolved BEFORE extract_alternatives, not after -- `override_route_
+    # known` must reach that call so its own fallback-suppression fires
+    # (see extract_alternatives' docstring "WHY THIS EXISTS"). Computing
+    # this after the fact would be too late: the fallback's garbage
+    # per-line "alternatives" are already baked into the return value by
+    # the time a post-hoc merge could react to them.
+    source_overrides = _source_override_alternatives(guard)
     try:
-        ev.alternatives = extract_alternatives(hso)
+        ev.alternatives = extract_alternatives(hso, override_route_known=bool(source_overrides))
     except UnclassifiableAlternative as exc:
         ev.extraction_error = str(exc)
         return ev
+    # C1 merge: OVERRIDE alternatives sourced from the guard's own call-site
+    # argument (never vacuous now that the render carries no key name at
+    # all), deduped against anything `extract_alternatives` already found
+    # in the rendered text (belt for a hand-written mention outside the
+    # builder -- see `_OVERRIDE_RE`'s own comment).
+    already = {a.detail for a in ev.alternatives if a.kind is AlternativeKind.OVERRIDE}
+    for alt in source_overrides:
+        if alt.detail not in already:
+            ev.alternatives.append(alt)
+            already.add(alt.detail)
     for alt in ev.alternatives:
         verdict = probe_alternative(alt, guard=guard, baseline=fire)
         ev.verdicts.append((alt, verdict))

@@ -1485,6 +1485,37 @@ class TestForeignSessionScopeGuard:
         result = _write_guarded(repo, f"{base_sha}..{tip_sha}")
         assert Path(result["out_path"]).is_file()
 
+    def test_single_commit_case3_does_not_advise_impossible_narrowing(
+        self, tmp_path
+    ) -> None:
+        """DEFECT 2 repro (2026-08-07 example-doctrine-repo-em memos: case3-remedy-is-
+        not-performable / review-trail-guard-remedy-unreachable). A sha_range
+        that is ALREADY a single commit lands in Case 3 when that commit is
+        untrailered and unplaceable — but there is no narrower range than one
+        commit, so the generic "supply a narrower sha_range" remedy names an
+        action that does not exist. The message for this specific shape must
+        not tell the caller to narrow further; it must name a performable
+        remedy instead (re-commit through the trailer-emitting path and
+        retry)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit_touching(repo, "solo.py", "untrailered solo commit")
+
+        with pytest.raises(ValueError, match="genuinely ambiguous") as exc_info:
+            _write_guarded(repo, f"{base_sha}..{tip_sha}")
+
+        message = str(exc_info.value)
+        assert "narrower sha_range" not in message, (
+            "single-commit Case 3 must not advise narrowing further — there "
+            f"is no narrower range than one commit. Got: {message}"
+        )
+        assert "re-commit" in message or "trailer" in message, (
+            f"expected the single-commit remedy to name re-committing through "
+            f"the trailer-emitting path. Got: {message}"
+        )
+
     def test_git_failure_in_guard_fails_closed(self, tmp_path) -> None:
         """A git failure inside the guard's own git subprocess calls (here:
         trailer_foreign_shas's `git log` over a sha_range naming SHAs that

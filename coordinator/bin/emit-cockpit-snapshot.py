@@ -86,6 +86,10 @@ def _resolve_repo_root() -> str:
         print(verdict["message"], file=sys.stderr)
         sys.exit(1)
     if not root:
+        # No git root resolved from cwd at all -- distinct from the
+        # MISMATCH identity gate above (positive evidence of a DIFFERENT
+        # real repo). This is "nowhere to write"; refusing here is not the
+        # AC4 "UNRESOLVED never refuses" carve-out being violated.
         print(
             f"emit-cockpit-snapshot: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,

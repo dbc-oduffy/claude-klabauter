@@ -191,8 +191,8 @@ _DENY_MSG_TEMPLATE = (
     "Escape hatch for rare legitimate foreground (inline result needed for the very "
     "next statement): touch "
     ".git/coordinator-sessions/{session_id}/.foreground-ok "
-    "(resident engine; env var COORDINATOR_AGENT_FOREGROUND_OK no longer reachable — "
-    "see module docstring D6). "
+    "(resident engine; the old env-var hatch is no longer reachable — "
+    "see module docstring D6 and docs/reference/guard-override-keys.md). "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 

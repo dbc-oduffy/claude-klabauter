@@ -106,8 +106,12 @@ TARGET_ITEM_ID = "bench-item-0001"
 
 TARGET_AXIS = "manual_close"
 """The axis folded for `TARGET_ITEM_ID` -- an arbitrary member of
-`tracker_transitions.TRANSITION_AXES`; the fold cost this module measures
-does not depend on which axis is chosen."""
+`tracker_transitions.TRANSITION_AXES`; the fold cost of the specific code
+path this module exercises (`render_status`/`_fold_axis_states`'s raw
+iteration) does not depend on which axis is chosen. Narrower than a claim
+about `tracker_transitions.py` cost in general -- this benchmark never
+calls `reopen_cascade` or exercises axis-specific `_ASSERTED_TO_STATE`/
+`_RETRACT_TO_STATE` logic (Review: coordinator:code-reviewer P3)."""
 
 TARGET_ITEM_EVENT_COUNT = 300
 """Transition events minted for `TARGET_ITEM_ID` on `TARGET_AXIS` in the
@@ -264,6 +268,66 @@ def materialize_fixture(
     return total_written
 
 
+def _time_bare_import(module_name: str) -> float:
+    """Time one cold subprocess spawn that does nothing but `import
+    <module_name>` -- process-spawn to exit, same timing shape as
+    `_time_probe`. Isolates import cost from fold cost for the C10 AC16
+    import-chain attribution (Review: coordinator:code-reviewer P2 --
+    `PHASE-0-MEASUREMENTS.md` cited a ~333ms/~79ms bare-import split with
+    no script on disk producing it; this is that script)."""
+    argv = [sys.executable, "-c", f"import {module_name}"]
+    start = time.perf_counter()
+    completed = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
+        creationflags=SUBPROCESS_CREATIONFLAGS,
+    )
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"measure_render_status: bare-import probe failed for "
+            f"{module_name!r} rc={completed.returncode} stderr={completed.stderr!r}"
+        )
+    return elapsed_ms
+
+
+def measure_bare_import(module_name: str, *, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> dict:
+    """Draw `warmup` discarded + `n` timed cold-start samples of a bare
+    `import <module_name>` subprocess and return reduced statistics --
+    same reduction shape as `measure`, so the two are directly comparable.
+    """
+    for _ in range(warmup):
+        _time_bare_import(module_name)
+    samples_ms: List[float] = [_time_bare_import(module_name) for _ in range(n)]
+    return {
+        "module": module_name,
+        "sample_count": n,
+        "min_ms": min(samples_ms),
+        "mean_ms": statistics.mean(samples_ms),
+        "median_ms": statistics.median(samples_ms),
+        "stdev_ms": statistics.stdev(samples_ms) if len(samples_ms) > 1 else 0.0,
+        "samples_ms": samples_ms,
+    }
+
+
+def run_import_isolation_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> dict:
+    """C10 AC16 import-chain attribution: bare-import cost of
+    `tracker_projection` vs `tracker_store`, isolated from fold/read cost.
+    Produces the numbers `PHASE-0-MEASUREMENTS.md`'s C10 section cites --
+    prior to this function existing, no script on disk reproduced them
+    (Review: coordinator:code-reviewer P2)."""
+    return {
+        "tracker_projection": measure_bare_import(
+            "coordinator_core.tracker_projection", n=n, warmup=warmup
+        ),
+        "tracker_store": measure_bare_import(
+            "coordinator_core.tracker_store", n=n, warmup=warmup
+        ),
+    }
+
+
 def _time_probe(repo_root: Path, item_id: str) -> float:
     """Time one cold spawn of `_render_status_probe` against `repo_root`,
     from process-spawn to exit -- same shape as
@@ -398,4 +462,5 @@ def run_c10_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> 
 
 if __name__ == "__main__":  # pragma: no cover
     result = run_c10_measurement()
+    result["import_isolation"] = run_import_isolation_measurement()
     print(json.dumps(result, indent=2, default=str))

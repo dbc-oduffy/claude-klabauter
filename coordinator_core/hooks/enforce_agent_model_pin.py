@@ -166,8 +166,8 @@ def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[s
         "coordinator_core/hooks/enforce_agent_model_pin.py module docstring. "
         "Drop the corresponding parameter(s) and re-dispatch.\n"
         f"<resolved from: {source_path}>\n"
-        f"Override (rare -- pre-launch only, human operator): set "
-        f"`{_OVERRIDE_ENV}=1` before the harness/hook process launches."
+        "An override exists for a human operator, pre-launch only -- see "
+        "docs/reference/guard-override-keys.md."
     )
 
 

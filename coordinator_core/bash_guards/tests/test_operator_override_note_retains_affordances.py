@@ -54,17 +54,37 @@ def _doc_text() -> str:
     return doc_path.read_text(encoding="utf-8")
 
 
-def test_note_states_the_env_var_is_not_reachable_in_session():
-    """The env var is mentioned only to close it off. Naming it without the
-    unsettable-in-session constraint invites an agent to try setting it from
-    inside a session, where the read happens in a different process. This is
-    the ONE fact the in-message note keeps inline -- everything else lives
-    behind the pointer."""
+def test_note_names_no_env_var():
+    """2026-08-11 second reshape (guard-messages-point-to-docs-never-name
+    plan) -- the in-message note stopped naming the key entirely (see
+    `operator_override_note`'s own docstring, "RESHAPED AGAIN 2026-08-11").
+    This replaces this file's original ``test_note_states_the_env_var_is_
+    not_reachable_in_session``, which asserted the OPPOSITE (the env var
+    had to be named, paired with the unsettable-in-session constraint) --
+    that invariant is retired, not merely relaxed: the note is a doc
+    pointer only now, and the pre-launch-only fact it used to carry inline
+    moved wholly into the reference doc (see
+    ``test_reference_doc_states_the_env_var_is_not_reachable_in_session``
+    below)."""
     note = _note()
-    assert _SENTINEL_ENV_VAR in note, "the caller's env var should still be named"
-    assert "unsettable" in note.lower() and "session" in note.lower(), (
-        "naming the env var without saying it cannot be set from inside a session invites an "
-        "in-session attempt that cannot work -- the constraint is the whole reason to mention it"
+    assert _SENTINEL_ENV_VAR not in note, "the note must not name the caller's env var any more"
+
+
+def test_reference_doc_states_the_env_var_is_not_reachable_in_session():
+    """The one fact the in-message note used to carry inline --
+    unsettable-from-inside-a-session -- must still be reachable somewhere a
+    reader following the note's pointer lands, or the constraint is lost
+    outright rather than merely relocated. Mirrors this file's existing
+    doc-content pins (``test_reference_doc_keeps_the_confinement_deny_
+    caveat`` etc.) -- this repo's ``docs/reference/guard-override-keys.md``
+    is a peer chunk's scope in the same dispatch, not this file's own edit
+    surface, but the fact still needs a gate somewhere or its loss goes
+    unnoticed."""
+    doc = _doc_text()
+    assert "unsettable" in doc.lower() and "session" in doc.lower(), (
+        "the reference doc must state the env var is unsettable from inside a session -- "
+        "this fact moved here from the in-message note's own 2026-08-11 second reshape "
+        "and must not be lost in the move"
     )
 
 

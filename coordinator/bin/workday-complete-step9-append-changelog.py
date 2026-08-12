@@ -269,7 +269,47 @@ def _resolve_coordinator_root():
     UNRESOLVED never refuses (DR-277, AC4). This is independent of, and in
     addition to, the pre-existing COORDINATOR_ROOT-vs-cwd-toplevel warning
     below.
+
+    Review: code-reviewer (P1) — COORDINATOR_ROOT read BEFORE the identity
+    gate runs, and the gate is skipped entirely when the override is set.
+    An explicitly-supplied root is caller intent that never touched cwd
+    (AC3) -- routing it through `resolve_checked_repo_root` as
+    `explicit_root` is that same rule applied to this env-var-shaped
+    explicit root, exactly as it bypassed the old bare `git rev-parse`
+    call. Gating a cwd-derived MISMATCH before the override was even read
+    defeated the override's whole purpose.
     """
+    override = os.environ.get("COORDINATOR_ROOT", "")
+    warn_suppress = os.environ.get("COORDINATOR_ROOT_WARN_SUPPRESS", "") == "1"
+
+    if override:
+        # Explicit root (AC3): resolve_checked_repo_root returns EXPLICIT
+        # and gates nothing on it -- the cwd-derived identity MISMATCH gate
+        # below is precisely what this override exists to sidestep.
+        coordinator_root, _verdict = resolve_checked_repo_root(explicit_root=override)
+        if not warn_suppress:
+            cwd_root, _cwd_verdict = resolve_checked_repo_root(explicit_root=None)
+            cwd_top = ""
+            if cwd_root:
+                try:
+                    cwd_top = str(Path(cwd_root).resolve(strict=False))
+                except OSError:
+                    cwd_top = ""
+            try:
+                cr_real = str(Path(override).resolve(strict=False))
+            except OSError:
+                cr_real = override
+            if cwd_top and cr_real != cwd_top:
+                print(
+                    f"WARNING: COORDINATOR_ROOT='{override}' differs from the cwd git toplevel "
+                    f"'{cwd_top}'. COORDINATOR_ROOT is a TEST-ONLY override; continuing with it "
+                    "as the repo root for this run. If this is a live ceremony on a consumer "
+                    "project, unset COORDINATOR_ROOT and re-run (COORDINATOR_ROOT_WARN_SUPPRESS=1 "
+                    "silences this in tests).",
+                    file=sys.stderr,
+                )
+        return coordinator_root
+
     cwd_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if verdict["verdict"] == "MISMATCH":
         print(verdict["message"], file=sys.stderr)
@@ -282,25 +322,13 @@ def _resolve_coordinator_root():
         except OSError:
             cwd_top = ""
 
-    override = os.environ.get("COORDINATOR_ROOT", "")
-    warn_suppress = os.environ.get("COORDINATOR_ROOT_WARN_SUPPRESS", "") == "1"
-    if override and not warn_suppress and cwd_top:
-        try:
-            cr_real = str(Path(override).resolve(strict=False))
-        except OSError:
-            cr_real = override
-        if cr_real != cwd_top:
-            print(
-                f"WARNING: COORDINATOR_ROOT='{override}' differs from the cwd git toplevel "
-                f"'{cwd_top}'. COORDINATOR_ROOT is a TEST-ONLY override; continuing with it "
-                "as the repo root for this run. If this is a live ceremony on a consumer "
-                "project, unset COORDINATOR_ROOT and re-run (COORDINATOR_ROOT_WARN_SUPPRESS=1 "
-                "silences this in tests).",
-                file=sys.stderr,
-            )
-
-    coordinator_root = override or cwd_top
+    coordinator_root = cwd_top
     if not coordinator_root:
+        # No git root resolved from cwd at all -- distinct from the MISMATCH
+        # identity gate above (which fires on POSITIVE evidence of a
+        # different real repo). This is "nowhere to write", not an identity
+        # mismatch; UNRESOLVED-with-no-root refusing here is not the AC4
+        # carve-out being violated (see repo_identity.py's own no-root leg).
         print("ERROR: cwd is not a git repo and COORDINATOR_ROOT is not set", file=sys.stderr)
         sys.exit(1)
     return coordinator_root

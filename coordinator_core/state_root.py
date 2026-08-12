@@ -46,6 +46,19 @@ Five routing rules (verbatim from the bash oracle's header):
                <git_root>/state                   when cwd git root is a sibling repo
             Fail-loud on unresolvable git root.
 
+  Published-mirror guard (applies to every rule that resolves claude-klabauter engine
+  state — Rules 2, 4, and 5's meta-repo branch): DR-132's two-tier gate means
+  the resolved claude-klabauter root can now be a PUBLISHED engine mirror
+  (`RESOLUTION_RESOLVED_ENGINE`), not only a live working tree
+  (`RESOLUTION_LIVE_WORKING_TREE`). State must never be written into a
+  published mirror — doing so leaks runtime/session artifacts (observed:
+  operator-machine-codename-bearing filenames) into a public repo and can
+  strand or split a state corpus. This module fail-louds
+  (`StateRootError`) whenever engine-subject state would resolve under a
+  `RESOLUTION_RESOLVED_ENGINE` root, mirroring this module's existing
+  fail-loud posture for other unresolvable/ambiguous cases (Rule 1, Rule 3's
+  cross-cutting branch). It does NOT invent an alternative state location.
+
 Public API:
     coordinator_state_root(central=False, subject=None, artifact=None, git_root=None) -> str
         Returns the resolved state-root path. Raises StateRootError (the rc-1
@@ -81,7 +94,10 @@ from typing import List, Optional
 
 from coordinator_core.artifact_subject import Subject, classify, remediation_message
 from coordinator_core.git import repo_root as _repo_root_seam
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.claude_klabauter_root import (
+    coordinator_claude_klabauter_root,
+    coordinator_claude_klabauter_root_with_class,
+)
 from coordinator_core.meta_repo_identity import (
     MetaRepoResolutionError,
     is_meta_repo,
@@ -89,6 +105,17 @@ from coordinator_core.meta_repo_identity import (
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 _STATE_SUBDIR = "state"
+
+#: Review: code-reviewer — duplicated from the C3 shim's
+#: `RESOLUTION_RESOLVED_ENGINE` module-level string constant
+#: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) rather than loading
+#: the shim just to read one string, mirroring the SAME duplication pattern
+#: `coordinator_core.claude_klabauter_root` already uses for
+#: `_RESOLUTION_LIVE_WORKING_TREE_LITERAL` (see that module's comment for the
+#: full rationale). Per the shim's own docstring, this string is "part of the
+#: contract, not just its name" — if the shim's constant value ever changes,
+#: this one must change with it.
+_RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
 
 
 class StateRootError(RuntimeError):
@@ -129,11 +156,30 @@ def _doe_state() -> str:
 
 
 def _claude_klabauter_state() -> str:
-    """Rule 2/4 helper: claude-klabauter engine state root. Raises StateRootError on failure."""
+    """Rule 2/4/5 helper: claude-klabauter engine state root. Raises StateRootError on
+    failure OR when the resolved claude-klabauter root is a published engine mirror
+    (`RESOLUTION_RESOLVED_ENGINE`) rather than a live working tree — see this
+    module's docstring, "Published-mirror guard". Uses
+    ``coordinator_claude_klabauter_root_with_class()`` (not the class-less
+    ``coordinator_claude_klabauter_root()``) specifically so this check is possible;
+    the ``RESOLUTION_LIVE_WORKING_TREE`` path below returns byte-identical to
+    the prior class-less resolution."""
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        claude_klabauter_root, resolution_class = coordinator_claude_klabauter_root_with_class()
     except RuntimeError as exc:
         raise StateRootError(str(exc)) from exc
+    if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
+        raise StateRootError(
+            "coordinator_state_root: engine-subject state resolved to a "
+            f"PUBLISHED engine mirror ('{claude_klabauter_root}'), not a live working "
+            "tree — refusing to write state into a published mirror. This "
+            "would leak runtime/session artifacts (e.g. operator-machine "
+            "identifiers) into a public repo and can strand or split a state "
+            "corpus. Remediate: run from a live working-tree checkout of "
+            "claude-klabauter (e.g. unset any published-mirror registration "
+            "for this session), or set CLAUDE_KLABAUTER_ROOT explicitly to a working "
+            "tree."
+        )
     return _state_of(claude_klabauter_root)
 
 

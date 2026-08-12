@@ -36,8 +36,19 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
-from coordinator_core.win_portability import no_console_creationflags
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from cc_invoke import resolve_engine_root  # noqa: E402
+
+_ENGINE_ROOT = str(resolve_engine_root(__file__))
+if _ENGINE_ROOT not in sys.path:
+    sys.path.insert(0, _ENGINE_ROOT)
+
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

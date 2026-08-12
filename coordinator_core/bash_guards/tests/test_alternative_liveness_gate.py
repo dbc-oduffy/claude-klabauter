@@ -110,6 +110,63 @@ def test_untriggered_count_never_grows_past_pin():
 
 
 # ---------------------------------------------------------------------------
+# write_guards/ discovery extension (chunk C9, agent-facing-messages-not-
+# apology plan). SEPARATE registries (WRITE_GUARD_LIVE_TRIGGERS/WRITE_GUARD_
+# UNTRIGGERED, not LIVE_TRIGGERS/UNTRIGGERED) so this extension never
+# touches the bash_guards-scoped EXPECTED_UNTRIGGERED/_UNTRIGGERED_PINNED_MAX
+# ratchets above -- per this dispatch's explicit "never relax an existing
+# pin" instruction.
+# ---------------------------------------------------------------------------
+
+
+def test_every_write_guard_is_registered_or_documented():
+    discovered = set(altlive.discover_write_guard_names())
+    registered = set(altlive.WRITE_GUARD_LIVE_TRIGGERS) | set(altlive.WRITE_GUARD_UNTRIGGERED)
+    missing = discovered - registered
+    assert not missing, (
+        "a write_guards/ module was added without a WRITE_GUARD_LIVE_TRIGGERS "
+        "entry or a named WRITE_GUARD_UNTRIGGERED reason: %s" % sorted(missing)
+    )
+
+
+def test_write_guard_untriggered_set_is_documented_not_silently_empty():
+    for name, reason in altlive.WRITE_GUARD_UNTRIGGERED.items():
+        assert isinstance(reason, str) and len(reason) > 20, (
+            "%s is in WRITE_GUARD_UNTRIGGERED with no real written reason" % name
+        )
+
+
+@pytest.mark.parametrize("guard", sorted(altlive.WRITE_GUARD_LIVE_TRIGGERS))
+def test_write_guard_registered_trigger_fires(guard):
+    result = altlive.fire_guard(guard)
+    assert result.fired, (
+        "%s's registered write_guards trigger did not fire (error=%r) -- broken "
+        "registry row, not a silent skip" % (guard, result.error)
+    )
+
+
+@pytest.mark.parametrize("guard", sorted(altlive.WRITE_GUARD_LIVE_TRIGGERS))
+def test_write_guard_named_alternatives_are_not_dead(guard):
+    """The write_guards/ analogue of `test_named_alternatives_are_not_dead`
+    below -- a DEAD verdict here means a write_guards/ alternative was
+    damaged by this chunk's own sweep (fix the message, not the gate, per
+    this module's own charter)."""
+    ev = altlive.evaluate_guard(guard)
+    if not ev.fire.fired:
+        pytest.skip("covered by test_write_guard_registered_trigger_fires; not re-asserted here")
+    if ev.extraction_error:
+        pytest.fail(
+            "%s: message names an alternative this extractor cannot classify: %s"
+            % (guard, ev.extraction_error)
+        )
+    dead = [(alt, v) for alt, v in ev.verdicts if v.status is altlive.VerdictStatus.DEAD]
+    assert not dead, "\n".join(
+        "%s: DEAD alternative [%s] %r -- %s" % (guard, alt.kind.value, alt.raw, v.evidence)
+        for alt, v in dead
+    )
+
+
+# ---------------------------------------------------------------------------
 # Every registered LIVE_TRIGGERS row actually fires. A trigger returning
 # None (or raising) is a broken registry row, not a silent skip.
 # ---------------------------------------------------------------------------
@@ -147,10 +204,10 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
 
         assert result.fired, "guard_inprocess_search's trigger did not fire: %r" % result.error
         reason = result.envelope.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-        # Guard's actual wording is "no subprocess spawned" (no "was") -- this
-        # phrase opens `_footer`'s full-paragraph branch and is absent from
+        # Guard's actual wording is "recognized as a search" -- this phrase
+        # opens `_footer`'s full-paragraph branch and is absent from
         # `_ANSWERED_MARKER`, so it is a reliable full-vs-short discriminator.
-        assert "Search already answered in-process, no subprocess spawned" in reason, (
+        assert "recognized as a search" in reason, (
             "fire_guard observed the pre-seeded latch for the ambient session id instead of "
             "a guaranteed-first call -- isolation did not hold: %r" % reason[:200]
         )
@@ -257,7 +314,20 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     # 1 (pre-existing, unrelated to the capability manifest) + 2 ("in-process" +
     # "searched in-process" -- both now resolve LIVE against harness_capability_manifest.json,
     # see EXPECTED_UNVERIFIABLE_COUNTS' comment above).
-    "guard_inprocess_search": 3,
+    # Re-pinned 3 -> 2 on 2026-08-12, EM ruling. NOT a ratchet relaxation: the
+    # third alternative stopped existing rather than stopping verifying. This
+    # floor was pinned at 3 in a49cd99e8 (2026-07-29), when `_footer()` still
+    # appended `operator_override_note(_DISABLE_ENV_VAR)`, giving one OVERRIDE
+    # alternative alongside the two HARNESS_CAPABILITY markers. 18b73e5bc
+    # (2026-08-11) deliberately removed that call -- a successfully ANSWERED
+    # search is not a denial and has no bypass to offer, and the offer was
+    # itself the trust defect (five dispatched executors distrusted correct
+    # in-process results because of it). `_source_override_alternatives` finds
+    # OVERRIDE alternatives by AST-walking for `operator_override_note` calls,
+    # so it now correctly returns []; the two capability markers both still
+    # grade LIVE. `_DISABLE_ENV_VAR` still works, it is just documented in
+    # docs/reference/guard-override-keys.md instead of announced inline.
+    "guard_inprocess_search": 2,
     "guard_multiprobe_banner": 1,
     "guard_plumbing_and_loops": 1,
     # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2.

@@ -141,6 +141,10 @@ def main(argv: list[str]) -> int:
 
     cwd_repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if cwd_repo_root is None:
+        # No git root resolved from cwd at all -- distinct from the
+        # MISMATCH identity gate below (positive evidence of a DIFFERENT
+        # real repo). This is "nowhere to write"; refusing here is not the
+        # AC4 "UNRESOLVED never refuses" carve-out being violated.
         print(f"set-goal-kr-status: cannot resolve git repo root from {os.getcwd()}", file=sys.stderr)
         return 2
     if verdict["verdict"] == "MISMATCH":

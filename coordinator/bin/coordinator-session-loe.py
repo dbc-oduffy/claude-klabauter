@@ -35,7 +35,8 @@ Resume strategy:      stateless — re-running on the same session yields
   identical output as long as the sentinel files haven't changed.
 
 Negative-spec: does NOT source coordinator-session.sh and does NOT spawn a
-  shell (`git rev-parse` runs via subprocess.run() with an argv list).
+  shell (repo-root resolution runs via repo_identity.resolve_checked_repo_root(),
+  which shells out to `git rev-parse` via subprocess.run() with an argv list).
 """
 from __future__ import annotations
 

@@ -148,7 +148,7 @@ class TestItem2InProcessSearchFiringShape:
         (repo / ".git").mkdir(parents=True)
         monkeypatch.setenv(_gis._SESSION_ID_ENV_VAR, "firing-shape-gate-test-session-2")
         first = _gis._footer(str(repo))
-        assert "Keep using grep as normal" in first
+        assert "recognized as a search" in first
 
 
 # ---------------------------------------------------------------------------

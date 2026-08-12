@@ -172,5 +172,134 @@ class TestBatonDriftSweepMismatchWarnsAndProceeds(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
+class TestCeremonyHookMismatchWarnsAndProceeds(unittest.TestCase):
+    """coordinator-ceremony-hook.py is the hottest script in this slice
+    (dispatch brief). Same READER shape as baton-drift-sweep.py: MISMATCH
+    warns to stderr using the resolver's own message and proceeds
+    (exit 0, never refuses); UNRESOLVED with no root falls back to
+    os.getcwd() and also never refuses (AC4). The resolver import here is
+    deferred (inside main(), after two early no-op returns), so this
+    mocks the shared repo_identity module's attribute rather than a
+    module-level name on the ceremony-hook module itself."""
+
+    def setUp(self):
+        self.mod = _load_module("coordinator-ceremony-hook.py", "coordinator_ceremony_hook_cli_c3")
+        import repo_identity
+        self.repo_identity = repo_identity
+
+    def test_mismatch_warns_and_proceeds(self):
+        v = _verdict("MISMATCH", "/repo/mismatch")
+        with mock.patch.object(
+            self.repo_identity, "resolve_checked_repo_root",
+            return_value=("/repo/mismatch", v),
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod.main(["workday-start"])
+
+        self.assertEqual(rc, 0)
+        self.assertIn(v["message"], stderr.getvalue())
+
+    def test_match_proceeds_silently(self):
+        v = _verdict("MATCH", "/repo/match")
+        with mock.patch.object(
+            self.repo_identity, "resolve_checked_repo_root",
+            return_value=("/repo/match", v),
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod.main(["workday-start"])
+
+        self.assertEqual(rc, 0)
+        self.assertNotIn(v["message"], stderr.getvalue())
+
+    def test_unresolved_with_no_root_never_refuses(self):
+        """AC4/DR-277: UNRESOLVED with no root at all falls back to
+        os.getcwd() and still returns 0 -- never hardened into a
+        crash/refusal beyond this hook's exit-0-always contract."""
+        v = _verdict("UNRESOLVED", None, sid=None)
+        with mock.patch.object(
+            self.repo_identity, "resolve_checked_repo_root",
+            return_value=(None, v),
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod.main(["workday-start"])
+
+        self.assertEqual(rc, 0)
+
+
+class TestReapIntegratedReviewFindingsMismatchWarnsAndProceeds(unittest.TestCase):
+    """reap-integrated-review-findings.py has two distinct call sites
+    (_reap_integrated_legacy, _reap_native) behind a seam-presence branch
+    in main(); neither was exercised by the grep-shaped assertions above.
+    Both are READERs (AC10, DR-277): MISMATCH warns and proceeds,
+    UNRESOLVED never refuses. Calling each function directly (bypassing
+    main()'s seam probe) with an empty tmp dir as repo_root keeps both
+    on the cheap "findings_dir does not exist; nothing to do" / native
+    transport-mocked early-exit path, same fixture shape as the ceremony
+    hook above -- no real git scaffolding needed."""
+
+    def setUp(self):
+        self.mod = _load_module(
+            "reap-integrated-review-findings.py", "reap_integrated_review_findings_cli_c3"
+        )
+
+    def test_legacy_mismatch_warns_and_proceeds(self):
+        v = _verdict("MISMATCH", "/repo/mismatch")
+        with mock.patch.object(
+            self.mod, "resolve_checked_repo_root",
+            return_value=("/repo/mismatch-does-not-exist", v),
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod._reap_integrated_legacy(dry_run=False, commit_prefix="")
+
+        self.assertEqual(rc, 0)
+        self.assertIn(v["message"], stderr.getvalue())
+
+    def test_legacy_unresolved_with_no_root_never_refuses(self):
+        v = _verdict("UNRESOLVED", None, sid=None)
+        with mock.patch.object(
+            self.mod, "resolve_checked_repo_root",
+            return_value=(None, v),
+        ):
+            rc = self.mod._reap_integrated_legacy(dry_run=False, commit_prefix="")
+
+        self.assertEqual(rc, 0)
+
+    def test_native_mismatch_warns_and_proceeds(self):
+        v = _verdict("MISMATCH", "/repo/mismatch")
+        fake_result = {"exit_code": 0, "reaped": [], "reaped_total": 0}
+        with mock.patch.object(
+            self.mod, "resolve_checked_repo_root",
+            return_value=("/repo/mismatch", v),
+        ), mock.patch.object(
+            self.mod.cc_invoke, "cc_invoke", return_value=fake_result,
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod._reap_native(
+                    dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter",
+                )
+
+        self.assertEqual(rc, 0)
+        self.assertIn(v["message"], stderr.getvalue())
+
+    def test_native_unresolved_with_no_root_never_refuses(self):
+        v = _verdict("UNRESOLVED", None, sid=None)
+        with mock.patch.object(
+            self.mod, "resolve_checked_repo_root",
+            return_value=(None, v),
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                rc = self.mod._reap_native(
+                    dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter",
+                )
+
+        self.assertEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

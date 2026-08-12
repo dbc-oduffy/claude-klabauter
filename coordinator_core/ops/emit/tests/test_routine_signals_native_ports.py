@@ -58,7 +58,7 @@ class TestCountDistillBacklogShape:
     def test_missing_archive_root_raises(self, tmp_path: Path) -> None:
         """No archive/completed dir → RuntimeError (bash oracle: ``exit 1`` + stderr)."""
         with pytest.raises(RuntimeError, match="archive root not found"):
-            _count_distill_backlog(tmp_path / "coordinator")
+            _count_distill_backlog(tmp_path / "repo", tmp_path / "coordinator")
 
     def test_empty_archive_dir_is_unknown(self, tmp_path: Path) -> None:
         """archive/completed exists but has zero .md files → computed_state 'unknown'
@@ -68,7 +68,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result == {
             "pending_count": 0,
             "threshold_days": 30,
@@ -86,7 +86,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result["computed_state"] == "fresh"
         assert result["pending_count"] == 0
         assert result["threshold_days"] == 30
@@ -103,7 +103,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result == {
             "pending_count": 1,
             "threshold_days": 30,
@@ -122,7 +122,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result == {
             "pending_count": 0,
             "threshold_days": 30,
@@ -141,7 +141,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result["pending_count"] == 0
 
     def test_six_or_more_pending_is_stale(self, tmp_path: Path) -> None:
@@ -156,7 +156,7 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result["pending_count"] == 6
         assert result["computed_state"] == "stale"
 
@@ -172,12 +172,71 @@ class TestCountDistillBacklogShape:
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
-        result = _count_distill_backlog(coordinator_root)
+        result = _count_distill_backlog(root, coordinator_root)
         assert result == {
             "pending_count": 0,
             "threshold_days": 30,
             "computed_state": "fresh",
         }
+
+    def test_archive_scan_is_rooted_at_repo_root_not_coordinator_root(
+        self, tmp_path: Path
+    ) -> None:
+        """The archive/completed scan reads *repo_root* — the emitting repo's own
+        archive, parity with the docs/bug-sweep signals beside this one — never the
+        coordinator root's install-layout-inferred tree. A populated repo_root archive
+        must be counted even when coordinator_root has no archive of its own at all."""
+        repo_root = tmp_path / "some-emitting-repo"
+        old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
+        _write(
+            repo_root / "archive" / "completed" / "2026-05" / "2026-05-01-undistilled-a1b2c3.md",
+            f"---\ncreated: {old_day}\nchain: null\n---\nbody\n",
+        )
+        # A coordinator_root elsewhere entirely, with no archive/completed reachable
+        # from it at all (not even via _resolve_distill_root's ladder/fallback).
+        coordinator_root = tmp_path / "unrelated-coordinator-checkout"
+        coordinator_root.mkdir(parents=True)
+
+        result = _count_distill_backlog(repo_root, coordinator_root)
+        assert result["pending_count"] == 1
+        assert result["computed_state"] == "mild"
+
+
+class TestCollectDistillBacklogUsesRepoRoot:
+    """``collect()``'s distill-backlog signal must read ``ctx.repo_root``'s own
+    archive/completed, matching its ``docs``/``bug-sweep`` siblings in the same
+    function — the defect this module exists to close (tc-3 always reported
+    pending_count=0/computed_state='unknown' because it scanned ctx.coordinator_root
+    instead)."""
+
+    def test_collect_reports_nonzero_pending_from_repo_root_archive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_root = tmp_path / "emitting-repo"
+        old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
+        _write(
+            repo_root / "archive" / "completed" / "2026-05" / "2026-05-01-undistilled-a1b2c3.md",
+            f"---\ncreated: {old_day}\nchain: null\n---\nbody\n",
+        )
+        coordinator_root = tmp_path / "unrelated-coordinator-checkout"
+        coordinator_root.mkdir(parents=True)
+
+        monkeypatch.setattr(routine_signals, "_run_staleness_native", lambda *a, **k: "fresh")
+        monkeypatch.setattr(routine_signals, "_resolve_coordinator_state_root", lambda root: None)
+        monkeypatch.setattr(routine_signals, "_commits_since_last", lambda *a, **k: 0)
+
+        ctx = MagicMock()
+        ctx.repo_name = "owner/repo"
+        ctx.observed_at = "2026-07-22T00:00:00Z"
+        ctx.coordinator_root = coordinator_root
+        ctx.repo_root = repo_root
+        ctx.provenance = lambda *a, **k: {}
+
+        signals, malformed = routine_signals.collect(ctx)
+        assert malformed == []
+        distill_signal = next(s for s in signals if s["kind"] == "distill-backlog")
+        assert distill_signal["computed_state"] == "mild"
+        assert distill_signal["inputs"]["pending_count"] == 1
 
 
 @pytest.mark.skipif(
@@ -215,7 +274,7 @@ class TestCountDistillBacklogUnreadableSubtree:
         original_mode = hidden_dir.stat().st_mode
         os.chmod(hidden_dir, 0o000)
         try:
-            result = _count_distill_backlog(coordinator_root)
+            result = _count_distill_backlog(root, coordinator_root)
         finally:
             os.chmod(hidden_dir, original_mode)
 
@@ -238,7 +297,7 @@ class TestCountDistillBacklogUnreadableSubtree:
         monkeypatch.setattr(
             routine_signals,
             "_count_distill_backlog",
-            lambda coordinator_root: {
+            lambda repo_root, coordinator_root: {
                 "pending_count": 0,
                 "threshold_days": 30,
                 "computed_state": "unknown",

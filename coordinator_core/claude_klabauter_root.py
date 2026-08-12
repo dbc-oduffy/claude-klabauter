@@ -343,19 +343,34 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
     `RESOLUTION_UNRESOLVED` string constants.
 
     HOT-PATH SHAPE (do not "simplify" away — see plan § C4 wrapper half):
-      1. Rung 1 (`CLAUDE_KLABAUTER_ROOT` env var) and Rung 1.5 (`.claude-klabauter-root`
-         pointer file) — `coordinator_claude_klabauter_root()`'s existing free rungs,
-         re-checked here so this function never runs the gate ahead of them.
-         Both classify as `RESOLUTION_LIVE_WORKING_TREE`: they are the SAME
-         resolution `coordinator_claude_klabauter_root()` already performs today
-         (AC7 byte-identical-on-a-single-tree-box), just with a class label
-         attached; they predate and are unaffected by the two-tier gate.
+      1. Rung 1 (`CLAUDE_KLABAUTER_ROOT` env var) — `coordinator_claude_klabauter_root()`'s
+         existing free rung, re-checked here so this function never runs
+         the gate ahead of it. Classifies as `RESOLUTION_LIVE_WORKING_TREE`:
+         it is the SAME resolution `coordinator_claude_klabauter_root()` already
+         performs today, just with a class label attached; it predates and
+         is unaffected by the two-tier gate.
       2. Cheap short-circuit: if `repos.claude_klabauter` (the published
          engine mirror key) is not registered at all, the gate's step 1/3
          (published-engine branches) can never fire — skip straight to the
-         shim's own live-tree resolution (`_resolve_claude_klabauter_root`) rather
+         shim's own live-tree resolution (`_resolve_claude_klabauter_root`, which
+         itself reads the `.claude-klabauter-root` pointer as ITS OWN rung 2) rather
          than paying for the full `_is_engine_working_repo` session-root
-         walk the gate would otherwise do first.
+         walk the gate would otherwise do first. THIS branch is where Rung
+         1.5's `.claude-klabauter-root` pointer fast path now lives — checked here,
+         ahead of the full gate walk (`_is_engine_working_repo`), so the
+         single-tree box (no klabauter registered) keeps today's
+         byte-identical zero-subprocess fast path (AC4). Note this still
+         pays one `_load_shim()`/`exec_module` cost (line 388, unconditional
+         before this branch) — it is the gate walk, not the shim load, that
+         is skipped here. On a dual-boot box (klabauter
+         IS registered) the pointer is deliberately NOT consulted here —
+         step 3's full gate decides instead, per plan
+         `2026-08-12-arm-the-klabauter-dual-boot-the-wrapper.md` § Problem:
+         the pointer previously pre-empted the gate on every installed
+         machine, since the installer always writes it. This loses nothing
+         on the dual-boot path: the shim's `_resolve_claude_klabauter_root` already
+         reads `.claude-klabauter-root` as its own rung inside the gate, so a working
+         repo still resolves via the pointer from inside step 3.
       3. Otherwise, run the full gate (`resolve_claude_klabauter_root_with_class()`),
          memoized module-scope on `(registry mtime pair, session root)` so
          a long-lived process re-invoking this on every call does not
@@ -373,20 +388,24 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
     if existing:
         return existing, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
 
-    pointer_path = machine_local_dir() / ".claude-klabauter-root"
-    try:
-        with open(pointer_path, "r", encoding="utf-8") as f:
-            val = f.read().strip()
-        if val:
-            return val, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
-    except OSError:
-        pass  # missing/unreadable pointer file — normal, falls through
-
     shim = _load_shim()
     ml_dir = shim._ml_dir()
 
     published_key = shim._registry_value(ml_dir, "repos.claude_klabauter")
     if not published_key:
+        # Rung 1.5 (`.claude-klabauter-root` pointer) fast path — see this function's
+        # own docstring, step 2. Only reachable here, on the
+        # klabauter-absent single-tree box, so a dual-boot box never lets
+        # the pointer pre-empt step 3's full gate.
+        pointer_path = machine_local_dir() / ".claude-klabauter-root"
+        try:
+            with open(pointer_path, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+            if val:
+                return val, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
+        except OSError:
+            pass  # missing/unreadable pointer file — normal, falls through
+
         root = shim._resolve_claude_klabauter_root(ml_dir)
         return root, shim.RESOLUTION_LIVE_WORKING_TREE
 

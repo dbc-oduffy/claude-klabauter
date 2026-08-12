@@ -42,6 +42,18 @@ from machine_local_impl_resolve import (  # noqa: E402
     claude_home as _mlir_claude_home,
     machine_local_impl_path as _mlir_machine_local_impl_path,
 )
+from cc_invoke import resolve_engine_root  # noqa: E402
+
+# The engine root must be on sys.path before `_git_root`'s `coordinator_core`
+# import: this file is also published into the claude-klabauter mirror, where
+# coordinator_core is NOT pip-installed and the interpreter's sys.path[0] is
+# this bin/ directory, not the checkout root. Without this the import resolves
+# nothing and every invocation dies inside the dedup pre-check — the failure is
+# on the critical path here, so the CLI is unusable rather than degraded. Same
+# bootstrap as coordinator/bin/record-platform-outcome (5850fb170).
+_ENGINE_ROOT = resolve_engine_root(__file__)
+if _ENGINE_ROOT not in sys.path:
+    sys.path.insert(0, _ENGINE_ROOT)
 
 # Mirrors coordinator-queue-append._QUEUE_APPEND_OUTPUT_ROOT_ENV for test isolation.
 # When set, the dedup scan looks under <QUEUE_APPEND_OUTPUT_ROOT>/state/lessons/

@@ -208,9 +208,26 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # the WHOAMI-BOOTSTRAP EXCEPTION above — do NOT generalize it to every
 # launcher; every entrypoint not named here renders byte-identical to before
 # this mechanism existed (see `_cmd_raw_cmdline_block`).
+#
+# MIRRORED, NOT IMPORTED, against `coordinator_core/install/substrate.py`'s
+# `_RAW_CMDLINE_TARGETS` — same caret-eating defect, same keying convention
+# (target-filename suffix, not full path), two independent module-load
+# surfaces per that module's own docstring (a hyphenated-filename generator
+# module has no ordinary `import` form). `scoped-git-commit` and
+# `cross-repo-memo` were added to `_RAW_CMDLINE_TARGETS` per
+# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# after-a-newline.md (both take multi-line arguments as a matter of course —
+# commit messages, memo bodies) but this set was NOT updated at the time,
+# leaving the install path that renders launchers via THIS generator
+# directly (rather than via `_write_agent_cmd_forwarder`) still vulnerable
+# to the caret-eating defect on those two CLIs. Closed here — see
+# `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
+# for the drift guard. Extend BOTH sets together, or that test goes red.
 _RAW_CMDLINE_ENTRYPOINTS = frozenset(
     {
         "coordinator/bin/coordinator-write-review-trail.py",
+        "coordinator/bin/scoped-git-commit",
+        "coordinator/bin/cross-repo-memo",
     }
 )
 

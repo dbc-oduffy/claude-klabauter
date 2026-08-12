@@ -144,7 +144,7 @@ compacted, at 3 shards** (AC16).
 | 1 | uncompacted baseline | 1 800 | 3 | 301.4 | 313.9 | 7.8 |
 | 1 | uncompacted growth | 15 300 | 3 | 359.6 | 391.0 | 18.8 |
 | 1 | compacted | 1 506 | 3 | 293.0 | 335.7 | 26.5 |
-| 2 | uncompacted baseline | 1 800 | 3 | ~301–345 | — | — |
+| 2 | uncompacted baseline | 1 800 | 3 | ~301–345 (min range across sub-samples, mean/stdev not captured) | — | — |
 | 2 | uncompacted growth | 15 300 | 3 | 391.9 | 460.2 | 52.6 |
 | 2 | compacted | 1 506 | 3 | 311.0 | 335.4 | 19.4 |
 
@@ -156,13 +156,22 @@ is well over the 84ms band — **`extrapolated_breach_total_events_at_shard_coun
 "already breached at baseline"` both runs**, exactly as sat-01's AC3 re-measurement found for
 `read_events` alone: the binding constraint is cold-start/import cost, not event count. This
 module's baseline is ~2.4x `read_events`' own re-measured ~125ms floor
-(`MEASUREMENT-2026-07-28-ac3-read-events-requantified.md`) — isolated by timing a bare
+(`MEASUREMENT-2026-07-28-ac3-read-events-requantified.md`) — isolated by
+`measure_render_status.run_import_isolation_measurement` (N=10, warmup=2, added post-review to
+make this attribution reproducible; Review: coordinator:code-reviewer P2 — the prior text cited
+~333ms/~79ms with no script on disk producing it), which times a bare
 `import coordinator_core.tracker_projection` subprocess against a bare
-`import coordinator_core.tracker_store` one: **~333ms vs ~79ms**, so most of the extra ~180ms
-`render_status` pays over `read_events` alone is `tracker_projection`'s own import chain
-(`tracker_entities` and what it pulls in), not the fold loop. This is a real, reportable
-observation about `coordinator_core/tracker_projection.py`'s import cost — flagged here, not
-fixed here (out of scope for C10 per its brief).
+`import coordinator_core.tracker_store` one: **min 347.6ms / mean 389.9ms (tracker_projection) vs
+min 61.1ms / mean 71.2ms (tracker_store)**, so most of the extra ~180ms `render_status` pays over
+`read_events` alone is `tracker_projection`'s own import chain (`tracker_entities` and what it
+pulls in), not the fold loop. This is a real, reportable observation about
+`coordinator_core/tracker_projection.py`'s import cost — flagged here, not fixed here (out of
+scope for C10 per its brief).
+
+Reproduce the import-isolation split: `python -c "from coordinator_core.benchmarks.
+measure_render_status import run_import_isolation_measurement; import json;
+print(json.dumps(run_import_isolation_measurement(), indent=2, default=str))"` (also folded into
+`python -m coordinator_core.benchmarks.measure_render_status`'s output as `import_isolation`).
 
 **AC17 — compacted delta is near-zero, as predicted, not a tuning failure.** `compaction_delta_ms:
 -8.4` (run 1) / `-8.9` (run 2) — compacted measured marginally FASTER in both runs, but

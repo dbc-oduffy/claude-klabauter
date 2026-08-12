@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coordinator_core.ops.deliverable_equivalence import (
     DeliverableDualReadMismatchError,
@@ -65,12 +66,17 @@ def _write_artifact(worktree_root: Path, entries: list[dict]) -> Path:
     state_dir = worktree_root / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
-    lines = ["entries:"]
-    for entry in entries:
-        lines.append(f"  - loser: {entry['loser']}")
-        lines.append(f"    winner: {entry['winner']}")
-        lines.append(f"    evidence: {entry.get('evidence', 'test fixture')!r}")
-    artifact_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    dumped_entries = [
+        {
+            "loser": entry["loser"],
+            "winner": entry["winner"],
+            "evidence": entry.get("evidence", "test fixture"),
+        }
+        for entry in entries
+    ]
+    artifact_path.write_text(
+        yaml.safe_dump({"entries": dumped_entries}, sort_keys=False), encoding="utf-8"
+    )
     return artifact_path
 
 
@@ -303,13 +309,11 @@ def _write_artifact_with_ledger(
 ) -> Path:
     """Write an artifact carrying BOTH `entries:` and `ledger:` — the additive-
     compatibility fixture shape."""
-    import yaml as _yaml
-
     state_dir = worktree_root / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
     artifact_path.write_text(
-        _yaml.safe_dump({"entries": entries, "ledger": ledger_rows}, sort_keys=False),
+        yaml.safe_dump({"entries": entries, "ledger": ledger_rows}, sort_keys=False),
         encoding="utf-8",
     )
     return artifact_path
@@ -364,6 +368,10 @@ def test_load_deliverable_ledger_unparsable_yaml_returns_empty_list(tmp_path, ca
         rows = load_deliverable_ledger(tmp_path)
 
     assert rows == []
+    # Review: coordinatorreview-integrator-574d6d25 — the caplog.at_level context
+    # implied "and it warns"; assert the warning was actually emitted, not just
+    # the return value.
+    assert any("could not read/parse" in record.message for record in caplog.records)
 
 
 def test_load_equivalence_map_unaffected_by_ledger_block(tmp_path):
@@ -416,24 +424,32 @@ def test_validate_deliverable_ledger_rows_accepts_open_row():
 
 
 def test_validate_deliverable_ledger_rows_raises_on_bad_status_enum():
-    with pytest.raises(DeliverableLedgerValidationError, match="status"):
+    # Review: coordinatorreview-integrator-574d6d25 — pin the NATURE of the
+    # violation (an invalid enum value), not just the bare field name "status".
+    with pytest.raises(DeliverableLedgerValidationError, match="status.*invalid|invalid.*status"):
         validate_deliverable_ledger_rows([_well_formed_row(status="deprecated")])
 
 
 def test_validate_deliverable_ledger_rows_raises_on_duplicate_deliverable_id():
-    with pytest.raises(DeliverableLedgerValidationError, match="duplicat"):
+    with pytest.raises(
+        DeliverableLedgerValidationError, match="duplicat.*deliverable_id|deliverable_id.*duplicat"
+    ):
         validate_deliverable_ledger_rows(
             [_well_formed_row(deliverable_id="dlv-dup"), _well_formed_row(deliverable_id="dlv-dup")]
         )
 
 
 def test_validate_deliverable_ledger_rows_raises_on_missing_closed_at_for_non_open():
-    with pytest.raises(DeliverableLedgerValidationError, match="closed_at"):
+    with pytest.raises(
+        DeliverableLedgerValidationError, match="closed_at.*required|required.*closed_at"
+    ):
         validate_deliverable_ledger_rows([_well_formed_row(status="shipped", closed_at=None)])
 
 
 def test_validate_deliverable_ledger_rows_raises_on_bad_join_provenance():
-    with pytest.raises(DeliverableLedgerValidationError, match="join_provenance"):
+    with pytest.raises(
+        DeliverableLedgerValidationError, match="join_provenance.*invalid|invalid.*join_provenance"
+    ):
         validate_deliverable_ledger_rows(
             [
                 _well_formed_row(
@@ -452,12 +468,16 @@ def test_validate_deliverable_ledger_rows_does_not_merely_warn(caplog):
         with pytest.raises(DeliverableLedgerValidationError):
             validate_deliverable_ledger_rows([_well_formed_row(status="bogus")])
 
-    # No row should have been silently accepted/skipped via a WARNING instead of a raise.
-    assert not any("skip" in record.message.lower() for record in caplog.records)
+    # No row should have been silently accepted/skipped via a WARNING instead of a
+    # raise — pin "raise instead of ANY warn", not just "raise instead of this one
+    # particular wording". Review: coordinatorreview-integrator-574d6d25.
+    assert not caplog.records
 
 
 def test_validate_deliverable_ledger_rows_raises_on_superseded_without_target():
-    with pytest.raises(DeliverableLedgerValidationError, match="superseded_by"):
+    with pytest.raises(
+        DeliverableLedgerValidationError, match="superseded_by.*required|required.*superseded_by"
+    ):
         validate_deliverable_ledger_rows(
             [_well_formed_row(status="superseded", superseded_by=None)]
         )
@@ -481,13 +501,11 @@ def _write_handoff(path: Path, deliverable_id: str | None = None, kind: str = "h
 
 def _write_ledger_only(worktree_root: Path, ledger_rows: list[dict]) -> Path:
     """Write an artifact carrying an empty `entries:` and the given `ledger:` rows."""
-    import yaml as _yaml
-
     state_dir = worktree_root / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
     artifact_path.write_text(
-        _yaml.safe_dump({"entries": [], "ledger": ledger_rows}, sort_keys=False),
+        yaml.safe_dump({"entries": [], "ledger": ledger_rows}, sort_keys=False),
         encoding="utf-8",
     )
     return artifact_path
@@ -499,7 +517,14 @@ def test_loaded_equivalence_map_carries_all_19_entries():
     derived deduped count with no reason to equal 19 (winners absorb multiple
     losers — research corpus §0). AC1's real intent — that the map DRIVING the
     seed carries all 19 declared entries, not the stale "14" — is discharged
-    directly here against the real repo artifact."""
+    directly here against the real repo artifact.
+
+    NOTE: this test intentionally reads the real on-disk
+    state/deliverable-equivalence.yaml rather than a tmp_path fixture, so its
+    pass/fail is coupled to future edits of that production ledger file — any
+    addition/removal of an entries: row will break this test with no code
+    change. If that happens, update the literal 19 below to match the new
+    entry count."""
     repo_root = Path(__file__).resolve().parents[3]
     equivalence_map = load_equivalence_map(repo_root)
     assert len(equivalence_map) == 19
@@ -535,6 +560,41 @@ def test_seed_rows_pass_validate_deliverable_ledger_rows(tmp_path):
     validate_deliverable_ledger_rows(rows)  # must not raise
 
 
+def _make_guarded_open(real_open):
+    """Build the archive write-guard for `open`, shared by the AC8 guard test and its
+    negative control.
+
+    Review: coordinatorcode-reviewer-s4-integration — the two tests previously each
+    carried their own copy of this closure. Editing one and not the other would have
+    silently decoupled the negative control from the guard it is the control FOR, so
+    the shared definition is the point, not a tidiness preference.
+
+    Catches "w"/"a"/"x": "w" alone misses append and exclusive-create.
+    """
+
+    def _guarded_open(file, mode="r", *args, **kwargs):
+        norm = str(file).replace("\\", "/")
+        if any(flag in mode for flag in ("w", "a", "x")) and "/archive/" in norm:
+            raise AssertionError(f"write-mode open() reached an archive/ path: {file}")
+        return real_open(file, mode, *args, **kwargs)
+
+    return _guarded_open
+
+
+def _make_guarded_replace(real_replace):
+    """Build the archive write-guard for `os.replace`, shared by the AC8 guard test and
+    its negative control — the `open` guard's symmetric twin, extracted for the same
+    reason."""
+
+    def _guarded_replace(src, dst, *args, **kwargs):
+        norm = str(dst).replace("\\", "/")
+        if "/archive/" in norm:
+            raise AssertionError(f"os.replace() reached an archive/ path: {dst}")
+        return real_replace(src, dst, *args, **kwargs)
+
+    return _guarded_replace
+
+
 def test_seed_makes_zero_writes_against_an_archived_fixture_path(tmp_path, monkeypatch):
     """AC8: the seed reads an archived artifact's deliverable_id but never opens
     it (or anything else) in write mode, and never `os.replace`s into
@@ -544,29 +604,49 @@ def test_seed_makes_zero_writes_against_an_archived_fixture_path(tmp_path, monke
     archived = archive_dir / "2026-01-01_000000_roadmap-example.md"
     _write_handoff(archived, "dlv-archived-example", kind="roadmap-baton")
 
-    real_open = builtins.open
-
-    def _guarded_open(file, mode="r", *args, **kwargs):
-        norm = str(file).replace("\\", "/")
-        if "w" in mode and "/archive/" in norm:
-            raise AssertionError(f"write-mode open() reached an archive/ path: {file}")
-        return real_open(file, mode, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "open", _guarded_open)
-
-    real_replace = os.replace
-
-    def _guarded_replace(src, dst, *args, **kwargs):
-        norm = str(dst).replace("\\", "/")
-        if "/archive/" in norm:
-            raise AssertionError(f"os.replace() reached an archive/ path: {dst}")
-        return real_replace(src, dst, *args, **kwargs)
-
-    monkeypatch.setattr(os, "replace", _guarded_replace)
+    monkeypatch.setattr(builtins, "open", _make_guarded_open(builtins.open))
+    monkeypatch.setattr(os, "replace", _make_guarded_replace(os.replace))
 
     rows = seed_deliverable_ledger_rows(tmp_path)
 
     assert any(row["deliverable_id"] == "dlv-archived-example" for row in rows)
+
+
+def test_seed_zero_write_guard_negative_control_open(tmp_path, monkeypatch):
+    """Negative control for the `open` half of the AC8 zero-write guard: the guard must
+    actually FIRE against a real violation, in every write mode it claims to catch.
+
+    Without this, the guard test above only ever exercises its no-violation path and
+    would pass identically against a broken guard.
+    Review: coordinatorreview-integrator-574d6d25."""
+    monkeypatch.setattr(builtins, "open", _make_guarded_open(builtins.open))
+
+    archive_dir = tmp_path / "archive" / "handoffs"
+    archive_dir.mkdir(parents=True)
+    violating_path = archive_dir / "violation.md"
+
+    for mode in ("w", "a", "x"):
+        with pytest.raises(AssertionError, match="write-mode open"):
+            open(violating_path, mode, encoding="utf-8")
+
+
+def test_seed_zero_write_guard_negative_control_replace(tmp_path, monkeypatch):
+    """Negative control for the `os.replace` half of the AC8 zero-write guard.
+
+    Review: coordinatorcode-reviewer-s4-integration — the first negative control named
+    both guards in its docstring and exercised only `open`, so a broken `_guarded_replace`
+    would have gone uncaught. That is the same inert-probe failure the negative control
+    was added to close, reproduced for the second guard; this closes it for real."""
+    monkeypatch.setattr(os, "replace", _make_guarded_replace(os.replace))
+
+    archive_dir = tmp_path / "archive" / "handoffs"
+    archive_dir.mkdir(parents=True)
+    src = tmp_path / "source.md"
+    src.write_text("x", encoding="utf-8")
+    violating_dst = archive_dir / "violation.md"
+
+    with pytest.raises(AssertionError, match=r"os\.replace\(\) reached an archive/ path"):
+        os.replace(src, violating_dst)
 
 
 def test_dual_read_raises_on_divergent_ledger_and_frontmatter(tmp_path, caplog):
@@ -593,10 +673,10 @@ def test_dual_read_raises_on_divergent_ledger_and_frontmatter(tmp_path, caplog):
             dual_read_deliverable_id(tmp_path, str(artifact), {})
 
     # This must be a raise, never a mere warning (departure from
-    # ownership_index.build_ownership_index's WARN precedent, per AC6).
-    assert not any(
-        "mismatch" in record.message.lower() for record in caplog.records
-    )
+    # ownership_index.build_ownership_index's WARN precedent, per AC6) — pin
+    # "raise instead of ANY warn", not just "raise instead of this one particular
+    # wording". Review: coordinatorreview-integrator-574d6d25.
+    assert not caplog.records
 
 
 def test_batch_wrapper_collects_mismatch_without_aborting_the_walk(tmp_path):

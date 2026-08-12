@@ -24,6 +24,16 @@ builder's non-instructive framing leads, not trails, the sentence that
 follows) is unchanged -- only the literal string each half pins is now
 builder-specific.
 
+SECOND PREMISE CHANGE, SAME DAY (docs/plans/2026-08-11-guard-messages-point-
+to-docs-never-name.md) -- `operator_override_note`'s ``"Override key (...)"``
+opening above was itself replaced a few hours later in the same dispatch
+sequence: the render no longer names the key (or its flag/reason shape) at
+all, only a doc pointer (``"See <doc> for this guard's override keys."``).
+`_OVERRIDE_NOTE_LEAD` below is updated to match; the invariant this class
+enforces (the builder's one sentence leads the whole message, unchanged
+since it IS the whole message now) still holds and is still worth pinning
+against a future regrowth that reintroduces framing ahead of the pointer.
+
 WHY THIS EXISTS
 
 Item 2 of the cross-repo memo
@@ -84,11 +94,11 @@ wording change).
 
 WHAT THIS CATCHES
 
-For `operator_override_note`: a future edit that drops the leading
-override-key statement, moves it to trail the env-var-naming clause
-(unchanged requirement -- this builder still must lead with it), or
-reintroduces the old disclaimer register or an assignment form (the latter
-is `test_operator_override_note_no_assignment_form.py`'s job specifically).
+For `operator_override_note`: a future edit that drops the leading doc-
+pointer statement, reintroduces the old disclaimer register, reintroduces
+an assignment form (`test_operator_override_note_no_assignment_form.py`'s
+job specifically), or reintroduces the env-var name into the render at all
+(`test_operator_override_note_retains_affordances.py`'s job).
 
 For `annotate_deny`: a future edit that (a) puts the unlock block ahead of
 the guard's own reason again, (b) drops the human-only opening statement
@@ -114,11 +124,13 @@ from __future__ import annotations
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.session import guard_unlock_sentinel as gus
 
-#: `operator_override_note`'s current leading clause (2026-08-11 reshape) --
-#: verbatim prefix match. Deliberately short: just enough to identify the
-#: non-instructive override-key framing without pinning the exact
-#: parenthetical (`(flag)`/`(reason)`) or key name that follows it.
-_OVERRIDE_NOTE_LEAD = "Override key ("
+#: `operator_override_note`'s current leading clause (2026-08-11 SECOND
+#: reshape, same day -- see module docstring). Deliberately short: this is
+#: now effectively the whole rendered string (a doc pointer only, no key,
+#: no shape parenthetical), so "leads" and "is" have converged -- pinned
+#: here anyway as the regression guard against a future edit that
+#: reintroduces framing text ahead of the pointer.
+_OVERRIDE_NOTE_LEAD = "See "
 
 #: `annotate_deny`'s unlock-block leading clause (2026-08-11 reshape) --
 #: verbatim prefix match, the human-only-affordance statement that replaced
@@ -136,26 +148,31 @@ class TestOperatorOverrideNoteDisclaimer:
     """`bash_guards._helpers.operator_override_note` -- the pre-launch
     env-var-only bypass pointer."""
 
-    def test_override_key_statement_present(self):
+    def test_doc_pointer_statement_present(self):
         note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")
         assert _OVERRIDE_NOTE_LEAD in note
 
-    def test_override_key_statement_leads(self):
+    def test_doc_pointer_statement_leads(self):
         note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")
         assert note.startswith(_OVERRIDE_NOTE_LEAD), (
-            "operator_override_note() must lead with the override-key "
-            "statement, not bury it after the env-var instruction -- got: %r" % note
+            "operator_override_note() must lead with the doc-pointer "
+            "statement -- got: %r" % note
         )
 
-    def test_override_key_statement_leads_with_reason_placeholder_variant(self):
-        """The reason-shaped render (``reason_placeholder=``) is a distinct
-        code path inside the same builder (2026-07-30 P1 fix) -- must not
-        silently diverge from the flag-shaped default on where the leading
-        statement sits."""
+    def test_doc_pointer_statement_leads_with_reason_placeholder_variant(self):
+        """`reason_placeholder=` is a distinct call path into the same
+        builder (2026-07-30 P1 fix) -- must not silently diverge from the
+        default on where the leading statement sits. As of the 2026-08-11
+        second reshape, ``reason_placeholder`` no longer changes the
+        rendered output at all (see that function's own docstring), so this
+        is now also a direct regression check that both calls render the
+        identical string."""
+        default_note = operator_override_note("COORDINATOR_QUEUE_PUNT")
         note = operator_override_note(
             "COORDINATOR_QUEUE_PUNT", reason_placeholder="<why this is being punted>"
         )
         assert note.startswith(_OVERRIDE_NOTE_LEAD)
+        assert note == default_note
 
     def test_retired_disclaimer_register_does_not_reappear(self):
         note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")

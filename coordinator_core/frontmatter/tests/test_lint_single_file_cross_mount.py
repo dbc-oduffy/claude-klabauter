@@ -53,6 +53,49 @@ def _other_mount_dir(tmp_path) -> str | None:
     return None
 
 
+def test_single_file_check_relpath_valueerror_reports_instead_of_raising(tmp_path, capsys, monkeypatch):
+    """Host-independent coverage of the `except ValueError` branch itself.
+
+    The two `skipif(os.name != "nt")` tests below only run on a genuinely
+    two-drive Windows box, so on a single-drive CI runner they are silently
+    skipped and the branch goes unexercised anywhere. This test forces the
+    same `os.path.relpath` raise via monkeypatch so the guard's behavior is
+    pinned on any host, independent of real disk topology. Review: reviewer
+    flagged (P2) that the guard's raising-relpath path had no host-independent
+    coverage — the two-drive tests remain as the additional real-topology check.
+    """
+    target = tmp_path / "cross-mount-handoff.md"
+    target.write_text(_HANDOFF_FM, encoding="utf-8")
+
+    def _raising_relpath(path, start):
+        raise ValueError("path is on mount 'C:', start on mount 'X:'")
+
+    monkeypatch.setattr(schema_validate.os.path, "relpath", _raising_relpath)
+
+    rc = schema_validate._run_single_file_check(str(tmp_path), str(target), False)
+
+    assert rc == 0, capsys.readouterr()
+    out = capsys.readouterr().out
+    assert "\\" not in out.split(":", 1)[-1].split(" valid")[0], out
+    assert "valid" in out, out
+
+
+def test_relpath_valueerror_missing_file_still_reports_not_found(tmp_path, capsys, monkeypatch):
+    """Host-independent coverage of the not-found guard under the same raise."""
+
+    def _raising_relpath(path, start):
+        raise ValueError("path is on mount 'C:', start on mount 'X:'")
+
+    monkeypatch.setattr(schema_validate.os.path, "relpath", _raising_relpath)
+
+    rc = schema_validate._run_single_file_check(
+        str(tmp_path), str(tmp_path / "does-not-exist.md"), False
+    )
+
+    assert rc == 2
+    assert "file not found" in capsys.readouterr().err
+
+
 @pytest.mark.skipif(os.name != "nt", reason="relpath only raises across mounts on Windows")
 def test_single_file_check_on_a_different_mount_reports_instead_of_raising(tmp_path, capsys):
     repo_root = _other_mount_dir(tmp_path)

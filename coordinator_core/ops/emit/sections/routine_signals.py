@@ -180,8 +180,17 @@ def _resolve_distill_root(coordinator_root: Path) -> Path:
     return Path(os.environ.get("CLAUDE_HOME", str(Path.home()))) / ".claude"
 
 
-def _count_distill_backlog(coordinator_root: Path) -> dict:
+def _count_distill_backlog(repo_root: Path, coordinator_root: Path) -> dict:
     """Native port of ``count-distill-backlog.sh --format json``.
+
+    ``/distill`` is a per-repo ceremony: the ``archive/completed`` scan is rooted at
+    *repo_root* (the emitting repo's own working tree — parity with the docs-staleness
+    and bug-sweep-staleness signals beside this one, both of which use
+    ``ctx.repo_root``), never inferred via ``_resolve_distill_root``'s install-layout
+    ladder. The wiki-corpus "already distilled" cross-check is a genuinely
+    coordinator-level concern (the distillation target lives in the coordinator's own
+    wiki, not the emitting repo), so that half keeps resolving through
+    ``_resolve_distill_root(coordinator_root)`` unchanged.
 
     Returns ``{"pending_count": int, "threshold_days": 30, "computed_state": str}``.
     Raises ``RuntimeError`` when the archive root is missing — mirrors the bash oracle's
@@ -208,13 +217,13 @@ def _count_distill_backlog(coordinator_root: Path) -> dict:
     distinguish "verified fresh/mild" from "state unknown because part of the tree was
     unreadable".
     """
-    root = _resolve_distill_root(coordinator_root)
-    archive_root = root / "archive" / "completed"
+    archive_root = Path(repo_root) / "archive" / "completed"
     if not archive_root.is_dir():
         raise RuntimeError(f"count-distill-backlog: archive root not found: {archive_root}")
 
-    wiki_local = root / "docs" / "wiki"
-    wiki_coord = root / "plugins" / "coordinator-claude" / "coordinator" / "docs" / "wiki"
+    wiki_root = _resolve_distill_root(coordinator_root)
+    wiki_local = wiki_root / "docs" / "wiki"
+    wiki_coord = wiki_root / "plugins" / "coordinator-claude" / "coordinator" / "docs" / "wiki"
     corpus_parts: list[str] = []
     for wiki_dir in (wiki_local, wiki_coord):
         if wiki_dir.is_dir():
@@ -409,7 +418,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
     # Distill-backlog signal (bash:849-852) — native port, no subprocess.
     try:
-        distill = _count_distill_backlog(ctx.coordinator_root)
+        distill = _count_distill_backlog(ctx.repo_root, ctx.coordinator_root)
     except (RuntimeError, OSError):
         distill = dict(_DISTILL_FALLBACK)
     distill_pending = distill.get("pending_count", 0)

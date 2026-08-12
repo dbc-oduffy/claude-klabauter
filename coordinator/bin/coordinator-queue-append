@@ -121,6 +121,12 @@ import sys
 import tempfile
 from typing import Any
 
+# PARSE-only, never a serializer — the YAML-emission section below (§ YAML
+# emission) stays hand-serialized, no pyyaml on the write path; yaml.safe_load
+# is used exclusively by the C2 round-trip gate in _build_yaml to VALIDATE the
+# already-hand-composed document, never to construct it.
+import yaml
+
 # ---------------------------------------------------------------------------
 # Shared registry loader — bin/lib/coordinator_registry.py derives REPO_ALIASES
 # and shared identity-resolution helpers from schemas/coordinator-registry.manifest.json
@@ -711,7 +717,9 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# YAML emission (stdlib only — no pyyaml)
+# YAML emission (stdlib only — no pyyaml for COMPOSING the document; the C2
+# round-trip gate at the bottom of _build_yaml uses yaml.safe_load to VALIDATE
+# the already-composed string, never to build it — see that gate's docstring)
 # ---------------------------------------------------------------------------
 
 
@@ -719,10 +727,11 @@ def _yaml_quote_string(value: str) -> str:
     """Wrap a string in double-quotes if it contains special YAML characters.
 
     Quoted when the string contains: colon+space, leading/trailing whitespace,
-    special start chars (|, >, !, &, *, {, }, [, ]), a whitespace-preceded
-    comment-introducer (<space># or <tab>#) anywhere in the line, is empty, is a
-    YAML-reserved scalar (true/false/null/yes/no/~, any case), or an all-digit
-    (integer-looking) scalar.
+    special start chars (|, >, !, &, *, {, }, [, ], ', `, ", %, @, ?, ,), a
+    trailing colon (also catches a lone `:`, which both starts and ends with
+    it), a whitespace-preceded comment-introducer (<space># or <tab>#) anywhere
+    in the line, is empty, is a YAML-reserved scalar (true/false/null/yes/no/~,
+    any case), or an all-digit (integer-looking) scalar.
 
     Negative-spec: a whitespace-preceded `#` introduces an inline YAML comment at
     ANY column, not only column 0 — a start-position-only check silently truncates
@@ -735,13 +744,20 @@ def _yaml_quote_string(value: str) -> str:
     being silently reparsed as bool/int (parity with coordinator-lesson-promote
     ._yaml_str's reserved-scalar check; all-digit quoting is a further hardening
     not present in that sibling).
+
+    2026-08-11 widening (queue-append quoter gap): the start-char set was missing
+    `'` and `` ` `` — both YAML indicators that cannot begin a plain scalar — plus
+    `"`, `%`, `@`, `?`, `,`, and a lone/trailing `:`. Verified against the fleet
+    lesson/improvement-queue corpus (example-retrieval-repo-em's fleet_prose unparseable-YAML
+    report, 2026-08-11).
     """
     if not value:
         return '""'
     needs_quoting = (
         ": " in value
         or value != value.strip()
-        or value[0] in '|>!&*{}[]'
+        or value[0] in "|>!&*{}[]'`\"%@?,"
+        or value.endswith(":")
         or re.search(r"(^|\s)#", value) is not None
         or value.startswith("- ")
         or "\n" in value
@@ -844,6 +860,24 @@ def _emit_block_map_list_field(key: str, items: list[dict], item_key: str = "tex
     return "\n".join(lines)
 
 
+def _offending_field_for_yaml_error(exc: "yaml.YAMLError", line_owners: list[str]) -> str:
+    """Map a `yaml.YAMLError`'s mark back to the field that composed that line.
+
+    `line_owners[i]` names the field key responsible for the i-th (0-indexed)
+    physical line of the document `_build_yaml` composed — see that function's
+    `line_owners` construction. Falls back to a placeholder when the error
+    carries no mark or the mark falls outside the tracked range (should not
+    happen for a document this module itself composed, but this is
+    diagnostic text, not a load-bearing invariant).
+
+    Mirrors coordinator_core.ops.queue_append._offending_field_for_yaml_error exactly.
+    """
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    if mark is not None and 0 <= mark.line < len(line_owners):
+        return line_owners[mark.line]
+    return "<unknown field>"
+
+
 def _build_yaml(schema_name: str, fields: dict) -> str:
     """Construct the YAML document string for a queue entry.
 
@@ -855,6 +889,18 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
     Required and optional field lists are derived from the schema via the native
     schema.describe op, which returns ordered arrays preserving schema declaration
     order — simpler than the old dict-key iteration.
+
+    Fail-loud round-trip gate (C2, docs/plans/2026-08-11-queue-append-quoter-gap-
+    and-the-unparsea.md): the composed document is `yaml.safe_load`-parsed
+    before being returned. On a `yaml.YAMLError` this RAISES a `ValueError`
+    naming the offending field — it does not warn, log-and-continue, or return
+    the malformed document. A warning on a corpus writer is how the unparseable-
+    YAML class this gate closes accumulated unnoticed in the first place.
+
+    Byte-parity is preserved BY CONSTRUCTION: this is parse-to-CHECK only — the
+    parsed object is discarded and the ORIGINAL composed string is what gets
+    returned on success. No `yaml.dump`/`yaml.safe_dump` anywhere on this path
+    (§ YAML emission section header, above).
     """
     described = _schema_cli_describe(_SCHEMA_CLI_NAME.get(schema_name, schema_name))
     required = described.get("required") or []   # ordered list of field names in schema order
@@ -869,6 +915,10 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
                 emit_order.append(opt)
 
     lines = []
+    # line_owners[i] names the field key that produced the i-th physical line
+    # of the eventual "\n".join(lines) document — the offending-field lookup
+    # the round-trip gate below uses to name a field in its raised error.
+    line_owners: list[str] = []
     for key in emit_order:
         value = fields.get(key)
         if value is None:
@@ -890,8 +940,19 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
             line = _emit_yaml_field(key, value)
         if line:
             lines.append(line)
+            line_owners.extend([key] * (line.count("\n") + 1))
 
-    return "\n".join(lines) + "\n"
+    document = "\n".join(lines) + "\n"
+    try:
+        yaml.safe_load(document)
+    except yaml.YAMLError as exc:
+        offending_field = _offending_field_for_yaml_error(exc, line_owners)
+        raise ValueError(
+            f"queue.append: composed YAML document failed to parse — offending "
+            f"field: {offending_field!r}. Fix the value passed for that field. "
+            f"Underlying parser error: {exc}"
+        ) from exc
+    return document
 
 
 # ---------------------------------------------------------------------------

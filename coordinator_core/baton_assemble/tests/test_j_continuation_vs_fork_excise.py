@@ -47,7 +47,7 @@ def _write_predecessor_and_artifact(tmp_path):
     excise is asked to discard it."""
     predecessor = _write_artifact(
         tmp_path / "state" / "handoffs" / "predecessor.md",
-        ["handoff_id: HID-1"],
+        ["handoff_id: hnd-predecessor-1a2b3c"],
     )
     artifact = _write_artifact(
         tmp_path / "state" / "handoffs" / "h1.md",
@@ -164,3 +164,25 @@ class TestExciseIsAdditiveOnly:
         assert any(a.startswith("--predecessor-id=") for a in d1["args"]), d1["args"]
         ids = {d["id"] for d in decision["directives"]}
         assert "d6" in ids, ids
+
+    def test_legacy_nonconforming_predecessor_id_omitted(self, tmp_path):
+        """A realistic legacy `handoff_id` (pre-`hnd-<slug>-<6hex>` convention)
+        drives the omission path: `--predecessor-id` is left off entirely
+        while `--predecessor` still threads through, since the path edge and
+        the id edge are independently gated."""
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "predecessor.md",
+            ["handoff_id: hnd-windows-deferred-legs-2026-07-28"],
+        )
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "h1.md",
+            [
+                "deliverable_id: DEL-EXCISE-LEGACY-1",
+                "initiative: init-excise-legacy-1",
+                f"predecessor: {predecessor.relative_to(tmp_path)}",
+            ],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+        assert any(a.startswith("--predecessor=") for a in d1["args"]), d1["args"]
+        assert not any(a.startswith("--predecessor-id=") for a in d1["args"]), d1["args"]

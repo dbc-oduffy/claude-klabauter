@@ -127,7 +127,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _token_matches_binary,
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
-from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -165,32 +164,17 @@ _SESSION_ID_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
 _LATCH_MARKER_NAME = "inprocess-search-footer-seen"
 
 #: The one-line invariant marker every answered call carries once the explanatory
-#: paragraph has already fired this session -- never a bare deny with no framing (the
-#: module docstring's "deny here means ALREADY HANDLED, not refused" contract).
-#:
-#: Reframed 2026-08-11 (this dispatch) so the FIRST three words tell the caller they
-#: received a real answer, not a lead "Denied" that a caller reads as a refusal before
-#: reaching the substitution framing later in the sentence -- three independently
-#: dispatched agents distrusted correct in-process results under the prior "Denied as
-#: written..." lead and burned extra tool calls cross-verifying them against direct
-#: `Read` calls (see `cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-banner-
-#: still-reads-as-agent-instruction.md` Item 2, and this dispatch's own exit-interview
-#: quotes). "Answered in-process" now leads; "not a refusal" plus the no-subprocess-ran
-#: fact still follow immediately -- that fact stays load-bearing, second, never dropped.
-#: Shares its opening clause with `_footer`'s full paragraph below by design -- the two
-#: forms state the identical fact, one at length and one tersely, never two different
-#: claims. Deliberately worded to NOT be a substring of that full paragraph (diverges
-#: right after the shared "[Answered in-process, not a refusal: " clause -- the marker
-#: continues "no subprocess ran...", the paragraph continues "your command was
-#: recognized...") -- `test_guard_inprocess_search.py::test_first_call_carries_full_
-#: paragraph` and `test_alternative_liveness_gate.py::test_fire_guard_isolates_from_a_
-#: pre_existing_session_latch` both assert the marker is ABSENT from a first-call
-#: (full-paragraph) reason, which would spuriously pass if the marker just happened to
-#: be a prefix of the paragraph; the divergence is real content, not an artifact of
-#: case alone.
+#: paragraph has already fired this session -- register contract (docs/wiki/
+#: guard-messaging.md § Register): one fact, stated once, declaratively. Not a
+#: substring of `_footer`'s full paragraph below -- the paragraph adds
+#: "recognized as a search", which this marker omits; that divergence is what
+#: `test_guard_inprocess_search.py::test_first_call_carries_full_paragraph` and
+#: `test_alternative_liveness_gate.py::test_fire_guard_isolates_from_a_pre_
+#: existing_session_latch` key off to assert the marker is absent from a
+#: first-call (full-paragraph) reason.
 _ANSWERED_MARKER = (
-    "[Answered in-process, not a refusal: no subprocess ran, results below "
-    "are this engine's own answer to your command. Keep using grep as normal.]"
+    "[Answered in-process: no subprocess spawned, results below are this "
+    "engine's own answer.]"
 )
 
 
@@ -261,14 +245,17 @@ def _mark_footer_seen(cwd: str, sid: str) -> None:
 
 def _footer(cwd: str) -> str:
     """Built at call time, never hoisted to a module constant (see
-    `_DISABLE_ENV_VAR`'s own comment) -- and, as of 2026-07-30 (H3, M13/M19
-    review finding), routes its mention of `_DISABLE_ENV_VAR` through
-    `operator_override_note` rather than hand-writing "To turn this off:
-    export %s=1" inline. The prior hand-written form was itself an instance
-    of the exact anti-pattern `test_no_handwritten_override_clauses.py`
-    exists to close package-wide -- caught only once that gate's AST walk
-    learned to fold a `%`-formatted module-level constant, which this
-    site's own construction was.
+    `_DISABLE_ENV_VAR`'s own comment).
+
+    As of 2026-08-11 (docs/plans/2026-08-11-guard-messages-point-to-docs-
+    never-name.md, C3): renders NO override pointer at all. This path
+    accompanies a SUCCESSFULLY ANSWERED search, not a denial -- a
+    non-denial has no bypass to offer, so `operator_override_note` is not
+    called here (it previously named `_DISABLE_ENV_VAR`, mirroring every
+    other guard's advisory; that mirroring was the defect this chunk
+    corrects, not a shape worth softening). An operator who wants to
+    disable in-process answering still finds `_DISABLE_ENV_VAR` documented
+    in `docs/reference/guard-override-keys.md`.
 
     As of 2026-08-01 (AC5): latches the EXPLANATORY PARAGRAPH, not the whole
     footer -- see the module docstring's "Session latch on the explanatory
@@ -283,18 +270,15 @@ def _footer(cwd: str) -> str:
         except Exception:
             pass
 
-    # Leads with the identical contract statement `_ANSWERED_MARKER` carries
-    # standalone (see that constant's own comment) -- "Search already answered
-    # in-process, no subprocess spawned" is a PINNED substring
-    # (test_guard_inprocess_search.py, test_alternative_liveness_gate.py); keep it
+    # States the identical fact `_ANSWERED_MARKER` carries standalone (see that
+    # constant's own comment), plus "recognized as a search" -- a PINNED
+    # substring (test_guard_inprocess_search.py, test_alternative_liveness_gate.py)
+    # that discriminates this full paragraph from the latched marker; keep it
     # verbatim if this paragraph is edited again.
     full = (
-        "[Answered in-process, not a refusal: your command was recognized as a "
-        "search and the results below are this engine's own answer to it, not "
-        "real command output -- no subprocess was spawned for it. Search already "
-        "answered in-process, no subprocess spawned. Keep using grep as normal -- "
-        "matching commands are auto-answered this way. %s]"
-    ) % operator_override_note(_DISABLE_ENV_VAR)
+        "[Answered in-process: your command was recognized as a search, no "
+        "subprocess spawned, results below are this engine's own answer.]"
+    )
 
     if sid:
         try:

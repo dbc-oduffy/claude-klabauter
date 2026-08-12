@@ -84,6 +84,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.subagent_zero_tool_use":          "common_dir",
     "hooks.subagent_zero_tool_use_surface":  "common_dir",
     "hooks.subagent_zero_tool_use_resolve":  "common_dir",
+    # hooks.subagent_fabrication_check — common_dir: repo_root is used to
+    # resolve the worktree root for a live `git status --porcelain` probe on
+    # the agent's declared target path(s), same reason subagent_zero_tool_use_resolve
+    # is common_dir (needs git_common_dir to locate its per-session store).
+    "hooks.subagent_fabrication_check":      "common_dir",
     # Working-tree, keyed on show-toplevel (per-worktree)
     "coverage.gate":                         "show_top",
     # cutover.gate — common_dir (NOT show_top like coverage.gate above): cutover
@@ -321,6 +326,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handoff.archive_transition. Spec: cross-repo/inbox/2026-08-04-market-
     # intelligence-em-baton-terminal-state-not-cleared-programmatically.md.
     "handoff.reconcile_close_terminal":      "common_dir",
+    # handoff.backfill_claim_stamp — reconstructs a missing claim stamp
+    # (claimed_at/claimed_by) from caller-supplied, git-verified evidence.
+    # Derives worktree via main_worktree_root(common_dir), same class as
+    # handoff.reconcile_close_terminal directly above. Spec:
+    # docs/plans/2026-08-11-a-claim-stamp-backfill-verb-and-the-lega.md.
+    "handoff.backfill_claim_stamp":          "common_dir",
     # handoff.repoint_origin — sanctioned hook-exempt writer for the
     # origin_handoff provenance edge; repoints/nulls origin_handoff on an
     # existing state/handoffs/*.md stub. Derives worktree via

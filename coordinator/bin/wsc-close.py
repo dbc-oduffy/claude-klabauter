@@ -217,6 +217,14 @@ def _cmd_tail_args(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"wsc-close.py tail-args: {exc}", file=sys.stderr)
         return 1
+    if not tokens:
+        print(
+            "wsc-close.py tail-args: no optional flag groups were supplied, so there "
+            "is no argv to emit — this is the ordinary case, not a failure (empty "
+            "stdout at exit 0 is the documented contract; see apply.py's `.argv` "
+            "token doc).",
+            file=sys.stderr,
+        )
     for token in tokens:
         print(token)
     return 0

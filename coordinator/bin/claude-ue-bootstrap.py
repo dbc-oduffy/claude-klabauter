@@ -82,9 +82,41 @@ def bootstrap(project_dir: str) -> tuple[bool, str]:
     return True, f"merged UE override into {settings_path}"
 
 
+_USAGE = (
+    "usage: claude-ue-bootstrap [PROJECT_DIR]\n"
+    "\n"
+    "Write (or merge) the UE plugin-override block into PROJECT_DIR/.claude/\n"
+    "settings.json. PROJECT_DIR must already exist; defaults to the current\n"
+    "directory when omitted. Surfaced as the remediation for doctor probe P-9."
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+
+    # Negative-spec: this CLI writes a directory tree at whatever it is handed,
+    # so an unvalidated argv is a filesystem-pollution bug, not a usability one.
+    # `--help` used to be taken as a project path: it created ./--help/.claude/
+    # settings.json in the caller's cwd and exited 0 reporting success (observed
+    # 2026-08-12, inside claude-klabauter). Reject flag-shaped and non-existent
+    # targets rather than materialising them.
+    if any(a in ("-h", "--help") for a in argv):
+        print(_USAGE)
+        return 0
+    if len(argv) > 1:
+        print(f"ERROR: expected at most one project directory, got {len(argv)}: "
+              f"{argv}\n\n{_USAGE}", file=sys.stderr)
+        return 2
+    if argv and argv[0].startswith("-"):
+        print(f"ERROR: unknown option {argv[0]!r}\n\n{_USAGE}", file=sys.stderr)
+        return 2
+
     project_dir = argv[0] if argv else str(Path.cwd())
+    if argv and not Path(project_dir).is_dir():
+        # Only guard an explicitly-named target. The no-argv default is cwd,
+        # which exists by construction.
+        print(f"ERROR: not a directory: {project_dir}\n\n{_USAGE}", file=sys.stderr)
+        return 2
     try:
         _changed, message = bootstrap(project_dir)
     except (OSError, json.JSONDecodeError) as exc:

@@ -15,7 +15,7 @@ banner-still-reads-as-agent-instruction.md` Item 2: dispatched reviewers in a
 sibling repo met real, correct search results under what read as a bare
 denial and had to infer, from position in the text alone, whether "denied"
 meant refused or substituted. `guard_inprocess_search.py` now states the
-distinction explicitly ("Answered in-process, not a refusal") and composes
+distinction explicitly ("Answered in-process") and composes
 `footer + rendered` so that statement leads the composed results, not just
 the paragraph in isolation. Modeled on `test_operator_only_disclaimer_leads.py`'s
 posture in the same package: a claim that the text says the right thing, or sits
@@ -87,7 +87,7 @@ class TestSessionLatchDedupesTheParagraph:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-1")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
         reason = _deny_reason(result)
-        assert "Search already answered in-process" in reason
+        assert "recognized as a search" in reason
         assert guard._ANSWERED_MARKER not in reason
 
     def test_second_call_same_session_carries_marker_not_paragraph(self, repo, monkeypatch):
@@ -95,7 +95,7 @@ class TestSessionLatchDedupesTheParagraph:
         guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
         reason = _deny_reason(second)
-        assert "Search already answered in-process" not in reason
+        assert "recognized as a search" not in reason
         assert guard._ANSWERED_MARKER in reason
 
     def test_every_answered_call_carries_an_already_handled_signal(self, repo, monkeypatch):
@@ -108,7 +108,7 @@ class TestSessionLatchDedupesTheParagraph:
             _deny_reason(guard.check(_payload("grep %d foo.py" % i, str(repo))))
             for i in range(4)
         ]
-        assert "Search already answered in-process" in reasons[0]
+        assert "recognized as a search" in reasons[0]
         for reason in reasons[1:]:
             assert guard._ANSWERED_MARKER in reason
 
@@ -119,7 +119,7 @@ class TestSessionLatchDedupesTheParagraph:
         guard.check(_payload("grep foo bar.py", str(repo)))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-B")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "Search already answered in-process" in _deny_reason(result)
+        assert "recognized as a search" in _deny_reason(result)
 
     def test_marker_survives_spawn_per_call_reinvocation(self, repo, monkeypatch):
         """The latch is disk state, not an in-process cache -- calling
@@ -135,8 +135,8 @@ class TestFailsOpenTowardTheFullParagraph:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         first = guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        assert "Search already answered in-process" in _deny_reason(first)
-        assert "Search already answered in-process" in _deny_reason(second)
+        assert "recognized as a search" in _deny_reason(first)
+        assert "recognized as a search" in _deny_reason(second)
 
     def test_current_session_id_sentinel_file_is_never_consulted(self, repo, monkeypatch, tmp_path):
         """SC-DR-009: `.current-session-id` is documented last-writer-wins
@@ -146,15 +146,15 @@ class TestFailsOpenTowardTheFullParagraph:
         (repo / ".current-session-id").write_text("some-other-session", encoding="utf-8")
         first = guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        assert "Search already answered in-process" in _deny_reason(first)
-        assert "Search already answered in-process" in _deny_reason(second)
+        assert "recognized as a search" in _deny_reason(first)
+        assert "recognized as a search" in _deny_reason(second)
 
     def test_unresolvable_repo_root_fails_open_to_full_paragraph(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-noroot")
         no_git_dir = tmp_path / "not-a-repo"
         no_git_dir.mkdir()
         result = guard.check(_payload("grep foo bar.py", str(no_git_dir)))
-        assert "Search already answered in-process" in _deny_reason(result)
+        assert "recognized as a search" in _deny_reason(result)
 
     def test_unwritable_marker_parent_fails_open_never_raises(self, repo, monkeypatch):
         """A latch WRITE failure (read-only `.git`, MinGit permissions) must
@@ -166,7 +166,7 @@ class TestFailsOpenTowardTheFullParagraph:
             lambda cwd, sid: (_ for _ in ()).throw(OSError("simulated unwritable path")),
         )
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "Search already answered in-process" in _deny_reason(result)
+        assert "recognized as a search" in _deny_reason(result)
 
     def test_stat_failure_on_read_fails_open_to_full_paragraph(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-statfail")
@@ -177,7 +177,7 @@ class TestFailsOpenTowardTheFullParagraph:
 
         monkeypatch.setattr(guard, "_latch_path", lambda cwd, sid: _BoomPath())
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "Search already answered in-process" in _deny_reason(result)
+        assert "recognized as a search" in _deny_reason(result)
 
 
 class TestHelpers:
@@ -239,7 +239,7 @@ class TestDenyVersusSubstitutionContract:
         result = guard.check(_payload("grep foo bar.py", str(repo)))
         reason = _deny_reason(result)
         assert "ANSWERED-TEXT" in reason
-        assert reason.index("not a refusal") < reason.index("ANSWERED-TEXT"), (
+        assert reason.index("in-process") < reason.index("ANSWERED-TEXT"), (
             "the deny-versus-substitution contract must precede the "
             "rendered results -- got: %r" % reason
         )
@@ -248,8 +248,8 @@ class TestDenyVersusSubstitutionContract:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full-text")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
         reason = _deny_reason(result)
-        assert "Answered in-process, not a refusal" in reason
-        assert "not a refusal" in reason
+        assert "Answered in-process" in reason
+        assert "recognized as a search" in reason
         assert not reason.startswith("[Denied")
 
     def test_latched_marker_states_the_contract_independently(self):
@@ -259,8 +259,8 @@ class TestDenyVersusSubstitutionContract:
         session. Fails against the old bare `"[answered in-process]"` marker,
         which named the mechanism but not the deny-versus-substitution
         contract at all."""
-        assert "Answered in-process, not a refusal" in guard._ANSWERED_MARKER
-        assert "not a refusal" in guard._ANSWERED_MARKER
+        assert "Answered in-process" in guard._ANSWERED_MARKER
+        assert "no subprocess spawned" in guard._ANSWERED_MARKER
         assert guard._ANSWERED_MARKER != "[answered in-process]"
         assert not guard._ANSWERED_MARKER.startswith("[Denied")
 
@@ -275,7 +275,7 @@ class TestDenyVersusSubstitutionContract:
         reason = _deny_reason(second)
         assert guard._ANSWERED_MARKER in reason
         assert "ANSWERED-TEXT" in reason
-        assert reason.index("not a refusal") < reason.index("ANSWERED-TEXT"), (
+        assert reason.index("in-process") < reason.index("ANSWERED-TEXT"), (
             "the latched marker's contract must precede the rendered "
             "results -- got: %r" % reason
         )

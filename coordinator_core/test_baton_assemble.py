@@ -7044,3 +7044,54 @@ class TestSuccessorSideFanInDownEdge:
         # And every leg gets its up-edge, so the down-edge count matches N-1.
         d6s = [d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"]
         assert len(d6s) == len(emitted) + 1
+
+    def test_three_leg_fan_in_threads_every_additional_predecessor(self, tmp_path, monkeypatch):
+        """Review: coordinator:code-reviewer (0d090196) -- every other test in
+        this class exercises exactly one additional predecessor, so the
+        per-entry `--additional-predecessor=` loop at d1 is only ever proven
+        at N=1; a regression that emitted just the first leg, or that
+        collapsed the list into a single flag, would still pass the whole
+        suite. This seeds THREE held claims (one primary, two additional) and
+        asserts both additional legs individually reach d1's args, each
+        normalized repo-relative, in the earliest-claimed-first order
+        `_resolve_held_handoff_for_session` documents.
+        """
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-21-third-alpha.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-primary-1a2b47"],
+        )
+        extra_first = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-19-first-extra.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-extra-1a2b51"],
+        )
+        extra_second = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-second-extra.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-extra-1a2b52"],
+        )
+        self._seed_handoff_claim(tmp_path, "sid-threeway", primary.name, "2026-07-20T09:00:00Z")
+        self._seed_handoff_claim(tmp_path, "sid-threeway", extra_first.name, "2026-07-20T10:00:00Z")
+        self._seed_handoff_claim(tmp_path, "sid-threeway", extra_second.name, "2026-07-20T11:00:00Z")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-threeway")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["id"] == "d1")
+        additional_flags = [
+            a.split("=", 1)[1] for a in d1["args"]
+            if a.startswith("--additional-predecessor=")
+        ]
+
+        expected_first = extra_first.relative_to(tmp_path).as_posix()
+        expected_second = extra_second.relative_to(tmp_path).as_posix()
+
+        # Both legs present -- neither dropped nor collapsed into one flag.
+        assert additional_flags.count(expected_first) == 1
+        assert additional_flags.count(expected_second) == 1
+        assert len(additional_flags) == 2
+
+        # Stable, earliest-claimed-first order -- not incidental list order.
+        assert additional_flags == [expected_first, expected_second]
+
+        # Every leg's up-edge is stamped too -- N=3 keeps the up/down parity.
+        d6s = [d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"]
+        assert len(d6s) == len(additional_flags) + 1

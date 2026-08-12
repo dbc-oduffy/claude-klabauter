@@ -36,9 +36,21 @@ def _state(root: str) -> str:
 @pytest.fixture
 def stub_peers(monkeypatch):
     """Default happy-path stubs for all four composed peers; each test overrides
-    only what it needs."""
+    only what it needs.
+
+    ``coordinator_claude_klabauter_root_with_class`` is stubbed to the
+    RESOLUTION_LIVE_WORKING_TREE class by default — the overwhelming common
+    case, and the class this module must remain byte-identical for. The
+    class-less ``coordinator_claude_klabauter_root`` is stubbed too since ``print_map``
+    still calls it directly.
+    """
     monkeypatch.setattr(sr, "coordinator_doe_root", lambda: _DOE)
     monkeypatch.setattr(sr, "coordinator_claude_klabauter_root", lambda: _CLAUDE_KLABAUTER)
+    monkeypatch.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: (_CLAUDE_KLABAUTER, "live-working-tree"),
+    )
     monkeypatch.setattr(sr, "classify", lambda _p: Subject.DOCTRINE)
     monkeypatch.setattr(sr, "is_meta_repo", lambda _g: False)
     monkeypatch.setattr(sr, "_resolve_git_root", lambda: _SIBLING)
@@ -72,9 +84,62 @@ def test_rule2_engine_fail_loud_when_claude_klabauter_unresolvable(stub_peers):
     def _boom():
         raise RuntimeError("cannot resolve CLAUDE_KLABAUTER_ROOT")
 
-    stub_peers.setattr(sr, "coordinator_claude_klabauter_root", _boom)
+    stub_peers.setattr(sr, "coordinator_claude_klabauter_root_with_class", _boom)
     with pytest.raises(sr.StateRootError):
         sr.coordinator_state_root(central=True, subject="engine")
+
+
+# --- Published-mirror guard: RESOLUTION_RESOLVED_ENGINE must never become
+# --- a state parent (the defect under test in this dispatch) ---------------
+
+
+def test_rule2_engine_fail_loud_when_resolved_engine_is_published_mirror(stub_peers):
+    _PUBLISHED_MIRROR = "/repos/claude-klabauter"
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: (_PUBLISHED_MIRROR, "resolved-engine"),
+    )
+    with pytest.raises(sr.StateRootError) as exc:
+        sr.coordinator_state_root(central=True, subject="engine")
+    assert _PUBLISHED_MIRROR in str(exc.value)
+    # Must NOT silently return a path under the published mirror.
+    assert not str(exc.value).startswith(_state(_PUBLISHED_MIRROR))
+
+
+def test_rule4_fail_loud_when_resolved_engine_is_published_mirror(stub_peers):
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: ("/repos/claude-klabauter", "resolved-engine"),
+    )
+    with pytest.raises(sr.StateRootError):
+        sr.coordinator_state_root(central=True)
+
+
+def test_rule5_meta_repo_fail_loud_when_resolved_engine_is_published_mirror(
+    stub_peers,
+):
+    stub_peers.setattr(sr, "_resolve_git_root", lambda: "/home/user/.claude")
+    stub_peers.setattr(sr, "is_meta_repo", lambda _g: True)
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: ("/repos/claude-klabauter", "resolved-engine"),
+    )
+    with pytest.raises(sr.StateRootError):
+        sr.coordinator_state_root()
+
+
+def test_rule2_engine_live_working_tree_unchanged(stub_peers):
+    # RESOLUTION_LIVE_WORKING_TREE (the default stub_peers class) resolves
+    # exactly as before -- no regression for the common case.
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: (_CLAUDE_KLABAUTER, "live-working-tree"),
+    )
+    assert sr.coordinator_state_root(central=True, subject="engine") == _state(_CLAUDE_KLABAUTER)
 
 
 # --- Rule 3: central + artifact -> classifier-routed -----------------------
@@ -109,6 +174,11 @@ def test_rule3_uses_real_classifier_end_to_end(stub_peers):
     stub_peers.undo()
     stub_peers.setattr(sr, "coordinator_doe_root", lambda: _DOE)
     stub_peers.setattr(sr, "coordinator_claude_klabauter_root", lambda: _CLAUDE_KLABAUTER)
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: (_CLAUDE_KLABAUTER, "live-working-tree"),
+    )
     # A coordinator_core path classifies engine -> claude-klabauter state.
     assert (
         sr.coordinator_state_root(central=True, artifact="coordinator_core/ipc.py")

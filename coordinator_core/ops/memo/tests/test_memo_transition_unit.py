@@ -40,6 +40,11 @@ from coordinator_core.ops.memo_transition import (
     _resolve,
 )
 
+try:
+    from coordinator_core.ops.memo_transition import _close
+except ImportError:
+    _close = None  # not yet implemented — TestClose reproduces the gap
+
 
 def _fm_dict(memo_path) -> dict:
     """Read back a memo's frontmatter as a parsed dict, for cross-field round-trip."""
@@ -1451,3 +1456,105 @@ created: 2026-06-01
         fm = _fm_dict(memo)
         assert fm["status"] == "actioned"
         assert "superseded_by" not in fm
+
+
+# ---------------------------------------------------------------------------
+# (5) close verb — DEFECT 1 repro (2026-08-12 inbox-blitz-dominant-verify-wave-b,
+# item 6§3 / audit item 3): the memo status enum
+# (coordinator_core/contract/emit_memo_schema.py) permits "closed", but no verb
+# in this module ever writes it — claim/action/release/resolve top out at
+# "actioned"/"superseded". The `closed`-only-counts-as-closed downstream gate
+# can therefore never be satisfied via any sanctioned mutation path.
+#
+# _close (actioned -> closed) makes the state reachable: it requires status ==
+# "actioned", and stamps closed_at + action_taken_at (backfilled from --at when
+# absent) + preserves decision, satisfying
+# schema_validate._memo_cf_closed_requires_companions.
+# ---------------------------------------------------------------------------
+
+class TestClose:
+    """_close: actioned -> closed, the previously-unreachable terminal state."""
+
+    _ACTIONED_FIXTURE = """\
+---
+kind: fyi
+status: actioned
+picked_up_at: '2026-01-02T10:00:00Z'
+picked_up_by: session-test
+decision: accepted
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def _setup_memo(self, tmp_path: Path) -> str:
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(self._ACTIONED_FIXTURE, encoding="utf-8")
+        _git_track(repo, memo)
+        return str(memo)
+
+    def test_close_verb_exists(self):
+        """Reproduces DEFECT 1: prior to the fix, _close does not exist at all."""
+        assert _close is not None, (
+            "coordinator_core.ops.memo_transition._close is missing — the memo "
+            "status enum's 'closed' value has no writer, so the closed state "
+            "is unreachable via any sanctioned op (DEFECT 1)."
+        )
+
+    def test_close_actioned_memo_reaches_closed(self, tmp_path):
+        if _close is None:
+            pytest.skip("_close not implemented yet — see test_close_verb_exists")
+        memo = self._setup_memo(tmp_path)
+        result = _close(memo, "2026-08-12T00:00:00Z")
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["status"] == "closed"
+        assert fm["closed_at"] == "2026-08-12T00:00:00Z"
+        assert fm["action_taken_at"] == "2026-08-12T00:00:00Z"
+        assert fm["decision"] == "accepted"
+
+    def test_close_passes_cross_field_validation(self, tmp_path):
+        """The written frontmatter must satisfy
+        schema_validate._memo_cf_closed_requires_companions (closed_at,
+        action_taken_at, decision all present when status=closed)."""
+        if _close is None:
+            pytest.skip("_close not implemented yet — see test_close_verb_exists")
+        memo = self._setup_memo(tmp_path)
+        _close(memo, "2026-08-12T00:00:00Z")
+        fm = _fm_dict(memo)
+        errors = validate_memo_cross_fields(fm)
+        assert errors == []
+
+    def test_close_non_actioned_memo_fails_loud(self, tmp_path):
+        if _close is None:
+            pytest.skip("_close not implemented yet — see test_close_verb_exists")
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(
+            "---\nkind: fyi\nstatus: open\nfrom: sender-session\n"
+            "summary: A test memo.\ncreated: 2026-06-01\n---\n",
+            encoding="utf-8",
+        )
+        _git_track(repo, memo)
+        result = _close(str(memo), "2026-08-12T00:00:00Z")
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+
+    def test_close_idempotent_when_already_closed(self, tmp_path):
+        if _close is None:
+            pytest.skip("_close not implemented yet — see test_close_verb_exists")
+        memo = self._setup_memo(tmp_path)
+        first = _close(memo, "2026-08-12T00:00:00Z")
+        assert first["exit_code"] == 0
+        second = _close(memo, "2026-08-12T00:00:00Z")
+        assert second["exit_code"] == 0
+        assert second["applied"] is False

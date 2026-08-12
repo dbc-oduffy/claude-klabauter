@@ -243,7 +243,12 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
 
         if not os.path.isfile(settings):
             print(
-                f"MISSING: {settings} — run ~/.claude/bin/claude-ue-bootstrap.sh {dir_path}",
+                # The bash entrypoint this used to name (~/.claude/bin/
+                # claude-ue-bootstrap.sh) was retired by the C5 native port and
+                # is absent on every machine — the remediation was unrunnable as
+                # written. Name the surviving CLI, which resolves through the
+                # settings-home forwarder like every other coordinator CLI.
+                f"MISSING: {settings} — run claude-ue-bootstrap {dir_path}",
                 file=sys.stderr,
             )
             fail = True

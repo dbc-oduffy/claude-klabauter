@@ -4418,7 +4418,7 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
     # _build_scoped_to before composing) — these flags feed both the
     # completeness gate AND the delivered value.
     parser.add_argument("--scoped-to-artifact", metavar="ARTIFACT", default=None, help="scoped_to.artifact — the file/contract/schema/subsystem this decision governs")
-    parser.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha)")
+    parser.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
     parser.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="scoped_to.sha — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")
     parser.add_argument("--scoped-to-seam", metavar="SEAM", default=None, help="scoped_to.seam — the boundary/interface this decision applies at")
     return parser
@@ -4491,6 +4491,14 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
           the complete triple is required: --scoped-to-artifact, exactly one
           of --scoped-to-version/--scoped-to-sha, and --scoped-to-seam —
           else the send fails loud before anything is written.
+
+          If the artifact you're pinning is only reachable through a publish
+          mirror (so no sha of it exists in the receiver's own clone),
+          --scoped-to-version is the correct arm, not --scoped-to-sha: sha
+          verification only fires when --scoped-to-sha is supplied
+          (`_verify_scoped_to_sha_resolvable`), so a version pin never
+          triggers a receiver-clone lookup that a mirror-only artifact could
+          never satisfy.
 
         Run `cross-repo-memo --list-receivers` to see valid --to targets.
     """)
@@ -4622,7 +4630,7 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     # send time, else the send fails loud. Mirrors
     # coordinator/bin/lib/schema.js:2290 — see _scoped_to_errors.
     draft_p.add_argument("--scoped-to-artifact", metavar="ARTIFACT", default=None, help="scoped_to.artifact — the file/contract/schema/subsystem this decision governs")
-    draft_p.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha)")
+    draft_p.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
     draft_p.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="scoped_to.sha — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")
     draft_p.add_argument("--scoped-to-seam", metavar="SEAM", default=None, help="scoped_to.seam — the boundary/interface this decision applies at")
 

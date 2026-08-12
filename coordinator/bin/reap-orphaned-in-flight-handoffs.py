@@ -537,13 +537,20 @@ def _shipped_orphan_sha(
     return _best_shipped_sha(candidates, sha_ct)
 
 
-def _run_archive_stamp_cli(args: list) -> bool:
+def _run_archive_stamp_cli(args: list) -> tuple:
     """Invoke bin/archive-stamp-cli (a Python trampoline into claude-klabauter
     coordinator_core.archive_stamp) as a subprocess, mirroring the retired
     _run_node's success-boolean contract (returncode == 0). Preserves the
     same success/failure handling the reaper previously got from
     _run_node(handoff-transition.js / stamp-shipped-in.js) — only the
     process target changed (no node spawn, no bash re-exec).
+
+    Returns ``(ok, diagnostic)``. The diagnostic is empty on success and
+    otherwise carries the exit code plus the child's stderr/stdout tail, so a
+    caller can name WHY a verb failed. Negative-spec: callers must not collapse
+    this back to a bare boolean — an unnamed "error releasing <path>; skipping"
+    line is indistinguishable from a released-nothing run and sent two sibling
+    repos chasing the wrong hypothesis (2026-08-12 cross-repo memos).
     """
     try:
         from cc_invoke import child_env  # noqa: E402 (path injected at module top)
@@ -552,9 +559,12 @@ def _run_archive_stamp_cli(args: list) -> bool:
             [sys.executable, _ARCHIVE_STAMP_CLI] + args,
             capture_output=True, text=True, check=False, env=child_env(), **no_console_creationflags(),
         )
-    except OSError:
-        return False
-    return result.returncode == 0
+    except OSError as exc:
+        return False, f"could not spawn {_ARCHIVE_STAMP_CLI}: {exc}"
+    if result.returncode == 0:
+        return True, ""
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "(no output)"
+    return False, f"{os.path.basename(_ARCHIVE_STAMP_CLI)} {args[0]} exit {result.returncode}: {detail}"
 
 
 def _has_live_children_exit_code(handoff_path: str) -> int:
@@ -596,8 +606,9 @@ def main(argv: Optional[list] = None) -> int:
     dry_run = args.dry_run
 
     # ---------------------------------------------------------------------
-    # Repo root / handoffs dir resolution — direct git rev-parse (same
-    # primitive the bash oracle wrapped): this reaper needs to run from a
+    # Repo root / handoffs dir resolution — via repo_identity's checked
+    # resolver (memoized, gates on session identity; not a direct git
+    # rev-parse call in this module): this reaper needs to run from a
     # cold session-init-hook shell like sweep-shipped-handoffs.sh, and scans
     # state/handoffs/ directly (session-claim liveness is itself keyed off
     # this same git root's .git/coordinator-sessions/).
@@ -641,6 +652,7 @@ def main(argv: Optional[list] = None) -> int:
     would_skip_by_guard = 0
     skipped_archived_duplicate = 0
     would_skip_archived_duplicate = 0
+    failed_release = 0
 
     # -----------------------------------------------------------------
     # Pass 1 (read-only): walk the corpus once, evaluate every gate up to
@@ -785,7 +797,12 @@ def main(argv: Optional[list] = None) -> int:
                 would_reclaim += 1
                 continue
 
-            _run_archive_stamp_cli(["stamp-shipped-in", f, "--sha", sha])
+            _stamp_ok, _stamp_diag = _run_archive_stamp_cli(["stamp-shipped-in", f, "--sha", sha])
+            if not _stamp_ok:
+                print(
+                    f"reap-orphaned-in-flight-handoffs.py: WARNING {f} — {_stamp_diag}",
+                    file=sys.stderr,
+                )
 
             # ASSERT shipped_in landed (mirrors
             # promote-shipped-in-flight-stubs.py:168-176) — UNCONDITIONAL,
@@ -801,7 +818,8 @@ def main(argv: Optional[list] = None) -> int:
                     file=sys.stderr,
                 )
             else:
-                if _run_archive_stamp_cli(["ship-handoff", f]):
+                ship_ok, ship_diag = _run_archive_stamp_cli(["ship-handoff", f])
+                if ship_ok:
                     print(
                         f"reap-orphaned-in-flight-handoffs.py: reclaimed (shipped): {f} "
                         f"(dead holder {claim_holder} ran a terminal ceremony; shipped_in {sha[:8]})"
@@ -815,7 +833,7 @@ def main(argv: Optional[list] = None) -> int:
                     # + status:consumed/deployment_state:in_flight forever
                     # (invisible to /pickup, never retried).
                     print(
-                        f"reap-orphaned-in-flight-handoffs.py: error shipping {f}; "
+                        f"reap-orphaned-in-flight-handoffs.py: error shipping {f} — {ship_diag}; "
                         "falling through to claim-release",
                         file=sys.stderr,
                     )
@@ -862,16 +880,21 @@ def main(argv: Optional[list] = None) -> int:
             f"claim released by crash-orphan reaper — holder {claim_holder} died without "
             "resolving; returned to pool"
         )
-        if _run_archive_stamp_cli(
+        release_ok, release_diag = _run_archive_stamp_cli(
             ["unconsume-handoff", f, note, "--reaped-from", claim_holder]
-        ):
+        )
+        if release_ok:
             print(
                 f"reap-orphaned-in-flight-handoffs.py: released {f} "
                 f"(dead holder: {claim_holder} — returned to pool)"
             )
             released += 1
         else:
-            print(f"reap-orphaned-in-flight-handoffs.py: error releasing {f}; skipping", file=sys.stderr)
+            print(
+                f"reap-orphaned-in-flight-handoffs.py: error releasing {f} — {release_diag}; skipping",
+                file=sys.stderr,
+            )
+            failed_release += 1
 
     # -----------------------------------------------------------------
     # Summary
@@ -883,8 +906,18 @@ def main(argv: Optional[list] = None) -> int:
             print(f"{would_release} orphaned in_flight handoffs would be released (dry-run)")
         if would_reclaim > 0:
             print(f"{would_reclaim} orphaned in_flight handoffs would be reclaimed as shipped (dry-run)")
-    elif released == 0:
+    elif released == 0 and failed_release == 0:
         print("no orphaned in_flight handoffs released")
+    elif released == 0 and failed_release > 0:
+        print(
+            f"0 orphaned in_flight handoffs released — {failed_release} release attempt(s) FAILED "
+            "(see error lines above)"
+        )
+    elif failed_release > 0:
+        print(
+            f"{released} orphaned in_flight claims released (returned to pool); "
+            f"{failed_release} release attempt(s) FAILED (see error lines above)"
+        )
     else:
         print(f"{released} orphaned in_flight claims released (returned to pool)")
 

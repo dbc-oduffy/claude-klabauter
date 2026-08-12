@@ -328,7 +328,11 @@ class TestSchemaValidationWarn:
         text = _advisory_text(result)
         assert "[frontmatter-schema warning]" in text
         assert "handoff:" in text
-        assert "COORDINATOR_SCHEMA_STRICT=1" in text
+        # AC9 remediation (chunk C9, agent-facing-messages-not-apology plan):
+        # the override key itself is no longer named in agent-facing text --
+        # only that an override route exists, routed to the doc.
+        assert "COORDINATOR_SCHEMA_STRICT" not in text
+        assert "docs/reference/guard-override-keys.md" in text
 
     def test_strict_mode_yields_none_not_mine(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")

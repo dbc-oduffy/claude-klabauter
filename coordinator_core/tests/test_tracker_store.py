@@ -2679,3 +2679,58 @@ class TestAppendEventsAC2AtomicityNegativeControl:
             append_events(batch, repo_root=repo)
 
         assert shard_path(repo).read_bytes() == before
+
+    @pytest.mark.skipif(
+        not _MSVCRT_AVAILABLE, reason="Windows msvcrt.locking backend not reachable on this host"
+    )
+    def test_msvcrt_lock_is_mandatory_blocks_a_second_fds_read(self, tmp_path, monkeypatch):
+        """Backend-differentiated regression, per the plan's C9 note: Windows'
+        msvcrt.locking is a MANDATORY byte-range lock — unlike POSIX flock,
+        it also blocks a second, independently-opened fd's plain read() into
+        the locked byte range, not just a competing locking() call. This is
+        the actual risk `test_atomicity_on_windows_msvcrt_backend` (above) was
+        meant to distinguish from the POSIX leg but only checked backend
+        identity for; this test exercises the mandatory-lock behavior itself
+        by opening a second fd to the same lock sidecar mid-``_mutate`` and
+        asserting the read is blocked while the msvcrt lock is held.
+        """
+        from coordinator_core import locked_write as lw
+
+        repo = _make_git_repo(tmp_path / "repo")
+        append_event(_event("evt-seed", "2026-01-01T00:00:00Z"), repo_root=repo)
+
+        target = shard_path(repo)
+        lock_path = lw._lock_dir(repo) / f"{lw._lock_key(target)}.lock"
+
+        _orig_locked_rmw = ts.locked_rmw
+        observed: dict = {}
+
+        def _probing_locked_rmw(target, mutate, **kwargs):
+            def _probing_mutate(old_text):
+                # The outer locked_rmw call already holds the msvcrt lock on
+                # lock_path's byte 0 at this point. Open a second, independent
+                # fd to the same lock file and try to read byte 0 from it —
+                # a mandatory lock blocks this; an advisory one would not.
+                second_fd = os.open(str(lock_path), os.O_RDONLY)
+                try:
+                    os.lseek(second_fd, 0, os.SEEK_SET)
+                    try:
+                        os.read(second_fd, 1)
+                        observed["blocked"] = False
+                    except OSError:
+                        observed["blocked"] = True
+                finally:
+                    os.close(second_fd)
+                return mutate(old_text)
+
+            return _orig_locked_rmw(target, _probing_mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _probing_locked_rmw)
+
+        batch = [_event("evt-msvcrt-mandatory-1", "2026-01-01T00:08:00Z")]
+        append_events(batch, repo_root=repo)
+
+        assert observed.get("blocked") is True, (
+            "a second fd's read() into the locked byte range was not blocked — "
+            "msvcrt.locking should be a mandatory lock, not merely advisory"
+        )

@@ -318,6 +318,23 @@ _RESOLVED_DELIVERABLE_LEDGER: Optional[List[Dict[str, Any]]] = None
 _DELIVERABLE_LEDGER_RESOLVED: bool = False
 _LEDGER_RESOLVED_FOR_ROOT: Optional[Path] = None
 
+# Review: coordinatorcode-reviewer s1-ledger-seam Finding 2 — _ledger_artifact_readable
+# used to re-read+re-parse the whole YAML artifact on every call, unmemoized, inside
+# dual_read_deliverable_ids_for_corpus's per-record loop (N reads for N artifacts) while
+# load_deliverable_ledger right beside it was already memoized. Memoized here, reset
+# alongside the ledger memo below so tests don't see cross-test staleness.
+_LEDGER_ARTIFACT_READABLE_RESOLVED: bool = False
+_LEDGER_ARTIFACT_READABLE_CACHE: Optional[bool] = None
+_LEDGER_ARTIFACT_READABLE_FOR_ROOT: Optional[Path] = None
+
+# Review: coordinatorcode-reviewer s1-ledger-seam Finding 1 — dual_read_deliverable_id
+# never called validate_deliverable_ledger_rows, so a malformed row (non-string
+# deliverable_id/evidence_source) was silently skipped by _ledger_evidence_index's own
+# `continue` and surfaced as "genuine_miss" rather than the loud failure
+# DeliverableLedgerValidationError exists for. Validated once per process/ledger-load
+# (not once per artifact) via this flag, reset alongside the ledger memo.
+_DELIVERABLE_LEDGER_VALIDATED: bool = False
+
 
 def _reset_deliverable_ledger_cache() -> None:
     """Test-only helper: clear the ``load_deliverable_ledger`` process-scope memo.
@@ -326,11 +343,21 @@ def _reset_deliverable_ledger_cache() -> None:
     the two loaders read the same file but are two independent read-models with
     independent memoization state, per sedge-06's D2 (same module, but the ledger
     is its own responsibility, not a mutation of the fork-equivalence one).
+
+    Also clears `_ledger_artifact_readable`'s own memo and the dual-read seam's
+    once-per-load validation flag (both additive to this same close-out-ledger
+    responsibility) — see their definitions for why each exists.
     """
     global _RESOLVED_DELIVERABLE_LEDGER, _DELIVERABLE_LEDGER_RESOLVED, _LEDGER_RESOLVED_FOR_ROOT
+    global _LEDGER_ARTIFACT_READABLE_RESOLVED, _LEDGER_ARTIFACT_READABLE_CACHE, _LEDGER_ARTIFACT_READABLE_FOR_ROOT
+    global _DELIVERABLE_LEDGER_VALIDATED
     _RESOLVED_DELIVERABLE_LEDGER = None
     _DELIVERABLE_LEDGER_RESOLVED = False
     _LEDGER_RESOLVED_FOR_ROOT = None
+    _LEDGER_ARTIFACT_READABLE_RESOLVED = False
+    _LEDGER_ARTIFACT_READABLE_CACHE = None
+    _LEDGER_ARTIFACT_READABLE_FOR_ROOT = None
+    _DELIVERABLE_LEDGER_VALIDATED = False
 
 
 def load_deliverable_ledger(worktree_root: Path) -> List[Dict[str, Any]]:
@@ -486,7 +513,7 @@ def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
 
         closed_at = row.get("closed_at")
         if status == "open":
-            if closed_at not in (None,):
+            if closed_at is not None:
                 raise DeliverableLedgerValidationError(
                     f"deliverable ledger row {row_ref} has status 'open' but a "
                     f"non-null 'closed_at' ({closed_at!r}); 'closed_at' must be "
@@ -657,9 +684,11 @@ def seed_deliverable_ledger_rows(worktree_root: Path) -> List[Dict[str, Any]]:
         # classify_artifact / _is_immutable_path_local are consulted for
         # completeness (every corpus entry is a real, classified artifact)
         # but neither gates whether this function reads or seeds it — see
-        # this function's own "Zero writes" docstring section.
-        classify_artifact(path)
-        _is_immutable_path_local(path)
+        # this function's own "Zero writes" docstring section. Both return
+        # values are deliberately discarded (Review: coordinatorcode-reviewer
+        # s1-ledger-seam Finding 3 — no gating on either call, by design).
+        _ = classify_artifact(path)
+        _ = _is_immutable_path_local(path)
 
         raw_id = extract_fm_field(path, "deliverable_id")
         if not raw_id:
@@ -748,16 +777,60 @@ def _ledger_artifact_readable(worktree_root: Path) -> bool:
     ABSENT/malformed degradation collapses every failure mode to `[]`, with no
     signal left over for a caller that needs to tell "empty ledger" apart from
     "broken ledger file" (research corpus §6's `errors` arm requirement).
+
+    Memoized per-process, keyed to the first `worktree_root` seen — mirrors
+    `load_deliverable_ledger`'s own memo (Review: coordinatorcode-reviewer
+    s1-ledger-seam Finding 2 — this used to re-read+re-parse the artifact on
+    every call inside `dual_read_deliverable_ids_for_corpus`'s per-record
+    loop). Cleared by `_reset_deliverable_ledger_cache`, same as that memo.
     """
+    global _LEDGER_ARTIFACT_READABLE_RESOLVED, _LEDGER_ARTIFACT_READABLE_CACHE
+    global _LEDGER_ARTIFACT_READABLE_FOR_ROOT
+
+    if _LEDGER_ARTIFACT_READABLE_RESOLVED:
+        assert _LEDGER_ARTIFACT_READABLE_CACHE is not None
+        if (
+            _LEDGER_ARTIFACT_READABLE_FOR_ROOT is not None
+            and worktree_root != _LEDGER_ARTIFACT_READABLE_FOR_ROOT
+        ):
+            logger.warning(
+                "deliverable_equivalence: _ledger_artifact_readable called with "
+                "worktree_root %s but the memoized result was resolved for %s; "
+                "returning the memoized result for the FIRST root, not this one. "
+                "Call _reset_deliverable_ledger_cache() between roots if this is a "
+                "test iterating multiple worktrees.",
+                worktree_root,
+                _LEDGER_ARTIFACT_READABLE_FOR_ROOT,
+            )
+        return _LEDGER_ARTIFACT_READABLE_CACHE
+
     artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
     if not artifact_path.is_file():
-        return True
-    try:
-        content = artifact_path.read_text(encoding="utf-8")
-        parsed = yaml.safe_load(content)
-    except Exception:  # noqa: BLE001 — any read/parse failure means "unreadable"
-        return False
-    return isinstance(parsed, dict)
+        result = True
+    else:
+        try:
+            content = artifact_path.read_text(encoding="utf-8")
+            parsed = yaml.safe_load(content)
+        except Exception as exc:  # noqa: BLE001 — any read/parse failure means "unreadable"
+            # Review: coordinatorcode-reviewer s1-ledger-seam Finding 4 — this used to
+            # swallow the exception with no logging, unlike load_deliverable_ledger's
+            # identical failure mode which logs a WARNING. This False becomes the
+            # caller-visible "ledger_unreadable" outcome, so log at the same level
+            # with the same exception detail to keep that outcome diagnosable.
+            logger.warning(
+                "deliverable_equivalence: could not read/parse %s for the ledger "
+                "readability check: %s; treating the ledger as unreadable.",
+                artifact_path,
+                exc,
+            )
+            result = False
+        else:
+            result = isinstance(parsed, dict)
+
+    _LEDGER_ARTIFACT_READABLE_CACHE = result
+    _LEDGER_ARTIFACT_READABLE_RESOLVED = True
+    _LEDGER_ARTIFACT_READABLE_FOR_ROOT = worktree_root
+    return result
 
 
 def _ledger_evidence_index(ledger_rows: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -767,6 +840,13 @@ def _ledger_evidence_index(ledger_rows: List[Dict[str, Any]]) -> Dict[str, str]:
     skipped — this index is a read convenience only, not a second validator;
     `validate_deliverable_ledger_rows` is the loud-failure path for a malformed
     row, called separately by whichever caller needs that guarantee.
+
+    Accepted, documented edge case (Review: coordinatorcode-reviewer
+    s1-ledger-seam Finding 6): if two rows' `evidence_source` name the same
+    artifact path, the LATER row in `ledger_rows` wins — silently, with a
+    logged WARNING. Not reachable from `seed_deliverable_ledger_rows` today
+    (it groups by canonical id before emitting, so no overlap within one seed
+    call), but a later stub that appends rows without dedup could hit it.
     """
     index: Dict[str, str] = {}
     for row in ledger_rows:
@@ -776,8 +856,17 @@ def _ledger_evidence_index(ledger_rows: List[Dict[str, Any]]) -> Dict[str, str]:
             continue
         for raw_path in evidence_source.split(";"):
             path = raw_path.strip()
-            if path:
-                index[path] = deliverable_id
+            if not path:
+                continue
+            if path in index and index[path] != deliverable_id:
+                logger.warning(
+                    "deliverable_equivalence: duplicate evidence_source path %r "
+                    "across ledger rows — overwriting %r with %r (last row wins).",
+                    path,
+                    index[path],
+                    deliverable_id,
+                )
+            index[path] = deliverable_id
     return index
 
 
@@ -842,6 +931,22 @@ def dual_read_deliverable_id(
         return fm_canonical, _LEDGER_OUTCOME_UNREADABLE
 
     ledger_rows = load_deliverable_ledger(worktree_root)
+
+    # Review: coordinatorcode-reviewer s1-ledger-seam Finding 1 — this seam used to
+    # consume ledger_rows straight through _ledger_evidence_index, which silently
+    # `continue`s past any row with a non-string deliverable_id/evidence_source. A
+    # malformed-but-present row then surfaced as "genuine_miss" — exactly the
+    # "reads as no verdict was ever asserted, rather than broken encoding" failure
+    # DeliverableLedgerValidationError's own docstring says this design exists to
+    # prevent. Validated once per process/ledger-load (not once per artifact, so
+    # this stays O(1) per corpus walk rather than O(corpus size)) via the module
+    # flag below; load_deliverable_ledger itself stays non-validating per its own
+    # documented contract.
+    global _DELIVERABLE_LEDGER_VALIDATED
+    if not _DELIVERABLE_LEDGER_VALIDATED:
+        validate_deliverable_ledger_rows(ledger_rows)
+        _DELIVERABLE_LEDGER_VALIDATED = True
+
     evidence_index = _ledger_evidence_index(ledger_rows)
 
     rel_path = os.path.relpath(artifact_path, str(worktree_root)).replace(os.sep, "/")

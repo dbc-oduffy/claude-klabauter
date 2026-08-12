@@ -520,6 +520,133 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 # chunk, see the shim's own negative-spec docstring).
 
 
+# --- C2 (2026-08-12 dual-boot plan): rung-1.5 pointer must not pre-empt the
+# DR-132 gate. Four tests THROUGH THE WRAPPER
+# (`coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class`) — the
+# `_short_circuit_fixture`/`_skew_fixture` cases above exercise the wrapper
+# too, but none of them pin a session root that the gate confirms is NOT a
+# working repo while `.claude-klabauter-root` is ALSO present, which is exactly the
+# defect's reproduction shape (see plan § Problem).
+#
+# Spec backlink: docs/plans/2026-08-12-arm-the-klabauter-dual-boot-the-wrapper.md
+
+
+@pytest.fixture
+def _dual_boot_fixture(tmp_path, monkeypatch):
+    """A synthetic registry with `.claude-klabauter-root` present (rung 1.5 pointer)
+    AND `repos.claude_klabauter` registered — the dual-boot shape. Session
+    root is confirmed NOT a working repo, so the gate (once reached) picks
+    the published engine. `write_registry` controls whether the session
+    root is registered as a working repo, the axis AC1 vs AC2 keys off."""
+    settings_home = tmp_path / "settings-home"
+    ml_dir = settings_home / "machine-local"
+    ml_dir.mkdir(parents=True)
+
+    live_dir = tmp_path / "live"
+    live_dir.mkdir()
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_dir), encoding="utf-8")
+
+    published_dir = tmp_path / "published-klabauter"
+    (published_dir / "coordinator_core").mkdir(parents=True)
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    def _write_registry(*, session_is_working_repo: bool) -> None:
+        lines = [
+            "[repos]",
+            f'claude_klabauter = "{published_dir.as_posix()}"',
+            "",
+            "[engine.working_repos]",
+        ]
+        if session_is_working_repo:
+            lines.append(f'claude_klabauter = "{session_dir.as_posix()}"')
+        else:
+            other_dir = tmp_path / "other-working-repo"
+            other_dir.mkdir(exist_ok=True)
+            lines.append(f'other = "{other_dir.as_posix()}"')
+        lines.append("")
+        (ml_dir / "registry.local.toml").write_text("\n".join(lines), encoding="utf-8")
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_dir))
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "1")
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+
+    return SimpleNamespace(
+        ml_dir=ml_dir,
+        write_registry=_write_registry,
+        live_dir=live_dir,
+        published_dir=published_dir,
+        session_dir=session_dir,
+    )
+
+
+def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_fixture):
+    """AC1: `.claude-klabauter-root` present + `repos.claude_klabauter` registered +
+    session root a CONFIRMED non-working repo -> the wrapper must match the
+    shim's own answer, `(<published>, 'resolved-engine')`. RED before C1:
+    today the wrapper returns the pointer's live tree instead, because rung
+    1.5 fires before the gate is ever consulted."""
+    fx = _dual_boot_fixture
+    fx.write_registry(session_is_working_repo=False)
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert root == str(fx.published_dir)
+    assert cls == "resolved-engine"
+
+
+def test_dual_boot_live_tree_wins_when_session_is_working_repo(_dual_boot_fixture):
+    """AC2: same dual-boot registration, but the session root IS registered
+    under `engine.working_repos.*` -> the gate confirms it a working repo
+    and the wrapper must still return the live tree."""
+    fx = _dual_boot_fixture
+    fx.write_registry(session_is_working_repo=True)
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert root == str(fx.live_dir)
+    assert cls == "live-working-tree"
+
+
+def test_dual_boot_claude_klabauter_root_env_wins_unconditionally(_dual_boot_fixture, monkeypatch):
+    """AC3: `CLAUDE_KLABAUTER_ROOT` env (rung 1) continues to win unconditionally,
+    unchanged, regardless of the dual-boot registration below it."""
+    fx = _dual_boot_fixture
+    fx.write_registry(session_is_working_repo=False)
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/explicit/claude-klabauter/root")
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert root == "/explicit/claude-klabauter/root"
+    assert cls == "live-working-tree"
+
+
+def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, monkeypatch):
+    """AC4: with `repos.claude_klabauter` ABSENT, behaviour is byte-identical
+    to today — the rung-1.5 pointer fast path still fires and resolves the
+    live tree, zero subprocess. Must stay GREEN both before and after C1."""
+    settings_home = tmp_path / "settings-home"
+    ml_dir = settings_home / "machine-local"
+    ml_dir.mkdir(parents=True)
+
+    live_dir = tmp_path / "live"
+    live_dir.mkdir()
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_dir), encoding="utf-8")
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert root == str(live_dir)
+    assert cls == "live-working-tree"
+
+
 def _make_bin_dir_with_sentinel(root, extra_targets=()):
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
@@ -582,17 +709,62 @@ def _exec_fallback_fixture(tmp_path, monkeypatch):
     )
 
 
-def test_exec_cli_falls_back_to_live_tree_for_published_only_gap(_exec_fallback_fixture, capsys):
+class _ExecSentinel(Exception):
+    """Raised by the monkeypatched exec primitives below instead of letting
+    `exec_cli` actually replace the pytest process — see
+    `test_exec_cli_falls_back_to_live_tree_for_published_only_gap`'s
+    docstring-equivalent comment for why (chosen approach 3 of the dispatch
+    brief's preference order: options 1/2 were not available — C4b's
+    per-target fallback decision is not separable from the exec call inside
+    `exec_cli` itself, and a subprocess boundary would need a real script
+    entrypoint this module doesn't have)."""
+
+
+def test_exec_cli_falls_back_to_live_tree_for_published_only_gap(
+    _exec_fallback_fixture, capsys, monkeypatch
+):
+    """Proves the C4b fallback DECISION (resolved-engine + published-only
+    gap -> live tree) without ever letting `exec_cli` reach a real exec.
+
+    Bug: this test used to call `shim.exec_cli(...)` bare and assert
+    `SystemExit(0)`. Under the `resolved-engine` class, `exec_cli` takes the
+    published->live fallback, finds `live-only-cli` in the live tree, and
+    ACTUALLY EXECS it (`os.execv` on POSIX, `_run_target_in_process` on
+    Windows) — replacing the pytest process. Under `-n` that crashes the
+    xdist worker; standalone it silently truncates the run with no summary
+    line and a shell-visible EXIT=0, a false green.
+
+    Fix: monkeypatch both exec primitives to record their target argument
+    and raise `_ExecSentinel` instead of exec'ing — `exec_cli` never
+    completes a real process replacement, but the recorded target proves
+    which root it resolved to.
+    """
     fx = _exec_fallback_fixture
     (fx.live_bin / "live-only-cli").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
     if os.name == "nt":
         (fx.live_bin / "live-only-cli.exe").write_bytes(b"")
 
     shim = _load_shim_for_test()
-    with pytest.raises(SystemExit) as excinfo:
+    recorded: dict = {}
+
+    def _fake_execv(executable, argv):
+        recorded["executable"] = executable
+        recorded["target_path"] = argv[1]
+        raise _ExecSentinel()
+
+    def _fake_run_target_in_process(target_path, argv, claude_klabauter_root):
+        recorded["target_path"] = target_path
+        recorded["claude_klabauter_root"] = claude_klabauter_root
+        raise _ExecSentinel()
+
+    monkeypatch.setattr(shim.os, "execv", _fake_execv)
+    monkeypatch.setattr(shim, "_run_target_in_process", _fake_run_target_in_process)
+
+    with pytest.raises(_ExecSentinel):
         shim.exec_cli("live-only-cli", [])
 
-    assert excinfo.value.code == 0
+    expected_target = str(fx.live_bin / "live-only-cli")
+    assert _normalize_root(recorded["target_path"]) == _normalize_root(expected_target)
 
 
 def test_exec_cli_target_absent_from_both_roots_exits_127_naming_both(_exec_fallback_fixture, capsys):

@@ -86,23 +86,39 @@ _VIOLATION_RE = re.compile(
     r'|\bCOORDINATOR_[A-Z0-9_]+="[^"\n]*"'
 )
 
-#: The one fact `operator_override_note` exists to attach to every such
-#: mention -- see that function's own docstring. A `NAME=1` instruction with
-#: this phrase NOT within a short lookahead window is exactly the dead-end
-#: shape this gate exists to catch: the env var is named, but the reader has
-#: no way to know it cannot be set from inside the session.
+#: The one fact `operator_override_note` used to attach to every such
+#: mention. A `NAME=1` instruction with this phrase NOT within a short
+#: lookahead window is the dead-end shape this gate exists to catch: the
+#: env var is named, but the reader has no way to know it cannot be set
+#: from inside the session.
 #:
-#: 2026-08-11 reshape: `operator_override_note` itself no longer renders a
+#: 2026-08-11 reshape #1: `operator_override_note` stopped rendering a
 #: `NAME=1`/`NAME="..."` assignment at all (see that function's own
 #: docstring, NEGATIVE SPEC 4, and
 #: `test_operator_override_note_no_assignment_form.py`), so this marker/
-#: lookahead machinery now only matters for a HAND-WRITTEN `NAME=1` site that
-#: bypasses the builder entirely (e.g. `_deny_reason_mutex`'s own known,
-#: out-of-scope `%s=1`, see `_KNOWN_UNFIXED_SITES` below) -- a real-world hit
-#: through this gate is now doubly wrong (an assignment AND unrouted through
-#: the builder), not merely missing a marker. Updated to the builder's
-#: current wording so a future hand-written site that copies the builder's
-#: OLD marker text is still caught as unattached.
+#: lookahead machinery already only mattered for a HAND-WRITTEN `NAME=1`
+#: site that bypasses the builder entirely (e.g. `_deny_reason_mutex`'s own
+#: known, out-of-scope `%s=1`, see `_KNOWN_UNFIXED_SITES` below).
+#:
+#: 2026-08-11 reshape #2, SAME DAY (docs/plans/2026-08-11-guard-messages-
+#: point-to-docs-never-name.md) -- `operator_override_note` stopped naming
+#: the env var at all (any form, assigned or bare) and this phrase is no
+#: longer present in ITS output either; the pre-launch-only fact it names
+#: moved wholly into the reference doc
+#: (`test_operator_override_note_retains_affordances.py`'s
+#: `test_reference_doc_states_the_env_var_is_not_reachable_in_session`
+#: pins it there now). This marker/lookahead machinery is UNCHANGED in
+#: purpose by reshape #2 -- it still exists solely to catch a HAND-WRITTEN
+#: `NAME=1` site outside the builder (`_KNOWN_UNFIXED_SITES`) -- and is kept
+#: verbatim rather than retired, since that class of violation is
+#: independent of what the builder itself renders. `TestDetectorSelfTest.
+#: test_negative_note_produced_by_the_real_builder_is_not_caught` below is
+#: the one control this reshape DOES change: it is updated to assert
+#: `_VIOLATION_RE` finds no match in the builder's output directly (AC-5:
+#: non-vacuous), rather than relying on `assert_render_carries_
+#: reachability_constraint`'s own zero-iteration loop to "pass" the same
+#: way whether or not the builder still carried anything this gate cares
+#: about.
 _REACHABILITY_MARKER = "unsettable from inside this session"
 
 #: How far past the end of a `NAME=1` match the reachability marker may
@@ -282,7 +298,17 @@ class TestDetectorSelfTest:
             assert_render_carries_reachability_constraint(rendered, context="synthetic")
 
     def test_negative_note_produced_by_the_real_builder_is_not_caught(self) -> None:
+        """2026-08-11 second reshape (see `_REACHABILITY_MARKER`'s own
+        comment above): the builder no longer names an env var at all, so
+        `_VIOLATION_RE` can never match its output -- asserted directly,
+        not merely inferred from `assert_render_carries_reachability_
+        constraint` passing over zero matches (AC-5: a gate that passes
+        vacuously proves nothing)."""
         text = "Something happened.\n\n" + operator_override_note("COORDINATOR_OVERRIDE_FOO")
+        assert not _VIOLATION_RE.search(text), (
+            "the real builder's output unexpectedly matched the hand-written-assignment "
+            "violation pattern: %r" % text
+        )
         assert_render_carries_reachability_constraint(text, context="synthetic")
 
     def test_negative_bare_var_name_with_no_equals_one_is_not_caught(self) -> None:

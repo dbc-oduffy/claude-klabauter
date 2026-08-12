@@ -134,6 +134,21 @@ _LOCUS_RE = re.compile(r"\b[\w./-]+\.(?:py|js|ts|md|json|yaml|yml|toml|sh)\b")
 # common and legitimate, and requiring a slash would gut recall on those.
 _URL_RE = re.compile(r"https?://\S+")
 
+# PAIRS-per-locus bound (audit: state/audits/2026-08-12-supersession-candidate-
+# pair-blowup.md). `_discriminating_locus_cutoff` bounds how many MEMOS may
+# cite a locus, but the candidate set is PAIRWISE — a locus sitting exactly at
+# that cutoff (14 memos on the 264-memo corpus measured 2026-08-12) still
+# contributes up to 14*13/2 = 91 pairs, and the memo-count cutoff has no way
+# to see that quadratic term. This bound caps the number of PAIRS any single
+# locus may contribute to `same-sender-same-locus`, independent of corpus
+# size: a locus that is "discriminating enough" by the memo-frequency test is
+# not, by that fact, entitled to an unbounded fan-out of pairs. Held at the
+# same floor as `_MAX_MEMOS_PER_DISCRIMINATING_LOCUS` deliberately — pairing
+# more densely doesn't make a locus a *stronger* signal, so there's no
+# corpus-scaling argument for raising it the way `_DISCRIMINATING_LOCUS_SHARE`
+# raises the memo-frequency cutoff on large corpora.
+_MAX_PAIRS_PER_LOCUS = 3
+
 # A locus cited across many memos carries no thread signal — `SKILL.md`,
 # `CLAUDE.md`, `__init__.py` and friends are ubiquitous surfaces, not shared
 # subject matter, and pairing on them manufactures supersession candidates an
@@ -628,6 +643,13 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
                 ),
             })
 
+    # Per-locus pair budget (see `_MAX_PAIRS_PER_LOCUS`) — a locus that has
+    # already spent its budget stops contributing NEW pairs, but a pair with
+    # at least one locus still under budget is still emitted (reported against
+    # only the loci that actually admitted it, so `shared_loci` never lists a
+    # locus that didn't count toward this pair's admission).
+    locus_pair_count: dict[str, int] = {}
+
     for i, newer in enumerate(records):
         for older in records[i + 1:]:
             newer_rec, older_rec = newer, older
@@ -649,10 +671,18 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
             pair = frozenset({newer_rec["path"].name, older_rec["path"].name})
             if pair in seen_pairs:
                 continue
-            shared = newer_rec["loci"] & older_rec["loci"] & discriminating
+            shared_all = newer_rec["loci"] & older_rec["loci"] & discriminating
+            if not shared_all:
+                continue
+            shared = sorted(
+                locus for locus in shared_all
+                if locus_pair_count.get(locus, 0) < _MAX_PAIRS_PER_LOCUS
+            )
             if not shared:
                 continue
             seen_pairs.add(pair)
+            for locus in shared:
+                locus_pair_count[locus] = locus_pair_count.get(locus, 0) + 1
             candidates.append({
                 "kind": "supersession_candidate",
                 "id": f"{newer_rec['path'].name} -> {older_rec['path'].name}",

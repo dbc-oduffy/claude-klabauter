@@ -2728,8 +2728,16 @@ class TestMultiChunkSubjectSeparators:
             ("C1, C2a: land two chunks, comma-space form", {"C1", "C2a"}),
             ("C1+C2a: land two chunks, plus-joined", {"C1", "C2a"}),
             ("C1/C2a: land two chunks, slash-joined", {"C1", "C2a"}),
+            (
+                "C1 + C2a: land two chunks, space-padded plus-joined",
+                {"C1", "C2a"},
+            ),
+            (
+                "C1 / C2a: land two chunks, space-padded slash-joined",
+                {"C1", "C2a"},
+            ),
         ],
-        ids=["comma", "comma-space", "plus", "slash"],
+        ids=["comma", "comma-space", "plus", "slash", "plus-spaced", "slash-spaced"],
     )
     def test_each_corpus_separator_registers_every_named_id(
         self, tmp_path, subject, expected_ids
@@ -2742,6 +2750,20 @@ class TestMultiChunkSubjectSeparators:
         query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
         assert query_ok is True
         assert expected_ids <= committed
+
+    def test_space_padded_plus_joined_subject_reproduces_cross_repo_memo(self):
+        """Live repro from the 2026-08-06 cross-repo memo (`close-out-and-
+        stamp-compound-subject-space-separator`): `C4 + C3b + C5a: ...` and
+        `C4b + C5b: ...` must NOT fail the whole leading-token match --
+        `_CHUNK_SUBJECT_RE`'s `,` branch already tolerates surrounding
+        whitespace; `+`/`/` did not, so the ENTIRE match failed (zero ids,
+        not a partial miss)."""
+        assert coas._CHUNK_SUBJECT_RE.match(
+            "C4 + C3b + C5a: delete the misc bucket, surface the drop set, repair the tests"
+        ) is not None
+        assert coas._CHUNK_SUBJECT_RE.match(
+            "C4b + C5b: minting policy becomes a threshold we derive"
+        ) is not None
 
     def test_multi_chunk_subject_with_partial_spine_coverage_reports_only_the_gap(
         self, tmp_path
@@ -6340,3 +6362,82 @@ class TestRepoIdentityGateWiring:
 
         assert exit_code == coas.EXIT_OK
         assert result["gates"]["repo_identity"]["verdict"] == _REPO_IDENTITY_UNRESOLVED
+
+
+# ===========================================================================
+# join-provenance non-chunk-commit inflation (cross-repo memo, 2026-08-08,
+# `trailer-confirmed-and-reporting-shape-accepted`, §2): `matched_commit_
+# count`/`JOIN_PROVENANCE_JOINED` used to count ANY commit in range carrying
+# a `Deliverable-Id:` trailer equal to the plan's own -- including plan-
+# authoring/ceremony commits with a non-chunk-shaped subject that never
+# registers a chunk-id via `_extract_chunk_ids` at all. Ceremony commits
+# always trailer, so a plan with genuinely zero shipped chunks (and zero
+# chunk-shaped commits in range) still reported `joined` off its own
+# authoring commits -- reading as a substantive, evidence-backed "nothing
+# shipped" verdict rather than the true "no chunk-shaped evidence exists"
+# state.
+# ===========================================================================
+
+
+class TestJoinProvenanceExcludesNonChunkCommits:
+    def test_trailered_non_chunk_shaped_commit_alone_does_not_report_joined(
+        self, tmp_path
+    ):
+        """A commit whose subject registers zero chunk-ids (a plain
+        ceremony/authoring subject, e.g. `docs: author the plan`) but
+        carries a matching `Deliverable-Id:` trailer must NOT, by itself,
+        satisfy `matched_commit_count`/`JOIN_PROVENANCE_JOINED` -- the join
+        stat is a fact about attributable CHUNK evidence, not about any
+        trailered commit in range."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root,
+            "plan.md",
+            "docs: author the plan document",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
+            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
+        )
+        assert query_ok is True
+        assert committed == set()
+        assert committed_shas == {}
+        assert join_stats.matched_commit_count == 0
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert shipped is False
+        assert join_provenance != coas.JOIN_PROVENANCE_JOINED
+
+    def test_trailered_chunk_shaped_commit_still_reports_joined(self, tmp_path):
+        """Sibling pin: a genuine chunk-shaped, trailered commit still
+        reports `matched_commit_count > 0`/`JOIN_PROVENANCE_JOINED` -- this
+        fix narrows matched-commit counting to chunk-shaped commits only,
+        it does not touch the real join path."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root,
+            "plan.md",
+            "C1: land chunk one",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
+            root, _DLV_VALID_SPINE
+        )
+        assert query_ok is True
+        assert "C1" in committed
+        assert join_stats.matched_commit_count >= 1
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert join_provenance == coas.JOIN_PROVENANCE_JOINED

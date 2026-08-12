@@ -247,6 +247,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.subagent_zero_tool_use_surface": OpClass.COMPUTE_ONLY,
     "hooks.subagent_zero_tool_use_resolve": OpClass.COMPUTE_ONLY,
     "hooks.subagent_arrival_check": OpClass.COMPUTE_ONLY,
+    "hooks.subagent_fabrication_check": OpClass.COMPUTE_ONLY,
     # hooks.context_pressure_precompact — MUTATING, same bookkeeping class as the four
     # above (its write target is tempdir rather than .git/coordinator-sessions/, which
     # changes the location, not the class).

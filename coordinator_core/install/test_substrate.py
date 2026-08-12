@@ -33,6 +33,8 @@ from coordinator_core.install.substrate import (
     _AGENT_PS1_FORWARDER_MARKER,
     _LEGACY_CMD_MARKER,
     _PS1_POLICY_STATUS_FILENAME,
+    _RAW_CMDLINE_TARGETS,
+    _agent_cmd_raw_cmdline_block,
     _agent_ps1_dest_name,
     _c10a_steps,
     _emit_and_verify_ps1_forwarders,
@@ -376,6 +378,110 @@ def test_agent_cmd_forwarder_falls_through_on_missing_bake_with_spaces(tmp_path)
 
     assert proc.returncode == 0, proc.stderr
     assert _FORWARDER_TOKEN in proc.stdout
+
+
+# --- _RAW_CMDLINE_TARGETS coverage -- scoped-git-commit / cross-repo-memo ----
+#
+# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# after-a-newline.md: `%*`-populated batch parameters silently lose everything
+# after a literal newline in an argument (a `.cmd` forwarder parse-time
+# defect, not a caller-side quoting bug -- see `_agent_cmd_raw_cmdline_block`'s
+# docstring). `coordinator-write-review-trail.py` was the only target opted
+# into the `%CMDCMDLINE%`-capture workaround; `scoped-git-commit` and
+# `cross-repo-memo` take multi-line arguments as a matter of course (commit
+# messages, memo bodies) and were silently NOT covered.
+#
+# These first two tests are platform-portable: they assert on the GENERATED
+# TEXT of the raw-cmdline capture block and the full `.cmd` body, not on
+# runtime behavior -- the actual newline-survives-the-round-trip behavior is
+# only observable by running a real `.cmd` file under `cmd.exe`, which this
+# environment (macOS) cannot do. The third test below is the Windows-only
+# runtime proof and is skipped here; it is included for the Windows box that
+# runs this suite.
+
+
+def test_raw_cmdline_targets_cover_scoped_git_commit_and_cross_repo_memo():
+    assert "scoped-git-commit" in _RAW_CMDLINE_TARGETS
+    assert "cross-repo-memo" in _RAW_CMDLINE_TARGETS
+    # Regression guard (AC1): the original sole member must still be present.
+    assert "coordinator-write-review-trail.py" in _RAW_CMDLINE_TARGETS
+
+
+@pytest.mark.parametrize("target", ["scoped-git-commit", "cross-repo-memo"])
+def test_agent_cmd_raw_cmdline_block_emits_capture_for_newly_covered_targets(target):
+    block = _agent_cmd_raw_cmdline_block(target)
+
+    assert block != ""
+    assert "_LAUNCHER_RAW_CMDLINE_FILE" in block
+    assert "%CMDCMDLINE%" in block
+
+
+def test_agent_cmd_raw_cmdline_block_stays_empty_for_uncovered_target():
+    # AC1: a target NOT in `_RAW_CMDLINE_TARGETS` renders byte-identical to
+    # before this mechanism existed -- the gate must stay closed by default.
+    assert _agent_cmd_raw_cmdline_block("some-other-cli") == ""
+
+
+@pytest.mark.parametrize("target", ["scoped-git-commit", "cross-repo-memo"])
+def test_agent_cmd_forwarder_body_includes_raw_cmdline_capture_for_target(
+    tmp_path, target
+):
+    dst = tmp_path / f"{target}.cmd"
+    _write_agent_cmd_forwarder(
+        target, dst, False, python3_cmd_resolved_bin="", target=target
+    )
+    body = dst.read_text(encoding="utf-8")
+
+    assert "_LAUNCHER_RAW_CMDLINE_FILE" in body
+    assert "%CMDCMDLINE%" in body
+
+
+def test_agent_cmd_forwarder_body_omits_raw_cmdline_capture_for_uncovered_target(
+    tmp_path,
+):
+    dst = tmp_path / "some-other-cli.cmd"
+    _write_agent_cmd_forwarder(
+        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
+    )
+    body = dst.read_text(encoding="utf-8")
+
+    assert "_LAUNCHER_RAW_CMDLINE_FILE" not in body
+    assert "%CMDCMDLINE%" not in body
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
+def test_agent_cmd_forwarder_raw_cmdline_survives_embedded_newline(tmp_path):
+    # Windows-only runtime proof: the Unix-half stub below reads the raw
+    # cmdline capture file the .cmd half writes and echoes it back, so a
+    # newline embedded in the invocation (the exact defect this mechanism
+    # exists to work around) surviving into that echoed text is direct
+    # evidence the capture mechanism engages for a newly-covered target, not
+    # just that the generated text contains the right tokens.
+    name = "scoped-git-commit"
+    unix_half = tmp_path / name
+    unix_half.write_text(
+        "import os\n"
+        "p = os.environ.get('_LAUNCHER_RAW_CMDLINE_FILE', '')\n"
+        "print('CAPTURED:' + (open(p, encoding='utf-8').read() if p else ''))\n",
+        encoding="utf-8",
+    )
+    cmd_half = tmp_path / f"{name}.cmd"
+    _write_agent_cmd_forwarder(
+        name, cmd_half, False, python3_cmd_resolved_bin=sys.executable, target=name
+    )
+
+    proc = subprocess.run(
+        [str(cmd_half), "line-one^\nline-two"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        shell=False,
+        **no_console_creationflags(),
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "CAPTURED:" in proc.stdout
+    assert "line-two" in proc.stdout
 
 
 # --- _refuse_machine_mutation / _windows_health_steps guard -----------------

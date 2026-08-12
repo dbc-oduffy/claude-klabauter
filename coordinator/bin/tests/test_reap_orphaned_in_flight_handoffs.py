@@ -272,16 +272,37 @@ def _fake_stamp_shipped_in(path, sha):
 
 def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=None):
     """Wire the module's resolver-trampoline functions to fakes so main()
-    runs without touching CLAUDE_KLABAUTER_ROOT or spawning any non-git subprocess."""
+    runs without touching CLAUDE_KLABAUTER_ROOT or spawning any non-git subprocess.
+
+    `resolve_checked_repo_root` (module-scope import from repo_identity,
+    wired in by bc0d2bde5 "C3: sweep and reap scripts ride the checked
+    resolver") is main()'s ONLY source of repo_root -- it is called with
+    explicit_root=None and resolves off cwd's real git toplevel, not off
+    this `repo_root` kwarg. Prior to bc0d2bde5 that kwarg was sufficient on
+    its own; post-C3 it must also be wired onto the checked-resolver stand-in
+    below, or main() silently walks pytest's OWN cwd (this repo's real
+    state/handoffs/) instead of the tmp_path fixture tree, mis-attributing
+    every handoff in this corpus as claim-holder-less.
+    """
     session_live_map = session_live_map or {}
     claim_holder_map = claim_holder_map or {}
 
+    mod.resolve_checked_repo_root = lambda explicit_root=None: (
+        repo_root,
+        {
+            "verdict": "EXPLICIT",
+            "session_root": None,
+            "resolved_root": repo_root,
+            "sid": None,
+            "message": "test stand-in: resolve_checked_repo_root patched by _patch_common",
+        },
+    )
     mod._resolve_session_live = lambda: (lambda holder, cwd=None: session_live_map.get(holder, False))
     mod._resolve_canonical_kind = lambda: (lambda kind: kind)
     mod._claim_holder = lambda path, repo_root="": claim_holder_map.get(path, "")
     mod._handoff_id_archived_twin = lambda handoff_id, repo_root: ""
     mod._has_live_children_exit_code = lambda path: 1  # childless -> proceed to release
-    mod._run_archive_stamp_cli = lambda args: True
+    mod._run_archive_stamp_cli = lambda args: (True, "")
 
 
 def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path):
@@ -343,7 +364,7 @@ def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path):
         stamped.append(args)
         if args[0] == "stamp-shipped-in":
             _fake_stamp_shipped_in(args[1], args[3])
-        return True
+        return True, ""
 
     mod._run_archive_stamp_cli = fake_stamp
 
@@ -418,7 +439,7 @@ def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path):
     mod.subprocess.run = fake_run
 
     stamped = []
-    mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or True)
+    mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or (True, ""))
 
     rc = mod.main([])
     assert rc == 0

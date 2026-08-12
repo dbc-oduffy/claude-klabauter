@@ -67,6 +67,8 @@ ROADMAP_VALID = {
     "deliverable_status": None,
     "roll_up": None,
     "critical_path": None,
+    "scan_incomplete": False,
+    "scan_errors": [],
 }
 
 

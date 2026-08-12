@@ -452,17 +452,52 @@ def operator_override_note(
     enforce, and it is checked by construction in
     ``test_operator_override_note_no_assignment_form.py`` -- do not weaken
     that test to re-permit a ``KEY=`` substring in this function's output.
+
+    RESHAPED AGAIN 2026-08-11 (same day, second reshape; PM-raised,
+    break-class; docs/plans/2026-08-11-guard-messages-point-to-docs-never-
+    name.md) -- the reshape immediately above still NAMED the override key,
+    bare, in every firing. Twelve rounds of rewording this function had not
+    closed the "reads as injection" defect (the specimen: dispatched agents
+    across the fleet reading "blocked, but here's a key you could try" as an
+    offer to bypass the guard) because every round kept the SAME SPEECH ACT
+    -- a denial that still names a bypass mechanism at the moment of denial.
+    This reshape changes the speech act instead of the wording: the render
+    below is a DOC POINTER ONLY. Neither ``env_var`` nor ``reason_placeholder``
+    is interpolated into the returned string any more -- the function now
+    returns the exact same literal string regardless of what either
+    argument is.
+
+    Both parameters are KEPT, not dropped, for two different reasons:
+    ``env_var`` is a required positional at 92 call sites across 42 files,
+    none of which change in this reshape (an SSOT edit, not a signature
+    break); ``reason_placeholder`` is kept per NEGATIVE SPEC 3 below, which
+    forbids forking a second builder for the 5 reason-shaped call sites.
+    Neither argument currently changes this function's OUTPUT -- with no key
+    rendered at all, the flag-shaped/reason-shaped distinction
+    ``reason_placeholder`` used to select between has no reader any more.
+    This is a live-but-currently-inert knob, stated here rather than left
+    for a future reader to discover by diffing two calls: removing the
+    parameter now would itself be the "fork a second builder" move the
+    moment a future render needs to differentiate again, so it stays,
+    documented as inert.
+
+    The load-bearing "read only at hook-process spawn, unsettable from
+    inside this session" fact this render used to carry inline moves
+    wholly into ``OVERRIDE_KEYS_DOC`` -- the doc this pointer already sends
+    the reader to -- rather than surviving in per-firing text.
+    ``test_deny_text_reachable_override.py``'s reachability-marker gate and
+    ``test_operator_override_note_retains_affordances.py`` are updated in
+    the same dispatch to check for that fact in the doc instead of the note.
+
+    NEGATIVE SPEC 5 -- do not re-interpolate ``env_var`` (or any per-guard
+    identifier) into this function's return value. That is precisely the
+    "offer to bypass the guard" speech act this reshape exists to remove;
+    rewording it again without removing it is the exact failure mode twelve
+    prior rounds already tried and the source memo (2026-08-11-example-retrieval-repo-
+    ue-addon-em-guard-self-narration-reads-as-injection.md) reports as still
+    unclosed.
     """
-    shape = (
-        'reason, e.g. "%s"' % reason_placeholder
-        if reason_placeholder is not None
-        else "flag"
-    )
-    return (
-        "Override key (%s), unsettable from inside this session -- read "
-        "only at hook-process spawn: %s -- key list: %s"
-        % (shape, env_var, _resolve_override_keys_doc_display())
-    )
+    return "See %s for this guard's override keys." % _resolve_override_keys_doc_display()
 
 
 # ---------------------------------------------------------------------------

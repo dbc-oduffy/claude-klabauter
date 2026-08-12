@@ -234,12 +234,14 @@ def test_schema_invalid_deliverable_id_aborts_and_leaves_file_unchanged(tmp_path
     original = sizing.read_text(encoding="utf-8")
 
     # Does not match the schema's `^dlv-(?!placeholder-replace-with)...`
-    # pattern for `deliverable_id` — the post-mutation validate_frontmatter
-    # call must reject this and MutateAbort before the write lands.
+    # pattern for `deliverable_id` — the post-mutation narrow, op-local
+    # `_validate_stamped_deliverable_id` check (not full-document schema
+    # validation — see that function's docstring) must reject this and
+    # MutateAbort before the write lands.
     _stamp_yaml_document(str(sizing), "not-a-valid-deliverable-id", str(repo))
 
     captured = capsys.readouterr()
-    assert "schema validation failed" in captured.err
+    assert "validation failed" in captured.err
 
     assert sizing.read_text(encoding="utf-8") == original, (
         "a schema-invalid mutation must never be written — MutateAbort keeps "

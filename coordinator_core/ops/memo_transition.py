@@ -1548,6 +1548,143 @@ def _release(memo: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# close verb — actioned -> closed, the previously-unreachable terminal state
+# (DEFECT 1, 2026-08-12 inbox-blitz-dominant-verify-wave-b audit item 6§3 /
+# audit item 3): the memo status schema enum
+# (coordinator_core/contract/emit_memo_schema.py) has always permitted
+# "closed", but no verb in this module ever wrote it — claim/action/release/
+# resolve top out at "actioned"/"superseded". Downstream consumers that treat
+# literal status "closed" as the memo lifecycle's closure signal could
+# therefore never observe it via any sanctioned mutation path.
+# ---------------------------------------------------------------------------
+
+def _close(memo: str, at: str) -> dict:
+    """Apply close transition: actioned → closed, stamping the companion
+    fields ``schema_validate._memo_cf_closed_requires_companions`` requires
+    (``closed_at``, ``action_taken_at``, ``decision``).
+
+    Idempotency: no-op when already closed (mirrors ``_release``'s open no-op).
+    Unexpected status (anything other than "actioned" or "closed") fails
+    loud, no write — closing a memo that never reached a decision would
+    silently manufacture one.
+
+    ``action_taken_at`` is backfilled to ``at`` when absent, since the
+    primary lifecycle (open -> in_progress -> actioned) never passes through
+    the grandfathered "action_taken" status that would otherwise have
+    stamped it — closing directly from "actioned" is the sanctioned path.
+    ``decision`` is preserved verbatim from the prior "actioned" write; a
+    memo with no decision on record (actioned via ``actioned_note`` only)
+    fails loud rather than closing without one.
+    """
+    try:
+        git_root = _containment_check(memo)
+    except ValueError as exc:
+        return _err(str(exc))
+    except subprocess.TimeoutExpired:
+        return _err(f"close: containment check timed out for --memo {memo!r}")
+
+    if not at or not at.strip():
+        return _err("close requires --at <ISO timestamp>")
+    _at = at.strip()
+
+    memo_path = Path(memo)
+    if not memo_path.is_file():
+        return _err(f"memo not found: {memo}")
+
+    _noop_result: list[dict | None] = [None]
+
+    def _mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(f"no parseable YAML frontmatter in {memo}")
+
+        pre_dup_count = _count_status_keys(split.fm_text)
+        if pre_dup_count >= 2:
+            raise MutateAbort(
+                f"memo has {pre_dup_count} status: keys — hand-collapse the duplicate before retrying\n"
+                f"  (edit the frontmatter to leave exactly one status: line, then retry)"
+            )
+
+        status = read_fm_field(split.fm_text, "status")
+
+        if status == "closed":
+            _noop_result[0] = _ok(False, f"{memo} already closed — no-op")
+            return old_text
+
+        if status != "actioned":
+            raise MutateAbort(
+                f'unexpected current status "{status or "(missing)"}" for close — expected actioned'
+            )
+
+        decision = read_fm_field(split.fm_text, "decision")
+        if not decision or not str(decision).strip():
+            raise MutateAbort(
+                f"{memo} has no decision on record — close requires an actioned memo "
+                "with a decision (accepted/partial/declined), not an actioned_note-only memo"
+            )
+
+        fm_text = split.fm_text
+
+        # numeric_quoting=True on every field write below, matching every other
+        # write site in this module (node's serializeYamlScalar unconditionally
+        # quotes all-digit values on every field it serializes).
+        fm_text = replace_fm_field(fm_text, "status", "closed", numeric_quoting=True)
+
+        if read_fm_field(fm_text, "closed_at") is None:
+            fm_text = insert_fm_field(fm_text, "closed_at", _at, "status", numeric_quoting=True)
+        else:
+            fm_text = replace_fm_field(fm_text, "closed_at", _at, numeric_quoting=True)
+
+        action_taken_at = read_fm_field(fm_text, "action_taken_at")
+        if not action_taken_at or not str(action_taken_at).strip():
+            if action_taken_at is None:
+                fm_text = insert_fm_field(
+                    fm_text, "action_taken_at", _at, "closed_at", numeric_quoting=True
+                )
+            else:
+                fm_text = replace_fm_field(fm_text, "action_taken_at", _at, numeric_quoting=True)
+
+        fm_text = _normalize_oversize_summary(fm_text, memo)
+
+        errors = _validate_memo_fm(fm_text)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(f"memo cross-field validation failed: {details}")
+
+        return rebuild(split, fm_text)
+
+    try:
+        new_text = locked_rmw(memo_path, _mutate, repo_root=git_root)
+    except MutateAbort as exc:
+        return _err(str(exc.args[0]) if exc.args else "close: unknown mutation error")
+    except LockTimeout as exc:
+        return _err(str(exc))
+    except FileNotFoundError:
+        return _err(f"memo not found: {memo}")
+
+    if _noop_result[0] is not None:
+        resumed_reply = _resume_probe_and_commit(
+            memo_path, git_root, "close", new_text,
+            f"{memo} already closed — resumed a stranded uncommitted write and committed it",
+        )
+        if resumed_reply is not None:
+            return resumed_reply
+        return _noop_result[0]
+
+    written_split = split_frontmatter(new_text)
+    if written_split is None or _count_status_keys(written_split.fm_text) != 1:
+        return _err(
+            f"INTERNAL ERROR — post-write status key count ≠ 1. Inspect {memo} immediately."
+        )
+
+    commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "close", new_text)
+    if commit_error is not None:
+        return _err(commit_error)
+
+    return _ok(True, f"closed {memo}", commit_sha=commit_sha)
+
+
+# ---------------------------------------------------------------------------
 # resolve verb (sync — dispatched via asyncio.to_thread)
 #
 # Native-only — no JS-side oracle (see module docstring's Parity note). C1 of
@@ -1753,7 +1890,7 @@ async def _handler(
     NOT this unused ``repo_root`` — the consumer-agnostic contract is unchanged.
 
     Required params:
-        verb (str) — one of: claim | action | release | resolve.
+        verb (str) — one of: claim | action | release | resolve | close.
         memo (str) — path to the target memo file.
 
     Verb-specific required params:
@@ -1769,6 +1906,10 @@ async def _handler(
                  same disposition params as action — atomic open→actioned, no intermediate
                  in_progress write (native-only, no JS mirror — see module docstring; C1 of
                  docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md).
+        close  : at (str, ISO timestamp) — actioned→closed, the previously-unreachable
+                 terminal status the schema enum has always permitted. Requires the memo
+                 be "actioned" WITH a decision on record; stamps closed_at (+ action_taken_at
+                 when absent). Idempotent no-op when already closed.
 
     correct_realization (bool, action|resolve only): narrow, opt-in re-action of an
         already-``actioned`` memo whose ``decision:`` is UNCHANGED — permits ``realized_by``
@@ -1798,7 +1939,7 @@ async def _handler(
     """
     verb = (params.get("verb") or "").strip()
     if not verb:
-        return _err("memo.transition: 'verb' is required (claim | action | release | resolve)")
+        return _err("memo.transition: 'verb' is required (claim | action | release | resolve | close)")
 
     memo = (params.get("memo") or "").strip()
     if not memo:
@@ -1824,6 +1965,11 @@ async def _handler(
         # asyncio.to_thread: blocking containment check + file I/O must not run on the event loop.
         return await asyncio.to_thread(_resolve, memo, session_id, at, params)
 
+    if verb == "close":
+        at = (params.get("at") or "").strip()
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
+        return await asyncio.to_thread(_close, memo, at)
+
     return _err(
-        f"memo.transition: unknown verb {verb!r} — supported: claim, action, release, resolve"
+        f"memo.transition: unknown verb {verb!r} — supported: claim, action, release, resolve, close"
     )

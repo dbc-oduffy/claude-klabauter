@@ -7,15 +7,28 @@ inline bash in the skill body — concentrating the precedence logic in a single
 entrypoint removes EM judgment from a mechanical procedure.
 
 Stdout: one-line status notice consumed by the briefing (RENAMED / IN-SPAN / FRESH-CUT /
-NAMED-WORKSTREAM / STALE-NEEDS-ABC / SYNC-MAIN-ABORT / RENAME-PUSH-FAILED), followed by
-the reconcile leg's own line on the FRESH-CUT / NAMED-WORKSTREAM / RENAMED paths.
-Stderr: human-readable detail.
+NAMED-WORKSTREAM / STALE-NEEDS-ABC / SYNC-MAIN-ABORT / RENAME-PUSH-FAILED / CRASH),
+followed by the reconcile leg's own line on the FRESH-CUT / NAMED-WORKSTREAM / RENAMED
+paths. CRASH is emitted by two guards, covering the two places an unhandled exception
+can propagate BEFORE any of the deliberate-refusal lines above got a chance to print:
+a module-level try/except around the ``workday_ceremony_lib``/``cc_invoke`` imports
+(near the top of this file — the ACTUAL 2026-08-12 incident, a ``ModuleNotFoundError``
+raised at that import), and ``_main_with_crash_guard`` wrapping ``main()`` itself
+(near the bottom, for anything unhandled inside the precedence switch). Without either,
+a crash-before-first-line and a refusal-that-ran-and-found-nothing-to-do are
+indistinguishable from the ceremony's side (state/bug-backlog/
+2026-08-12-ceremony-cannot-distinguish-a-step-0-tha-2245f21fe6d0.yaml). Still exits 1,
+same as every other unexpected-error path — nothing downstream keys off exit code to
+tell a crash apart from a deliberate abort (see ``_main_with_crash_guard``'s own
+docstring for the consumer-grep that established this).
+Stderr: human-readable detail; on CRASH, the full traceback (never swallowed).
 
 Exit codes:
   0 — step 0 succeeded; proceed to step 1.
   2 — stale-commit guard triggered; A/B/C Branch Reconciliation needed.
   3 — reconcile with origin/main hit a conflict; PM resolves first.
-  1 — sync-main aborted or other unexpected error.
+  1 — sync-main aborted, an unhandled exception (CRASH; see Stdout above), or other
+      unexpected error.
 
 Test seam (internal, not part of the ceremony contract):
   --self-heal-machine-slug      run only the Step 0.2a machine-slug self-heal/drift block.
@@ -60,9 +73,29 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-import workday_ceremony_lib as wc  # noqa: E402
-from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+# Module-level crash guard — narrow, covers only the imports below (and their
+# sys.path bootstrap) that can realistically fail at import time: a missing
+# lib dir, a broken workday_ceremony_lib/cc_invoke, or (the 2026-08-12
+# incident this closes) an unreachable coordinator_core transitively pulled
+# in by them. Without this, such a failure propagates before
+# `_main_with_crash_guard` (which wraps `main()`, further below) is ever
+# reached — the exact "crash before any status line" failure mode
+# state/bug-backlog/2026-08-12-ceremony-cannot-distinguish-a-step-0-tha-
+# 2245f21fe6d0.yaml describes; a REAL 2026-08-12 incident on this exact
+# import (ModuleNotFoundError: coordinator_core, since fixed in d2d4ec545)
+# is what proved the class, not just the theory. Uses only stdlib
+# (print/sys/traceback) already imported above — never depends on anything
+# from the imports it is guarding, which may not exist in a half-imported
+# module.
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+    import workday_ceremony_lib as wc  # noqa: E402
+    from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+except Exception:
+    import traceback
+    print("CRASH")
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LIB_DIR = os.path.join(PLUGIN_ROOT, "lib")
@@ -523,5 +556,38 @@ def main(argv: list[str]) -> int:
     return _rename_across_midnight(old, new)
 
 
+def _main_with_crash_guard(argv: list[str]) -> int:
+    """Top-level guard around ``main()`` — makes an unhandled exception
+    distinguishable from a deliberate refusal on the stdout status-line
+    contract the ceremony already consumes (module docstring's Stdout
+    block).
+
+    Without this, ``main()`` had no top-level exception handler and was
+    invoked bare as ``sys.exit(main(argv))``: a crash BEFORE any status
+    line printed exited 1 with nothing on stdout — identical, from
+    /workday-start's side, to a step that ran and legitimately found
+    nothing to do. Filed as state/bug-backlog/2026-08-12-ceremony-cannot-
+    distinguish-a-step-0-tha-2245f21fe6d0.yaml.
+
+    Reuses exit code 1 rather than minting a new one: grepping
+    ``coordinator/commands/workday-start.md`` (example-doctrine-repo) shows the
+    consumer already treats exit 1 as "unexpected error -> halt"
+    unconditionally of WHICH unexpected error — nothing downstream
+    branches on 1 vs. a hypothetical distinct crash code, so a new code
+    would add a contract surface with no reader. The CRASH stdout line is
+    the only new signal needed; the traceback goes to stderr exactly as
+    it would have with no guard at all (``BaseException`` — SystemExit,
+    KeyboardInterrupt — is deliberately NOT caught here, so ``sys.exit()``
+    and Ctrl-C keep their normal behavior).
+    """
+    try:
+        return main(argv)
+    except Exception:
+        import traceback
+        _out("CRASH")
+        traceback.print_exc(file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(_main_with_crash_guard(sys.argv[1:]))

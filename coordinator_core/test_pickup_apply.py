@@ -1191,6 +1191,86 @@ class TestMainApplyDecisionsShapeValidation:
 
 
 # ---------------------------------------------------------------------------
+# `apply`/`drop` reject a multi-artifact argument (2026-08-11 defect,
+# same harm class as `brief`'s bullet-list silent drop): neither CLI arm ever
+# called `split_artifact_args`, so an ` AND `-joined or bulleted argument fell
+# straight into `resolve_artifact` as ONE literal path — silently mutating
+# (claiming/committing/releasing) whichever ONE artifact the hard-line-wrap
+# sanitize fallback happened to match, with no indication a second artifact
+# was ever named. `brief` itself keeps its existing array-fan-out (a hard
+# cross-repo consumer contract) — only `apply`/`drop`, which mutate and never
+# had a multi-artifact contract, are made to refuse.
+# ---------------------------------------------------------------------------
+
+class TestMainApplyRejectsMultiArtifact:
+    def test_and_joined_argument_fails_loud_not_first_wins(self, capsys):
+        rc = pa_apply.main_apply(["state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
+
+        assert rc == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
+        err = capsys.readouterr().err
+        assert "2 artifacts" in err
+        assert "state/handoffs/h1.md" in err
+        assert "cross-repo/inbox/m1.md" in err
+
+    def test_bulleted_argument_fails_loud_naming_every_path(self, capsys):
+        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
+        rc = pa_apply.main_apply([raw])
+
+        assert rc == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
+        err = capsys.readouterr().err
+        assert "2 artifacts" in err
+        assert "state/handoffs/h1.md" in err
+        assert "cross-repo/inbox/m1.md" in err
+
+    def test_single_path_is_unaffected(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(
+            pa_apply, "apply", lambda *a, **k: (pa_apply.APPLY_EXIT_OK, {"landed": []})
+        )
+
+        rc = pa_apply.main_apply(["state/handoffs/h1.md"])
+
+        assert rc == pa_apply.APPLY_EXIT_OK
+
+
+class TestMainDropRejectsMultiArtifact:
+    def test_and_joined_argument_fails_loud_not_first_wins(self, capsys):
+        rc = pa_apply.main_drop(["state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
+
+        assert rc == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
+        err = capsys.readouterr().err
+        assert "2 artifacts" in err
+        assert "state/handoffs/h1.md" in err
+        assert "cross-repo/inbox/m1.md" in err
+
+    def test_bulleted_argument_fails_loud_naming_every_path(self, capsys):
+        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
+        rc = pa_apply.main_drop([raw])
+
+        assert rc == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
+        err = capsys.readouterr().err
+        assert "2 artifacts" in err
+        assert "state/handoffs/h1.md" in err
+        assert "cross-repo/inbox/m1.md" in err
+
+    def test_single_path_is_unaffected(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(
+            pa_apply, "drop", lambda *a, **k: (pa_apply.APPLY_EXIT_OK, {"released": True})
+        )
+
+        rc = pa_apply.main_drop(["state/handoffs/h1.md"])
+
+        assert rc == pa_apply.APPLY_EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # Same-session claim re-entry (2026-07-25 live incident) — `apply` is
 # explicitly re-runnable (module docstring § "the hold-path residue"), but a
 # memo's `d1` (`session-claim-cli claim-artifact memo`) was unconditionally

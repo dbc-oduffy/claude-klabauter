@@ -219,6 +219,111 @@ class TestQueryCLIFileMode(unittest.TestCase):
             self.assertEqual(r['capture_source'], 'derived')
 
 
+class TestQueryCLIFileModeResolution(unittest.TestCase):
+    """--file resolution-aware matching: relative/absolute, separators, case.
+
+    Spec backlink: cross-repo/inbox/2026-08-11-example-cockpit-repo-em-three-answers-back-relative-path-zero.md
+    """
+
+    def setUp(self):
+        self._tmpdir = _make_transcript_dir()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _query(self, file_path: str) -> subprocess.CompletedProcess:
+        return _run_cli('--file', file_path, transcript_dir=self._tmpdir.name)
+
+    def test_absolute_arg_still_matches(self):
+        """Regression guard: absolute platform-native arg unchanged behaviour."""
+        result = self._query('/project/src/main.py')
+        data = json.loads(result.stdout)
+        self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
+
+    def test_repo_relative_posix_arg_matches_absolute_record(self):
+        """The reported defect: a --project-relative arg must resolve, not
+        string-compare, against the absolute stored file_path."""
+        result = self._query('src/main.py')
+        data = json.loads(result.stdout)
+        self.assertEqual(
+            len(data), 1,
+            msg=f'Expected 1 record for relative arg, got: {data}; stderr={result.stderr}',
+        )
+        self.assertEqual(data[0]['file_path'], '/project/src/main.py')
+
+    def test_backslash_arg_matches_forward_slash_record(self):
+        result = self._query('src\\main.py')
+        data = json.loads(result.stdout)
+        self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
+        self.assertEqual(data[0]['file_path'], '/project/src/main.py')
+
+    def test_same_basename_different_directory_does_not_match(self):
+        """Anti-suffix guard: no bare endswith match."""
+        result = self._query('vendor/main.py')
+        self.assertEqual(result.returncode, 2, msg=f'Unexpected match: {result.stdout}')
+
+    @unittest.skipUnless(sys.platform == 'win32', 'case-insensitive match is Windows-only')
+    def test_case_insensitive_match_on_windows(self):
+        result = self._query('/PROJECT/SRC/MAIN.PY')
+        data = json.loads(result.stdout)
+        self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
+
+
+class TestQueryByFileBashRedirectDirection(unittest.TestCase):
+    """Absolute query arg must match a relative record (Bash-redirect rows).
+
+    Appends one extra Bash tool_use line (relative-path redirect) to a copy
+    of the golden transcript, run via subprocess — per this test module's
+    negative-spec, query-file-attribution.py is never imported directly.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory(prefix='fa_query_test_bash_')
+        dest = os.path.join(self._tmpdir.name, f'{_SESSION_ID}.jsonl')
+        with open(_FIXTURE, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        extra = json.dumps({
+            'type': 'assistant',
+            'sessionId': _SESSION_ID,
+            'message': {
+                'role': 'assistant',
+                'content': [{
+                    'type': 'tool_use', 'id': 't99', 'name': 'Bash',
+                    'input': {
+                        'command': 'echo hi > out/build.log',
+                        'description': 'relative redirect write',
+                    },
+                }],
+            },
+        })
+        extra_result = json.dumps({
+            'type': 'user',
+            'sessionId': _SESSION_ID,
+            'message': {
+                'role': 'user',
+                'content': [{'type': 'tool_result', 'tool_use_id': 't99', 'content': ''}],
+            },
+        })
+        lines.append(extra)
+        lines.append(extra_result)
+        with open(dest, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_absolute_arg_matches_relative_record(self):
+        result = _run_cli(
+            '--file', '/project/out/build.log', transcript_dir=self._tmpdir.name,
+        )
+        data = json.loads(result.stdout)
+        self.assertEqual(
+            len(data), 1,
+            msg=f'Expected 1 record, got: {data}; stderr={result.stderr}',
+        )
+        self.assertEqual(data[0]['session_id'], _SESSION_ID)
+
+
 class TestQueryCLITableFormat(unittest.TestCase):
     """--format table produces non-JSON human-readable output (smoke check)."""
 

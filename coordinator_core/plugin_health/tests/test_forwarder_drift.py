@@ -211,7 +211,8 @@ def test_missing_and_cited_is_the_loud_arm(tmp_path: Path, two_bin_dirs):
     loud = [line for line in warn_lines if "check-auto-memory-drained" in line]
     assert len(loud) == 1
     assert "cited by a live prompt-surface invocation" in loud[0]
-    assert "127" in loud[0]
+    assert "NOTHING GATES ON IT" in loud[0]
+    assert "SILENTLY" not in loud[0]  # AC4: the false "exits 127 SILENTLY" claim is gone
     assert "skills/workstream-complete/SKILL.md" in loud[0]
     # The plain wording is NOT used for the cited name.
     assert not any(
@@ -314,10 +315,11 @@ def test_agent_bin_directory_missing_is_also_a_skip(tmp_path: Path, two_bin_dirs
     assert result.skipped is True
 
 
-def test_main_always_exits_zero_even_with_drift(tmp_path: Path, two_bin_dirs, monkeypatch, capsys):
-    """CLI contract: WARN, never FAIL — main() must return 0 regardless of
-    whether drift was found, matching scan-addon-health.py's own
-    'advisory, never gating' convention."""
+def test_main_exits_zero_on_uncited_only_drift(tmp_path: Path, two_bin_dirs, monkeypatch, capsys):
+    """AC2/AC7: uncited-only drift stays exit 0 — the WARN-only population
+    is unaffected by the C1/C2 exit-contract split (matches
+    scan-addon-health.py's own 'advisory, never gating' convention for that
+    population)."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
     _write_cli(agent_bin, "foo")
@@ -335,3 +337,133 @@ def test_main_always_exits_zero_even_with_drift(tmp_path: Path, two_bin_dirs, mo
     assert rc == 0
     captured = capsys.readouterr()
     assert "missing-one" in captured.out
+
+
+def test_main_exits_nonzero_on_cited_missing_set(tmp_path: Path, two_bin_dirs, monkeypatch):
+    """AC2/AC7: a non-empty cited-but-missing set is the one population that
+    gates — main() must return non-zero."""
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "example-doctrine-repo"
+    _write_cli(agent_bin, "foo")
+    _write_cli(agent_bin, "check-auto-memory-drained")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+    _write_doe_citation(
+        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+    )
+
+    monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
+    monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
+    monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
+    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+
+    rc = fd.main([])
+
+    assert rc != 0
+
+
+def test_cited_missing_field_is_empty_for_uncited_only_drift(tmp_path: Path, two_bin_dirs):
+    """AC1/AC7: the machine-readable field stays empty when the only drift is
+    uncited — distinct from the rendered warn lines, which do exist here."""
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    _write_cli(agent_bin, "foo")
+    _write_cli(agent_bin, "some-uncited-cli")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+    )
+
+    assert result.ok is False
+    assert result.cited_missing == {}
+
+
+def test_cited_missing_field_is_empty_for_orphan_only_drift(tmp_path: Path, two_bin_dirs):
+    """AC7 regression guard: an orphaned forwarder alone must never populate
+    `cited_missing` — orphan drift is a different axis (installed-but-not-
+    derived), not a missing-and-cited one."""
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+
+    _write_cli(agent_bin, "foo")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "retired-cli")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+    )
+
+    assert result.ok is False
+    assert result.cited_missing == {}
+
+
+def test_cited_missing_field_is_empty_on_skip(tmp_path: Path, two_bin_dirs, monkeypatch):
+    """AC6/AC7: an unresolvable claude-klabauter root is a clean skip, and must never
+    populate `cited_missing` — the non-zero exit path fires only on a
+    positively-computed non-empty set, never on 'could not determine'."""
+    settings_bin, compat_bin = two_bin_dirs
+    _write_forwarder(settings_bin, "foo")
+    _write_forwarder(compat_bin, "foo")
+
+    def _raise():
+        raise RuntimeError("repos.claude_klabauter is not set")
+
+    monkeypatch.setattr(fd, "coordinator_claude_klabauter_root", _raise)
+
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin)
+
+    assert result.ok is True
+    assert result.skipped is True
+    assert result.cited_missing == {}
+
+
+def test_cited_missing_field_is_empty_for_clean_result(tmp_path: Path, two_bin_dirs):
+    """AC7: a fully clean, no-drift result carries an empty `cited_missing`
+    field too."""
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+
+    _write_cli(agent_bin, "foo")
+    _write_cli(agent_bin, "bar")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "bar")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+    )
+
+    assert result.ok is True
+    assert result.cited_missing == {}
+
+
+def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two_bin_dirs):
+    """AC1/AC7: the non-empty case — `cited_missing` names the CLI and the
+    citing site, the same fact the rendered warn line carries, in
+    machine-readable form."""
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "example-doctrine-repo"
+
+    _write_cli(agent_bin, "foo")
+    _write_cli(agent_bin, "check-auto-memory-drained")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+    _write_doe_citation(
+        doe_root, "skills/workstream-complete/SKILL.md", "check-auto-memory-drained"
+    )
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root
+    )
+
+    assert result.ok is False
+    assert set(result.cited_missing.keys()) == {"check-auto-memory-drained"}
+    assert any(
+        "skills/workstream-complete/SKILL.md" in site
+        for site in result.cited_missing["check-auto-memory-drained"]
+    )

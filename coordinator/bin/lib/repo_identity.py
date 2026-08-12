@@ -33,10 +33,14 @@ This module intentionally imports NOTHING beyond the `cc_invoke` engine
 bootstrap (see the sys.path shim below, copied verbatim in shape from
 `coordinator/bin/wsc-coverage-gate-runner.py`'s own bootstrap) plus the two
 engine seams it composes over. It is NOT added to `cli_shared.py`:
-verified on disk, `cli_shared.current_repo_root()` has exactly one caller
-(`resolve_from_repo`, same file) and none of the ~30 class-A migration
-targets import `cli_shared` at all -- see the plan's C1 body for the full
-refutation. `cli_shared.py` also declares itself call-site plumbing, not
+verified on disk (before it was deleted in C2), `cli_shared.current_repo_root()`
+had exactly one caller (`resolve_from_repo`, same file) and none of the ~30
+class-A migration targets imported `cli_shared` at all -- see the plan's C1
+body for the full refutation. That fan-in premise is what the argument rests
+on, not the function's continued existence: C2 deleted `current_repo_root()`
+outright once every call site it fed was repointed onto this module, so the
+function no longer exists, but the reason this module was kept separate from
+`cli_shared.py` still holds. `cli_shared.py` also declares itself call-site plumbing, not
 engine-owned business logic, which a gate composed directly over
 `coordinator_core.pickup_assemble` is not obviously.
 

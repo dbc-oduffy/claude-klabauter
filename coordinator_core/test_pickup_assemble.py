@@ -5466,6 +5466,50 @@ class TestMultiArtifactBrief:
         assert payload["artifact"]["classification"] == "handoff"
         assert rc == pa.EXIT_OK
 
+    def test_unquoted_multi_token_argv_fails_loud_not_silent(self, tmp_path, monkeypatch, capsys):
+        # Two paths arriving as SEPARATE argv tokens (an unquoted shell paste,
+        # not a single ` AND `-joined/bulleted string) hits `brief`'s own
+        # "unrecognized argument" usage-error path — already loud (non-zero
+        # exit, named on stderr), not a silent single-path fallback.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        _seed_memo(repo, "m1.md")
+        monkeypatch.chdir(repo)
+
+        rc = pa.main(["brief", "state/handoffs/h1.md", "cross-repo/inbox/m1.md"])
+        err = capsys.readouterr().err
+
+        assert rc == pa.EXIT_USAGE
+        assert "cross-repo/inbox/m1.md" in err
+
+    def test_real_bin_trampoline_subprocess_fans_out_both_not_first_only(self, tmp_path):
+        # End-to-end regression through the ACTUAL CLI binary (not just the
+        # in-process `main()`): confirms the bulleted PM-shaped paste yields
+        # BOTH decision objects via the real `coordinator/bin/pickup-assemble`
+        # trampoline, not merely via direct Python calls into this module.
+        import subprocess
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        _seed_memo(repo, "m1.md")
+
+        bin_path = r"X:\claude-klabauter\coordinator\bin\pickup-assemble"
+        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
+        proc = subprocess.run(
+            [sys.executable, bin_path, "brief", raw],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(proc.stdout)
+
+        assert isinstance(payload, list)
+        assert len(payload) == 2
+        assert payload[0]["artifact"]["path"] == "state/handoffs/h1.md"
+        assert payload[1]["artifact"]["path"] == "cross-repo/inbox/m1.md"
+
 
 def _decode_decision_payload_like_autofire(raw: str) -> list[dict]:
     """Local reimplementation of example-doctrine-repo's `pickup-autofire.py`

@@ -362,6 +362,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--reviewer-evidence", dest="reviewer_evidence", default=None,
     )
+    # Optional attestation of whether the review actually ran the touched
+    # code or only read it — forwarded verbatim to the native op, which
+    # validates against its own `_VALID_EXECUTION_BASES`
+    # (coordinator_core/ops/review_trail_write.py). Kept as a local literal
+    # here rather than importing that private name across the bin/core seam
+    # this file does not otherwise cross.
+    # Spec: docs/plans/2026-08-11-review-trail-carries-execution-basis.md § C3
+    parser.add_argument(
+        "--execution-basis", dest="execution_basis", default=None,
+        choices=["executed", "read-only"],
+    )
     args, _unknown = parser.parse_known_args(argv)
 
     # Required-arg presence gate: exit 1 on any missing required arg (unchanged
@@ -427,6 +438,8 @@ def main(argv: list[str]) -> int:
         params["reviewed_paths"] = args.reviewed_paths
     if args.reviewer_evidence is not None:
         params["reviewer_evidence"] = args.reviewer_evidence
+    if args.execution_basis is not None:
+        params["execution_basis"] = args.execution_basis
 
     try:
         result = cc_invoke.route_mutation(
@@ -440,6 +453,13 @@ def main(argv: list[str]) -> int:
         print(f"coordinator-write-review-trail.py: {exc}", file=sys.stderr)
         return 2
 
+    # Negative-spec: the op's `result` is authoritative about what was
+    # RECORDED — never echo `args.execution_basis` back into it as a
+    # fallback. The op deliberately OMITS the key when a reviewer sidecar
+    # exists whose `## Execution capability` section is absent or
+    # unparseable (§ C2), and re-injecting the caller's word there would
+    # print an unverified claim as though it had been written to disk —
+    # exactly the typed-flag-as-evidence failure § Anti-scope forbids.
     print(json.dumps(result))
     return 0
 

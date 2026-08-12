@@ -853,9 +853,24 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # launcher permanently unsweepable. A hyphenated-filename module also has no
 # ordinary `import` form -- only `importlib.util.spec_from_file_location`
 # against a path this module has no other reason to resolve -- which is
-# extra coupling for one shared constant. One entrypoint today; do NOT widen
-# speculatively (plan Anti-scope).
-_RAW_CMDLINE_TARGETS = frozenset({"coordinator-write-review-trail.py"})
+# extra coupling for one shared constant. Widen only for a NAMED,
+# verified-live defect (as below) -- never speculatively.
+#
+# `scoped-git-commit` and `cross-repo-memo` added per
+# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# after-a-newline.md: both take multi-line arguments as a matter of course
+# (commit messages, memo bodies) and both are extensionless on-disk CLIs
+# (no `.py` suffix -- see `_derive_agent_helper_target_map`'s stem-dedup
+# rule), so their TARGET string in this module's keying convention is the
+# bare name, not a `.py`-suffixed one. `gen-launcher-shim.py`'s own mirror
+# set (`_RAW_CMDLINE_ENTRYPOINTS`) has since been brought into line with
+# this one -- the two sets are kept in sync by convention (mirrored, not
+# imported, per this module's own docstring above), with
+# `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
+# as the drift guard. Extend BOTH sets together, or that test goes red.
+_RAW_CMDLINE_TARGETS = frozenset(
+    {"coordinator-write-review-trail.py", "scoped-git-commit", "cross-repo-memo"}
+)
 
 
 def _agent_cmd_raw_cmdline_block(target: str) -> str:

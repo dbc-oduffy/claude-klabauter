@@ -347,8 +347,9 @@ def build_violation_payload_advisory(schema_name: str, errors: list[dict]) -> Op
             "hookEventName": "PreToolUse",
             "additionalContext": (
                 f"[frontmatter-schema warning] {message}\n\n"
-                "The write will proceed. Fix the frontmatter on the next edit, "
-                "or set COORDINATOR_SCHEMA_STRICT=1 to block on violations. "
+                "The write will proceed. Fix the frontmatter on the next edit. "
+                "An operator override exists to block on violations instead — "
+                "see docs/reference/guard-override-keys.md. "
                 "Periodic drift is swept by /update-docs."
             ),
         },

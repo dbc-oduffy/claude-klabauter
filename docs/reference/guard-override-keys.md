@@ -1,12 +1,12 @@
 # Bash-guard override keys and bypass options
 
-This doc is the full content that `coordinator_core.bash_guards._helpers
-.operator_override_note()` used to inline on every guard firing (~50 words,
-paid by every advisory message in the suite, every time). It now fires a
-short pointer to this doc instead — see that function's docstring for the
-cut history. This doc carries the detail; the in-message note carries only
-the one fact that must survive at decision time (an env var is unsettable
-from inside a running session — it is read once at hook-process spawn).
+A guard message names the guard that fired and nothing else about its
+override — no key, no assignment form, no bypass framing. This doc is the
+operator's route from a guard name to its override key: the § "Override
+keys, by guard" table below is the primary lookup an operator uses, not a
+backstop to something guard output already told them. See
+`coordinator_core.bash_guards._helpers.operator_override_note()`'s own
+docstring for the exact rendered pointer and its cut history.
 
 2026-08-11 (PM-raised, break-class): the in-message note and `annotate_deny`'s
 unlock block both used to open with `"Bypass options for a human operator,
@@ -14,11 +14,13 @@ not this agent: ..."`. That framing was itself an injection tell, not a
 safeguard — the deniability-preserving register an attacker writes to make
 an agent feel authorised while covering itself. Two independently-dispatched
 agents (a code-reviewer, a review-integrator, no shared context) classified
-it as prompt injection and declined to act. Both builders now state the
-load-bearing fact plainly instead of through a disclaimer frame; see
-`operator_override_note`'s and `annotate_deny`'s own docstrings for the full
-rationale. Every route below remains a human-only affordance in substance —
-only the framing that said so changed.
+it as prompt injection and declined to act. Both builders dropped the
+disclaimer frame; `annotate_deny`'s unlock block now states its load-bearing
+fact plainly instead, and `operator_override_note` went further still — as
+of the 2026-08-11 key-removal pass it states no per-key fact at all,
+pointing here instead (see this doc's contract note above). See each
+builder's own docstring for the full rationale. Every route below remains a
+human-only affordance in substance — only the framing that said so changed.
 
 ## Human-only affordances — an in-session agent cannot exercise these
 
@@ -40,11 +42,12 @@ watching the session, can do.
      subagent, regardless of marker content.
    Every scope also names which guard **band(s)** it suppresses via a
    `Bands:` field (`advisory-rewrite`, `platform-conditioned-deny`).
-3. **`<ENV_VAR>=1`, set before the harness/hook process launches.** This is
-   the one route named inline in every guard message, because it is
-   guard-specific (each guard reads its own var) — see the key table below.
-   **Pre-launch only.** Nothing reachable from inside a live session sets a
-   variable this guard process will see (see Security context, leg 1).
+3. **`<ENV_VAR>=1`, set before the harness/hook process launches.**
+   Guard-specific — each guard reads its own var. Not named inline in guard
+   output; look the guard up by name in the § "Override keys, by guard"
+   table below to find its key. **Pre-launch only.** Nothing reachable from
+   inside a live session sets a variable this guard process will see (see
+   Security context, leg 1).
 4. **The in-session guard-unlock sentinel**, a one-shot file the operator
    drops for the exact `(session_id, guard_name)` pair that just denied —
    see § In-session unlock below. Unlike routes 1–3, this one is reachable
@@ -556,14 +559,18 @@ Not in this table, by design:
   `write_guards/nudge_prose_queue_append.py`,
   `write_guards/nudge_new_sh_file_naked_python.py`) — a different shape entirely
   (a key that takes a one-sentence reason, not a bare flag). All four
-  modules render via `operator_override_note(env_var,
+  modules call `operator_override_note(env_var,
   reason_placeholder="<one-sentence reason>")` (2026-07-30 P1 fix, origin of
   the shape; `nudge_prose_queue_append.py` and
-  `nudge_new_sh_file_naked_python.py` follow the same shape), which prints
-  `Override key (reason), unsettable from inside this session -- ...` instead
-  of the helper's default `Override key (flag), ...` parenthetical
-  (2026-08-11 reshape: neither shape renders `VAR=1`/`VAR="..."` anymore —
-  see `operator_override_note`'s own docstring, NEGATIVE SPEC 4). Before the
+  `nudge_new_sh_file_naked_python.py` follow the same shape) to mark
+  themselves reason-shaped rather than flag-shaped. That distinction still
+  exists in the call-site argument and in `operator_override_note`'s own
+  branching — it simply has no reader in guard output any more, since the
+  2026-08-11 key-removal pass stopped rendering the key (or its
+  parenthetical shape) inline at all; the guard message points to this doc
+  instead (see `operator_override_note`'s own docstring for the current
+  render) — the four key names above are how an operator finds them, since
+  none of the four appears in either table (this bullet is why). Before the
   2026-07-30 fix, the helper's hardcoded `%s=1` render was not merely "not
   literally accurate" for `COORDINATOR_QUEUE_PUNT`/`COORDINATOR_BATON_BODY_
   PUNT` — it was actively wrong: both vars' own `_is_trivial_reason`

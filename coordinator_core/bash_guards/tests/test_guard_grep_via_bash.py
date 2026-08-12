@@ -167,16 +167,27 @@ class TestPartialRewriteStillAdvises:
         assert "registered ahead of this guard" not in ctx
         assert "already evaluated this exact invocation" not in ctx
 
-    def test_message_names_its_own_override_route(self):
+    def test_message_points_to_the_override_route_doc(self):
         """A code-review finding (M17, 2026-07-30): H11(b) had opted this guard's advisory
         out of `operator_override_note` entirely, leaving `_OVERRIDE_ENV_VAR`
         functional but undiscoverable from the message text. Restored as
         the same one-line SSOT pointer every sibling guard appends -- not
-        the old ~1.1KB inline boilerplate, which stays gone."""
+        the old ~1.1KB inline boilerplate, which stays gone.
+
+        UPDATED 2026-08-11 (guard-messages-point-to-docs-never-name plan,
+        C2): `operator_override_note` stopped naming the env-var key at all
+        -- the property this test now proves is "reaches its own override
+        route via the doc pointer", not "prints the key inline". The key's
+        continued FUNCTIONING is `test_override_suppresses_partial_rewrite_
+        advisory`/`test_override_suppresses_gnu_only_advisory`'s job (live
+        behavioral checks, unaffected by this render change); this test's
+        job is the render's reachability shape only. Renamed from
+        `test_message_names_its_own_override_route` to match."""
         out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
         ctx = out["additionalContext"]
         assert "blanket-disarm marker" not in ctx
-        assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" in ctx
+        assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
+        assert "docs/reference/guard-override-keys.md" in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -307,13 +318,16 @@ class TestGnuOnlyConstructStillAdvises:
         ctx = out["additionalContext"]
         assert "Explore or general-purpose subagent" in ctx
 
-    def test_message_names_its_own_override_route(self):
-        """See the sibling assertion in TestComposedAdvisoryWithoutRewrite
-        for the full rationale (a code-review finding, M17, 2026-07-30)."""
+    def test_message_points_to_the_override_route_doc(self):
+        """See the sibling assertion (renamed the same way, same day) in
+        TestComposedAdvisoryWithoutRewrite for the full rationale (a
+        code-review finding, M17, 2026-07-30, updated 2026-08-11 for the
+        guard-messages-point-to-docs-never-name plan's C2 render change)."""
         out = _envelope("grep -Pn TODO src/", host_is_windows=True)
         ctx = out["additionalContext"]
         assert "blanket-disarm marker" not in ctx
-        assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" in ctx
+        assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
+        assert "docs/reference/guard-override-keys.md" in ctx
 
 
 # ---------------------------------------------------------------------------

@@ -94,6 +94,18 @@ _NO_OVERRIDE_NOTE_ALLOWLIST: Dict[str, str] = {
     # route for it to name -- unlike its `git-no-optional-locks` neighbor,
     # which rewrites `cmd` and therefore has advisory text to gate.
     "reap-stale-git-lock": "guard_reap_stale_git_lock.py's own module docstring -- side-effect-only guard that always returns None, never emits advisory text, so no override route exists to name.",
+    # docs/plans/2026-08-11-guard-messages-point-to-docs-never-name.md,
+    # chunk C3 (peer session, same wave, already landed on this tree ahead
+    # of this dispatch): `guard_inprocess_search._footer()` no longer calls
+    # `operator_override_note` at all -- see that function's own docstring.
+    # Its band is ADVISORY_REWRITE (an answered-in-process footer, not a
+    # denial), and a non-denial has no bypass to offer, so this is a
+    # deliberate zero-override-route guard, not a gap this inventory should
+    # flag. Named here rather than left to silently fail this test, which
+    # otherwise has no way to distinguish "forgot to route through the
+    # builder" (a real regression) from "correctly stopped offering one"
+    # (this guard's own C3 fix).
+    "inprocess-search": "docs/plans/2026-08-11-guard-messages-point-to-docs-never-name.md, C3 -- guard_inprocess_search._footer() answers a SUCCESSFUL search, never a denial, and a non-denial has no bypass to offer; see that function's own docstring.",
 }
 
 #: Matches the call expression inside `lambda: <call>(...)` as registered

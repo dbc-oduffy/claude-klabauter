@@ -2561,6 +2561,18 @@ def _build_directives(
     # value crosses into a scaffolded file) rather than in `resolve_lineage`
     # keeps that echo-the-caller contract intact for d6, which takes the
     # value in memory and never writes it into frontmatter.
+    #
+    # `--predecessor-id` is additionally gated on `_pred_id` matching
+    # `handoff.schema.json`'s own `predecessor_id` pattern
+    # (`^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$`) -- a
+    # non-conforming value (legacy pre-id artifact, hand-authored id, etc.)
+    # is omitted here for the SAME normalize-at-the-crossing-point reason
+    # the repo-relative path normalization above lives here rather than in
+    # `resolve_lineage`: `--predecessor` still carries the lineage edge, so
+    # nothing is lost, while a malformed id would author a guaranteed
+    # `predecessor_id` schema-validation failure on the freshly scaffolded
+    # successor.
+    _predecessor_id_pattern = re.compile(r"^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$")
     _pred = None
     if kind == "handoff":
         _pred = lineage.get("predecessor")
@@ -2568,7 +2580,7 @@ def _build_directives(
         if _pred:
             _pred_rel = _repo_relative_posix(_pred, root)
             d1_args.append(f"--predecessor={_pred_rel}")
-            if _pred_id:
+            if _pred_id and _predecessor_id_pattern.match(_pred_id):
                 d1_args.append(f"--predecessor-id={_pred_id}")
 
         # Successor-side fan-in down-edge (sedge-02). `d6*` already stamps the
@@ -2660,13 +2672,17 @@ def _build_directives(
         # surfaces this string in `report["replayed"]` and on stderr -- but it
         # is only non-silent if the string SAYS SO, which is what this branch is
         # for. Naming the exact legs makes the manual fix a copy-paste.
-        _replay_extras = lineage.get("additional_predecessors") or []
-        if _replay_extras:
-            _replay_rel = [_repo_relative_posix(_e, root) for _e in _replay_extras]
+        # Review: coordinator:code-reviewer (0d090196) -- renamed from
+        # `_replay_extras`/`_replay_rel` to match this function's other
+        # additional-predecessor locals (`_extra`, `_extra_path`,
+        # `_ledger_extra_paths`) rather than a one-off pairing.
+        _extra_paths = lineage.get("additional_predecessors") or []
+        if _extra_paths:
+            _extra_rels = [_repo_relative_posix(_e, root) for _e in _extra_paths]
             d1_directive["already_satisfied_reason"] += (
                 "; NOTE this run resolved "
-                f"{len(_replay_rel)} additional predecessor(s) -- "
-                + ", ".join(_replay_rel)
+                f"{len(_extra_rels)} additional predecessor(s) -- "
+                + ", ".join(_extra_rels)
                 + " -- whose successor-side `additional_predecessors:` down-edge d1 "
                 "would have written. Skipping d1 skips that write. Verify the field "
                 "on the resumed successor and add any missing leg by hand; the `d6*` "

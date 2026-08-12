@@ -938,10 +938,7 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
     a root-selection preference, not a precondition for making the call —
     the native module is always invoked either way.
     """
-    if coordinator_root is not None:
-        plugin_root = coordinator_root
-    else:
-        plugin_root = (plugins_root / "coordinator-claude" / "coordinator" / "bin").parent
+    plugin_root = _doe_payload_root(coordinator_root, plugins_root, "templates/setup")
     try:
         with _temp_env(CLAUDE_PLUGIN_ROOT=str(plugin_root)):
             rc, _, _ = _call_native_main(verify_templates_setup_sync.main, [])
@@ -953,14 +950,26 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
                 "P-11",
                 "amber",
                 "templates/setup drift detected — run verify-templates-setup-sync.py (no "
-                "flags, inspect-only) to inspect. Since the runtime-root resolver now "
-                "prefers a resolved example-doctrine-repo clone over the shared ~/.claude/setup/ copy (see "
-                "coordinator_percolate_runtime_root()), this drift no longer reaches the "
-                "resolved truth on a machine with a example-doctrine-repo clone — it is largely defanged, not "
-                "urgent to hand-patch. Do not `cp` over the destination; it may be a "
-                "foreign-repo-tracked file. Re-run the coordinator installer "
-                "(`/coordinator:install`) to deliver an in-manifest update via its careful "
-                "overwrite path instead.",
+                "flags, inspect-only) to see which files. Read NOT_PRESENT rows as benign "
+                "(neither side exists yet); only MISMATCH rows are drift. Since the "
+                "runtime-root resolver prefers a resolved example-doctrine-repo clone over the shared "
+                "~/.claude/setup/ copy (see coordinator_percolate_runtime_root()), a "
+                "MISMATCH does not reach the resolved truth on a machine with a example-doctrine-repo clone "
+                "— real, but not urgent. RE-RUNNING THE INSTALLER WILL NOT CLEAR THIS, and "
+                "that is by design, not a bug: substrate.py's percolation step classifies a "
+                "drifted destination as operator-customized and PRESERVES it, logging "
+                "`[machine-local] operator-customized <file> preserved; template at <path> "
+                "for diff reference`. It cannot tell a deliberate local edit from stale "
+                "content, so it refuses to guess. Verified 2026-08-12 by perturbing the "
+                "live file, running install-maximalist.py to completion (rc=0), and "
+                "observing the drift survive. Do not `cp` over the destination by hand "
+                "either: it is foreign-repo-tracked (the ~/.claude meta-repo, "
+                "coordinator-claude plane), so an unattributed overwrite travels to every "
+                "machine that pulls. Resolve it as a decision, not a sync: diff the live "
+                "copy against the template the log line names, decide which side is "
+                "authoritative, and re-pin deliberately with a commit that says why — or "
+                "route it to the coordinator-claude owner via "
+                "coordinator/bin/cross-repo-memo if the call is theirs.",
             )
         ]
     return []
@@ -1009,8 +1018,52 @@ def _currency_plugin_root(coordinator_root: Optional[Path], plugins_root: Path) 
     only when it actually carries the schema-version file; otherwise keep the
     historical plugins_root path so the marketplace case does not regress.
     """
-    if coordinator_root is not None and (coordinator_root / "coordinator-schema-version").is_file():
+    return _doe_payload_root(coordinator_root, plugins_root, "coordinator-schema-version")
+
+
+def _doe_payload_root(
+    coordinator_root: Optional[Path], plugins_root: Path, marker: str
+) -> Path:
+    """Resolve the coordinator root that actually carries `marker`.
+
+    Shared by P-11 (marker `templates/setup`) and P-13 (marker
+    `coordinator-schema-version`). Both probes need the example-doctrine-repo-side payload, and
+    both were reaching for it the same broken way.
+
+    Three rungs, marker-verified rather than assumed:
+
+    1. `coordinator_root` when it carries the marker. On a marketplace install
+       this is the right answer and stays first.
+    2. The example-doctrine-repo-root ladder (`coordinator_doe_root()`), when THAT carries it.
+       This is the rung the CLI path needs and did not have: `coordinator_root`
+       arrives from `_doe_coordinator_root()`, whose first rung is
+       COORDINATOR_BIN_ROOT — which the CLI entry sets to CLAUDE-KLABAUTER's bin. So the
+       CLI hands these probes `<claude-klabauter>/coordinator`, which carries neither
+       marker: `coordinator-schema-version` stayed in example-doctrine-repo when the probe
+       migrated here (see coordinator/bin/probe-onboarding-currency.py's
+       plugin-root note), and `templates/setup` is example-doctrine-repo-owned outright.
+    3. The historical marketplace path, unchanged, so that case cannot regress.
+
+    Why this matters beyond a wrong path: on a live-source install the
+    marketplace directory holds only `data/`, so falling through to rung 3 made
+    P-13 report `inconclusive(schema constant unreadable)` and P-11 report
+    templates/setup DRIFT — each naming a remedy for a condition that was not
+    the real one. A probe that misdiagnoses is worse than one that fails: P-11's
+    remedy text talks the reader out of urgency ("largely defanged"), and P-13's
+    pointed at a file the operator was never going to find.
+    """
+    if coordinator_root is not None and (coordinator_root / marker).exists():
         return coordinator_root
+    try:
+        doe = coordinator_doe_root()
+        if doe:
+            candidate = normalize_native_path(str(doe)) / "coordinator"
+            if (candidate / marker).exists():
+                return candidate
+    except Exception:
+        # Never raise from a probe's root resolution — fall through to the
+        # historical path and let the probe report its own honest status.
+        pass
     return plugins_root / "coordinator-claude" / "coordinator"
 
 

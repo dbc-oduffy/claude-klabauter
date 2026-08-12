@@ -156,6 +156,34 @@ class RoadmapSummary(BaseModel):
 
     D9: nullable, never optional.
     """
+    scan_incomplete: bool
+    """
+    Derived at emit: True when the handoff scan backing roll_up could not read
+    part of the subtree, making roll_up.total an undercount. A consumer deriving
+    a percentage from roll_up MUST treat True as "this number is incomplete"
+    rather than rendering it as fact.
+
+    Deliberately NOT nullable, unlike its neighbours here: a consumer that has
+    to distinguish absent-from-false cannot tell a clean scan from an old
+    producer, which is the exact failure this field exists to close. Present
+    always — False on a clean scan, never absent, never null.
+
+    Spec backlinks:
+      example-cockpit-repo/cross-repo/archive/2026-08-11-example-cockpit-repo-em-corrections-and-one-live-pct-shipped-defect.md
+      state/sizings/2026-08-11-cockpit-emission-defects-dropped-scan-in.yaml
+
+    D9 exception ratified by claude-central-em 2026-08-11 (bilateral gate,
+    MINOR additive 3.10.0 -> 3.11.0): required and key-present-always.
+    """
+    scan_errors: list[str]
+    """
+    Derived at emit: human-readable reasons the scan was incomplete, empty on a
+    clean scan. Item type is pinned to string by the same ratification — not a
+    structured error object — so consumers may render them directly.
+
+    Present always, empty-list on a clean scan; never absent, never null. See
+    scan_incomplete for why these two depart from the nullable convention.
+    """
 
     content_hash: ContentHash | None = None
     """

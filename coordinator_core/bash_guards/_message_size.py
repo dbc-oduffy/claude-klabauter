@@ -218,6 +218,28 @@ def _extract_prose_text(envelope: Optional[Dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def extract_prose_text(envelope: Optional[Dict[str, Any]]) -> str:
+    """Public alias for ``_extract_prose_text``.
+
+    A second caller package (``coordinator_core.bash_guards.tests``' C3a
+    rendered-message lint harness) needs this exact prose extraction --
+    the same ``additionalContext``/``permissionDecisionReason`` pull this
+    module's own byte-size leg uses -- without re-deriving it or reaching
+    across a package boundary for a leading-underscore name. Mirrors the
+    ``resolve_override_keys_doc_display`` promotion precedent in
+    ``_helpers.py``: the underscore-prefixed original stays unchanged for
+    every in-module caller (``measure_envelope``); this wrapper is the
+    promoted, intentionally-shared entry point.
+
+    Spec backlink: docs/plans/2026-08-12-agent-facing-messages-not-apology.md,
+    chunk C3 TEXT SEAM CORRECTION -- the register leg must read
+    ``GuardCapture``'s rendered text via this seam, never a
+    hand-duplicated re-derivation of ``hookSpecificOutput``'s prose
+    fields.
+    """
+    return _extract_prose_text(envelope)
+
+
 def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     """Union a list of (possibly overlapping) `(start, end)` character
     ranges into their non-overlapping cover -- a backtick span can sit
@@ -434,126 +456,44 @@ def _data_block_bytes(text: str) -> int:
     return total
 
 
-#: Sentinel key rendered through `operator_override_note` at import time
-#: purely to discover the LITERAL TEXT that immediately precedes the env-var
-#: name in each of its two branches (flag-shaped, `reason_placeholder=`-
-#: shaped) -- never a hardcoded transcription of that builder's prose. See
-#: `_derive_override_env_var_prefixes` for why this must stay derived.
-_OVERRIDE_PREFIX_SENTINEL = "ZZZOVERRIDESENTINELZZZ"
+#: The ONE fixed string `operator_override_note` now renders, regardless of
+#: `env_var`/`reason_placeholder` -- see that function's own docstring,
+#: "RESHAPED AGAIN 2026-08-11" (second reshape the same day as the first).
+#: That reshape stopped interpolating the guard's own env-var name into its
+#: output at all, so there is no longer a per-guard ARGUMENT to recover from
+#: rendered text, and no per-branch prefix to derive either: every call
+#: renders byte-identical output. Computed once at import time (never per
+#: measurement) because the builder is now a pure zero-argument-dependent
+#: constant -- still a LIVE render of the real builder, never a hand-copied
+#: transcription of its prose (same discipline the retired derivation
+#: functions below this comment used to enforce for the old, argument-
+#: dependent shape).
+_OVERRIDE_NOTE_TAIL = operator_override_note("")
 
 
-def _derive_override_env_var_prefixes() -> List[str]:
-    """Recover the literal prefix text `operator_override_note` renders
-    immediately before its `env_var` argument, for BOTH branches (default
-    flag-shaped, and `reason_placeholder=`-shaped), by rendering the
-    builder with a sentinel key and slicing off everything before the
-    sentinel.
-
-    NEGATIVE SPEC (2026-08-11 incident): `_OVERRIDE_ENV_VAR_RE` used to be
-    an INDEPENDENT, hand-transcribed pattern (`r"\\b([A-Z][A-Z0-9_]{3,})=1\\b"`)
-    keyed on a `KEY=1` assignment shape. `operator_override_note`'s
-    2026-08-11 reshape (commit ba3bf8a98) removed the assignment form
-    entirely (NEGATIVE SPEC 4 on that function -- the key is now named
-    BARE), and this independent transcription silently decoupled: it
-    recovered nothing, `_tail_bytes` subtracted nothing, and the ~170-byte
-    SSOT tail landed back inside every guard's prose budget uncredited (30+
-    corpus cells over the 220-byte cap). A pattern built by TRANSCRIBING a
-    builder's output shape can always drift out of sync with the builder
-    silently, because nothing ties the two together -- this function is the
-    fix: it renders the ACTUAL builder and reads the prefix back off ITS
-    OWN output, so a future reshape of `operator_override_note`'s rendered
-    text automatically changes what this function derives too. Do not
-    replace this with a second hand-copied literal, ever -- that is the
-    exact defect class this function exists to close.
-    """
-    prefixes: List[str] = []
-    for rendered in (
-        operator_override_note(_OVERRIDE_PREFIX_SENTINEL),
-        operator_override_note(_OVERRIDE_PREFIX_SENTINEL, reason_placeholder="a caller-supplied reason placeholder"),
-    ):
-        idx = rendered.index(_OVERRIDE_PREFIX_SENTINEL)
-        prefixes.append(rendered[:idx])
-    return prefixes
-
-
-def _derive_override_env_var_common_suffix() -> str:
-    """The two branches' prefixes (`_derive_override_env_var_prefixes`)
-    diverge only in the parenthetical SHAPE text (``"(flag)"`` vs.
-    ``'(reason, e.g. "<placeholder>")'`` -- the latter interpolates the
-    CALLER's own `reason_placeholder` text, which `_discoverable_env_vars`
-    cannot know in advance for an arbitrary guard message). Everything
-    AFTER that parenthetical (``"), unsettable from inside this session --
-    read only at hook-process spawn: "``) is identical between the two
-    branches regardless of placeholder text, so anchoring on the common
-    SUFFIX of the two derived prefixes -- rather than either prefix whole
-    -- recovers the env var independent of which placeholder text a given
-    call site used. Still fully derived from a live render, never a
-    transcription of this literal string.
-    """
-    prefixes = _derive_override_env_var_prefixes()
-    a, b = prefixes[0], prefixes[1]
-    length = 0
-    while length < min(len(a), len(b)) and a[len(a) - 1 - length] == b[len(b) - 1 - length]:
-        length += 1
-    return a[len(a) - length :]
-
-
-_OVERRIDE_ENV_VAR_RE = re.compile(
-    re.escape(_derive_override_env_var_common_suffix()) + r"([A-Z][A-Z0-9_]{3,})"
-)
-
-
-def _tail_bytes(
-    text: str,
-    override_env_var: Optional[str],
-    *,
-    override_reason_placeholder: Optional[str] = None,
-) -> int:
+def _tail_bytes(text: str) -> int:
     """Algorithm step 4: locate the mandatory `operator_override_note` tail
-    BY IDENTITY and return its byte length if present. `override_env_var`
-    must be the exact env var the guard's OWN call site passed to
-    `operator_override_note` -- this is identity matching against a known
-    SSOT fragment (call the same builder, subtract the exact string it
-    returns), not a regex and not a fixed literal, since the doc path
-    spliced into the rendered string is itself call-time-resolved
-    (`_resolve_override_keys_doc_display`)."""
-    candidates = [override_env_var] if override_env_var else _discoverable_env_vars(text)
-    for candidate in candidates:
-        tail = operator_override_note(candidate, reason_placeholder=override_reason_placeholder)
-        if tail and tail in text:
-            return len(tail.encode("utf-8"))
-    return 0
+    BY IDENTITY (the fixed string above) and return its byte length if
+    present.
 
-
-def _discoverable_env_vars(text: str) -> List[str]:
-    """Recover the env-var argument a guard passed to `operator_override_note`
-    by reading it back off the rendered message.
-
-    This does NOT weaken the identity guarantee `_tail_bytes` documents: the
-    subtraction still only happens when the builder's own returned string
-    appears verbatim in the message. What is inferred here is the ARGUMENT,
-    not the tail — a wrong guess simply builds a string that does not match
-    and subtracts nothing, which is the safe direction.
-
-    The alternative — a hand-maintained env-var column on all 69 corpus rows —
-    was rejected deliberately: it rots the moment a guard changes its override
-    key, and it fails silently by over-counting prose (the tail lands back in
-    the cap) rather than loudly. Recovering the argument from the message keeps
-    the SSOT in the guard's own call site, where it belongs.
-
-    NEGATIVE SPEC (2026-08-11) -- `_OVERRIDE_ENV_VAR_RE` MUST stay DERIVED
-    from `operator_override_note`'s own render
-    (`_derive_override_env_var_prefixes`), never re-transcribed as an
-    independent literal pattern. The 2026-08-11 reshape of that builder
-    (commit ba3bf8a98, removing the `KEY=1` assignment form) broke this
-    recovery precisely because the prior pattern was authored as a
-    standalone copy of the builder's output shape, with nothing tying the
-    two together -- the builder changed, the copy did not, and recovery
-    silently went to zero. Any future reshape of `operator_override_note`'s
-    rendered text must not be able to decouple this regex again without
-    also changing what it derives from.
-    """
-    return _OVERRIDE_ENV_VAR_RE.findall(text)
+    SIMPLIFIED 2026-08-11 (guard-messages-point-to-docs-never-name plan,
+    landed the same dispatch as `operator_override_note`'s own second
+    reshape): the prior version of this function took an `override_env_var`
+    argument (falling back to `_discoverable_env_vars`, which read the
+    argument BACK OFF the rendered message via a derived regex) because the
+    builder used to interpolate the guard's own env-var name into its
+    output, so the tail differed per call site -- a guard's message had to
+    be matched against ITS OWN specific rendering. That interpolation is
+    gone: the builder now renders the SAME string for every guard, every
+    env var, every `reason_placeholder`, so there is nothing left to
+    recover an argument FOR, and the whole per-guard discovery apparatus
+    this docstring used to describe (`_derive_override_env_var_prefixes`,
+    `_derive_override_env_var_common_suffix`, `_OVERRIDE_ENV_VAR_RE`,
+    `_discoverable_env_vars`) is retired along with it, not merely
+    unused -- a regex built to recover a signal the render no longer
+    carries is dead code reasoning about a defect class that can no longer
+    occur, not a safety net."""
+    return len(_OVERRIDE_NOTE_TAIL.encode("utf-8")) if _OVERRIDE_NOTE_TAIL and _OVERRIDE_NOTE_TAIL in text else 0
 
 
 def _provenance_marker_bytes(text: str) -> int:
@@ -579,8 +519,6 @@ def measure_envelope(
     envelope: Optional[Dict[str, Any]],
     *,
     band: Optional[Union[GuardBand, str]] = None,
-    override_env_var: Optional[str] = None,
-    override_reason_placeholder: Optional[str] = None,
 ) -> MessageSizeMeasurement:
     """Measure one guard envelope: total / prose / exempt-span / found-data
     byte counts, plus band and the speaker/over-cap predicates.
@@ -591,16 +529,21 @@ def measure_envelope(
     cell is itself part of what the corpus needs to see (non-triggering
     cells are required, not optional -- Anti-scope).
 
-    `override_env_var` (and `override_reason_placeholder`) must be the
-    exact arguments the guard's OWN call site passed to
-    `operator_override_note`, for the identity-match tail subtraction
-    (`_tail_bytes`). Passing nothing means "this guard's message carries no
-    override tail" -- the tail subtraction is then a no-op, not an error.
+    SIGNATURE CHANGE 2026-08-11 (guard-messages-point-to-docs-never-name
+    plan): `override_env_var`/`override_reason_placeholder` are REMOVED, not
+    merely defaulted to `None` -- `operator_override_note`'s own reshape the
+    same dispatch made its output independent of both arguments (a single
+    fixed string every guard's tail either carries verbatim or doesn't), so
+    there was no longer a real argument for a caller to supply; keeping the
+    parameters would have left two live-looking knobs that silently did
+    nothing, the exact "dead knob" shape that function's own docstring
+    documents rather than ships for `reason_placeholder`. `_tail_bytes` now
+    takes only `text`, see its own docstring for the full mechanism change.
     """
     text = _extract_prose_text(envelope)
     total_bytes = len(text.encode("utf-8"))
     exempt_bytes = _exempt_span_bytes(text) + _provenance_marker_bytes(text)
-    tail_bytes = _tail_bytes(text, override_env_var, override_reason_placeholder=override_reason_placeholder)
+    tail_bytes = _tail_bytes(text)
     data_bytes = _data_block_bytes(text)
     prose_bytes = max(0, total_bytes - exempt_bytes - tail_bytes - data_bytes)
     return MessageSizeMeasurement(

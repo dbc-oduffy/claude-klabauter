@@ -18,6 +18,13 @@ CLI:
 Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C2
 Replaces:      plugins/coordinator-claude/coordinator/bin/query-file-attribution.mjs
 
+--file matching: accepts an absolute path or a path relative to --project (or
+cwd if --project is unset), either separator style ('/' or '\\'), matched
+case-insensitively on Windows only. A relative arg is resolved against the
+project root and compared to stored (often absolute) record paths, and vice
+versa — no filesystem access, no symlink following, '.'/'..' collapsed via
+os.path.normpath only.
+
 Negative-spec:
   - Do NOT write to state/ or any other disk location — read-only consumer.
   - Do NOT query state/file-attribution-ledger/ shards (that is the old .mjs path).
@@ -25,6 +32,8 @@ Negative-spec:
     transcript-derived equivalent and is superseded by the new derivation model.
   - Do NOT fabricate file paths — derive-file-attribution.py's null-on-ambiguity
     invariant is respected; unknown rows with null file_path are absent from output.
+  - --file matching is whole-path equality after resolution only — never a
+    suffix/endswith match (would falsely match ingest.ts against vendor/ingest.ts).
 """
 
 import argparse
@@ -70,8 +79,25 @@ def _load_derive_module():
 # ---------------------------------------------------------------------------
 
 def _normalise_path(p: str) -> str:
-    """Normalise path separators for cross-platform matching."""
-    return p.replace('\\', '/')
+    """Normalise path separators (and case, on Windows) for cross-platform matching."""
+    p = p.replace('\\', '/')
+    if sys.platform == 'win32':
+        p = p.casefold()
+    return p
+
+
+def _resolved_forms(p: str, project_root: str) -> List[str]:
+    """Return the set of normalised comparison forms for a path.
+
+    Includes the path as given, and — if it is not already absolute — the
+    path resolved against project_root. Never touches the filesystem and
+    never follows symlinks; os.path.normpath only collapses '.'/'..'.
+    """
+    forms = [_normalise_path(os.path.normpath(p))]
+    if not os.path.isabs(p):
+        joined = os.path.normpath(os.path.join(project_root, p))
+        forms.append(_normalise_path(joined))
+    return forms
 
 
 def query_by_session(
@@ -83,14 +109,24 @@ def query_by_session(
 
 
 def query_by_file(
-    records: List[Dict[str, Any]], file_path: str
+    records: List[Dict[str, Any]], file_path: str, project_root: str
 ) -> List[Dict[str, Any]]:
-    """Return aggregate records for the given file_path, sorted by session_id."""
-    norm = _normalise_path(file_path)
-    matches = [
-        r for r in records
-        if _normalise_path(r.get('file_path', '') or '') == norm
-    ]
+    """Return aggregate records for the given file_path, sorted by session_id.
+
+    Matches when the query arg and the stored record path agree after
+    resolution against project_root in either direction — handles both an
+    absolute record with a relative query arg, and a relative record (e.g.
+    from a Bash-redirect row) with an absolute query arg.
+    """
+    query_forms = set(_resolved_forms(file_path, project_root))
+    matches = []
+    for r in records:
+        record_path = r.get('file_path', '') or ''
+        if not record_path:
+            continue
+        record_forms = set(_resolved_forms(record_path, project_root))
+        if query_forms & record_forms:
+            matches.append(r)
     return sorted(matches, key=lambda r: r.get('session_id', '') or '')
 
 
@@ -272,7 +308,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             outputs.append(_fmt_table_session(session_records, args.session))
 
     if args.file is not None:
-        file_records = query_by_file(all_records, args.file)
+        file_records = query_by_file(all_records, args.file, project_root)
         total_matches += len(file_records)
         if args.format == 'json':
             outputs.append(_fmt_json(file_records))

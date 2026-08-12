@@ -179,11 +179,11 @@ def main(argv: list[str]) -> int:
 
     # READER (AC10): a MISMATCH verdict is warned to stderr and the resolved
     # root used anyway (DR-277); UNRESOLVED never refuses either (AC4).
-    repo_root, _repo_verdict = resolve_checked_repo_root(explicit_root=None)
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
         _die("review-coverage-gate.py: cannot find git repo root")
-    if _repo_verdict["verdict"] == "MISMATCH":
-        print(_repo_verdict["message"], file=sys.stderr)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
 
     params: dict[str, object] = {}
     if from_handoff:

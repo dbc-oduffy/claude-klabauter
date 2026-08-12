@@ -19,6 +19,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core import tracker_entities
 from coordinator_core import tracker_store
 from coordinator_core import tracker_transitions as tt
 
@@ -315,7 +316,6 @@ def test_ac9_cascade_emitted_through_exactly_one_append_events_call(
         return orig_append_event(event, repo_root=repo_root)
 
     monkeypatch.setattr(tracker_store, "append_events", _spy_append_events)
-    monkeypatch.setattr(tt, "tracker_store", tracker_store)
     monkeypatch.setattr(tracker_store, "append_event", _spy_append_event)
 
     # Prime the item so both retractable axes read as currently asserted.
@@ -415,6 +415,124 @@ def test_applied_at_null_only_for_suggest_tier(repo_root):
 
     assert suggest["applied_at"] is None
     assert direct["applied_at"] == direct["observed_at"]
+
+
+# ---------------------------------------------------------------------------
+# Review: coordinator:code-reviewer, P1 — `_find_existing_by_address` scans
+# the SAME shared shard `tracker_entities.py` writes into (and this
+# module's own `kind: "snapshot"` events land in), and neither shape
+# carries `item_id`/`axis`/`to_state`. This regression fixture writes one
+# of each onto the shard BEFORE emitting a transition — the mixed-shard
+# scan the pre-fix `_dedup_check_address` unguarded bracket access would
+# have crashed on with `KeyError: 'item_id'` (or `'axis'`/`'to_state'`).
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_shard_entity_and_snapshot_events_do_not_crash_transition_dedup(
+    repo_root,
+):
+    tracker_entities.emit_project_created(
+        "proj-1", name="Project One", repo_root=repo_root
+    )
+
+    snapshot_payload = tt.build_snapshot_event(
+        "item-snap",
+        "code_complete",
+        folded_event_ids=["evt-fake-folded"],
+        as_of_sequence=1,
+        as_of_applied_at=None,
+        folded_to_state="asserted",
+    )
+    tt.emit_snapshot_event(snapshot_payload, repo_root=repo_root)
+
+    first = tt.emit_transition(
+        "item-9",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-mixed"},
+        tier="auto",
+        source_observation_id="obs-mixed",
+        repo_root=repo_root,
+    )
+    second = tt.emit_transition(
+        "item-9",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-mixed"},
+        tier="auto",
+        source_observation_id="obs-mixed",
+        repo_root=repo_root,
+    )
+
+    assert second["id"] == first["id"]
+    events = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-9"
+    ]
+    assert len(events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Review: coordinator:code-reviewer, P3 — `_emit_batch`'s partial-dedup
+# branch (an existing-match resolved alongside a genuinely-new payload in
+# the SAME batch) has no current production caller (`reopen_cascade` always
+# passes `source_observation_id=None`, which never dedups), so it is
+# exercised directly here rather than through `reopen_cascade`.
+# ---------------------------------------------------------------------------
+
+
+def test_emit_batch_partial_dedup_keeps_only_new_payloads_in_append_call(
+    repo_root, monkeypatch
+):
+    calls = []
+    orig_append_events = tracker_store.append_events
+
+    def _spy_append_events(events, *, repo_root):
+        calls.append(list(events))
+        return orig_append_events(events, repo_root=repo_root)
+
+    monkeypatch.setattr(tracker_store, "append_events", _spy_append_events)
+
+    existing = tt.emit_transition(
+        "item-batch",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-batch"},
+        tier="auto",
+        source_observation_id="obs-batch",
+        repo_root=repo_root,
+    )
+
+    dup_payload = tt.transition_event(
+        "item-batch",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-batch"},
+        tier="auto",
+        source_observation_id="obs-batch",
+    )
+    new_payload = tt.transition_event(
+        "item-batch",
+        "qa_verified",
+        "verified",
+        actor="reconciler",
+        evidence=None,
+        tier="auto",
+        source_observation_id="obs-batch-2",
+    )
+
+    result = tt._emit_batch([dup_payload, new_payload], repo_root=repo_root)
+
+    assert result[0]["id"] == existing["id"]
+    assert result[1]["axis"] == "qa_verified"
+    assert len(calls) == 1
+    assert len(calls[0]) == 1
+    assert calls[0][0]["axis"] == "qa_verified"
 
 
 def test_suggest_tier_event_invisible_to_read_events(repo_root):

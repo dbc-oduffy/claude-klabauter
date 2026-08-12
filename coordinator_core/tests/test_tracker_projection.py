@@ -1196,6 +1196,79 @@ def test_ac10_content_bound_skip_survives_late_earlier_event_across_shards(
 # ---------------------------------------------------------------------------
 
 
+def test_ac10_late_event_strictly_between_fold_boundary_and_snapshot_stamp(
+    repo_root, monkeypatch
+):
+    """Regression for the P1 window neither existing AC10 test exercises:
+    an un-folded event whose `applied_at` sorts STRICTLY BETWEEN the
+    snapshot's `as_of_applied_at` (the fold boundary) and the snapshot
+    record's own (later, compaction-time-stamped) `applied_at`.
+
+    `read_events`' global sort places that event BEFORE the snapshot
+    record — it is correctly unskipped and applied by a naive raw-order
+    fold — but a fold that then hits the snapshot at its own (later) sort
+    position and unconditionally overwrites state silently discards it.
+    Fails pre-fix: pre-fix code processes the gap event first (state ->
+    "asserted"), then reaches the snapshot and overwrites unconditionally
+    (state -> "retracted"), landing on "retracted" while full replay of
+    {t1 asserted, t2 retracted, gap-event asserted} is "asserted" — the
+    fold and the reference oracle diverge. Post-fix, the snapshot is
+    positioned at `as_of_applied_at` (before the gap event), so the gap
+    event applies on top of the seed and both equal "asserted"."""
+    monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "machine-a")
+    item_id = _make_item(repo_root)
+    axis = "code_complete"
+
+    tt.emit_transition(
+        item_id, axis, "asserted", actor="a", tier="direct", repo_root=repo_root
+    )
+    tt.emit_transition(
+        item_id, axis, "retracted", actor="a", tier="direct", repo_root=repo_root
+    )
+
+    snapshot = tt.snapshot_axis_if_due(item_id, axis, repo_root=repo_root)
+    assert snapshot is not None
+    assert snapshot["kind"] == "snapshot"
+    as_of_applied_at = snapshot["as_of_applied_at"]
+    snapshot_applied_at = snapshot["applied_at"]
+    assert as_of_applied_at < snapshot_applied_at, (
+        "fixture precondition: the snapshot's own applied_at (compaction "
+        "wall-clock time) must sort strictly after as_of_applied_at (the "
+        "fold boundary) for there to be a gap to inject an event into"
+    )
+
+    # Strictly inside (as_of_applied_at, snapshot.applied_at) — never
+    # folded (postdates the fold boundary), never skipped, but sorts
+    # BEFORE the snapshot record itself under read_events' raw order.
+    gap_dt = (
+        _parse_iso(as_of_applied_at)
+        + (_parse_iso(snapshot_applied_at) - _parse_iso(as_of_applied_at)) / 2
+    )
+    gap_event = _raw_transition_event(
+        item_id,
+        axis,
+        "asserted",
+        event_id="evt-gap-between-boundary-and-stamp",
+        applied_at=_iso(gap_dt),
+    )
+    assert as_of_applied_at < gap_event["applied_at"] < snapshot_applied_at
+
+    monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "machine-b")
+    _write_raw_event_line(shard_path(repo_root, machine="machine-b"), gap_event)
+
+    all_events = tracker_store.read_events(repo_root=repo_root)
+    real_events = [event for event in all_events if event.get("kind") != "snapshot"]
+    expected = _reference_axis_state(real_events, item_id, axis)
+    assert expected == "asserted"
+
+    actual = current_state(item_id, axis, repo_root=repo_root)
+    assert actual == expected, (
+        "snapshot seed overwrote an event landing strictly between the "
+        "fold boundary and the snapshot's own applied_at stamp — see P1 "
+        "regression docstring"
+    )
+
+
 def test_ac12_compaction_appends_never_rewrites_shard_prefix(repo_root, monkeypatch):
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "machine-a")
     item_id = _make_item(repo_root)

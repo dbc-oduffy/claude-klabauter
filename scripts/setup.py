@@ -1452,6 +1452,42 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return repo_root, "git-root auto-discovery"
 
 
+def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | None:
+    """Discover an existing klabauter checkout so a `claude-klabauter` install
+    can auto-arm DR-132's published-mirror key (AC1) — NEVER guess one
+    (AC2). Each candidate must exist on disk AND contain `coordinator_core/`
+    — the same usability predicate `_resolve_published_engine` applies.
+    Checked in this order, first hit wins:
+
+      1. an existing `repos.claude_klabauter` registry value — the common
+         case, and why seeding is idempotent (AC4): if this hits, the value
+         written back is the value already registered, never a different
+         one.
+      2. an existing `publish.mirrors.claude_klabauter.path` registry
+         value — a real and likely signal (observed live 2026-08-12: this
+         box had it set while the resolution key was absent).
+      3. the conventional sibling layout beside the claude-klabauter checkout
+         (`../claude-klabauter`).
+
+    No hit -> None, and the caller writes nothing (AC2) — a claude-klabauter
+    developer with no klabauter clone is a legitimate configuration.
+    """
+    from coordinator_core.install._shared import ml_get
+
+    candidates = [
+        ml_get("repos.claude_klabauter", plugin_root=plugin_root),
+        ml_get("publish.mirrors.claude_klabauter.path", plugin_root=plugin_root),
+        str(repo_root.parent / "claude-klabauter"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_path = Path(candidate)
+        if candidate_path.is_dir() and (candidate_path / "coordinator_core").is_dir():
+            return str(candidate_path)
+    return None
+
+
 def register_claude_klabauter_root(
     claude_klabauter_root_resolved: Path, claude_klabauter_root_source: str, repo_root: Path, args: Args
 ) -> Path:
@@ -1463,14 +1499,24 @@ def register_claude_klabauter_root(
       - claude-klabauter: machine-local set repos.claude_klabauter AND
         machine-local set engine.working_repos.claude_klabauter, both to the
         same resolved value — unchanged from before this branch existed.
+        ALSO auto-arms DR-132's two-tier gate: when a klabauter checkout is
+        discoverable (`_discover_klabauter_root`; never guessed), a THIRD
+        write seeds machine-local set repos.claude_klabauter to the
+        discovered path (AC1). No discoverable checkout -> that key is left
+        untouched, not an error (AC2). PM ruling 2026-08-12: a claude-klabauter
+        developer's machine is auto-armed for the dual-boot; a klabauter
+        install user must never encounter the concept (see the branch
+        below).
       - claude-klabauter: machine-local set repos.claude_klabauter ONLY —
-        neither claude_klabauter key is written. Per the agreed cross-repo
-        contract (cross-repo/inbox/2026-08-05-example-doctrine-repo-em-klabauter-
-        location-belongs-in-the-registry-not-a-pointer-file.md), the
-        registry carries the published engine's location and an absent key
-        makes a consumer fall open to the live-tree rung — writing a
-        claude_klabauter key from a klabauter clone would classify the
-        *published* engine as a *working repo*, inverting that model.
+        neither claude_klabauter key is written, and the dual-boot auto-arm
+        above does NOT apply here — this branch is unchanged in behaviour
+        and output. Per the agreed cross-repo contract
+        (cross-repo/inbox/2026-08-05-example-doctrine-repo-em-klabauter-location-
+        belongs-in-the-registry-not-a-pointer-file.md), the registry
+        carries the published engine's location and an absent key makes a
+        consumer fall open to the live-tree rung — writing a claude_klabauter
+        key from a klabauter clone would classify the *published* engine as
+        a *working repo*, inverting that model.
       - neither identity resolvable: fail loud (exit 95,
         EXIT_REPO_IDENTITY_UNRESOLVED) — a wrong guess here poisons the
         working-repo discriminant, which is worse than not registering.
@@ -1491,9 +1537,10 @@ def register_claude_klabauter_root(
     degrade gracefully instead (advisory, exit success; no key is
     registered). Fail loud ONLY when machine-local IS present but
     registration fails, or when the override pair is absent — that contract
-    covers every key for the resolved identity identically: a second key
-    (`engine.working_repos.claude_klabauter`) is not a separate registration
-    with its own fallback, it is a second write inside the same guard.
+    covers every key for the resolved identity identically: neither
+    `engine.working_repos.claude_klabauter` nor the auto-armed
+    `repos.claude_klabauter` is a separate registration with its own
+    fallback — each is a further write inside the same guard.
 
     `engine.working_repos.*` is example-doctrine-repo's key-namespace (schema authored on their
     plane, `machine-local-registry.md` §324); our half is this install-time
@@ -1501,11 +1548,28 @@ def register_claude_klabauter_root(
     state/memo-outbox/sent/working-repos-adopted-count-confirmed-12-not-13.md
     for why `repos.claude_klabauter` alone is not the working-repo signal.
     """
+    # Review: code-reviewer 2026-07-21 Finding 3 (P1) — resolved via the
+    # canonical, Windows-hardened `resolve_machine_local_cli` (which knows to
+    # prefer a `templates/bin/_machine_local.py` python shim, and to avoid the
+    # extension-less `bin/machine-local` shim on Windows, WinError 193)
+    # instead of a naive `shutil.which` + bare subprocess.
+    from coordinator_core.install._shared import resolve_machine_local_cli
+
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    plugin_root_str = str(plugin_root) if plugin_root else None
+
     identity = resolve_repo_identity(repo_root)
     if identity == "claude-klabauter":
-        keys = ("repos.claude_klabauter",)
+        key_values = {"repos.claude_klabauter": str(claude_klabauter_root_resolved)}
     elif identity == "claude-klabauter":
-        keys = ("repos.claude_klabauter", "engine.working_repos.claude_klabauter")
+        key_values = {
+            "repos.claude_klabauter": str(claude_klabauter_root_resolved),
+            "engine.working_repos.claude_klabauter": str(claude_klabauter_root_resolved),
+        }
+        discovered_klabauter = _discover_klabauter_root(repo_root, plugin_root_str)
+        if discovered_klabauter:
+            key_values["repos.claude_klabauter"] = discovered_klabauter
     else:
         print(file=sys.stderr)
         print(
@@ -1531,22 +1595,14 @@ def register_claude_klabauter_root(
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
 
+    keys = tuple(key_values)
     keys_desc = " + ".join(keys)
     print()
     print(f"--- Registration ({identity}): {keys_desc} ---")
     print(f"CLAUDE_KLABAUTER_ROOT source: {claude_klabauter_root_source}")
     print(f"CLAUDE_KLABAUTER_ROOT resolved: {claude_klabauter_root_resolved}")
 
-    # Review: code-reviewer 2026-07-21 Finding 3 (P1) — resolved via the
-    # canonical, Windows-hardened `resolve_machine_local_cli` (which knows to
-    # prefer a `templates/bin/_machine_local.py` python shim, and to avoid the
-    # extension-less `bin/machine-local` shim on Windows, WinError 193)
-    # instead of a naive `shutil.which` + bare subprocess.
-    from coordinator_core.install._shared import resolve_machine_local_cli
-
-    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
-    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
-    machine_local_argv = resolve_machine_local_cli(str(plugin_root) if plugin_root else None)
+    machine_local_argv = resolve_machine_local_cli(plugin_root_str)
     if machine_local_argv is None:
         override_pair = args.skip_dep_check and args.accept_risk
         if not override_pair:
@@ -1562,7 +1618,7 @@ def register_claude_klabauter_root(
         print(f"  {keys_desc} registration skipped (--skip-dep-check --accept-missing-deps-risk accepted).")
         print("  When coordinator-claude is installed, register with:")
         for key in keys:
-            print(f"    machine-local set {key} {claude_klabauter_root_resolved}")
+            print(f"    machine-local set {key} {key_values[key]}")
         return claude_klabauter_root_resolved
 
     # machine-local IS present -> coordinator-claude is installed; the example-doctrine-repo command
@@ -1571,27 +1627,28 @@ def register_claude_klabauter_root(
     # veneers later. Every key in `keys` sits inside the same guard — a failure
     # to write any one of them is a registration failure under this contract.
     for key in keys:
+        value = key_values[key]
         try:
             proc = subprocess.run(
-                machine_local_argv + ["set", key, str(claude_klabauter_root_resolved)],
+                machine_local_argv + ["set", key, value],
                 timeout=15,
                 **_NO_CONSOLE,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed to launch: {exc}", file=sys.stderr)
-            print(f"  Tried to register: {claude_klabauter_root_resolved}", file=sys.stderr)
+            print(f"  Tried to register: {value}", file=sys.stderr)
             print("  Remediation: run manually:", file=sys.stderr)
-            print(f"    machine-local set {key} {claude_klabauter_root_resolved}", file=sys.stderr)
+            print(f"    machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         if proc.returncode != 0:
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed.", file=sys.stderr)
-            print(f"  Tried to register: {claude_klabauter_root_resolved}", file=sys.stderr)
+            print(f"  Tried to register: {value}", file=sys.stderr)
             print("  Remediation: run manually:", file=sys.stderr)
-            print(f"    machine-local set {key} {claude_klabauter_root_resolved}", file=sys.stderr)
+            print(f"    machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
-        print(f"PASS [registration] {key} = {claude_klabauter_root_resolved}")
+        print(f"PASS [registration] {key} = {value}")
     return claude_klabauter_root_resolved
 
 

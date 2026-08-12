@@ -1,6 +1,9 @@
 """
-coordinator_core.plugin_health.forwarder_drift — WARN-only staleness probe for
-generated agent-helper bin/ forwarders.
+coordinator_core.plugin_health.forwarder_drift — staleness probe for
+generated agent-helper bin/ forwarders. WARN-only for the UNCITED population;
+FAIL-LOUD for the CITED-but-missing population (see CITED-VS-UNCITED SPLIT
+below, amended 2026-08-12) — two populations, two severities, not one
+uniform contract.
 
 Purpose: install-substrate's `_derive_agent_helper_target_map`
 (coordinator_core/install/substrate.py) computes the installed-forwarder name
@@ -26,15 +29,39 @@ Step 1.10 Addon Health, not an install-time gate. install-health-run.py's own
 contract is also FAIL-LOUD-on-aggregate ("install is incomplete" — see that
 module's docstring); a leg that must never fail the run it is registered in
 would be a contradiction of that contract, not an instance of it. This module
-follows the drift.py home and its contract instead: WARN, never FAIL, never
-raise.
+follows the drift.py home and its contract instead for the population that
+argument is actually about: install-health legs where derived==installed BY
+CONSTRUCTION. That argument is scoped to that population — it predates, and
+does not extend to, the CITED-but-missing population added 2026-07-31/
+sharpened 2026-08-12 (see CITED-VS-UNCITED SPLIT below). A cited CLI with no
+forwarder is not expected transient state between installs; it is a live
+prompt surface instructing an EM to invoke something that cannot resolve.
+This module never raises regardless of population — but it is no longer
+uniformly WARN-only; see the Contract block and CITED-VS-UNCITED SPLIT below
+for the two-population split this docstring now records.
 
 Contract:
-  - Never raises. Any resolution failure (claude-klabauter root unresolvable) is a
-    clean SKIP (`skipped=True`, `ok=True`), never a fail — that persona (an
-    OSS consumer with no claude-klabauter checkout, or any repo/machine where
-    repos.claude_klabauter isn't registered) legitimately has nothing to
-    compare.
+  - Never raises, in either population. Any resolution failure (claude-klabauter root
+    unresolvable) is a clean SKIP (`skipped=True`, `ok=True`), never a fail
+    — that persona (an OSS consumer with no claude-klabauter checkout, or any repo/
+    machine where repos.claude_klabauter isn't registered) legitimately has
+    nothing to compare. AC6: the CITED-population fail-loud path below fires
+    ONLY on a positively-computed non-empty `cited_missing` set — never on
+    "could not determine".
+  - UNCITED population: WARN, never FAIL — `main()`/the CLI stay exit 0.
+    Uncited drift is exactly "an install ran before the current
+    coordinator/bin/ contents", ordinary transient lag, not an install
+    defect; making this population fail-loud would be the permanent-noise
+    failure this module's own history (the retired `~/.claude/bin` mirror
+    leg, see below) already learned the hard way.
+  - CITED-but-missing population: FAIL-LOUD — `check-forwarder-drift.py`
+    exits non-zero (see CITED-VS-UNCITED SPLIT below and that CLI's own
+    `Exit codes:` block) when `ForwarderDriftResult.cited_missing` is
+    non-empty. This is a distinct population from the install-health legs
+    the WARN-only argument above was written for: nothing regenerates a
+    forwarder for a CLI a prompt surface currently cites, so this is not
+    "derived==installed by construction" drift — it is a live, currently-
+    broken invocation path.
   - Reports BOTH directions for the settings-home `bin/` (authoritative —
     gets the PATH nudge, the only location `_install_bin_resolvers` still
     writes): DERIVED-BUT-NOT-INSTALLED (a stale install — the 2026-07-23
@@ -62,26 +89,32 @@ Contract:
     detected" without naming what drifted is nearly worthless at this scale
     (~300 forwarders; the incident was 2 names out of ~300).
 
-CITED-VS-UNCITED SPLIT (2026-07-31 sharpening) — a missing settings-home/bin
-forwarder is reported in one of two registers depending on whether any
-Example-doctrine-repo prompt surface actually tells an agent to invoke it:
+CITED-VS-UNCITED SPLIT (2026-07-31 sharpening; exit contract split
+2026-08-12) — a missing settings-home/bin forwarder is reported (and now
+gated) in one of two registers depending on whether any example-doctrine-repo prompt
+surface actually tells an agent to invoke it:
   - UNCITED: nothing in the corpus names this CLI. Today's framing is
     correct as-is — this is exactly "an install ran before the current
     coordinator/bin/ contents", ordinary transient lag, remedied by a
-    re-install, never an escalation.
+    re-install, never an escalation. Stays WARN-only, exit 0.
   - CITED: a prompt surface (a skill, command, agent, snippet, or pipeline
     doc) names this exact settings-home/bin/<name> invocation. That
-    invocation rc=127's SILENTLY (bash treats 127 as an ordinary nonzero
+    invocation FAILS — a shell prints `bash: <path>: No such file or
+    directory` on stderr before rc=127 (not silent output-wise) — but
+    nothing GATES on that exit code (bash treats 127 as an ordinary nonzero
     exit; no branch on that code means the caller proceeds as if the step
-    ran). For a step a skill calls a *blocking gate*
-    (`check-auto-memory-drained`, cited by `/workstream-complete`) or cites
-    at a ceremony boundary (`safe-commit-offer`, cited by `/handoff` and
-    `/quick-wrap`), the missing forwarder is not transient lag an operator
-    can shrug off until the next install — it is a gate silently not
-    running, indistinguishable in its own output from a gate that ran and
-    passed. This case gets a distinctly louder line naming every citing
-    surface, so the fact does not stay buried in "advisory, exit 0 always"
-    framing that was written for the OTHER case.
+    ran). The defect is that nothing gates, not that nothing prints. For a
+    step a skill calls a *blocking gate* (`check-auto-memory-drained`,
+    cited by `/workstream-complete`) or cites at a ceremony boundary
+    (`safe-commit-offer`, cited by `/handoff` and `/quick-wrap`), the
+    missing forwarder is not transient lag an operator can shrug off until
+    the next install — it is a gate silently not running, indistinguishable
+    in its own output from a gate that ran and passed. This population is
+    both reported with a distinctly louder line naming every citing surface
+    AND (2026-08-12) exposed as the machine-readable `cited_missing` field
+    (see `ForwarderDriftResult`) that `check-forwarder-drift.py` gates on —
+    non-empty `cited_missing` fails the CLI's exit code; the UNCITED
+    population never does.
 
   Names are drawn from example-doctrine-repo's `coordinator/{agents,skills,commands,
   snippets,pipelines}/**/*.md` (excluding `tests/`/`fixtures/` segments,
@@ -107,17 +140,17 @@ Example-doctrine-repo prompt surface actually tells an agent to invoke it:
   advisory wording, never a hard failure — same never-raises contract as
   the rest of this module.
 
-  EXIT CODE — deliberately UNCHANGED at "exit 0 always" even for the CITED
-  case. `main()`'s caller (`/workday-start` Step 1.10 Addon Health)
-  consumes this probe as advisory; making the cited case fail would need a
-  matching contract change on that consuming step, which lives in
-  example-doctrine-repo and is out of this dispatch's scope to edit. A louder in-band
-  line that a human (or a skill parsing this probe's own output) actually
-  reads is the right lever here, not a silent contract break on a step that
-  currently has no branch for a non-zero exit from this probe. If a
-  cited-CLI 127 ever needs to hard-block a ceremony, that is a coordinated
-  two-repo change (this module's exit contract + the consuming step's
-  handling of it), not a unilateral flip here.
+  EXIT CODE (amended 2026-08-12; verified this session — no consumer keys on
+  this CLI's exit code programmatically, so this flip is additive, not a
+  breaking contract change) — `main()` now exits 1 when `cited_missing` is
+  non-empty, 0 in every other case (uncited-only drift, orphan-only drift,
+  skip, clean). `main()`'s caller, `/workday-start` Step 1.10 Addon Health,
+  consumes this probe's stdout advisorily and does not branch on its exit
+  code today, so this flip changes nothing for that caller's current
+  behavior while giving any future or external consumer (a script, a
+  different ceremony step) a real signal to key on instead of parsing
+  stdout. The UNCITED population's exit code is unchanged at 0 — see
+  Contract block above.
 
 Forwarder identification is CONTENT-based (a fixed marker line every
 `_write_agent_forwarder`-generated file carries), not name-based:
@@ -170,12 +203,29 @@ _PROG = "forwarder-drift"
 # re-deriving substrate.py's own name-exclusion policy here.
 _FORWARDER_MARKER = "# coordinator-claude bin forwarder for "
 
-_REMEDY = "re-run /coordinator:install (coordinator/scripts/install-maximalist.py) to regenerate forwarders"
+# Minimum remedy (AC5): `python3 -m coordinator_core.install.substrate`
+# requires CLAUDE_PLUGIN_ROOT pointed at the example-doctrine-repo clone's coordinator/
+# dir and fails loud without it (no self-derivation) — that is the whole
+# forwarder-regeneration step, without the maximalist orchestrator's broader
+# scope (settings.json hook blocks, shell shims, the claude-doe wrapper, the
+# venv), which is over-broad advice for forwarder-only drift on a machine
+# running dozens of concurrent sessions. /coordinator:install
+# (coordinator/scripts/install-maximalist.py) remains the guided superset,
+# not the only named option. Note for whoever reads this: `--check-only`
+# stops at the FIRST divergence and never reaches the forwarder step, so it
+# cannot preview this drift.
+_REMEDY = (
+    "run `python3 -m coordinator_core.install.substrate` (requires CLAUDE_PLUGIN_ROOT set to the "
+    "example-doctrine-repo coordinator/ dir) as the minimum remedy, or /coordinator:install "
+    "(coordinator/scripts/install-maximalist.py) as the guided superset, to regenerate forwarders"
+)
 
 _ADVISORY_LINE = (
-    f"[info] {_PROG}: advisory-only, exit 0 always — drift here means an install ran BEFORE the "
-    "current coordinator/bin/ contents (expected transient state between installs, not an install "
-    f"defect). The remedy is a re-install ({_REMEDY}), never an escalation."
+    f"[info] {_PROG}: UNCITED drift here is advisory-only, exit 0 always — it means an install ran "
+    "BEFORE the current coordinator/bin/ contents (expected transient state between installs, not "
+    "an install defect). CITED-but-missing drift is different: it fails the CLI's exit code (see "
+    f"module docstring's CITED-VS-UNCITED SPLIT). The remedy in both cases: {_REMEDY}, never an "
+    "escalation for the uncited case."
 )
 
 # The ~/.claude/bin compat mirror's producer was retired 2026-07-24 (0fc30697,
@@ -207,12 +257,23 @@ class ForwarderDriftResult:
     zero-drift result, though both carry ok=True. `lines` are [ok]/[warn]/
     [skip] stdout-shaped messages in emission order; `stderr_lines` is always
     empty today (kept for shape-parity with plugin_health.drift.DriftResult
-    and to leave room for a future diagnostic-only channel)."""
+    and to leave room for a future diagnostic-only channel).
+
+    `cited_missing` (new 2026-08-12, AC1) is the machine-readable form of the
+    CITED-VS-UNCITED SPLIT (see module docstring): `{settings-home-bin CLI
+    name: [citing-site, ...]}` for every missing settings-home/bin forwarder
+    that is ALSO named by a live example-doctrine-repo prompt-surface invocation. Empty
+    dict in every other case — uncited-only drift, orphan-only drift, skip,
+    or clean. This is the field `check-forwarder-drift.py` gates on
+    (non-empty -> non-zero exit); everything else about this result stays
+    advisory. Distinct from the rendered `[warn] ... cited at: ...` lines in
+    `lines`, which remain the human-readable form of the same fact."""
 
     ok: bool
     skipped: bool = False
     lines: List[str] = field(default_factory=list)
     stderr_lines: List[str] = field(default_factory=list)
+    cited_missing: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def _resolve_agent_bin() -> Optional[Path]:
@@ -347,6 +408,7 @@ def _diff_one_location(
         return ForwarderDriftResult(ok=True, lines=[ok_line])
 
     lines: List[str] = []
+    cited_missing_sites: Dict[str, List[str]] = {}
     if missing:
         cited_missing = [n for n in missing if cited_sites and n in cited_sites] if cited_sites is not None else []
         uncited_missing = [n for n in missing if n not in cited_missing]
@@ -357,19 +419,21 @@ def _diff_one_location(
             )
         if cited_missing:
             for name in cited_missing:
-                sites = ", ".join(sorted(cited_sites[name]))
+                sites = sorted(cited_sites[name])
+                cited_missing_sites[name] = sites
+                sites_str = ", ".join(sites)
                 lines.append(
                     f"[warn] {_PROG} ({label}): CLI(s) in coordinator/bin/ have no installed forwarder "
                     "AND are cited by a live prompt-surface invocation — this is NOT expected transient "
-                    "install lag: every invocation exits 127 SILENTLY (no output), so any gate or step "
-                    f"depending on it is being SKIPPED, not passed. {_REMEDY}. bin/{name} cited at: {sites}"
+                    "install lag: the invocation fails and NOTHING GATES ON IT, so any gate or step "
+                    f"depending on it is being SKIPPED, not passed. {_REMEDY}. bin/{name} cited at: {sites_str}"
                 )
     if orphaned:
         lines.append(
             f"[warn] {_PROG} ({label}): {len(orphaned)} installed forwarder(s) have no matching CLI "
             f"in coordinator/bin/ (orphaned) — {_REMEDY} to reconcile: {', '.join(orphaned)}"
         )
-    return ForwarderDriftResult(ok=False, lines=lines)
+    return ForwarderDriftResult(ok=False, lines=lines, cited_missing=cited_missing_sites)
 
 
 def check_forwarder_drift(
@@ -418,6 +482,7 @@ def check_forwarder_drift(
     lines: List[str] = [_ADVISORY_LINE]
     stderr_lines: List[str] = []
     any_drift = False
+    cited_missing: Dict[str, List[str]] = {}
     for label, bin_dir, check_missing, location_cited_sites in locations:
         if not bin_dir.is_dir():
             lines.append(f"[skip] {_PROG} ({label}): '{bin_dir}' does not exist — no install at this location yet")
@@ -427,10 +492,11 @@ def check_forwarder_drift(
         )
         lines.extend(result.lines)
         stderr_lines.extend(result.stderr_lines)
+        cited_missing.update(result.cited_missing)
         if not result.ok:
             any_drift = True
 
-    return ForwarderDriftResult(ok=not any_drift, lines=lines, stderr_lines=stderr_lines)
+    return ForwarderDriftResult(ok=not any_drift, lines=lines, stderr_lines=stderr_lines, cited_missing=cited_missing)
 
 
 def main(argv: List[str]) -> int:
@@ -440,8 +506,13 @@ def main(argv: List[str]) -> int:
         print(line)
     for line in result.stderr_lines:
         print(line, file=sys.stderr)
-    # Advisory only — never gates (see module docstring: WARN, not FAIL).
-    return 0
+    # Two-population split (see module docstring's CITED-VS-UNCITED SPLIT,
+    # amended 2026-08-12): a non-empty `cited_missing` is a live prompt
+    # surface instructing an EM to invoke something that cannot resolve —
+    # that is not the advisory, "expected transient lag" population the
+    # WARN-only contract was written for, so it gates. Every other outcome
+    # (uncited-only drift, orphan-only drift, skip, clean) stays exit 0.
+    return 1 if result.cited_missing else 0
 
 
 @register_op("plugin_health.forwarder_drift")
@@ -453,9 +524,13 @@ async def _plugin_health_forwarder_drift(params: dict, repo_root=None) -> dict:
     install state, not the caller's repo (same "none"-scope class as
     plugin_health.drift / engine.drift).
 
-    Returns {"ok": bool, "skipped": bool, "lines": [...], "stderr_lines": [...]}.
-    `ok=False` means drift was found — the caller decides what to do with
-    that; this op itself never raises and never signals a hard failure.
+    Returns {"ok": bool, "skipped": bool, "lines": [...], "stderr_lines": [...],
+    "cited_missing": {name: [site, ...]}}. `ok=False` means drift was found —
+    the caller decides what to do with that; this op itself never raises and
+    never signals a hard failure. `cited_missing` is the AC1 machine-readable
+    field (see `ForwarderDriftResult.cited_missing`'s docstring); non-empty
+    only for the cited-but-missing population, never for uncited/orphan
+    drift, a skip, or a clean result.
     """
     del params
     result = check_forwarder_drift()
@@ -464,6 +539,7 @@ async def _plugin_health_forwarder_drift(params: dict, repo_root=None) -> dict:
         "skipped": result.skipped,
         "lines": result.lines,
         "stderr_lines": result.stderr_lines,
+        "cited_missing": result.cited_missing,
     }
 
 

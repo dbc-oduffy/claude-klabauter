@@ -696,6 +696,68 @@ class TestSupersessionCandidates:
         cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
         assert [c["shared_loci"] for c in cands] == [["memo_blitz_buckets.py"]]
 
+    def test_pairs_per_locus_bound_caps_fanout_at_boundary_cutoff(self, tmp_path):
+        # state/audits/2026-08-12-supersession-candidate-pair-blowup.md — a
+        # locus sitting exactly at `_discriminating_locus_cutoff` still
+        # contributes up to C(cutoff, 2) pairs; `_MAX_PAIRS_PER_LOCUS` (3)
+        # must cap that fanout regardless. Corpus sized to 61 open memos so
+        # the SHARE-scaled cutoff (ceil(0.05 * 61) == 4) governs, and the
+        # shared locus is cited by exactly 4 same-sender memos — the
+        # boundary case (a locus AT the cutoff, not comfortably under it).
+        # Uncapped this would emit C(4, 2) == 6 pairs; capped it must emit
+        # at most `_MAX_PAIRS_PER_LOCUS` == 3.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        for i in range(57):
+            _write_memo(
+                inbox, f"2026-07-01-filler{i:03d}-em-x.md", sender=f"filler{i:03d}-em",
+                created="2026-07-01", body="no shared locus here\n",
+            )
+        for i in range(4):
+            _write_memo(
+                inbox, f"2026-07-2{i}-b-em-shared{i}.md", sender="b-em",
+                created=f"2026-07-2{i}", body="see shared_file.py\n",
+            )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        shared = [c for c in cands if c["shared_loci"] == ["shared_file.py"]]
+        assert len(shared) == 3
+
+    def test_declaration_bases_still_emit_when_inferred_basis_is_capped(self, tmp_path):
+        # Regression for the pairs-per-locus fix: `self-declared` and
+        # `declared` must be completely unaffected by the inferred-basis
+        # pair cap, even in a corpus where the locus-pair cap is actively
+        # suppressing `same-sender-same-locus` candidates.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        for i in range(57):
+            _write_memo(
+                inbox, f"2026-07-01-filler{i:03d}-em-x.md", sender=f"filler{i:03d}-em",
+                created="2026-07-01", body="no shared locus here\n",
+            )
+        for i in range(4):
+            _write_memo(
+                inbox, f"2026-07-2{i}-b-em-shared{i}.md", sender="b-em",
+                created=f"2026-07-2{i}", body="see shared_file.py\n",
+            )
+        _write_memo(inbox, "2026-07-20-a-em-declared-old.md", sender="a-em")
+        _write_memo(
+            inbox, "2026-07-21-a-em-declared-new.md", sender="a-em",
+            supersedes="2026-07-20-a-em-declared-old.md",
+        )
+        _write_memo(
+            inbox, "2026-07-22-c-em-self-old.md", sender="c-em", created="2026-07-22",
+            body="Original process notes.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-23-c-em-self-new.md", sender="c-em", created="2026-07-23",
+            body="Superseding it: 2026-07-22-c-em-self-old.md is retired.\n",
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        assert any(c["basis"] == "declared" for c in cands)
+        assert any(c["basis"] == "self-declared" for c in cands)
+        inferred = [c for c in cands if c["basis"] == "same-sender-same-locus"]
+        assert len(inferred) == 3
+
 
 # ---------------------------------------------------------------------------
 # Trigger

@@ -340,12 +340,15 @@ def append_events(events: list[dict], *, repo_root: Path) -> list[dict]:
        duplicate ids are rejected. An invalid batch writes nothing and
        never touches the lock.
     2. In-lock (inside the single ``_mutate``, because it depends on the
-       shard tail): own-shard collision detection for every id in the
-       batch — a batch id colliding with an EXISTING shard id, or with
-       another event already accepted earlier in this same batch's
-       in-lock pass — raises ``TrackerStoreDuplicateIdError`` and writes
-       nothing (AC3). ``sequence`` is assigned ``tail+1, tail+2, …
-       tail+N`` in input order within the one ``_mutate`` return.
+       shard tail): own-shard collision detection — every EXISTING shard
+       line's id is checked against ``seen_batch_ids``, the full,
+       pre-lock-computed set of every id in the batch (en masse, not an
+       incrementally-grown in-lock accept-set), and a hit raises
+       ``TrackerStoreDuplicateIdError`` and writes nothing (AC3).
+       Intra-batch duplicates are never seen here — pass 1 already
+       rejected them before the lock was touched. ``sequence`` is
+       assigned ``tail+1, tail+2, … tail+N`` in input order within the
+       one ``_mutate`` return.
 
     The clock rule: event *k* chains its ``(wall_ms, counter)`` off event
     *k-1*'s OWN just-assigned pair, NOT off the original shard tail for

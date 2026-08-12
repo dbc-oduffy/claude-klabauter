@@ -2433,6 +2433,435 @@ def _fire_nudge_unrouted_sizing() -> Optional[Dict[str, Any]]:
     return {"hookSpecificOutput": {"additionalContext": text}}
 
 
+
+# ---------------------------------------------------------------------------
+# C12 -- corpus rows for the 23 hooks/ modules C3c/C10 left uncovered (0 of
+# 3 already-covered em_report_altitude/nudge_harness_directive_dispatch/
+# nudge_unrouted_sizing above). Per module, exactly one of three outcomes
+# (no fourth): (1) a real firing row, (2) a named uncapturable reason, (3)
+# "no agent-facing emitter" with evidence. C10's own comment above claims
+# an `async def _handler` MCP-tool-shaped op "cannot invoke... without a
+# second, differently-shaped capture seam" -- that claim does not survive
+# contact with the actual modules: every async `_handler(params, repo_root)`
+# below is a plain coroutine, fired the same way `test_subagent_arrival_
+# check.py` et al. already do in this tree (`asyncio.run(_handler(...))`
+# inside a zero-arg sync closure) -- no new harness infrastructure, just a
+# wrapper this module already had the tools to write.
+# ---------------------------------------------------------------------------
+
+import asyncio as _hooks_asyncio
+
+from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
+from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
+from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
+from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
+from coordinator_core.hooks import nudge_foreground_agent_dispatch as _hook_nudge_foreground_agent_dispatch
+from coordinator_core.hooks import nudge_named_agent_report_delivery as _hook_nudge_named_agent_report_delivery
+from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_unauthorized_handoff
+from coordinator_core.hooks import postuse_advisory_dispatch as _hook_postuse_advisory_dispatch
+from coordinator_core.hooks import example_retrieval_repo_detect as _hook_example_retrieval_repo_detect
+from coordinator_core.hooks import suggest_sonnet_research as _hook_suggest_sonnet_research
+from coordinator_core.hooks import ue_knowledge_distrust as _hook_ue_knowledge_distrust
+from coordinator_core.hooks import agent_completion_log as _hook_agent_completion_log
+from coordinator_core.hooks import context_pressure_precompact as _hook_context_pressure_precompact
+from coordinator_core.hooks import session_heartbeat as _hook_session_heartbeat
+from coordinator_core.hooks import subagent_arrival_check as _hook_subagent_arrival_check
+from coordinator_core.hooks import subagent_fabrication_check as _hook_subagent_fabrication_check
+from coordinator_core.hooks import subagent_zero_tool_use as _hook_subagent_zero_tool_use
+from coordinator_core.hooks import subagent_zero_tool_use_resolve as _hook_subagent_zero_tool_use_resolve
+from coordinator_core.hooks import subagent_zero_tool_use_surface as _hook_subagent_zero_tool_use_surface
+from coordinator_core.hooks import track_dispatched_agents as _hook_track_dispatched_agents
+from coordinator_core.hooks import track_touched_files as _hook_track_touched_files
+
+
+def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Normalize a raw hook return into the `envelope-or-None` shape `HookCapture`
+    expects -- `no_advisory()` returns `{}` (falsy but not `None`), and the
+    structured-JSON-RPC-result modules (subagent_arrival_check et al.) return a
+    non-empty dict that carries no `hookSpecificOutput` key at all. Both count as
+    "did not speak" for this corpus's purposes."""
+    if not result:
+        return None
+    if not isinstance(result, dict) or "hookSpecificOutput" not in result:
+        return None
+    return result
+
+
+# --- (1) agent_completion_log -- write-only PostToolUse op; module docstring's
+# own Negative-spec: "Do NOT return advisory text ... always return
+# no_advisory()." Verified live: params={} takes the no-repo_root early return.
+def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_agent_completion_log._handler({}, repo_root=None))
+    )
+
+
+# --- (2) auto_push -- no register_op, no hookSpecificOutput/_envelope import
+# anywhere in the module (grep-verified); it is a standalone `python3 -m
+# coordinator_core.hooks.auto_push` post-commit CLI script whose only output is
+# `print(..., file=sys.stderr)` console diagnostics for a human reading the
+# commit's terminal output, never an additionalContext/permissionDecisionReason/
+# deny envelope surfaced to the model. NOT FIRED here: its only entrypoint
+# (`main()`) performs a real `git push` against the invoking checkout's actual
+# remote -- there is no side-effect-free unit to call, and invoking it would be
+# a real network mutation this corpus must never make. Classification 3 rests on
+# the static evidence above, not a captured row.
+
+# --- (3) block_unenumerated_agent_type -- real firing row: check() denies an
+# unenumerated subagent_type via deny() -> real PreToolUse deny text.
+def _fire_block_unenumerated_agent_type() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "totally-bogus-nonexistent-role-zz"},
+    }
+    return _to_envelope_or_none(_hook_block_unenumerated_agent_type.check(payload))
+
+
+def _fire_block_unenumerated_agent_type_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {}}
+    return _to_envelope_or_none(_hook_block_unenumerated_agent_type.check(payload))
+
+
+# --- (4) context_pressure_precompact -- write-only PreCompact op; every branch
+# in `_handler` returns `no_advisory()` (grep-verified: the module's only
+# `return` besides early exits is `no_advisory()`). Verified live with params={}.
+def _fire_context_pressure_precompact_noop() -> Optional[Dict[str, Any]]:
+    # `_handler` here is a plain sync `def` (unlike most of this section's other
+    # modules) -- confirmed by grep: no `async` on its definition line.
+    return _to_envelope_or_none(_hook_context_pressure_precompact._handler({}, repo_root=None))
+
+
+# --- (5) enforce_agent_model_pin -- real firing row: check() denies a pinned
+# model violation. `resolve_model_pins` is monkeypatched exactly as
+# hooks/tests/test_enforce_agent_model_pin.py's own `_patch_pins` does.
+def _fire_enforce_agent_model_pin() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            _hook_enforce_agent_model_pin,
+            "resolve_model_pins",
+            lambda *, doe_root=None: (
+                {
+                    "coordinator:executor": {
+                        "model": "sonnet",
+                        "_source_path": "test-fixture:/coordinator/agents/executor.md",
+                    }
+                },
+                None,
+            ),
+        )
+        payload = {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "coordinator:executor", "model": "opus", "prompt": "go"},
+        }
+        return _to_envelope_or_none(_hook_enforce_agent_model_pin.check(payload))
+
+
+def _fire_enforce_agent_model_pin_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            _hook_enforce_agent_model_pin,
+            "resolve_model_pins",
+            lambda *, doe_root=None: ({}, None),
+        )
+        payload = {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "coordinator:executor", "model": "opus", "prompt": "go"},
+        }
+        return _to_envelope_or_none(_hook_enforce_agent_model_pin.check(payload))
+
+
+# --- (6) nudge_em_code_dispatch -- real firing row via `op()` (the sync
+# direct-call shape this module ALSO carries per C10's own comment; the async
+# `_handler` never receives old_string/new_string/content per this module's own
+# MultiEdit negative-spec, so `op()` is the shape with an agent-facing message).
+def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_input": {"file_path": "src/module.py", "content": "def foo():\n    return 42\n"},
+        "session_id": "sess-c12-nemcd-fire-%s" % uuid.uuid4().hex,
+    }
+    return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+
+
+def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_input": {"file_path": "docs/notes.md", "content": "some notes\n"},
+        "session_id": "sess-c12-nemcd-ctrl-%s" % uuid.uuid4().hex,
+    }
+    return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+
+
+# --- (7) nudge_foreground_agent_dispatch -- real firing row: `run_in_background`
+# present-and-false rewrites into a backgrounded dispatch via rewrite_input(),
+# whose attached `context` is the AC9-fixed AUTO-REROUTED advisory text.
+def _fire_nudge_foreground_agent_dispatch() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "run_in_background": "false",
+        "session_id": "sess-c12-nfad-fire",
+        "tool_input": {"prompt": "do the thing"},
+    }
+    return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
+
+
+def _fire_nudge_foreground_agent_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "run_in_background": "true",
+        "session_id": "sess-c12-nfad-ctrl",
+        "tool_input": {"prompt": "do the thing"},
+    }
+    return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
+
+
+# --- (8) nudge_named_agent_report_delivery -- real firing row: a named Agent
+# dispatch with no SendMessage-to-main delivery instruction advises (AC9 fix).
+def _fire_nudge_named_agent_report_delivery() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {
+            "prompt": "Investigate the thing. Report back: findings.",
+            "name": "flag-emitter",
+        },
+    }
+    return _to_envelope_or_none(_hook_nudge_named_agent_report_delivery._handler(payload))
+
+
+def _fire_nudge_named_agent_report_delivery_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"prompt": "investigate X"}}
+    return _to_envelope_or_none(_hook_nudge_named_agent_report_delivery._handler(payload))
+
+
+# --- (9) nudge_unauthorized_handoff -- real firing row: a Write into
+# state/handoffs/ with no authoring skill active and no kind:recovery
+# frontmatter fires the nudge via post_advisory().
+def _fire_nudge_unauthorized_handoff() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Write",
+        "file_path": "state/handoffs/2026-08-12-example.md",
+        "content": "no frontmatter here\n",
+        "transcript_path": "",
+    }
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
+    )
+
+
+def _fire_nudge_unauthorized_handoff_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Write",
+        "file_path": "state/handoffs/2026-08-12-example.md",
+        "content": "kind: recovery\n",
+        "transcript_path": "",
+    }
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
+    )
+
+
+# --- (10) platform_localize -- no register_op, no hookSpecificOutput/_envelope
+# import anywhere in the module (grep-verified); its only entrypoint (`main()`)
+# is a standalone settings-localization CLI writing `.claude/settings.local.json`
+# and printing WARNING lines to stderr for a human, never an
+# additionalContext/permissionDecisionReason/deny envelope. NOT FIRED here: unlike
+# the read-only banner modules below, `main()`'s product is a real on-disk
+# settings-local.json write with no side-effect-free unit underneath it small
+# enough to fire safely inside this corpus; classification 3 rests on the static
+# evidence above (no register_op decorator, no envelope import), not a captured
+# row.
+
+# --- (11) postuse_advisory_dispatch -- real firing row: with no session_id, the
+# handler runs only the unauthorized-handoff fold-in leg (its own docstring:
+# "the one check that does NOT depend on session_id... runs even when session_id
+# is absent"), so the same Write-into-state/handoffs/ payload fires it via
+# post_advisory() -- same underlying text as nudge_unauthorized_handoff's own row
+# above, reached through the aggregator's own merge path instead.
+def _fire_postuse_advisory_dispatch() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Write",
+        "file_path": "state/handoffs/2026-08-12-example.md",
+        "content": "no frontmatter here\n",
+        "transcript_path": "",
+    }
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
+    )
+
+
+def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Read", "file_path": "", "content": "", "transcript_path": ""}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
+    )
+
+
+# --- (12) example_retrieval_repo_detect -- real firing row: `detect_banner(cwd)` returns
+# the UNINITIALIZED banner string for a scratch dir carrying a `.example-retrieval-repo/
+# manifest.json` marker with no `graph.db` beside it.
+def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-") as scratch:
+        scratch_dir = Path(scratch)
+        os.makedirs(scratch_dir / ".example-retrieval-repo")
+        (scratch_dir / ".example-retrieval-repo" / "manifest.json").write_text("{}", encoding="utf-8")
+        banner = _hook_example_retrieval_repo_detect.detect_banner(str(scratch_dir))
+        if not banner:
+            return None
+        return {"hookSpecificOutput": {"additionalContext": banner}}
+
+
+def _fire_example_retrieval_repo_detect_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-ctrl-") as scratch:
+        banner = _hook_example_retrieval_repo_detect.detect_banner(scratch)
+        if not banner:
+            return None
+        return {"hookSpecificOutput": {"additionalContext": banner}}
+
+
+# --- (13) session_heartbeat -- write-only Pre+PostToolUse bookkeeping op; every
+# branch in `_handler` returns `no_advisory()` (grep-verified). Verified live
+# with params={} (no session_id -> the earliest no_advisory() branch).
+def _fire_session_heartbeat_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_session_heartbeat._handler({}, repo_root=None))
+    )
+
+
+# --- (14) subagent_arrival_check -- structured JSON-RPC poll result, NOT an
+# advisory envelope: `_handler`'s own docstring, "Returns the pinned {"state",
+# "agent_id", "subagent_transcript_path", "reason"} shape directly (structured
+# JSON-RPC result, not an advisory envelope)". Verified live: the result carries
+# no `hookSpecificOutput` key at all.
+def _fire_subagent_arrival_check_structured() -> Optional[Dict[str, Any]]:
+    result = _hooks_asyncio.run(_hook_subagent_arrival_check._handler({}))
+    assert "hookSpecificOutput" not in result, (
+        "subagent_arrival_check began emitting an advisory envelope -- C12's "
+        "no-agent-facing-emitter classification is stale"
+    )
+    return _to_envelope_or_none(result)
+
+
+# --- (15) subagent_fabrication_check -- structured JSON-RPC verdict result, not
+# an advisory envelope (own `_envelope()` helper returns a plain {"verdict", ...}
+# dict, no `hookSpecificOutput`). Verified live with params={}.
+def _fire_subagent_fabrication_check_structured() -> Optional[Dict[str, Any]]:
+    result = _hooks_asyncio.run(_hook_subagent_fabrication_check._handler({}, repo_root=None))
+    assert "hookSpecificOutput" not in result, (
+        "subagent_fabrication_check began emitting an advisory envelope -- C12's "
+        "no-agent-facing-emitter classification is stale"
+    )
+    return _to_envelope_or_none(result)
+
+
+# --- (16) subagent_zero_tool_use -- write-only detector op; every branch in
+# `_handler` returns `no_advisory()` (grep-verified). Verified live with
+# params={} (missing repo_root/session_id/transcript_path -> the early
+# no_advisory() branch).
+def _fire_subagent_zero_tool_use_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_subagent_zero_tool_use._handler({}, repo_root=None))
+    )
+
+
+# --- (17) subagent_zero_tool_use_resolve -- structured JSON-RPC verdict result
+# (own `_verdict()` helper), not an advisory envelope. Verified live with
+# params={}.
+def _fire_subagent_zero_tool_use_resolve_structured() -> Optional[Dict[str, Any]]:
+    result = _hooks_asyncio.run(_hook_subagent_zero_tool_use_resolve._handler({}, repo_root=None))
+    assert "hookSpecificOutput" not in result, (
+        "subagent_zero_tool_use_resolve began emitting an advisory envelope -- "
+        "C12's no-agent-facing-emitter classification is stale"
+    )
+    return _to_envelope_or_none(result)
+
+
+# --- (18) subagent_zero_tool_use_surface -- structured JSON-RPC read result;
+# own module docstring: "this op returns a plain dict" (not an advisory
+# envelope). Verified live with params={}.
+def _fire_subagent_zero_tool_use_surface_structured() -> Optional[Dict[str, Any]]:
+    result = _hooks_asyncio.run(_hook_subagent_zero_tool_use_surface._handler({}, repo_root=None))
+    assert "hookSpecificOutput" not in result, (
+        "subagent_zero_tool_use_surface began emitting an advisory envelope -- "
+        "C12's no-agent-facing-emitter classification is stale"
+    )
+    return _to_envelope_or_none(result)
+
+
+# --- (19) suggest_sonnet_research -- real firing row: an unresolvable agent_id
+# (not a named-teammate id, not bare hex) is "not suppressed", firing the
+# DELEGATION REQUIRED advisory. `_has_deep_research_plugin` is monkeypatched to
+# False exactly as hooks/test_suggest_sonnet_research.py's own `_run` does (a
+# present deep-research plugin on the executing machine would otherwise
+# suppress this row nondeterministically).
+def _fire_suggest_sonnet_research() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
+        payload = {"agent_id": "not-an-agent-id", "session_id": "abcdefgh"}
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_suggest_sonnet_research._handler(payload)))
+
+
+def _fire_suggest_sonnet_research_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
+        payload = {"agent_id": "arscout-deadbeef123456ab", "session_id": "abcdefgh-full-session"}
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_suggest_sonnet_research._handler(payload)))
+
+
+# --- (20) track_dispatched_agents -- write-only dispatch-tracking op;
+# `_handler`'s docstring: "Returns no_advisory() -- product is the on-disk write
+# side-effect." Verified live with params={} (missing required fields ->
+# an early no_advisory() branch).
+def _fire_track_dispatched_agents_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_track_dispatched_agents._handler({}, repo_root=None))
+    )
+
+
+# --- (21) track_touched_files -- write-only touched-files-tracking op; module
+# docstring: "Returns no_advisory() (empty dict) on every invocation path."
+# Verified live with params={}.
+def _fire_track_touched_files_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_track_touched_files._handler({}, repo_root=None))
+    )
+
+
+# --- (22) ue_knowledge_distrust -- real firing row: `run(cwd, plugin_root)`
+# returns a non-empty UE-mistrust banner when a `.uproject` file is found under
+# cwd. Fired against a scratch dir with a synthetic `.uproject`; `plugin_root`
+# points at the same scratch dir so `_run_bootstrap`'s settings-merge write
+# lands inside the scratch tree, never a real `.claude/` install.
+def _fire_ue_knowledge_distrust() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-") as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / "Example.uproject").write_text("{}", encoding="utf-8")
+        result = _hook_ue_knowledge_distrust.run(str(scratch_dir), str(scratch_dir))
+        if not result.banner:
+            return None
+        return {"hookSpecificOutput": {"additionalContext": result.banner}}
+
+
+def _fire_ue_knowledge_distrust_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-ctrl-") as scratch:
+        result = _hook_ue_knowledge_distrust.run(scratch, scratch)
+        if not result.banner:
+            return None
+        return {"hookSpecificOutput": {"additionalContext": result.banner}}
+
+
+# --- (23) coordinator_reminder -- real firing row: `render_reminder()`
+# unconditionally returns the static Quick-Orient heredoc text (module
+# docstring: "If the file is missing... only the static heredoc section is
+# returned" -- there is no input that makes it return ""). No non-firing
+# control row exists for the same reason `nudge_unrouted_sizing` has none (see
+# `test_every_hooks_row_guard_has_a_non_firing_control_row` below): a synthetic
+# no-catalog call either produces the heredoc text or it does not exercise this
+# guard's real render path at all.
+def _fire_coordinator_reminder() -> Optional[Dict[str, Any]]:
+    text = _hook_coordinator_reminder.render_reminder(None)
+    if not text:
+        return None
+    return {"hookSpecificOutput": {"additionalContext": text}}
+
+
 HOOK_ROWS: List[HookRow] = [
     HookRow("em_report_altitude", "fire-d2", True, _fire_em_report_altitude_d2),
     HookRow("em_report_altitude", "control", False, _fire_em_report_altitude_control),
@@ -2449,6 +2878,114 @@ HOOK_ROWS: List[HookRow] = [
         _fire_nudge_harness_directive_dispatch_control,
     ),
     HookRow("nudge_unrouted_sizing", "fire-plan-message", True, _fire_nudge_unrouted_sizing),
+    # --- C12 additions: the 23 previously-uncovered hooks/ modules. ---
+    HookRow("agent_completion_log", "noop-control", False, _fire_agent_completion_log_noop),
+    HookRow(
+        "block_unenumerated_agent_type",
+        "fire-unenumerated-deny",
+        True,
+        _fire_block_unenumerated_agent_type,
+    ),
+    HookRow(
+        "block_unenumerated_agent_type",
+        "control-no-subagent-type",
+        False,
+        _fire_block_unenumerated_agent_type_control,
+    ),
+    HookRow(
+        "context_pressure_precompact", "noop-control", False, _fire_context_pressure_precompact_noop
+    ),
+    HookRow("enforce_agent_model_pin", "fire-model-violation", True, _fire_enforce_agent_model_pin),
+    HookRow(
+        "enforce_agent_model_pin",
+        "control-no-pins",
+        False,
+        _fire_enforce_agent_model_pin_control,
+    ),
+    HookRow("nudge_em_code_dispatch", "fire-code-write", True, _fire_nudge_em_code_dispatch),
+    HookRow(
+        "nudge_em_code_dispatch", "control-doc-write", False, _fire_nudge_em_code_dispatch_control
+    ),
+    HookRow(
+        "nudge_foreground_agent_dispatch",
+        "fire-reroute",
+        True,
+        _fire_nudge_foreground_agent_dispatch,
+    ),
+    HookRow(
+        "nudge_foreground_agent_dispatch",
+        "control-already-background",
+        False,
+        _fire_nudge_foreground_agent_dispatch_control,
+    ),
+    HookRow(
+        "nudge_named_agent_report_delivery",
+        "fire-named-no-delivery",
+        True,
+        _fire_nudge_named_agent_report_delivery,
+    ),
+    HookRow(
+        "nudge_named_agent_report_delivery",
+        "control-unnamed",
+        False,
+        _fire_nudge_named_agent_report_delivery_control,
+    ),
+    HookRow("nudge_unauthorized_handoff", "fire-handoff-write", True, _fire_nudge_unauthorized_handoff),
+    HookRow(
+        "nudge_unauthorized_handoff",
+        "control-kind-recovery",
+        False,
+        _fire_nudge_unauthorized_handoff_control,
+    ),
+    HookRow(
+        "postuse_advisory_dispatch", "fire-uh-fold", True, _fire_postuse_advisory_dispatch
+    ),
+    HookRow(
+        "postuse_advisory_dispatch",
+        "control-no-session-no-write",
+        False,
+        _fire_postuse_advisory_dispatch_control,
+    ),
+    HookRow("example_retrieval_repo_detect", "fire-uninitialized", True, _fire_example_retrieval_repo_detect),
+    HookRow("example_retrieval_repo_detect", "control-no-marker", False, _fire_example_retrieval_repo_detect_control),
+    HookRow("session_heartbeat", "noop-control", False, _fire_session_heartbeat_noop),
+    HookRow(
+        "subagent_arrival_check",
+        "structured-result-control",
+        False,
+        _fire_subagent_arrival_check_structured,
+    ),
+    HookRow(
+        "subagent_fabrication_check",
+        "structured-result-control",
+        False,
+        _fire_subagent_fabrication_check_structured,
+    ),
+    HookRow("subagent_zero_tool_use", "noop-control", False, _fire_subagent_zero_tool_use_noop),
+    HookRow(
+        "subagent_zero_tool_use_resolve",
+        "structured-result-control",
+        False,
+        _fire_subagent_zero_tool_use_resolve_structured,
+    ),
+    HookRow(
+        "subagent_zero_tool_use_surface",
+        "structured-result-control",
+        False,
+        _fire_subagent_zero_tool_use_surface_structured,
+    ),
+    HookRow("suggest_sonnet_research", "fire-garbage-agent-id", True, _fire_suggest_sonnet_research),
+    HookRow(
+        "suggest_sonnet_research",
+        "control-named-teammate",
+        False,
+        _fire_suggest_sonnet_research_control,
+    ),
+    HookRow("track_dispatched_agents", "noop-control", False, _fire_track_dispatched_agents_noop),
+    HookRow("track_touched_files", "noop-control", False, _fire_track_touched_files_noop),
+    HookRow("ue_knowledge_distrust", "fire-uproject-detected", True, _fire_ue_knowledge_distrust),
+    HookRow("ue_knowledge_distrust", "control-no-uproject", False, _fire_ue_knowledge_distrust_control),
+    HookRow("coordinator_reminder", "fire-quick-orient", True, _fire_coordinator_reminder),
 ]
 
 
@@ -2697,9 +3234,14 @@ def test_every_hooks_row_guard_has_a_non_firing_control_row():
     sanctions for this module) rather than firing `op()` end-to-end, so
     there is no "non-firing" cell to construct the same way -- a synthetic
     route/status pair either produces plan-message text or it does not
-    exercise this guard's real message-composition path at all."""
+    exercise this guard's real message-composition path at all.
+
+    `coordinator_reminder` (C12) is the same documented exception for a
+    different reason: `render_reminder()` unconditionally returns the static
+    Quick-Orient heredoc -- no input makes it return "", so there is no
+    non-firing cell to construct."""
     non_firing = {row.guard for row in HOOK_ROWS if not row.expected_speaker}
-    expected = {row.guard for row in HOOK_ROWS} - {"nudge_unrouted_sizing"}
+    expected = {row.guard for row in HOOK_ROWS} - {"nudge_unrouted_sizing", "coordinator_reminder"}
     assert non_firing == expected
 
 

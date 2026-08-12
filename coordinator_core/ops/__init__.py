@@ -152,6 +152,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_ship_archive", 'registers "handoff.ship_and_archive"'),
     ("coordinator_core.ops.handoff_archive_transition", 'registers "handoff.archive_transition"'),
     ("coordinator_core.ops.handoff_reconcile_close_terminal", 'registers "handoff.reconcile_close_terminal"'),
+    ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
     ("coordinator_core.ops.goals_match", 'registers "goal.match_candidates"'),
