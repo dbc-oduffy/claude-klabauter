@@ -847,7 +847,14 @@ _ISO_FMT = "%Y-%m-%dT%H:%M:%S.%f"
 
 
 def _iso(dt: datetime) -> str:
-    return dt.strftime(_ISO_FMT)[:-3] + "000Z"
+    # Full microsecond precision -- production's own `_stamp_applied_at()`
+    # (`tracker_transitions.py`) stamps via `datetime.now(timezone.utc).
+    # isoformat(timespec="microseconds")`, never millisecond-truncated.
+    # Zeroing the last 3 digits here (the pre-fix form) made a
+    # test-fabricated `applied_at` sort ambiguously close to a real,
+    # full-precision production stamp -- see AC10's "strictly between"
+    # regression test, which intermittently failed on exactly this seam.
+    return dt.strftime(_ISO_FMT) + "Z"
 
 
 def _parse_iso(value: str) -> datetime:

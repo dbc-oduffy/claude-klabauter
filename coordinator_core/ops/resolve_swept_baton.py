@@ -67,7 +67,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional
 
@@ -193,7 +192,7 @@ def _archiving_commit(worktree_root: Path, fpath: Path) -> Optional[str]:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_GIT_TIMEOUT_SECONDS,
-            **no_console_creationflags(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _LOG.warning(

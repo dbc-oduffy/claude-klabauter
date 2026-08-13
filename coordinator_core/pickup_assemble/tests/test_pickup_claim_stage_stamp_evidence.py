@@ -103,7 +103,9 @@ def _claim_dir(repo: Path, basename: str) -> Path:
     return repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
 
 
-def _write_claim(repo: Path, basename: str, holder_sid: str, *, stage: str) -> Path:
+def _write_claim(
+    repo: Path, basename: str, holder_sid: str, *, stage: str, stamped: bool = False
+) -> Path:
     cdir = _claim_dir(repo, basename)
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "pid").write_text("4242\n", encoding="utf-8")
@@ -113,6 +115,10 @@ def _write_claim(repo: Path, basename: str, holder_sid: str, *, stage: str) -> P
         claimed.strftime("%Y-%m-%dT%H:%M:%SZ") + "\n", encoding="utf-8"
     )
     (cdir / "stage").write_text(f"{stage}\n", encoding="utf-8")
+    if stamped:
+        (cdir / "stamped").write_text(
+            claimed.strftime("%Y-%m-%dT%H:%M:%SZ") + "\n", encoding="utf-8"
+        )
     return cdir
 
 
@@ -160,17 +166,48 @@ def test_self_held_apply_stage_ledger_claim_with_empty_mirror_satisfies_d2(
 ):
     """C11 row 35 preservation: a session that already stamped the claim on a
     different branch reads as ledger-`apply`-stage held-by-self with a
-    reverted (empty) mirror. That must still satisfy `d2`."""
+    reverted (empty) mirror. The claim dir carries the `stamped` marker
+    (the stamp genuinely landed on the other branch) — that must still
+    satisfy `d2`."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
     as_session("sid-a")
     holder_reads_live(True)
-    _write_claim(repo, "h1.md", "sid-a", stage="apply")
+    _write_claim(repo, "h1.md", "sid-a", stage="apply", stamped=True)
 
     result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=False)
 
     assert _d2(result)["already_satisfied"] is True
+
+
+def test_apply_stage_claim_with_refused_stamp_does_not_satisfy_d2(
+    tmp_path, as_session, holder_reads_live
+):
+    """THE regression this module was repaired for (cross-repo/inbox/
+    2026-08-13-example-doctrine-repo-em-pickup-already-satisfied-masks-a-refused-write.md):
+    `apply.py::apply` promotes the claim dir to `apply` stage UNCONDITIONALLY,
+    before `d2`'s directive (`archive-stamp-cli claim-handoff`) ever runs — so
+    an `apply`-stage claim dir is reachable on a REFUSED stamp attempt exactly
+    as much as on a landed one. No `stamped` marker present means no stamp
+    ever landed; `d2` must NOT be reported `already_satisfied` on the next
+    `brief`, even though the claim dir already reads `apply` stage.
+
+    This is the case that FAILED before the fix (the old fallback read only
+    `claim_stage(...) == CLAIM_STAGE_APPLY`, which is True here) and PASSES
+    after it (the new fallback reads `claim_stamped(...)`, which is False
+    here)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+    _write_claim(repo, "h1.md", "sid-a", stage="apply", stamped=False)
+
+    result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=False)
+
+    assert claims_mod.claim_stage(_claim_dir(repo, "h1.md")) == claims_mod.CLAIM_STAGE_APPLY
+    assert _d2(result)["already_satisfied"] is False
 
 
 def test_mirror_only_evidence_satisfies_d2(tmp_path, as_session, monkeypatch):

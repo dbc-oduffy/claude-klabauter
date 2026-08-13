@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_gen_launcher_shim.py — unit coverage for the whoami-bootstrap
 launcher class.
 

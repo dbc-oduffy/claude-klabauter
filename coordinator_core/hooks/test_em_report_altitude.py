@@ -154,7 +154,7 @@ def test_indented_code_block_counts_as_prose(tmp_path):
 
 
 def test_d2_fires_on_two_citations(tmp_path):
-    text = "See coordinator_core/hooks/foo.py:42 and also /Users/example-operator/X/bar.py for context."
+    text = "See coordinator_core/hooks/foo.py:42 and also /Users/alice/X/bar.py for context."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
     assert "citations" in result["message"]
@@ -193,7 +193,7 @@ def test_d2_file_line_regex_matches_bare_and_pathed_source_files(tmp_path):
 def test_d2_recognizes_linux_home_and_opt_paths(tmp_path):
     """/home/... and /opt/... must count as absolute-path citations, not
     just /Users/... (F2 — multi-OS support is P0)."""
-    text = "See /home/example-operator/repo/foo.py and /opt/tooling/bar.sh for context and one more note."
+    text = "See /home/alice/repo/foo.py and /opt/tooling/bar.sh for context and one more note."
     file_line, abs_path = m._citation_count(text)
     assert abs_path == 2
 
@@ -208,7 +208,7 @@ def test_d2_windows_drive_letter_does_not_match_url_scheme(tmp_path):
 
 
 def test_d2_fires_independent_of_length_short_message(tmp_path):
-    text = "Relayed to /Users/example-operator/X/claude-klabauter/state/a.md and /Users/example-operator/X/example-doctrine-repo/cross-repo/b.md."
+    text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/example-doctrine-repo/cross-repo/b.md."
     assert m._word_count(text) < 20
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
@@ -224,7 +224,7 @@ def test_both_detectors_trip_together(tmp_path):
     long_prose = " ".join(["word"] * 210)
     text = (
         f"{long_prose} See coordinator_core/hooks/foo.py:42 and "
-        "/Users/example-operator/X/bar.py:100 for more."
+        "/Users/alice/X/bar.py:100 for more."
     )
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
@@ -239,7 +239,7 @@ def test_both_detectors_trip_on_the_one_fire_carries_both_measurements(repo):
     long_prose = " ".join(["word"] * 210)
     text = (
         f"{long_prose} See coordinator_core/hooks/foo.py:42 and "
-        "/Users/example-operator/X/bar.py:100 for more."
+        "/Users/alice/X/bar.py:100 for more."
     )
     result = m.op(_payload(repo, session_id="both-fire", last_assistant_message=text))
     assert result is not None
@@ -422,7 +422,7 @@ def test_d1_firing_full_form(tmp_path):
 
 
 def test_d2_firing_full_form(tmp_path):
-    text = "See coordinator_core/hooks/foo.py:42 and also /Users/example-operator/X/bar.py for context."
+    text = "See coordinator_core/hooks/foo.py:42 and also /Users/alice/X/bar.py for context."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert "Ignore this if the citation was the point" in result["message"]
 
@@ -456,7 +456,7 @@ def test_corpus_shape_353_word_status_report_fires_d1(tmp_path):
 
 
 def test_corpus_shape_10_word_reply_two_absolute_paths_fires_d2_only(tmp_path):
-    text = "Relayed the memo to /Users/example-operator/X/claude-klabauter/state/a.md and /Users/example-operator/X/example-doctrine-repo/b.md"
+    text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/example-doctrine-repo/b.md"
     word_count = m._word_count(text)
     assert word_count <= 20
     result = m.op(_payload(tmp_path, last_assistant_message=text))

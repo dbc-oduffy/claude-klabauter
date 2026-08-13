@@ -1987,7 +1987,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     policy_result = load_policy(policy_path)
     policy = policy_result.policy
-    auto_ship_enabled = bool(policy.get("auto_ship_enabled", True))
+    auto_ship_enabled = bool(policy.get("auto_ship_enabled", False))
     # § C10 / AC16 — flatten PolicyResult.source/.resolved_path into the two
     # report fields; merged into the returned dict and the C12a Markdown
     # report below so a reader can tell "absent"/"malformed"/"loaded" apart

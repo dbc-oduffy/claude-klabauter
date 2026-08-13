@@ -40,6 +40,7 @@ _REAL_TEST_MODULES = {
     "test_home_sandbox.py",
     "test_golden.py",
     "test_suite_mutex.py",
+    "test_symlink_capability.py",
 }
 
 

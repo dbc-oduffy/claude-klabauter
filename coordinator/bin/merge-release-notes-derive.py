@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """merge-release-notes-derive.py -- native port of the /merging-to-main Step 5.5
 pending-release reconcile sweep + release-tag attribution walk.

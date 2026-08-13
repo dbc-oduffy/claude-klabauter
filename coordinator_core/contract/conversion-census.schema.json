@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/conversion-census.schema.json",
+  "title": "Conversion-census row",
+  "description": "Shape of one row in example-doctrine-repo's conversion census — the per-step classification of converting a skill into a computed skill. Example-doctrine-repo owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["step_id", "classification"],
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of the conversion step this row classifies, scoped to one skill's conversion procedure. Not a cross-skill join key — see contract § 2."
+    },
+    "classification": {
+      "type": "string",
+      "enum": ["MECHANICAL", "JUDGMENT", "MIXED"],
+      "description": "MECHANICAL: fully generatable by the scaffolder. JUDGMENT: fully author-authored; the scaffolder emits a stub. MIXED: the step forcibly splits into a mechanical part and a judgment part — see mechanical_part / judgment_part, both required when classification is MIXED (contract § 2.2)."
+    },
+    "mechanical_part": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The generatable portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3."
+    },
+    "judgment_part": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The author-authored portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional free-text rationale for the classification. Not consumed structurally by the scaffolder."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "classification": { "const": "MIXED" } },
+        "required": ["classification"]
+      },
+      "then": {
+        "required": ["mechanical_part", "judgment_part"]
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": { "classification": { "const": "MIXED" } },
+          "required": ["classification"]
+        }
+      },
+      "then": {
+        "not": { "required": ["mechanical_part"] }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": { "classification": { "const": "MIXED" } },
+          "required": ["classification"]
+        }
+      },
+      "then": {
+        "not": { "required": ["judgment_part"] }
+      }
+    }
+  ]
+}

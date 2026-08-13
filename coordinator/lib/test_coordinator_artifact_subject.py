@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_coordinator_artifact_subject.py — table-driven tests for
 coordinator_artifact_subject.
 

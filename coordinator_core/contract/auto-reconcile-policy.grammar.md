@@ -25,6 +25,7 @@ zero claude-klabauter code change.
 | key | type | required | meaning |
 |---|---|---|---|
 | `three_signal` | mapping | yes | Tuning knobs for the DEC-1 three-signal shipped-ness bar (signal (a) commit-subject match, (b) named-deliverable-on-disk, (c) SHA-reachable-on-HEAD). Accepted as a mapping with OPTIONAL sub-keys (see below) — all sub-keys have code-side defaults, so an absent/empty `three_signal: {}` is valid and matches today's ratified behavior baseline. `policy_loader._validate_grammar` only checks the required top-level keys; these sub-keys are not independently type-validated by the loader, so adding/amending one is a example-doctrine-repo-side YAML data edit, zero claude-klabauter code change and zero re-validation. |
+| `auto_ship_enabled` | boolean | no (optional) | Gates whether `handoff.reconcile_open` may actually apply an auto-ship mutation; **default `false` (fail-closed)** — absent from the file resolves to `false`. `auto_ship_enabled` is INDEPENDENT of `dry_run`: flipping `dry_run: false` alone does NOT arm auto-ship. To arm auto-ship the author must ALSO explicitly write `auto_ship_enabled: true`. |
 
 ### `three_signal` optional sub-keys (2026-07-20 claude-central-em false-positive memo, Defect 2)
 
@@ -52,7 +53,9 @@ YAML itself declares:
   **plus a surfaced data-defect warning**. This IS a real defect example-doctrine-repo should hear about,
   distinct from the expected-absent case above.
 - File **present and valid** → the reader returns the parsed policy dict verbatim (with
-  `auto_ship_enabled` defaulted to `true` if the key is absent from the file), no warning.
+  `auto_ship_enabled` defaulted to `false` if the key is absent from the file, so an
+  absent-file run and a valid-file run that simply omits the key resolve to the same
+  fail-closed answer — silence never arms auto-ship), no warning.
 
 ## Non-normative example
 

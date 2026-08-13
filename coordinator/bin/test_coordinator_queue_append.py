@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_coordinator_queue_append.py — integration tests for coordinator-queue-append CLI.
 
@@ -54,6 +53,31 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 # successor to the deleted node schema-cli.js (480ad8f8); `-m coordinator_core.
 # frontmatter.schema_cli` must be spawned with cwd here so the import resolves.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT_COORDINATOR_CORE = os.path.join(_REPO_ROOT, "coordinator_core")
+
+
+def _resolve_doe_root_for_tests() -> str:
+    """Best-effort example-doctrine-repo sibling root, for tests that override CLAUDE_HOME.
+
+    coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back to
+    a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
+    settings-home-anchored -- a test overriding CLAUDE_HOME to a throwaway dir
+    (to prove CLAUDE_HOME is unused for project scope, e.g.) collaterally
+    breaks that fallback too. Resolving it once here and forwarding it as an
+    explicit DOE_ROOT env override (coordinator_registry.py's own rung 1
+    override) keeps the manifest read working without touching what the test
+    actually asserts on.
+    """
+    try:
+        from coordinator_core.testing.doe_root import resolve_doe_root
+
+        root = resolve_doe_root()
+    except Exception:
+        return ""
+    return root if root and os.path.isdir(root) else ""
+
+
+_DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
 
 # ---------------------------------------------------------------------------
 # Test infrastructure
@@ -659,8 +683,12 @@ def test_schema_load_fails_loud_via_env_override() -> None:
     name = "Test 7b — bad CLAUDE_KLABAUTER_ROOT: native schema seam unreachable → fail loud"
     with tempfile.TemporaryDirectory() as bad_claude_klabauter_root, \
          tempfile.TemporaryDirectory() as tmpdir:
-        # bad_claude_klabauter_root has no coordinator_core package — schema.describe/validate
+        # bad_claude_klabauter_root has no coordinator_core.invoke — schema.describe/validate
         # have no legacy fallback, so the CLI must fail loud before writing anything.
+        # (coordinator_core's other submodules ARE populated, real-symlinked, so
+        # repo_identity.py's own module-level `coordinator_core.git` import doesn't
+        # 404 before the CLI ever reaches the schema-seam check under test.)
+        _populate_engine_root_minus_invoke(bad_claude_klabauter_root)
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
@@ -897,6 +925,8 @@ def test_project_scope_still_writes_cwd_relative() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
         env = {"CLAUDE_HOME": claude_home_dir, "CLAUDE_KLABAUTER_ROOT": fake_claude_klabauter_root}
+        if _DOE_ROOT_FOR_TESTS:
+            env["DOE_ROOT"] = _DOE_ROOT_FOR_TESTS
 
         result = _run_cli(
             _improvement_queue_required_args(),  # no --queue-scope → defaults to project
@@ -1852,6 +1882,31 @@ def test_lesson_add_facet_threading() -> None:
 # Helpers for routing-gate tests (C2 strang-08 arm)
 # ---------------------------------------------------------------------------
 
+def _populate_engine_root_minus_invoke(root: str) -> None:
+    """Build a `root/coordinator_core` package that mirrors the real one for
+    every top-level entry EXCEPT `invoke`/`invoke.py`.
+
+    require_engine_on_path (repo_identity.py's module-level side effect)
+    front-inserts CLAUDE_KLABAUTER_ROOT at sys.path[0] before the real repo root is ever
+    consulted, so a bare empty `root` (no coordinator_core at all) makes
+    `coordinator_core.git`/`coordinator_core.pickup_assemble` unimportable --
+    a spurious ModuleNotFoundError unrelated to whatever "seam absent"
+    scenario the test is modeling. Symlinking everything but `invoke` gives
+    those always-needed imports a real target while still leaving
+    `coordinator_core.invoke` genuinely absent (find_spec-visible seam
+    absence), which is the property these "seam absent"/"bad CLAUDE_KLABAUTER_ROOT"
+    tests are actually asserting on.
+    """
+    coord_dir = os.path.join(root, "coordinator_core")
+    os.makedirs(coord_dir, exist_ok=True)
+    for _entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
+        if _entry in ("invoke", "invoke.py", "__pycache__"):
+            continue
+        _dest = os.path.join(coord_dir, _entry)
+        if not os.path.exists(_dest):
+            os.symlink(os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry), _dest)
+
+
 def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: str = "") -> str:
     """Create a fake coordinator_core.invoke package under tmpdir for routing tests.
 
@@ -1882,9 +1937,24 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     """
     coord_dir = os.path.join(tmpdir, "coordinator_core")
     os.makedirs(coord_dir, exist_ok=True)
-    # __init__.py required for the package to be importable as a Python module.
-    with open(os.path.join(coord_dir, "__init__.py"), "w", encoding="utf-8") as fh:
-        fh.write("")
+
+    # require_engine_on_path (repo_identity.py's module-level side effect) front-
+    # inserts CLAUDE_KLABAUTER_ROOT (= tmpdir here) at sys.path[0] before the real repo
+    # root, so this fake `coordinator_core` package becomes the ONE regular
+    # package Python resolves for every `coordinator_core.*` import in the
+    # spawned CLI -- real coordinator_core on PYTHONPATH included. Symlink
+    # every real top-level entry this fixture doesn't itself override (this
+    # fake only ever adds `invoke.py`), __init__.py included (the real one
+    # carries package-level re-exports other modules import directly), so
+    # `coordinator_core.git` / `coordinator_core.pickup_assemble` (needed by
+    # repo_identity.py and cli_shared.py) still resolve to the genuine
+    # implementation instead of 404ing against a partial stub package.
+    for _entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
+        if _entry in ("invoke", "invoke.py", "__pycache__"):
+            continue
+        _dest = os.path.join(coord_dir, _entry)
+        if not os.path.exists(_dest):
+            os.symlink(os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry), _dest)
 
     stash_path_repr = repr(os.path.join(tmpdir, "_schema_fields_stash.json"))
     schema_op_preamble = (
@@ -2006,10 +2076,14 @@ def test_routing_seam_absent_uses_legacy() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
 
-        # claude_klabauter_dir has no coordinator_core package -> seam absent for EVERY op,
+        # claude_klabauter_dir has no coordinator_core.invoke -> seam absent for EVERY op,
         # including the schema.describe/schema.validate calls legacy_fn's own
         # _validate()/_build_yaml() make — which now have no legacy fallback either.
+        # (coordinator_core's other submodules ARE populated, real-symlinked, so
+        # repo_identity.py's own module-level `coordinator_core.git` import doesn't
+        # 404 before the CLI ever reaches the seam-absence path under test.)
         # Do NOT set QUEUE_APPEND_OUTPUT_ROOT so the live routing gate is exercised.
+        _populate_engine_root_minus_invoke(claude_klabauter_dir)
         result = _run_cli(
             _debt_backlog_required_args(),
             env={

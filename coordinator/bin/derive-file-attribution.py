@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 derive-file-attribution.py — Derive session→file attribution from Claude Code transcripts.
 
@@ -81,7 +80,13 @@ from typing import Any, Dict, List, Optional, Tuple
 # `<session>/subagents/agent-*.jsonl` — see DR-244 § Amendment 2026-07-29, Q3. This is
 # exactly the "derivation-logic changed, transcript files themselves didn't" case the
 # note above warns about: a stale cache would silently keep serving top-level-only rows.
-_DERIVATION_VERSION = 2
+# v2 -> v3 (2026-08-13): extract_shell_token no longer strips backslashes out of a
+# Windows-shaped redirect target (drive-letter or UNC prefix) — see
+# _is_windows_shaped_prefix docstring for the root-cause this fixes. Also fixed:
+# unquoted redirect targets now honour a genuine POSIX backslash-escape (e.g.
+# `foo\ bar.txt`) instead of stopping at the escaped char. A stale cache would
+# silently keep re-serving the pre-fix mangled paths forever.
+_DERIVATION_VERSION = 3
 
 _CACHE_SCHEMA_VERSION = 1
 
@@ -154,12 +159,41 @@ def mask_quotes(command: str) -> str:
     return ''.join(result)
 
 
+def _is_windows_shaped_prefix(prefix: str) -> bool:
+    """
+    True when `prefix` (the token's leading characters, taken BEFORE any
+    backslash-unescaping) opens a Windows-style path: a drive letter
+    (`<drive>:\\...` or the drive-relative `<drive>:foo` form, no separator
+    required —
+    both are absolute enough on Windows that a bash-style backslash-escape
+    reading would be wrong) or a UNC share (`\\\\server\\share`).
+
+    Root-cause note (2026-08-13, teammate-dispatched fix): the mangling that
+    produced 76 backslash-stripped `file_attributions` rows was NOT generic
+    "extract_shell_token performs POSIX unescaping" — the unquoted branch
+    below never touched backslashes at all. It was this function's caller's
+    double-quoted branch, which unconditionally treated every `\\X` as an
+    escape sequence and dropped the backslash — so a Windows drive-absolute
+    redirect target, double-quoted, came out with every separator deleted
+    (verified on disk: `state/cockpit-emission.json` `file_attributions`,
+    76 rows). The gate below is the fix: a Windows-shaped
+    token skips backslash-unescaping entirely in both the double-quoted and
+    unquoted branches, so its separators survive intact for the porter to
+    recognize (and correctly exclude) as a non-repo-relative path.
+    """
+    if re.match(r'^[A-Za-z]:', prefix):
+        return True
+    return prefix.startswith('\\\\')
+
+
 def extract_shell_token(command: str, pos: int) -> Tuple[Optional[str], bool, int]:
     """
     Extract the next shell token from command starting at pos.
     Returns (token, is_double_quoted, end_pos).
 
-    Ported from extractShellToken (project.mjs:137-166).
+    Ported from extractShellToken (project.mjs:137-166). Extended
+    (2026-08-13) with the Windows-shaped gate in `_is_windows_shaped_prefix`
+    — see that function's docstring for the root-cause this addresses.
     """
     # Skip leading whitespace (space or tab)
     while pos < len(command) and command[pos] in (' ', '\t'):
@@ -169,13 +203,18 @@ def extract_shell_token(command: str, pos: int) -> Tuple[Optional[str], bool, in
 
     c = command[pos]
     if c == '"':
+        start = pos + 1
+        windows_shaped = _is_windows_shaped_prefix(command[start:start + 3])
         chars: List[str] = []
-        j = pos + 1
+        j = start
         while j < len(command) and command[j] != '"':
             # Review: code-reviewer (F1) — handle backslash escapes so \" inside a
             # double-quoted redirect target doesn't short-read into a fabricated
             # truncated path. Mirrors mask_quotes semantics; preserves never-fabricate.
-            if command[j] == '\\' and j + 1 < len(command):
+            # Gated on `not windows_shaped`: a Windows path's `\U`, `\A`, etc. are
+            # separators, not escapes, and must survive verbatim (see
+            # _is_windows_shaped_prefix docstring).
+            if not windows_shaped and command[j] == '\\' and j + 1 < len(command):
                 j += 1
                 chars.append(command[j])
             else:
@@ -190,10 +229,23 @@ def extract_shell_token(command: str, pos: int) -> Tuple[Optional[str], bool, in
             j += 1
         return ''.join(chars), False, j + 1
     else:
+        windows_shaped = _is_windows_shaped_prefix(command[pos:pos + 3])
         chars = []
         j = pos
-        while j < len(command) and command[j] not in (' ', '\t', ';', '|', '&', '<', '>'):
-            chars.append(command[j])
+        while j < len(command):
+            ch = command[j]
+            # Unquoted POSIX backslash-escape: consume the next char literally
+            # (e.g. `foo\ bar.txt` → the escaped space no longer terminates the
+            # token). Gated the same way as the double-quoted branch above —
+            # a Windows-shaped token's backslashes are separators, not escapes.
+            if not windows_shaped and ch == '\\' and j + 1 < len(command):
+                j += 1
+                chars.append(command[j])
+                j += 1
+                continue
+            if ch in (' ', '\t', ';', '|', '&', '<', '>'):
+                break
+            chars.append(ch)
             j += 1
         return ''.join(chars), False, j
 

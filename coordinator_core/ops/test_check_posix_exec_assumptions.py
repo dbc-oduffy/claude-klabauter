@@ -30,6 +30,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from coordinator_core.ops import check_posix_exec_assumptions  # noqa: E402
 from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     ALL_CLASSES,
     CLASSES,
@@ -770,7 +771,12 @@ def test_scan_still_flags_ungated_os_access(tmp_path):
 # Report-only class: unresolved_cross_path.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_unresolved_cross_path_macos_home(tmp_path):
+def test_scan_detects_unresolved_cross_path_current_machine_home_macos(
+    tmp_path, monkeypatch
+):
+    """A literal matching THIS machine's operator-home (macOS shape) is the
+    class's genuine subject -- narrowed 2026-08-13, Q2.1 ruling."""
+    monkeypatch.setenv("HOME", "/Users/alice")
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         'def default_root():\n    return "/Users/alice/repo"\n'
@@ -782,7 +788,37 @@ def test_scan_detects_unresolved_cross_path_macos_home(tmp_path):
     assert "tool.py" in result["unresolved_cross_path"]
 
 
-def test_scan_detects_unresolved_cross_path_windows_drive(tmp_path):
+def test_scan_does_not_flag_synthetic_home_literal_off_current_machine(
+    tmp_path, monkeypatch
+):
+    """A synthetic `/Users/alice` fixture literal that does NOT match the
+    CURRENT machine's own `$HOME` is test data, not a leak -- the narrowing
+    this ruling adds, distinct from the drive-letter drop. Same shape as
+    `test_scan_detects_unresolved_cross_path_current_machine_home_macos`
+    except `$HOME` is a different user, proving the current-machine
+    discrimination actually gates the finding."""
+    monkeypatch.setenv("HOME", "/Users/bob")
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        'def default_root():\n    return "/Users/alice/repo"\n'
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["unresolved_cross_path"]
+
+
+def test_scan_does_not_flag_windows_drive_letter_literal(tmp_path, monkeypatch):
+    """The `<drive-letter>:[\\/]` arm was DROPPED ENTIRELY 2026-08-13
+    (Q2.1 ruling): a live re-measurement found it responsible for 127/178
+    findings, almost all this repo's own correct Windows-portability code
+    (`pyresolve.py`'s interpreter-discovery ladder, `break_glass.py`'s
+    Windows temp-path syntax recognition) being flagged for existing.
+    `$HOME` is pinned to the literal's own value so this negative result
+    is provably about the drive-letter drop, not an accidental miss on the
+    current-machine-home narrowing."""
+    monkeypatch.setenv("HOME", "C:\\Users\\alice")
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         'def default_root():\n    return "C:\\\\Users\\\\alice\\\\repo"\n'
@@ -791,7 +827,7 @@ def test_scan_detects_unresolved_cross_path_windows_drive(tmp_path):
 
     result = scan(repo)
 
-    assert "tool.py" in result["unresolved_cross_path"]
+    assert "tool.py" not in result["unresolved_cross_path"]
 
 
 def test_scan_does_not_flag_settings_home_resolved_path(tmp_path):
@@ -811,9 +847,12 @@ def test_scan_does_not_flag_settings_home_resolved_path(tmp_path):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path):
+def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path, monkeypatch):
     """Negative control: a documented example path in a module docstring is
-    documentation, not a hardcoded runtime assumption."""
+    documentation, not a hardcoded runtime assumption. `$HOME` is pinned to
+    match the literal so this is a genuine test of the docstring exclusion,
+    not an incidental miss from the current-machine-home narrowing."""
+    monkeypatch.setenv("HOME", "/Users/alice")
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         '"""Example: /Users/alice/repo/file.txt is the macOS layout."""\n'
@@ -826,7 +865,11 @@ def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_detects_unresolved_cross_path_linux_home(tmp_path):
+def test_scan_detects_unresolved_cross_path_current_machine_home_linux(
+    tmp_path, monkeypatch
+):
+    """A literal matching THIS machine's operator-home (Linux shape)."""
+    monkeypatch.setenv("HOME", "/home/alice")
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         'def default_root():\n    return "/home/alice/repo"\n'
@@ -838,9 +881,11 @@ def test_scan_detects_unresolved_cross_path_linux_home(tmp_path):
     assert "tool.py" in result["unresolved_cross_path"]
 
 
-def test_scan_detects_unresolved_cross_path_unc_share(tmp_path):
-    """`^\\\\\\\\` (UNC `\\\\server\\share`) -- defined in
-    `_CROSS_PATH_PATTERNS` but had no fixture proving it actually fires."""
+def test_scan_does_not_flag_unc_share_literal(tmp_path):
+    """UNC (`\\\\server\\share`) is not a home-rooted literal and was never
+    part of the narrowed, kept "home-rooted arm" (Q2.1 ruling) -- it never
+    starts with a `$HOME` value either, so it cannot pass the
+    current-machine narrowing regardless."""
     repo = _init_repo(tmp_path)
     literal = repr(r"\\server\share\repo")
     (repo / "tool.py").write_text(f"def default_root():\n    return {literal}\n")
@@ -848,7 +893,7 @@ def test_scan_detects_unresolved_cross_path_unc_share(tmp_path):
 
     result = scan(repo)
 
-    assert "tool.py" in result["unresolved_cross_path"]
+    assert "tool.py" not in result["unresolved_cross_path"]
 
 
 def test_scan_does_not_flag_url_with_single_letter_looking_scheme(tmp_path):
@@ -990,10 +1035,15 @@ def test_scan_does_not_flag_tempfile_gettempdir(tmp_path):
 def test_report_only_classes_never_fail_check_against_baseline(tmp_path):
     """A report-only violation with NOTHING in the baseline must still
     report ok=True -- report-only classes are scanned/printed but never
-    gate check_against_baseline."""
+    gate check_against_baseline.
+
+    Uses `unclassified` (a `/tmp/`-prefixed literal), not
+    `unresolved_cross_path` -- that class was promoted to BLOCKING
+    2026-08-13 (Q2.1 ruling) and is `unclassified`'s only remaining
+    report-only sibling."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
-        'def default_root():\n    return "/Users/alice/repo"\n'
+        'def default_root():\n    return "/tmp/scratch/repo"\n'
     )
     _commit_all(repo)
 
@@ -1003,13 +1053,17 @@ def test_report_only_classes_never_fail_check_against_baseline(tmp_path):
 
     assert ok is True
     assert "tool.py" in msg  # still visible in the report-only summary
-    assert "unresolved_cross_path" in msg
+    assert "unclassified" in msg
 
 
 def test_report_only_classes_excluded_from_baseline_growth_check(tmp_path):
     """Growing a report-only class's count between scans must never trip
     assert_baseline_not_grown -- only the blocking CLASSES are diffed, and
-    report-only classes are never persisted into the baseline file at all."""
+    report-only classes are never persisted into the baseline file at all.
+
+    Uses `unclassified`, not `unresolved_cross_path` -- see
+    `test_report_only_classes_never_fail_check_against_baseline`'s
+    docstring for why."""
     repo = _init_repo(tmp_path)
     baseline_dir = repo / "state"
     baseline_dir.mkdir()
@@ -1021,12 +1075,23 @@ def test_report_only_classes_excluded_from_baseline_growth_check(tmp_path):
     # populated list under a report-only class name, must not read as growth
     # because assert_baseline_not_grown only inspects CLASSES.
     widened = {cls: [] for cls in CLASSES}
-    widened["unresolved_cross_path"] = ["new-finding.py"]
+    widened["unclassified"] = ["new-finding.py"]
     baseline_path.write_text(json.dumps(widened))
 
     ok, msg = assert_baseline_not_grown(repo, "state/posix-exec-baseline.json")
 
     assert ok is True
+
+
+def test_unresolved_cross_path_is_not_report_only():
+    """Anti-regrowth lock (2026-08-13, Q2.1 ruling): `unresolved_cross_path`
+    was promoted to BLOCKING (`CLASSES`) and MUST NOT be in
+    `REPORT_ONLY_CLASSES`. Nothing procedural stops a future author
+    demoting it back to report-only the way it lived for two weeks
+    unread -- this assertion is the artifact that does: a demotion fails
+    this test red instead of merging quietly."""
+    assert "unresolved_cross_path" in CLASSES
+    assert "unresolved_cross_path" not in REPORT_ONLY_CLASSES
 
 
 def test_scan_returns_every_class(tmp_path):
@@ -1352,6 +1417,33 @@ def test_every_exemption_repo_key_is_a_canonical_fleet_repo_key():
             )
 
 
+def test_every_exemption_carries_a_written_reason():
+    """Same bar as EXEMPT_PREFIXES' analogous
+    `test_every_exempt_prefix_carries_a_written_reason`: a per-file grant
+    must state which admission test it passes, not merely exist."""
+    for cls, per_repo in EXEMPTIONS.items():
+        for repo_key, relpaths in per_repo.items():
+            for relpath, reason in relpaths.items():
+                assert isinstance(reason, str) and len(reason.split()) >= 25, (
+                    f"EXEMPTIONS[{cls!r}][{repo_key!r}][{relpath!r}] needs a "
+                    f"real reason, got {reason!r}"
+                )
+
+
+def test_module_docstring_states_the_third_admission_test():
+    """The permanent-artifact-shape-irreducibility admission test
+    (2026-08-13 eng-director ruling) must be discoverable in the module's
+    own docstring, the same place the two-leg-pair and EXEMPT_PREFIXES
+    admission tests already live -- not merely in a comment beside one
+    dict entry, where a future reader granting a fourth row would never
+    find it."""
+    doc = " ".join(check_posix_exec_assumptions.__doc__.split())
+    assert "permanent artifact-shape irreducibility" in doc
+    assert "restatement" in doc.lower()
+    assert "elimination-target" in doc.lower()
+    assert "standing reduction target" in doc
+
+
 def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted():
     """Repo-scoping must leave claude-klabauter's OWN scan result unchanged:
     every relpath exempted under the claude_klabauter key is still invisible in
@@ -1552,8 +1644,21 @@ def test_stale_exempt_prefix_is_red(tmp_path):
 
 def test_stale_prefix_check_is_green_when_the_preserved_tree_exists(tmp_path):
     """Positive control for the staleness gate: it must not fire merely
-    because prefixes are declared."""
+    because prefixes are declared. `check_no_stale_exempt_prefixes` checks
+    EVERY prefix registered under the scanned repo's key, not just the one
+    this fixture was originally built around -- so a repo claiming to BE
+    claude-klabauter must carry a matching tracked file under every
+    claude_klabauter-keyed EXEMPT_PREFIXES entry, not only `_CLAUDE_KLABAUTER_PREFIX`,
+    or this positive control would false-fire the moment a second grant
+    (e.g. the frozen-fixture-bytes prefixes) is added."""
     repo = _repo_with_preserved_tree(tmp_path, "claude-klabauter", _CLAUDE_KLABAUTER_PREFIX)
+    for prefix in EXEMPT_PREFIXES.get(REPO_CLAUDE_KLABAUTER, {}):
+        if prefix == _CLAUDE_KLABAUTER_PREFIX:
+            continue
+        target = repo / prefix / "specimen.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_MULTI_CLASS_VIOLATOR, encoding="utf-8")
+    _commit_all(repo, "seed remaining claude_klabauter prefixes")
 
     ok, msg = check_no_stale_exempt_prefixes(repo)
 

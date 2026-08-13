@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """workweek-complete-close.py — closing-orchestration CLI for /workweek-complete.
 
 Ports the residual imperative logic that was still hand-authored inline as

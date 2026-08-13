@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """bug-sweep-probes.py — naked-Python probes for the /bug-sweep skill.
 
 Ports the genuine imperative logic out of example-doctrine-repo's

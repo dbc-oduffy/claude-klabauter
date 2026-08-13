@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_no_bin_docstring_command_substitution.py — RATCHET regression net for
 the PRECISE hazard behind the retired sh/python polyglot trampoline: a
 command substitution span embedded in a module docstring, not the mere

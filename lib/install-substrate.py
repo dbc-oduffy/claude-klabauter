@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 install-substrate.py — CLI trampoline over claude-klabauter coordinator_core.install.substrate.
 

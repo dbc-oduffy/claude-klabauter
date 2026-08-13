@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """sweep-consumed-handoffs.py — on-demand single-family archival sweep for CONSUMED
 handoffs, via session.sweep_consumed_handoffs.

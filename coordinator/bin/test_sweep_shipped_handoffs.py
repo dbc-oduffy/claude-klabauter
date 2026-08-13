@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_sweep_shipped_handoffs.py — self-contained test suite for sweep-shipped-handoffs.py.
 
 Port of: test-sweep-shipped-handoffs.sh (example-doctrine-repo f703efad, 2026-07-21). Retargets the bash

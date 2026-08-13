@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 bin/claude-klabauter-doctor-probe.py — Tier-1 static diagnostic probe for the claude-klabauter install chain.
 

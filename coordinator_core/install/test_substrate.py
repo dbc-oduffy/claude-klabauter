@@ -101,7 +101,7 @@ def test_resolve_baked_python_bin_bakes_nothing_off_windows(monkeypatch, host_os
     monkeypatch.setattr(
         pyresolve,
         "resolve_python_bin",
-        lambda **_: ("/Users/example-operator/.coordinator-claude-settings/.coordinator-venv/bin/python", []),
+        lambda **_: ("/Users/alice/.coordinator-claude-settings/.coordinator-venv/bin/python", []),
     )
     assert _resolve_baked_python_bin() == ""
 
@@ -365,7 +365,7 @@ def test_agent_cmd_forwarder_falls_through_on_empty_bake(tmp_path):
 def test_agent_cmd_forwarder_falls_through_on_foreign_platform_bake(tmp_path):
     # The synced-~/.claude case verbatim: a macOS venv interpreter path baked
     # into a launcher running on Windows. Pre-fix this was rc=3 forever.
-    macos_bake = "/Users/example-operator/.coordinator-claude-settings/.coordinator-venv/bin/python"
+    macos_bake = "/Users/alice/.coordinator-claude-settings/.coordinator-venv/bin/python"
     assert not Path(macos_bake).exists()
 
     proc = _run_forwarder(_render_forwarder_pair(tmp_path, macos_bake), "hello")

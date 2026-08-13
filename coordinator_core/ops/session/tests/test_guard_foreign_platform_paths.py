@@ -35,14 +35,14 @@ def _posix_settings():
                 {
                     "hooks": [
                         {
-                            "command": "python3 /Users/example-operator/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 /Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py",
                         }
                     ]
                 }
             ]
         },
         "extraKnownMarketplaces": {
-            "example-retrieval-repo": {"source": {"source": "directory", "path": "/Users/example-operator/X/example-retrieval-repo"}}
+            "example-retrieval-repo": {"source": {"source": "directory", "path": "/Users/alice/X/example-retrieval-repo"}}
         },
     }
 
@@ -62,7 +62,7 @@ def _windows_corrupted_settings():
         },
         "extraKnownMarketplaces": {
             "example-game-workbench-repo": {
-                "source": {"source": "directory", "path": "C:\\Users\\example-operator\\.claude\\plugins\\example-game-workbench-repo"}
+                "source": {"source": "directory", "path": "C:\\Users\\alice\\.claude\\plugins\\example-game-workbench-repo"}
             }
         },
     }
@@ -101,7 +101,7 @@ def test_posix_paths_on_windows_host_flagged():
 
 def test_clean_windows_on_windows_host_no_findings():
     windows_native = {
-        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/example-operator/example-doctrine-repo/coordinator/hooks/scripts/foo.py"}]}]},
+        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/alice/example-doctrine-repo/coordinator/hooks/scripts/foo.py"}]}]},
     }
     findings = detect_foreign_platform_paths(windows_native, host_is_windows=True)
     assert findings == []
@@ -112,7 +112,7 @@ def test_clean_windows_on_windows_host_no_findings():
 
 def test_mixed_shapes_posix_host_only_windows_shape_flagged():
     mixed = {
-        "a": "python3 /Users/example-operator/X/example-doctrine-repo/coordinator/hooks/scripts/ok.py",
+        "a": "python3 /Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/ok.py",
         "b": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/bad.py",
     }
     findings = detect_foreign_platform_paths(mixed, host_is_windows=False)
@@ -153,7 +153,7 @@ def test_url_and_unc_paths_do_not_false_positive():
 def test_suggestion_derived_from_doe_root(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / ".doe-root").write_text("/Users/example-operator/X/example-doctrine-repo", encoding="utf-8")
+    (config_dir / ".doe-root").write_text("/Users/alice/X/example-doctrine-repo", encoding="utf-8")
     settings = config_dir / "settings.json"
     import json
 
@@ -164,7 +164,7 @@ def test_suggestion_derived_from_doe_root(tmp_path):
 
     banner = evaluate_foreign_platform_paths(settings, config_dir=config_dir, host_is_windows=False)
     assert "FOREIGN-PLATFORM PATH(S) DETECTED" in banner
-    assert "/Users/example-operator/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py" in banner
+    assert "/Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py" in banner
 
 
 def test_no_doe_root_suggestion_is_none(tmp_path):
@@ -183,7 +183,7 @@ def test_format_banner_empty_findings_is_empty_string():
 
 def test_format_banner_names_offending_keys():
     findings = detect_foreign_platform_paths(_windows_corrupted_settings(), host_is_windows=False)
-    banner = format_banner(findings, "/Users/example-operator/.claude/settings.json")
+    banner = format_banner(findings, "/Users/alice/.claude/settings.json")
     assert "settings.json" in banner
     assert "X:/example-doctrine-repo" in banner
     assert "DETECT-ONLY" in banner
@@ -524,7 +524,7 @@ def test_prose_allow_marker_only_suppresses_its_own_line():
 
 
 def test_prose_posix_leak_on_windows_host_fires():
-    text = "checked out at `/Users/example-operator/X/some-repo` on that box"
+    text = "checked out at `/Users/alice/X/some-repo` on that box"
     findings = detect_foreign_platform_paths_in_prose(text, host_is_windows=True)
     assert len(findings) == 1
     assert findings[0].shape == "posix-path-on-windows-host"
@@ -533,7 +533,7 @@ def test_prose_posix_leak_on_windows_host_fires():
 def test_prose_scan_native_host_shape_stays_quiet():
     """A POSIX-shaped path scanned on a POSIX host (native, not foreign) must
     not fire -- mirrors the settings.json leg's own host-conditioning."""
-    text = "checked out at `/Users/example-operator/X/some-repo` on that box"
+    text = "checked out at `/Users/alice/X/some-repo` on that box"
     assert detect_foreign_platform_paths_in_prose(text, host_is_windows=False) == []
 
 

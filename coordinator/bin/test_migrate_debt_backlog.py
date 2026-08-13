@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_migrate_debt_backlog.py — test suite for migrate-debt-backlog.py.
 

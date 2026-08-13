@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""migrate-state-to-claude-klabauter.sh — idempotent migration of ~/.claude working data to the claude-klabauter sibling repo.
+"""migrate-state-to-claude-klabauter.sh — idempotent migration of ~/.claude working data to the engine repo.
 
 Two-phase cross-repo excision: `--populate` copies (never removes) state/,
-docs/{plans,research,problems}/, and archive/ into claude-klabauter; `--finalize`
+docs/{plans,research,problems}/, and archive/ into the engine repo; `--finalize`
 delta re-syncs, guards per-path, then removes the ~/.claude originals only
 after the C3/C4/C12 repoint and C11 dogfood consistency gate. Copy/guard/
 remove logic lives claude-klabauter-side in coordinator_core.ops.migrate_state_to_claude_klabauter

@@ -3147,6 +3147,32 @@ def _scaffold_research_synthesis(title: str) -> str:
     return "\n".join(lines)
 
 
+# dispatch_feed placeholder block — SHARED by _scaffold_run_report and
+# _scaffold_review_findings below so the two self-persist scaffolders in this
+# file cannot drift from each other the way this file's dispatch_feed
+# literal drifted from coordinator_core.subagent_sandbox.provision_report.
+# _frontmatter's own copy (C6, commit 8571f7f22273; fixed here in C6b).
+#
+# This is a HAND-MAINTAINED mirror of provision_report._frontmatter's
+# dispatch_feed block, not an import of it: provision_report.py lives in the
+# coordinator_core engine checkout, reached only through this file's
+# best-effort _ensure_engine_on_path() seam (may be unresolvable on a
+# published/vendored install with no claude-klabauter checkout on disk), while this
+# scaffolder's dispatch_feed placeholder must render even when the engine is
+# absent (same degrade-open posture as SESSION_LEDGER_BLOCK_LINES above).
+# Importing across that seam would make an otherwise engine-independent
+# scaffold arm engine-REQUIRED for the CLI's normal case. The shape is
+# instead pinned by a shared regression test
+# (coordinator/tests/test_flight_recorder_scaffolder.py) that parses BOTH
+# producers' emitted dispatch_feed and asserts field-for-field agreement —
+# see that test's module for the enforcement mechanism.
+_DISPATCH_FEED_BLOCK_LINES: tuple[str, ...] = (
+    "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter",
+    "  gate_kind: none",
+    "  write_files: []",
+)
+
+
 def _scaffold_run_report(
     plan_path: str,
     chunk_id: str,
@@ -3161,13 +3187,20 @@ def _scaffold_run_report(
     plan, chunk, dispatched_at, dispatched_by, status: dispatched, agent_type,
     spawned_at, commits: [], sidecar_schema: v1, started_at/finished_at (null —
     executor-written), divergence (block-style `diverged: false` nested mapping —
-    executor-written, post-run), and dispatch_feed: null (INERT placeholder — the
+    executor-written, post-run), and dispatch_feed (INERT placeholder — the
     field is optional/claude-klabauter-emitter-written per pcli-04/C3, executor-READ-ONLY;
-    emitting it as `null` here — rather than omitting it — matches the landed
-    claude-klabauter CONTRACT.md scaffold shape byte-for-byte, easing the C10 scaffold-
-    round-trip comparison). Field shape matches the printf the retired
-    fan-out-dispatch.sh (example-doctrine-repo 65e5d199, 2026-07-19) used to emit (same key
-    order, same default values).
+    emitted as a block-style object containing ONLY the sub-fields with a
+    real value at scaffold time (`gate_kind: none`, `write_files: []`) —
+    every other declared sub-property (label/agent_type/model/effort/
+    schema_ref/brief_ref/est_min) admits no null in run-report.schema.json
+    and is OMITTED rather than null-valued (dispatch_feed has no `required`
+    list and `additionalProperties: true`, so omission validates cleanly),
+    per _DISPATCH_FEED_BLOCK_LINES above — matching the corrected shape
+    coordinator_core.subagent_sandbox.provision_report._frontmatter emits
+    (C6, commit 8571f7f22273, corrected in C6b after a staff review found
+    C6's original all-null-subfields shape was schema-invalid). Field shape
+    matches the printf the retired fan-out-dispatch.sh (example-doctrine-repo 65e5d199,
+    2026-07-19) used to emit for the fields it still shares.
 
     This function is the former _scaffold_flight_recorder, renamed and extended
     for the run-report subsume (plan: 2026-07-13-subagent-run-report-subsume.md,
@@ -3218,7 +3251,7 @@ def _scaffold_run_report(
         "finished_at: null",
         "divergence:",
         "  diverged: false",
-        "dispatch_feed: null",
+        *_DISPATCH_FEED_BLOCK_LINES,
         "---",
         "",
         "<!-- Run-report lifecycle: dispatched → in_flight → complete | blocked | thrashing.",
@@ -3319,7 +3352,7 @@ def _scaffold_review_findings(slice_id: str, scope: str, spawned_at: str, lead_s
         "divergence:",
         "  diverged: false",
         "commits: []",
-        "dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter",
+        *_DISPATCH_FEED_BLOCK_LINES,
         "---",
         "",
         f"# Code Review: Slice {slice_id} -- {scope}",

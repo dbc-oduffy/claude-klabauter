@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 query-file-attribution.py — Read-only CLI for session→file attribution queries.
 

@@ -22,7 +22,7 @@ Fixture shape mirrors test_cross_repo_memo.py:
   - _parse_frontmatter helper (verbatim from sibling)
 
 Real-op seam plumbing (2026-07-21 trampoline flip, harness repair): draft/send/list
-now dispatch through cc_invoke.route_mutation onto claude-klabauter's memo.draft/memo.send/
+now dispatch through cc_invoke.route_mutation onto the engine repo's memo.draft/memo.send/
 memo.list_outbox ops — there is no local direct-write fallback. Tests exercising
 these verbs need a fixture-resolvable CLAUDE_KLABAUTER_ROOT (via `_resolve_test_claude_klabauter_root`,
 the same cc_invoke four-rung ladder test_cross_repo_memo.py's helper of the same
@@ -67,6 +67,86 @@ def _script_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "cross-repo-memo")
 
 
+def _sibling_example_doctrine_repo_probe() -> str:
+    """Env-independent fallback: locate the sibling example-doctrine-repo checkout by
+    walking up from THIS file to the engine repo root, then probing that
+    root's own parent directory for the fleet's conventional sibling-clone
+    name, `example-doctrine-repo` (see project CLAUDE.md "sibling example-doctrine-repo
+    checkout"). Not a hand-typed absolute path -- portable to any machine
+    that clones the fleet repos side-by-side.
+
+    Exists because `coordinator_core.testing.doe_root.resolve_doe_root()`
+    is itself CLAUDE_HOME/COORDINATOR_SETTINGS_HOME-anchored (registry +
+    `.doe-root` pointer rungs) -- on a machine where those env vars are
+    pinned to an isolated tmpdir (every test in this file does this, and a
+    fully-isolated-home CI/reproducer run does it for the WHOLE process),
+    that resolver returns "" even though the sibling checkout is sitting
+    right there on disk. This probe never touches CLAUDE_HOME/
+    COORDINATOR_SETTINGS_HOME at all.
+
+    Returns "" if no candidate carries the manifest.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    claude_klabauter_root = here
+    for _ in range(8):
+        if os.path.isdir(os.path.join(claude_klabauter_root, ".git")):
+            break
+        parent = os.path.dirname(claude_klabauter_root)
+        if parent == claude_klabauter_root:
+            return ""
+        claude_klabauter_root = parent
+    else:
+        return ""
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "example-doctrine-repo")
+    manifest = os.path.join(
+        candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
+    )
+    return candidate if os.path.isfile(manifest) else ""
+
+
+def _resolve_doe_root_for_tests() -> str:
+    """Best-effort example-doctrine-repo sibling root, forwarded as DOE_ROOT to every
+    spawned CLI invocation in this file, AND pinned into this process's own
+    `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so any in-process
+    import of `coordinator_registry` resolves too.
+
+    coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back
+    to a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
+    COORDINATOR_SETTINGS_HOME-anchored -- every test in this file points those
+    at an isolated tmpdir for fixture isolation, which collaterally starves
+    that fallback too. Resolving it once here and forwarding it as an
+    explicit DOE_ROOT override (coordinator_registry.py's own rung-1 override)
+    keeps the manifest read working without touching what each test actually
+    asserts on. Mirrors coordinator/bin/test_coordinator_queue_append.py's
+    helper of the same name.
+
+    Negative-spec: `resolve_doe_root()` alone is NOT sufficient here -- it
+    reads CLAUDE_HOME/COORDINATOR_SETTINGS_HOME internally, so it goes empty
+    under a whole-process isolated-home run even though the sibling checkout
+    is present on disk; `_sibling_example_doctrine_repo_probe()` is the env-independent
+    fallback that keeps this file hermetic to ambient machine state.
+    """
+    try:
+        from coordinator_core.testing.doe_root import resolve_doe_root
+
+        root = resolve_doe_root()
+    except Exception:
+        root = ""
+    if root and os.path.isdir(root):
+        return root
+    return _sibling_example_doctrine_repo_probe()
+
+
+_DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
+# Pinned into THIS process's environ (not just forwarded per-subprocess) so
+# any in-process import of `coordinator_registry` sees the same override
+# coordinator_registry.py's own rung-1 (`DOE_ROOT` env) already honors,
+# rather than raising FileNotFoundError before any subprocess is even
+# spawned. `setdefault` respects an operator's own pre-set DOE_ROOT.
+if _DOE_ROOT_FOR_TESTS:
+    os.environ.setdefault("DOE_ROOT", _DOE_ROOT_FOR_TESTS)
+
+
 def _load_dispatcher_module():
     """Import the extensionless cross-repo-memo script as a module.
 
@@ -89,11 +169,18 @@ def _python() -> str:
     return sys.executable
 
 
+def _with_doe_root(env: dict[str, str]) -> dict[str, str]:
+    """Forward DOE_ROOT into a test env dict unless the caller already set it."""
+    if "DOE_ROOT" not in env and _DOE_ROOT_FOR_TESTS:
+        env = {**env, "DOE_ROOT": _DOE_ROOT_FOR_TESTS}
+    return env
+
+
 def _run_dispatcher(args: list[str], env: dict[str, str], stdin_text: str = "") -> subprocess.CompletedProcess:
     """Invoke the dispatcher CLI as a subprocess with the given environment."""
     return subprocess.run(
         [_python(), _script_path()] + args,
-        env={**os.environ, **env},
+        env={**os.environ, **_with_doe_root(env)},
         capture_output=True,
         text=True,
         input=stdin_text,
@@ -279,7 +366,7 @@ def _run_dispatcher_in_repo(
     """Invoke the dispatcher CLI with cwd=repo_dir so git rev-parse works."""
     return subprocess.run(
         [_python(), _script_path()] + args,
-        env={**os.environ, **env},
+        env={**os.environ, **_with_doe_root(env)},
         capture_output=True,
         text=True,
         input=stdin_text,
@@ -1705,7 +1792,7 @@ def test_compose_prints_path_default() -> None:
         }
         # Pop EDITOR from the merged env (we pass env={**os.environ, **env_overrides})
         # The run helper merges with os.environ — ensure EDITOR is absent.
-        env_with_no_editor = {**os.environ, **env}
+        env_with_no_editor = {**os.environ, **_with_doe_root(env)}
         env_with_no_editor.pop("EDITOR", None)
 
         today = datetime.date.today().isoformat()
@@ -1826,6 +1913,8 @@ def test_compose_open_without_editor() -> None:
         env_with_no_editor["MACHINE_LOCAL_IMPL"] = mock_impl
         env_with_no_editor["CLAUDE_HOME"] = claude_home
         env_with_no_editor["EDITOR"] = ""  # explicitly empty
+        if _DOE_ROOT_FOR_TESTS:
+            env_with_no_editor["DOE_ROOT"] = _DOE_ROOT_FOR_TESTS
 
         result = subprocess.run(
             [_python(), _script_path(), "compose", topic, "--open"],

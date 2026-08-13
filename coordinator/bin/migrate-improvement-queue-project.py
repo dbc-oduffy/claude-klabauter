@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 migrate-improvement-queue-project.py — one-shot migration of project-specific entries
 from the legacy pipe-delimited state/improvement-queue.md into structured YAML files

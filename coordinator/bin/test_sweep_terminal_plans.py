@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_sweep_terminal_plans.py — self-contained test suite for sweep-terminal-plans.py.
 
 Port of: coordinator/hooks/scripts/tests/test-sweep-terminal-plans.sh (example-doctrine-repo e34f2484,

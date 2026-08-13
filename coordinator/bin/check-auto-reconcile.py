@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
 bin/check-auto-reconcile.sh -- CLI trampoline over the engine repo's
@@ -58,6 +57,14 @@ Render rule (offers-not-nags): result.surfaced empty or missing -> silent
 (nothing to report). result.surfaced non-empty -> one line per entry:
   [auto-reconcile] <handoff_id>: <reason> — <evidence>
 (the " — <evidence>" tail is omitted when evidence is empty/missing).
+result.gates_cleared[] additionally renders one would-flip line per entry
+where dry_run is truthy AND blocker_ids is non-empty (a dry-run clear/narrow
+verdict never reaches surfaced[] -- see handoff_reconcile.py's routing
+docstring -- so this is the only operator-visible signal it produces):
+  [auto-reconcile] <handoff_id>: gate cleared — would flip awaiting_gate →
+  <target> (dry-run, not applied) — blockers: <ids>
+An entry with empty blocker_ids (the non-dry-run vacuous no-op shape) is
+never rendered -- nothing to announce.
 Malformed/unparseable JSON -> silent, never crash. Exit 0 always.
 
 Rendering is deliberately self-contained (no engine import) so the
@@ -111,7 +118,12 @@ from cc_invoke import ensure_engine_on_path  # noqa: E402
 
 
 def _render(response: Any) -> List[str]:
-    """Render result.surfaced[] as one '[auto-reconcile] ...' line per entry.
+    """Render result.surfaced[] as one '[auto-reconcile] ...' line per entry,
+    PLUS one dry-run would-flip line per qualifying result.gates_cleared[]
+    entry (clear/narrow verdicts computed under dry_run=true never reach
+    surfaced[] -- see handoff_reconcile.py's D1/gate_evidence docstring
+    sections -- so this second pass is the only operator-visible signal a
+    dry-run gate-clear produces at all).
 
     Self-contained (no engine import) -- see module docstring.
     """
@@ -124,7 +136,7 @@ def _render(response: Any) -> List[str]:
         return []
     surfaced = result.get("surfaced") or []
     if not isinstance(surfaced, list):
-        return []
+        surfaced = []
     lines: List[str] = []
     for entry in surfaced:
         if not isinstance(entry, dict):
@@ -136,6 +148,24 @@ def _render(response: Any) -> List[str]:
         if evidence:
             line += " — {}".format(evidence)
         lines.append(line)
+
+    gates_cleared = result.get("gates_cleared") or []
+    if not isinstance(gates_cleared, list):
+        gates_cleared = []
+    for entry in gates_cleared:
+        if not isinstance(entry, dict):
+            continue
+        blocker_ids = entry.get("blocker_ids") or []
+        if not entry.get("dry_run") or not isinstance(blocker_ids, list) or not blocker_ids:
+            continue
+        handoff_id = str(entry.get("handoff_id", "")).replace("\n", " ").replace("\r", " ")
+        verdict = str(entry.get("verdict", "")).replace("\n", " ").replace("\r", " ")
+        blockers = ", ".join(str(b).replace("\n", " ").replace("\r", " ") for b in blocker_ids)
+        target = "ready_to_fire" if verdict == "clear" else "awaiting_gate (narrowed)"
+        lines.append(
+            "[auto-reconcile] {}: gate cleared — would flip awaiting_gate → {} "
+            "(dry-run, not applied) — blockers: {}".format(handoff_id, target, blockers)
+        )
     return lines
 
 

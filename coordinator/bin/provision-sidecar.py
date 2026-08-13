@@ -284,12 +284,12 @@ def main(argv: list) -> int:
     # loud ones above are preconditions this tool owns and can state
     # definitively (ineligible type, unresolvable session id). Whether a given
     # subagent_type has a report_type_map row is a fact about a policy file
-    # claude-klabauter does not own; refusing on its absence would make this CLI brittle
+    # the engine repo does not own; refusing on its absence would make this CLI brittle
     # against a sibling's config in exactly the way its own docstring warns
     # against.
     # --type is validated HERE rather than via argparse `choices=`, because
     # TEMPLATE_TYPES lives in provision_report, which this script imports
-    # lazily inside main() (after claude-klabauter-root resolution) -- the parser is
+    # lazily inside main() (after engine-root resolution) -- the parser is
     # built before that import exists. Validating here keeps the two lists in
     # the lockstep TEMPLATE_TYPES' own comment demands, without reintroducing
     # an import-order dependency the lazy import deliberately removed.

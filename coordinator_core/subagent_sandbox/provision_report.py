@@ -158,7 +158,20 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
     path-sanitized segment used for the directory leaf) -- see
     ``_provision``'s call site. Falls back to the literal ``null`` when
     absent -- in practice this is never absent when reached via
-    ``_provision`` since ``session_id`` is required for eligibility."""
+    ``_provision`` since ``session_id`` is required for eligibility.
+
+    ``dispatch_feed``'s sub-properties in run-report.schema.json
+    (``label``/``agent_type``/``model``/``effort``/``schema_ref``/
+    ``brief_ref`` = ``type: string``, ``est_min`` = ``type: number``) admit
+    NO null -- only the field itself is ``["object", "null"]``. There is no
+    ``required`` list and ``additionalProperties: true``, so a valid
+    block-style object may simply OMIT every field it has no real value
+    for. This emits ONLY the two fields with a real value at scaffold time
+    (``gate_kind: none`` -- a valid enum member -- and ``write_files: []``)
+    and drops the seven null-valued lines a prior revision emitted, which
+    were schema-invalid (staff review + coordinator/tests/
+    test_flight_recorder_scaffolder.py Case 3/6h caught it downstream, see
+    C6b)."""
     return (
         "---\n"
         "status: open\n"
@@ -169,15 +182,8 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
         "  diverged: false\n"
         "commits: []\n"
         "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter\n"
-        "  label: null\n"
-        "  agent_type: null\n"
-        "  model: null\n"
-        "  effort: null\n"
-        "  schema_ref: null\n"
-        "  brief_ref: null\n"
         "  gate_kind: none\n"
         "  write_files: []\n"
-        "  est_min: null\n"
         "---\n\n"
     )
 

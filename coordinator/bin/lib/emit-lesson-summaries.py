@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """emit-lesson-summaries.py — union-join {state/lessons/} ∪ {lessons-outbox/} ∪ {lessons-outbox/drained/}
 into a JSON array of LessonSummary records for the cockpit snapshot emitter.
 

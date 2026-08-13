@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """whats-next.py — Prioritized next-work surface for /workday-start Step 4.
 
 Spec backlink: archive/specs/2026-05-05-script-first-deterministic-ops.md §T3

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 memo_compose.py — shared composer for cross-repo memo frontmatter and documents.
 

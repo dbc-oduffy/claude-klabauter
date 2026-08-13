@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -56,6 +57,13 @@ from typing import Optional
 import pytest
 
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
+
+# Repo root -- prepended onto PYTHONPATH for the one genuine subprocess spawn
+# below so `coordinator_core.hooks.block_unenumerated_agent_type`'s own
+# module-level `from coordinator_core._hook_envelope import deny` resolves
+# regardless of the spawned child's cwd. Same shape as
+# coordinator_core/tests/test_invoke_main.py::_make_env's _PROJECT_ROOT.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 
 # test_main_subprocess_contract_exit_and_stdout_shape needs one genuine OS-
 # level subprocess run of main()'s real stdin/stdout/exit-code boundary
@@ -194,12 +202,16 @@ def test_main_subprocess_contract_exit_and_stdout_shape() -> None:
         "tool_input": {"subagent_type": "hookprobe-subprocess-channel-pin", "prompt": "do the thing"},
     }
     module_path = Path(mod.__file__)
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{_PROJECT_ROOT}{os.pathsep}{existing_pp}" if existing_pp else _PROJECT_ROOT
     result = subprocess.run(
         [sys.executable, str(module_path)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 

@@ -28,6 +28,7 @@ from coordinator_core.ops.goal_append import (
     append_goal,
 )
 from coordinator_core.ops.emit._slug import machine_slug
+from coordinator_core.testing import symlink_capability
 
 # Positive floor assertion: op must be registered before any test runs.
 _OP_NAME = "goal.append"
@@ -831,6 +832,7 @@ class TestIsAbsoluteCrp:
 # rather than raising "outside repo_root".
 # ---------------------------------------------------------------------------
 
+@symlink_capability.requires_symlink_capability
 class TestNormalizeCoordinatorRootPathSymlink:
     """A symlinked repo_root must not break normalization when crp is the
     dereferenced (real) path — pins the double-realpath in the implementation."""

@@ -32,7 +32,7 @@ by hand when this module's precedence rule changes:
   - `gen-claude-klabauter-root-pointer.py` (see that file's own docstring) (review:
     code-reviewer F5/F6).
   - `coordinator/bin/machine-local` (its own docstring gives the recursion
-    rationale: claude-klabauter-root resolution itself shells out to machine-local, so
+    rationale: engine-root resolution itself shells out to machine-local, so
     a trampoline that imports this module here would recurse). This second
     exception was not originally listed here, which is how its inline copy
     drifted from this ladder (dropped the `CLAUDE_HOME` rung) unnoticed
@@ -52,7 +52,7 @@ Negative-spec: does NOT remove, neuter, or stop-populating the mirror rung —
 callers on a machine where settings-home is somehow absent/incomplete must
 still resolve via the mirror. This module changes precedence only.
 
-Spec backlink: claude-klabauter state/audits/2026-07-25-claude-bin-mirror-read-
+Spec backlink: this repo's own state/audits/2026-07-25-claude-bin-mirror-read-
   rungs.md (work-list); example-doctrine-repo state/audits/2026-07-24-claude-bin-compat-
   mirror-binding-audit.md (VERDICT: HAS-BINDINGS); docs/decisions/
   DR-210-claude-klabauter-native-tooling-ownership-strangler.md Amendment 2026-07-24

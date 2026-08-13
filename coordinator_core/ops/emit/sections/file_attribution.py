@@ -5,7 +5,7 @@ Claude Code natural transcripts. The bash oracle delegates this section ENTIRELY
 external Python producer ``bin/derive-file-attribution.py`` — it invokes no inline
 aggregation logic. The port preserves that delegation: ``collect`` shells out to the
 SAME script with the SAME CLI flags and applies the contract fix-ups the bash performs,
-plus two porter-owned corrections layered on top (F1/F2 below) that the producer
+plus porter-owned corrections layered on top (F1/F2/F2b/F4 below) that the producer
 itself does not and must not implement (F3 of the same fix — this porter, not the
 producer, owns contract-boundary shaping; that division of labor holds regardless of who
 owns the producer's bytes):
@@ -58,6 +58,43 @@ ephemeral paths cannot satisfy a repo-relative contract and are EXCLUDED from
 ``file_attributions`` — but, per the same F1 no-silent-narrowing principle, the exclusion
 is counted and made visible as an ``excluded: True`` marker row in
 ``malformed_records.file_attributions`` rather than just dropped.
+
+F2b (break-class fix, guard gap in F2 itself): a producer-side bug strips path separators
+before emitting ``file_path``, so a Windows-absolute path arrives as a drive letter glued
+directly to the rest of the (separator-less) path, e.g. ``<drive>:somedirfile.py``. The F2
+guard's ``_WINDOWS_DRIVE_RE`` required a separator immediately after the colon, so this
+shape matched neither the drive-letter regex nor the backslash test in
+``_is_windows_shaped`` — it was scored POSIX-shaped, read as "already repo-relative" by
+``_is_absolute``, and passed through verbatim (76 rows on the 2026-08-10 emission: 74
+``C:...``, 2 ``X:...``). The regex now matches a bare drive letter plus colon regardless of
+what follows, which routes this shape into the same absolute-path containment check F2
+already applies, and it is excluded (with an ``excluded: True`` marker, same channel) exactly
+like any other out-of-repo absolute path. See ``_WINDOWS_DRIVE_RE``.
+
+Post-relativization key collapse (F4, break-class fix): the producer's ``aggregate`` keys
+its per-file rows on ``(session_id, file_path)`` using ``file_path`` AS THE TRANSCRIPT
+RECORDED IT — before this porter's F2 relativization runs. Two distinct producer keys (an
+absolute in-repo path and the already-relative form of the SAME file in the SAME session)
+are distinct strings pre-relativization, so ``aggregate`` never merges them; each survives
+as its own row. F2's ``_relativize_or_exclude`` then rewrites both to the identical
+repo-relative string, and the emitted array carries two rows for one natural key — 84 such
+collisions on the 2026-08-10 emission, 81 disagreeing with each other on attribute values
+(``last_operation``, counts, line deltas, honesty markers), because the two occurrences
+really were separate observations the pre-relativization key kept apart. Two conformant
+consumers (upsert-last-wins vs. unique-constraint-first-wins) would answer differently from
+the SAME 81 rows — producer-side ambiguity no consumer contract can resolve. This is NOT
+the pre-aggregation the negative-spec below forbids: it restores uniqueness of
+``(repo, session_id, file_path)``, which is already this module's declared natural key, on
+rows THIS PORTER's own F2 rewrite split apart — it does not collapse a subagent onto its
+parent session or fold the (session, file) axis away. ``collect`` runs a merge pass,
+``_merge_duplicate_key_records``, after F2 relativization: ``edited_count``/
+``read_count``/``referenced_count`` sum (the split was artificial, the touches were real);
+``lines_added``/``lines_removed`` sum null-aware (``None`` and ``0`` are not the same claim
+— a null total is preserved rather than coerced); ``completeness``/
+``provenance_completeness``/``capture_source`` take the worst-case value across the merged
+occurrences, per AC6 above; ``last_operation`` prefers a non-null value, then an edit-class
+op over a read-class one, then input order — never invented. See
+``_merge_duplicate_key_records`` and ``_worst_marker``.
 
 ATTRIBUTION SCOPE — session transcripts AND subagent transcripts, one level deep. The
 producer's ``_iter_transcript_entries`` enumerates each top-level ``<session>.jsonl`` plus
@@ -150,6 +187,28 @@ _NON_DICT_RECORD_REASON = (
     "file-attribution record"
 )
 
+# Honesty-marker worst-case ordering (higher index = worse quality) for the F4 merge pass
+# below — see module docstring F4. Deliberately duplicated rather than imported: the
+# producer is a frozen, subprocess-isolated external script (see `_run_producer`'s
+# docstring on that isolation boundary), and these three tables mirror
+# `coordinator/bin/derive-file-attribution.py`'s own `COMPLETENESS_ORDER` /
+# `CAPTURE_SOURCE_ORDER` / `PROV_COMPLETENESS_ORDER` (which itself documents mirroring a
+# third copy in `emit-cockpit-snapshot.py`) — keep all in sync on any change to the
+# honesty-marker vocabulary.
+_COMPLETENESS_ORDER: dict[str, int] = {"complete": 0, "partial": 1, "unknown": 2}
+_CAPTURE_SOURCE_ORDER: dict[str, int] = {
+    "journal_projection": 0, "hook_capture": 1, "derived": 2,
+}
+_PROV_COMPLETENESS_ORDER: dict[str, int] = {"complete": 0, "unknown": 1}
+
+# `last_operation` values the producer stamps only from an `edited`-link-type row's
+# `metadata.operation` (see `aggregate`'s `link_type == 'edited'` branch) — every non-null
+# value the producer can currently emit is edit-class by construction. The read/reference
+# vs. edit distinction below is still enforced generically (not narrowed to "prefer the only
+# class that exists today") so the merge stays correct if the producer's vocabulary grows a
+# genuinely read-class operation value later.
+_EDIT_CLASS_OPERATIONS = frozenset({"edit", "create", "delete", "rename", "bash"})
+
 # Ceiling for the producer subprocess. This is a fail-open safety guard, not a latency SLA —
 # the section runs only on the full-enrichment cadence tier, so a generous ceiling costs
 # nothing on the hot path. The budget must cover a COLD full-corpus scan, not a warm one, and
@@ -170,7 +229,21 @@ _NON_DICT_RECORD_REASON = (
 # (it has over-attributed this op four times).
 _PRODUCER_TIMEOUT_SECONDS = 180
 
-_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# Separator after the colon is OPTIONAL (F2b, break-class fix): a confirmed producer-side
+# bug strips every path separator before emitting file_path, turning a Windows-absolute
+# path such as "<drive>:\some\dir\file.py" into "<drive>:somedirfile.py" — the drive
+# letter survives, the backslashes do not. The strict "drive letter + separator" form
+# of this regex missed that shape entirely: it matched neither this regex nor the
+# backslash test in `_is_windows_shaped`, so the path was treated as POSIX-relative and
+# `_relativize_or_exclude` waved it through unchanged (76 rows on the 2026-08-10 emission:
+# 74 `C:...`, 2 `X:...`). A drive letter immediately followed by `:` is a strong enough
+# Windows signal on its own — genuine Windows drive-relative paths (`C:foo`, distinct from
+# `C:\foo`) are not a shape this pipeline's producers legitimately emit, so treating any
+# `<letter>:` prefix as Windows-shaped costs nothing real and closes the gap. This
+# regex is also the sole predicate `_validate_prior_file_attributions` delegates to (by
+# design, see its docstring), so widening it here correctly forces a prior emission
+# carrying these 76 rows to fail validation and recompute — intended, not a regression.
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 
 def _extract_prior_file_attributions(prior: dict):
@@ -216,16 +289,27 @@ def _validate_prior_file_attributions(rows: Any, repo_root: Path) -> Optional[st
     implementation of F2, and the computed path already does it correctly. Reject and
     recompute — see ``skipped_stage``'s negative-spec.
 
-    Checks only ``file_path`` (plus each row being an object at all), the one field F2 owns.
-    This is not a whole-contract validator and must not grow into one — schema conformance is
+    Checks ``file_path`` (F2's field) plus natural-key uniqueness (F4's invariant), the two
+    things a freshly-computed batch is guaranteed to have and a stale one might not. This is
+    not a whole-contract validator and must not grow into one — schema conformance is
     ``validate.py``'s job; this is the narrow "is the reused value as good as a computed one"
     gate.
+
+    F4 addendum: a prior emission can satisfy F2 (every ``file_path`` already repo-relative)
+    and still carry duplicate ``(repo, session_id, file_path)`` rows — F2 alone does not
+    imply F4, since F4's collisions are created by relativization, not prevented by it,
+    and a prior run's own relativized output can pre-date the F4 merge pass entirely. A
+    freshly computed batch is unique on that key by construction; a reused batch that is not
+    is therefore not equivalent to a computed one, and is rejected the same way an
+    unrelativized ``file_path`` is.
     """
     if not isinstance(rows, list):
         return f"expected a list of rows, got {type(rows).__name__}"
     non_dict = 0
     offenders = 0
     first: Optional[str] = None
+    seen_keys: set[tuple] = set()
+    duplicate_keys: set[tuple] = set()
     for row in rows:
         if not isinstance(row, dict):
             # The computed path quarantines these into malformed_records; a reused batch that
@@ -238,7 +322,12 @@ def _validate_prior_file_attributions(rows: Any, repo_root: Path) -> Optional[st
             offenders += 1
             if first is None:
                 first = original if isinstance(original, str) else repr(original)
-    if offenders or non_dict:
+            continue
+        key = (row.get("repo"), row.get("session_id"), relativized)
+        if key in seen_keys:
+            duplicate_keys.add(key)
+        seen_keys.add(key)
+    if offenders or non_dict or duplicate_keys:
         parts = []
         if offenders:
             parts.append(
@@ -248,9 +337,15 @@ def _validate_prior_file_attributions(rows: Any, repo_root: Path) -> Optional[st
             )
         if non_dict:
             parts.append(f"{non_dict} of {len(rows)} entries are not objects")
+        if duplicate_keys:
+            parts.append(
+                f"{len(duplicate_keys)} (repo, session_id, file_path) natural keys are "
+                f"duplicated across {len(rows)} rows — the prior emission predates or "
+                f"bypassed this porter's F4 merge pass"
+            )
         return (
             "; ".join(parts)
-            + " — the prior emission predates or bypassed this porter's F2 path normalisation"
+            + " — the prior emission predates or bypassed this porter's F2/F4 normalisation"
         )
     return None
 
@@ -406,7 +501,128 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         record["file_path"] = relativized
         in_repo_records.append(record)
 
-    return in_repo_records, malformed
+    merged_records = _merge_duplicate_key_records(in_repo_records)
+    return merged_records, malformed
+
+
+def _null_aware_sum(a: Optional[int], b: Optional[int]) -> Optional[int]:
+    """Sum two nullable integer totals without coercing a genuine null to 0.
+
+    ``None + None -> None`` (neither merged occurrence had a line count to report — the
+    total is genuinely unknown, not zero); ``None + 5 -> 5``; ``5 + 3 -> 8``. See module
+    docstring F4.
+    """
+    if a is None and b is None:
+        return None
+    return (a or 0) + (b or 0)
+
+
+def _worst_marker(order_map: dict, a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """Return the worse (higher-order) of two honesty-marker values.
+
+    Mirrors ``coordinator/bin/derive-file-attribution.py``'s own ``_worst_marker`` exactly
+    (same None-handling, same ``.get(v, 99)`` unknown-value fallback) — see the order-table
+    comment above for why this is a deliberate duplicate rather than an import.
+    """
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if order_map.get(a, 99) >= order_map.get(b, 99) else b
+
+
+def _merge_last_operation(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """Merge two ``last_operation`` values from occurrences of the SAME natural key.
+
+    Decided EM merge rule (module docstring F4): prefer a non-null value over null; where
+    both are non-null and conflict, prefer an edit-class operation
+    (``_EDIT_CLASS_OPERATIONS``) over a non-edit-class one; where that still does not
+    decide it (both edit-class, or both non-edit-class, or equal), keep *a* — the
+    occurrence encountered first in the producer's output order, a deterministic tie-break
+    rather than an arbitrary one. Never invents a value not present in either input.
+    """
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a == b:
+        return a
+    a_is_edit = a in _EDIT_CLASS_OPERATIONS
+    b_is_edit = b in _EDIT_CLASS_OPERATIONS
+    if a_is_edit and not b_is_edit:
+        return a
+    if b_is_edit and not a_is_edit:
+        return b
+    return a
+
+
+def _merge_duplicate_key_records(records: list[dict]) -> list[dict]:
+    """Collapse *records* onto one row per distinct ``(repo, session_id, file_path)``.
+
+    See module docstring F4 for why this exists: the producer's own ``(session_id,
+    file_path)`` aggregation runs BEFORE this porter's F2 relativization, so two producer
+    rows that relativize to the same path are distinct producer keys and both survive
+    ``aggregate`` unmerged. This function restores the natural key's uniqueness on the
+    ALREADY-relativized ``file_path`` values (every *records* entry has passed through
+    ``_relativize_or_exclude`` by the time this runs).
+
+    Order-preserving: the first occurrence of each key sets the row's position in the
+    output; later occurrences merge into it in place. This keeps output order stable and
+    deterministic for the ``_merge_last_operation`` input-order tie-break.
+
+    Per-field merge rule (decided, not inferred — see F4):
+      - edited_count / read_count / referenced_count: summed. Real, distinct observations
+        the pre-relativization key artificially split apart.
+      - lines_added / lines_removed: null-aware summed (``_null_aware_sum``).
+      - completeness / provenance_completeness / capture_source: worst-case
+        (``_worst_marker``) — honesty markers are never upgraded by a merge (AC6).
+      - last_operation: ``_merge_last_operation`` (non-null over null, edit-class over
+        read-class, then input order).
+      - every other field (repo, file_path, session_id, coordinator_root_path, provenance,
+        ...) is taken from the FIRST occurrence unchanged — these are either identical
+        across occurrences of the same key by construction (repo/file_path/session_id) or
+        not covered by the EM's decided merge semantics (provenance), so merging them would
+        be inventing a rule rather than applying one.
+    """
+    merged: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for record in records:
+        key = (record.get("repo"), record.get("session_id"), record.get("file_path"))
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = dict(record)
+            order.append(key)
+            continue
+        existing["edited_count"] = (
+            (existing.get("edited_count") or 0) + (record.get("edited_count") or 0)
+        )
+        existing["read_count"] = (
+            (existing.get("read_count") or 0) + (record.get("read_count") or 0)
+        )
+        existing["referenced_count"] = (
+            (existing.get("referenced_count") or 0) + (record.get("referenced_count") or 0)
+        )
+        existing["lines_added"] = _null_aware_sum(
+            existing.get("lines_added"), record.get("lines_added")
+        )
+        existing["lines_removed"] = _null_aware_sum(
+            existing.get("lines_removed"), record.get("lines_removed")
+        )
+        existing["completeness"] = _worst_marker(
+            _COMPLETENESS_ORDER, existing.get("completeness"), record.get("completeness")
+        )
+        existing["provenance_completeness"] = _worst_marker(
+            _PROV_COMPLETENESS_ORDER,
+            existing.get("provenance_completeness"),
+            record.get("provenance_completeness"),
+        )
+        existing["capture_source"] = _worst_marker(
+            _CAPTURE_SOURCE_ORDER, existing.get("capture_source"), record.get("capture_source")
+        )
+        existing["last_operation"] = _merge_last_operation(
+            existing.get("last_operation"), record.get("last_operation")
+        )
+    return [merged[key] for key in order]
 
 
 def _run_producer(producer, *args: str) -> "tuple[list[dict], Optional[str]]":

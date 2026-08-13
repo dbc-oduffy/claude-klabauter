@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """claude-ue-bootstrap.py <project-dir>
 
@@ -15,10 +14,11 @@ Usage:
 Manual, example-doctrine-repo-owned per-project UE plugin gating helper — see
 docs/wiki/per-project-plugin-gating.md. NOT auto-invoked by any hook or
 ceremony (coordinator_core.hooks.ue_knowledge_distrust ported the SessionStart
-auto-bootstrap write/merge logic natively into claude-klabauter's Python -- see that
-module's `_run_bootstrap`, which retired the bash `["bash", script, cwd]`
-subprocess spawn this script used to receive on the session-hot-path). This
-script survives as the deliberate manual entrypoint the docs point users at.
+auto-bootstrap write/merge logic natively into the control-plane engine's
+Python -- see that module's `_run_bootstrap`, which retired the bash
+`["bash", script, cwd]` subprocess spawn this script used to receive on the
+session-hot-path). This script survives as the deliberate manual entrypoint
+the docs point users at.
 
 Part of the 2026-07-19 Windows de-bash campaign
 (docs/plans/2026-07-19-debash-coordinator-windows.md), chunk I-d. Fix-in-port

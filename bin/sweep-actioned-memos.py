@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 bin/sweep-actioned-memos.py — thin CLI over the cross-repo actioned-memo sweep.
 

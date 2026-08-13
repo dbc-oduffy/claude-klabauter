@@ -636,6 +636,63 @@ def promote_claim_stage(
     return True
 
 
+def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
+    """Record that the frontmatter stamp backing this claim actually LANDED —
+    a durable ``stamped`` marker file, written ONLY after the caller confirms
+    a genuinely successful mutation (e.g. ``archive_stamp.cs_claim_handoff``
+    returning ok on its OWN post-write ``_validate_fm`` pass), never before.
+
+    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+    already-satisfied-masks-a-refused-write.md): ``claim_stage`` reads
+    ``apply`` the moment ``promote_claim_stage`` runs, which ``pickup_
+    assemble.apply.apply`` does UNCONDITIONALLY, BEFORE the directives that
+    might actually perform the frontmatter stamp execute. A directive whose
+    stamp attempt then fails (e.g. a schema-violating frontmatter write
+    refused loud by ``handoff_transition._claim``) leaves the claim dir at
+    ``apply`` stage with NO stamp ever landed — so ``stage == apply`` is
+    reachable state on both a landed AND a refused write and cannot answer
+    "did the stamp land" by itself. This marker is the fact that can: it is
+    written from the ONE call site that has already confirmed success, not
+    inferred from a stage transition that fires unconditionally pre-attempt.
+
+    Best-effort, mirroring ``promote_claim_stage``'s own bool-return
+    contract: a write failure here must never fail a caller that has already
+    done the real, successful work — returns False rather than raising, and
+    the caller (``apply.py``'s ``_dispatch_archive_stamp_cli``) treats this as
+    advisory, not directive-failing.
+
+    Returns True when the marker is present (freshly written, or already
+    there — idempotent), False on any OSError or on a missing claim dir.
+    """
+    claim_dir = Path(claim_dir)
+    if not claim_dir.is_dir():
+        return False
+    try:
+        (claim_dir / "stamped").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def claim_stamped(claim_dir: Union[str, Path]) -> bool:
+    """True iff ``claim_dir`` carries the ``stamped`` marker ``mark_claim_
+    stamped`` writes — i.e. a frontmatter stamp for this claim has been
+    CONFIRMED to land, as distinct from ``claim_stage(claim_dir) ==
+    CLAIM_STAGE_APPLY``, which is true from the moment the claim is promoted
+    and says nothing about whether the stamp attempt that followed actually
+    succeeded (see ``mark_claim_stamped``'s docstring for the incident this
+    distinction closes).
+
+    False for a missing claim dir, a missing marker file (including every
+    claim dir written before this marker existed — back-compat is safe by
+    construction here: ``d2`` simply re-emits as unsatisfied on such a claim,
+    and ``handoff_transition._claim`` is idempotent at the full target state,
+    so a redundant re-stamp is a no-op success, not a duplicate mutation),
+    or an unreadable marker file.
+    """
+    return (Path(claim_dir) / "stamped").is_file()
+
+
 class ClaimRelocationError(OSError):
     """Raised by ``relocate_artifact_claim`` when the physical directory move
     itself fails (permission denial, cross-volume ``EXDEV``, transient FS

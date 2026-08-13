@@ -170,6 +170,9 @@ def _validate_grammar(data: Any) -> List[str]:
     if "dry_run" in data and not isinstance(data["dry_run"], bool):
         defects.append("'dry_run' must be a boolean")
 
+    if "auto_ship_enabled" in data and not isinstance(data["auto_ship_enabled"], bool):
+        defects.append("'auto_ship_enabled' must be a boolean")
+
     return defects
 
 
@@ -228,7 +231,11 @@ def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
         )
 
     policy = dict(data)
-    policy.setdefault("auto_ship_enabled", True)
+    # Fail-closed: absent key must resolve identically to the absent-file and
+    # malformed-file branches (both `auto_ship_enabled: False`), so silence
+    # never arms auto-ship. See cross-repo/inbox/2026-08-13-example-doctrine-repo-em-
+    # grammar-pin-cannot-express-auto-ship-off.md.
+    policy.setdefault("auto_ship_enabled", False)
     return PolicyResult(
         policy=policy,
         source="loaded",

@@ -602,6 +602,7 @@ def _run_install_claude_doe_wrapper(stub_env):
     return stub_env["claude_home"] / ".local" / "bin" / "claude-doe"
 
 
+# AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
 def test_claude_doe_wrapper_symlink_noops_when_already_correct(stub_env):
     """Directly re-running the install step against an already-correct
@@ -624,6 +625,7 @@ def test_claude_doe_wrapper_symlink_noops_when_already_correct(stub_env):
     assert Path(os.readlink(dst2)) == target
 
 
+# AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
 def test_claude_doe_wrapper_symlink_replaces_stale_regular_file(stub_env):
     """The live-machine state right now: `~/.local/bin/claude-doe` is a
@@ -647,6 +649,7 @@ def test_claude_doe_wrapper_symlink_replaces_stale_regular_file(stub_env):
     assert Path(os.readlink(result)) == target
 
 
+# AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
 def test_claude_doe_wrapper_symlink_replaces_broken_link(stub_env):
     """A dangling symlink (target since deleted) must be replaced, not left
@@ -668,6 +671,7 @@ def test_claude_doe_wrapper_symlink_replaces_broken_link(stub_env):
     assert result.resolve().is_file()
 
 
+# AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
 def test_claude_doe_wrapper_symlink_replaces_wrong_target_link(stub_env):
     """A symlink pointing at the WRONG target (e.g. a stale settings-home

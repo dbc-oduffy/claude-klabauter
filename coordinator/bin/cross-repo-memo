@@ -1757,6 +1757,39 @@ def _commit_delivered_memo(
 ) -> "tuple[str, bool] | None":
     """Stage+commit ONLY the just-delivered memo file in the RECEIVER repo.
 
+    SOLE CALLER: the `--self-receipt` arm. Every ordinary send routes through
+    the claude-klabauter engine, which commits the delivery itself
+    (`coordinator_core/ops/fleet/memo_send.py::_commit_delivered_memo`); this
+    copy was retired from that path 2026-07-21 and is retained only for
+    self-receipt, which bypasses the engine entirely and is its own sole
+    committer. `--self-receipt` is single-repo by construction (rejected with
+    `--campaign-to`, see `_cmd_send`), so on this path the "receiver" IS the
+    caller's own repo.
+
+    NOT A DUPLICATE OF THE ENGINE COPY — negative spec, do not "dedupe". The
+    two differ on exactly two invariants, and both differences follow from the
+    single-repo/foreign-repo split above:
+
+      1. NO all-hooks-off `-c core.hooksPath=<empty-tmpdir>`. The engine
+         suppresses the receiver's hooks because a FOREIGN repo's commit-time
+         machinery is not ours to run — a `prepare-commit-msg` stamping a
+         Session-Id trailer would inject a false trailer onto a foreign
+         delivery. Here the hooks are the repo's OWN, on its own commit, and
+         running them is correct. Adding hooksPath here would suppress hooks
+         the repo is entitled to fire.
+      2. Branch creation is RETAINED (see the PM ruling below). The engine
+         removed it 2026-07-21 (the Staff Engineer REQUIRES_CHANGES) because creating or
+         switching a branch in a repo the engine does not own is an
+         unacceptable foreign mutation — a receiver mid-bisect or mid-rebase
+         has its branch state changed out from under it. Self-receipt has no
+         foreign tree to mutate, so that rationale does not reach this path.
+
+    Collapsing the two would either suppress the local repo's own hooks or
+    reintroduce foreign branch mutation, depending on which copy won. Nothing
+    else here is deliberately divergent: the scoped single-path add/commit, the
+    never-raise contract, the AC3 unstage-on-failure, and the three-phrasing
+    idempotent-no-op guard are all held in common and SHOULD be kept in step.
+
     Reliable-delivery fix (2026-07-11): delivery previously left the memo as a
     dirty untracked file, relying on a receiver-EM organically noticing it in
     `git status`. That's a soft signal — this commits the memo so delivery is a
@@ -1910,7 +1943,11 @@ def _commit_delivered_memo(
 
         subject = f"cross-repo: deliver {title} memo from {sender}"
         commit_result = subprocess.run(
-            ["git", "-C", receiver_path, "commit", "-m", subject, "--", memo_relpath],
+            [
+                "git", "-C", receiver_path,
+                "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
+                "commit", "-m", subject, "--", memo_relpath,
+            ],
             capture_output=True,
             text=True,
         )
@@ -3208,6 +3245,44 @@ def _commit_archived_outbox_draft(outbox_path: str, dest: str, sender_root: str)
         )
 
 
+def _print_live_peer_advisory(receiver_path: str) -> None:
+    """Advisory-only: name the live sessions whose `cwd` is inside
+    `receiver_path`, so the sender knows whether the recipient repo's EM is
+    around right now.
+
+    Wired here, and ONLY here, per
+    `state/handoffs/2026-08-13-live-peer-roster.md` § 4/AC7: this is the one
+    place "is the recipient even here?" actually blocks a decision, and the
+    only ingredient this CLI already has is a receiver REPO path, not a
+    session UUID — `session.resolve_address` (keyed on a UUID) cannot answer
+    that question, so it has to be the roster.
+
+    Never blocks, never changes the exit code, at any stage. Any failure —
+    the engine unresolvable, the roster read raising — degrades to printing
+    nothing, same as `peer_roster.build_roster`'s own advisory-read
+    discipline. Anti-scope (same handoff): a READ surface only — this never
+    calls `SendMessage` and never suggests the caller do so.
+
+    The calling session's own row (`is_self`) is excluded from the printed
+    set: this line answers "who is over there," not "am I over there."
+    """
+    try:
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.session import peer_roster
+
+        rows = peer_roster.build_roster(receiver_path)
+    except Exception:
+        return
+
+    repo_label = os.path.basename(os.path.normpath(receiver_path)) or receiver_path
+    addresses = [row.address for row in rows if not row.is_self and row.address]
+
+    if not addresses:
+        print(f"No live sessions in {repo_label}.")
+        return
+    print(f"{len(addresses)} live session(s) in {repo_label}: {', '.join(addresses)}")
+
+
 # Review: code-reviewer (Finding 2) — extracted from what were two ~100-line
 # near-identical copies (`_cmd_send`'s dispatch tail and main()'s ordinary
 # flag-only send arm). Both call sites mirror the same
@@ -3388,6 +3463,7 @@ def _send_via_engine(
 
     print(f"Hand the PM this path for relay: {abs_receiver}")
     print("Reminder: Hand the PM the receiver path — PM-relay is still the primary channel.")
+    _print_live_peer_advisory(receiver_path)
     # Review: code-reviewer (Finding 3) — pass the already-materialized
     # invoke_kind (never None) at both call sites for consistency, rather
     # than one site passing a possibly-None raw arg — a future edit to the

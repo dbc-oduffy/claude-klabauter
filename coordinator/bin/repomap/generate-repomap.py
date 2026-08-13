@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate a ranked repository map for LLM context injection.
 
 Parses git-tracked files using tree-sitter (TypeScript, TSX, JSX, Python, C++)

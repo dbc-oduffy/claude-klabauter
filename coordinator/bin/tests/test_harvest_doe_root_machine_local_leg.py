@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 """
 test_harvest_doe_root_machine_local_leg.py — regression test for the

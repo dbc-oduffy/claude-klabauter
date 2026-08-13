@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_migrate_bug_backlog.py — unit tests for migrate-bug-backlog.py
 

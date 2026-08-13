@@ -35,11 +35,19 @@ see the review-integrator's completion report for the invocation to run them.
 
 from __future__ import annotations
 
+import io
 import subprocess
 from pathlib import Path
 
 from coordinator_core.locked_write import LockTimeout
-from coordinator_core.ops.backfill_deliverable_spine import _stamp_yaml_document
+from coordinator_core.ops.backfill_deliverable_spine import (
+    classify_artifact,
+    enumerate_corpus,
+    extract_deliverable_id,
+    extract_plan_id,
+    main as backfill_main,
+    _stamp_yaml_document,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -272,3 +280,286 @@ def test_file_not_found_is_named_skip(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "file not found" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# C2 — archive/specs/** deliverable_id leg (new gap this chunk closes)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_artifact_recognizes_archived_spec():
+    assert classify_artifact("/repo/archive/specs/2026-08/foo.md") == "archived-spec"
+
+
+def test_enumerate_corpus_includes_archive_specs(tmp_path):
+    specs_dir = tmp_path / "archive" / "specs" / "2026-08"
+    specs_dir.mkdir(parents=True)
+    spec_file = specs_dir / "2026-08-01-fixture.md"
+    spec_file.write_text("---\ntitle: x\n---\n", encoding="utf-8")
+
+    corpus = enumerate_corpus(str(tmp_path))
+    assert str(spec_file) in corpus
+
+
+def _write_frontmatter(
+    path: Path,
+    *,
+    workstream: str | None = None,
+    deliverable_id_line: str | None = None,
+    plan_id_line: str | None = None,
+    slug: str | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", 'title: "fixture"']
+    if slug is not None:
+        lines.append(f"slug: {slug}")
+    if workstream is not None:
+        lines.append(f"workstream: {workstream}")
+    if deliverable_id_line is not None:
+        lines.append(deliverable_id_line)
+    if plan_id_line is not None:
+        lines.append(plan_id_line)
+    lines += ["---", "", "# fixture", ""]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_write_mints_deliverable_id_onto_archived_spec_and_never_remints_on_rerun(tmp_path):
+    root = tmp_path
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-spec.md"
+    _write_frontmatter(spec, workstream="fixture-ws", slug="fixture-spec")
+
+    rc1 = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc1 == 0
+
+    text = spec.read_text(encoding="utf-8")
+    assert "deliverable_id: dlv-" in text
+    minted = extract_deliverable_id(str(spec), "archived-spec")
+    assert minted.startswith("dlv-")
+
+    # Re-run must mint nothing further (carry rule D1).
+    rc2 = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc2 == 0
+    assert spec.read_text(encoding="utf-8") == text
+
+
+def test_archived_spec_already_carrying_deliverable_id_is_untouched(tmp_path):
+    root = tmp_path
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-spec-full.md"
+    _write_frontmatter(
+        spec,
+        workstream="fixture-ws",
+        deliverable_id_line="deliverable_id: dlv-fixture-preexisting-000000",
+        plan_id_line="plan_id: pln-fixture-spec-full-preexisting",
+        slug="fixture-spec-full",
+    )
+    original = spec.read_text(encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+    assert spec.read_text(encoding="utf-8") == original
+
+
+def test_literal_null_deliverable_id_is_treated_as_absent_and_minted(tmp_path):
+    root = tmp_path
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-spec-null.md"
+    _write_frontmatter(
+        spec,
+        workstream="fixture-ws-null",
+        deliverable_id_line="deliverable_id: null",
+        slug="fixture-spec-null",
+    )
+
+    backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+
+    minted = extract_deliverable_id(str(spec), "archived-spec")
+    assert minted.startswith("dlv-")
+
+
+# ---------------------------------------------------------------------------
+# C2 — plan_id leg (fourth leg, entirely new)
+# ---------------------------------------------------------------------------
+
+
+def test_write_mints_plan_id_onto_plan_and_archived_spec_lacking_one(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan.md"
+    _write_frontmatter(plan, slug="fixture-plan")
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-spec.md"
+    _write_frontmatter(spec, slug="fixture-spec")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    plan_id_1 = extract_plan_id(str(plan), "plan")
+    plan_id_2 = extract_plan_id(str(spec), "archived-spec")
+    assert plan_id_1.startswith("pln-")
+    assert plan_id_2.startswith("pln-")
+
+
+def test_plan_id_already_present_is_not_re_minted(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-full.md"
+    _write_frontmatter(
+        plan,
+        plan_id_line="plan_id: pln-fixture-plan-full-aaaaaa",
+        slug="fixture-plan-full",
+    )
+    original = plan.read_text(encoding="utf-8")
+
+    backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+
+    assert plan.read_text(encoding="utf-8") == original
+
+
+def test_plan_id_rerun_is_a_true_no_op(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-rerun.md"
+    _write_frontmatter(plan, slug="fixture-plan-rerun")
+
+    out1 = io.StringIO()
+    backfill_main(["--write", "--root", str(root)], out=out1, err=io.StringIO())
+    stamped_text = plan.read_text(encoding="utf-8")
+
+    out2 = io.StringIO()
+    backfill_main(["--write", "--root", str(root)], out=out2, err=io.StringIO())
+    assert plan.read_text(encoding="utf-8") == stamped_text
+    assert "Lacking plan_id:    0" in out2.getvalue()
+
+
+def test_dry_run_reports_plan_id_population_without_writing(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-dry.md"
+    _write_frontmatter(plan, slug="fixture-plan-dry")
+    original = plan.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(["--dry-run", "--root", str(root)], out=out, err=io.StringIO())
+    assert rc == 0
+    assert plan.read_text(encoding="utf-8") == original
+    assert "Lacking plan_id:    1" in out.getvalue()
+
+
+def test_plan_id_leg_skips_sidecar(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-sidecar.md"
+    _write_frontmatter(plan, slug="fixture-plan-sidecar")
+    sidecar = root / "docs" / "plans" / "2026-08-13-fixture-plan-sidecar.sonnet-review.md"
+    _write_frontmatter(sidecar, slug="fixture-plan-sidecar-review")
+    original_sidecar = sidecar.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(["--write", "--root", str(root)], out=out, err=io.StringIO())
+    assert rc == 0
+
+    assert extract_plan_id(str(plan), "plan").startswith("pln-")
+    assert sidecar.read_text(encoding="utf-8") == original_sidecar
+    assert "Lacking plan_id:    1" in out.getvalue()
+
+
+def test_plan_id_leg_skips_undated_non_plan_document(tmp_path):
+    root = tmp_path
+    readme = root / "docs" / "plans" / "README.md"
+    _write_frontmatter(readme, slug="plans-readme")
+    index = root / "docs" / "plans" / "INDEX.md"
+    _write_frontmatter(index, slug="plans-index")
+    original_readme = readme.read_text(encoding="utf-8")
+    original_index = index.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(["--write", "--root", str(root)], out=out, err=io.StringIO())
+    assert rc == 0
+
+    assert readme.read_text(encoding="utf-8") == original_readme
+    assert index.read_text(encoding="utf-8") == original_index
+    assert "Lacking plan_id:    0" in out.getvalue()
+
+
+def test_plan_id_leg_still_mints_onto_dated_plan_record(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-dated.md"
+    _write_frontmatter(plan, slug="fixture-plan-dated")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    assert extract_plan_id(str(plan), "plan").startswith("pln-")
+
+
+# ---------------------------------------------------------------------------
+# C2-leg3 — unkeyed sizings (no citing plan) mint a STANDALONE deliverable_id
+# ---------------------------------------------------------------------------
+
+
+def test_write_mints_standalone_id_onto_unkeyed_sizing_and_never_remints_on_rerun(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    sizing = _seed_sizing(repo, "2026-08-13-fixture-unkeyed.yaml", _sizing_body())
+
+    out1 = io.StringIO()
+    rc1 = backfill_main(["--write", "--root", str(repo)], out=out1, err=io.StringIO())
+    assert rc1 == 0
+
+    minted = extract_deliverable_id(str(sizing), "sizing")
+    assert minted.startswith("dlv-"), f"expected a minted dlv- id, got {minted!r}"
+    assert "fixture-unkeyed" in minted, (
+        "an unkeyed sizing's standalone id must derive from the sizing's OWN "
+        f"slug (filename minus date prefix), got {minted!r}"
+    )
+    assert "Stamped (unkeyed sizings): 1" in out1.getvalue()
+
+    text_after_first_write = sizing.read_text(encoding="utf-8")
+
+    # Re-run: carry rule D1 — a sizing already carrying a real id is never
+    # re-minted. Must be a true no-op (byte-identical file).
+    out2 = io.StringIO()
+    rc2 = backfill_main(["--write", "--root", str(repo)], out=out2, err=io.StringIO())
+    assert rc2 == 0
+    assert sizing.read_text(encoding="utf-8") == text_after_first_write
+    assert "Stamped (unkeyed sizings): 0" in out2.getvalue()
+    assert extract_deliverable_id(str(sizing), "sizing") == minted
+
+
+def test_sizing_already_carrying_real_id_is_untouched(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    sizing = _seed_sizing(
+        repo,
+        "2026-08-13-fixture-preexisting.yaml",
+        _sizing_body(deliverable_id="dlv-preexisting-000000"),
+    )
+    original = sizing.read_text(encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(repo)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+    assert sizing.read_text(encoding="utf-8") == original
+    assert extract_deliverable_id(str(sizing), "sizing") == "dlv-preexisting-000000"
+
+
+def test_keyed_sizing_still_gets_group_derived_id_from_citing_plan(tmp_path):
+    """A sizing WITH a citing plan must keep getting the group-derived id it
+    gets today — only the unkeyed arm changes (C2-leg3 constraint)."""
+    repo = _make_git_repo(tmp_path)
+    sizing = _seed_sizing(repo, "2026-08-13-fixture-keyed.yaml", _sizing_body())
+
+    plan = repo / "docs" / "plans" / "2026-08-13-fixture-keyed-plan.md"
+    _write_frontmatter(
+        plan,
+        slug="fixture-keyed-plan",
+        deliverable_id_line="deliverable_id: dlv-fixture-keyed-plan-aaaaaa",
+    )
+    # sizing_object: is the plan -> sizing forward pointer build_plan_sizing_index
+    # reads to build the reverse edge — see that function's docstring.
+    text = plan.read_text(encoding="utf-8")
+    text = text.replace(
+        "deliverable_id: dlv-fixture-keyed-plan-aaaaaa",
+        "deliverable_id: dlv-fixture-keyed-plan-aaaaaa\n"
+        "sizing_object: state/sizings/2026-08-13-fixture-keyed.yaml",
+    )
+    plan.write_text(text, encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(repo)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    minted = extract_deliverable_id(str(sizing), "sizing")
+    assert minted == "dlv-fixture-keyed-plan-aaaaaa", (
+        "a keyed sizing must inherit its citing plan's deliverable_id "
+        f"unchanged, got {minted!r}"
+    )

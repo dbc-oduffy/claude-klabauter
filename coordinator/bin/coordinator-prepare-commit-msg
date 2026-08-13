@@ -330,7 +330,28 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
     — never raises. An empty result reads identically to "tier 0 has
     nothing to say" at the call site, which is exactly the fallback-to-
     session-tiers behaviour this hook must degrade to.
+
+    ``coordinator_core.win_portability`` is not importable off a bare
+    ``sys.path`` in a real hook invocation (git spawns this script with no
+    ``PYTHONPATH``), so the bootstrap here MUST be
+    ``_ensure_claude_klabauter_on_syspath()`` — the same self-location bootstrap every
+    other ``coordinator_core`` import in this file already uses — before
+    that import is attempted. A resolution failure still degrades to ``[]``
+    (never blocks the commit), matching the module's fail-soft contract, but
+    is noted on stderr, matching the visible-not-silent convention this file
+    already uses for tier-0 ambiguity (``_resolve_deliverable_id``) — a
+    silently empty tier-0 lookup here previously masqueraded as "nothing
+    staged" indefinitely.
     """
+    claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
+    if not claude_klabauter_root:
+        sys.stderr.write(
+            "coordinator-prepare-commit-msg: could not resolve the colocated "
+            "claude-klabauter checkout for coordinator_core.win_portability; staged-path "
+            "derivation (tier-0 Deliverable-Id resolution) skipped for this "
+            "commit.\n"
+        )
+        return []
     try:
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -342,7 +363,12 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
             stdin=subprocess.DEVNULL,
             **no_console_creationflags(),
         )
-    except Exception:
+    except Exception as exc:
+        sys.stderr.write(
+            "coordinator-prepare-commit-msg: staged-path derivation failed "
+            f"({exc}); tier-0 Deliverable-Id resolution skipped for this "
+            "commit.\n"
+        )
         return []
     if out.returncode != 0:
         return []

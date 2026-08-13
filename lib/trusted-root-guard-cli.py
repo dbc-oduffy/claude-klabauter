@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """trusted-root-guard-cli.py — Python-native CLI trampoline over claude-klabauter
 coordinator_core.trusted_root_guard.coordinator_trusted_root_guard_or_exit.
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """wsc-close.py — small `/workstream-complete` Step 3/3.5 mechanics the
 `ceremony.wsc_tail` op does not own: caller-side CLI-flag assembly for the

@@ -388,9 +388,14 @@ class TestOwnInboxUnconditionalDeny:
         assert result is not None
         reason = _assert_deny_shape(result)
         assert "cross-repo/inbox/" in reason
-        # The override note routes to the doc and does not echo the key —
-        # register rule B6 (BYPASS-KEY IN THE DENIAL).
-        assert "guard-override-keys.md" in reason
+        # 2026-08-13 (audience-gated operator_override_note reshape, C1a/
+        # DECISIONS.md D1): the override-keys doc pointer is now emitted
+        # ONLY for a positively-resolved EM audience -- this test's bare
+        # `_payload(...)` dict carries no real agent envelope, so it
+        # resolves NOT-EM and the doc pointer is correctly absent here
+        # (never echoing the bare key either way — register rule B6).
+        assert "guard-override-keys.md" not in reason
+        assert "COORDINATOR_OVERRIDE_OWN_INBOX" not in reason
 
     def test_own_inbox_misplacement_denies_under_strict_too(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")

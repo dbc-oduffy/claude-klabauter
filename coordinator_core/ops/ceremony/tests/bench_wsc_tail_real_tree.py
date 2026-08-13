@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Baseline measurement harness for `ceremony.wsc_tail`, driven against a
 real-shape (deliberately dirty) local clone of claude-klabauter -- see
 docs/plans/2026-07-23-wsc-tail-slim-down.md C1.

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """handoff-archive-transition.py — CLI trampoline over claude-klabauter's
 `handoff.archive_transition` op, covering the two dispatch shapes example-doctrine-repo's

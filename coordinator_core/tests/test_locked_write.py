@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.testing import symlink_capability
+
 # ---------------------------------------------------------------------------
 # POSIX guard
 # ---------------------------------------------------------------------------
@@ -66,12 +68,6 @@ pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
 ]
-
-# Symlink creation on Windows needs elevation/developer-mode; gate those tests.
-_skip_no_symlink = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="symlink creation requires elevation/developer-mode on Windows",
-)
 
 # ---------------------------------------------------------------------------
 # Import under test
@@ -499,7 +495,7 @@ class TestCrossProcessLostUpdateProof:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_symlink
+@symlink_capability.requires_symlink_capability
 class TestSymlinkMutualExclusion:
     def test_symlink_and_real_path_share_one_lock(self, tmp_path):
         """Two callers naming the same physical file via symlink vs realpath

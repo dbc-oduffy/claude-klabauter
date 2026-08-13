@@ -15,6 +15,7 @@ import pytest
 
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.plan_status_transition import main
+from coordinator_core.testing import symlink_capability
 
 # Golden-oracle cases pin `main`'s real HEAD-commit and porcelain-status reads
 # against an actual git repo — the CLI's stdout/exit-code contract was captured
@@ -446,6 +447,7 @@ def test_in_containment_plan_path_flips_normally(tmp_path):
     assert p.read_text(encoding="utf-8") == "---\nstatus: implemented\n---\n\nBody.\n"
 
 
+@symlink_capability.requires_symlink_capability
 def test_out_of_containment_plan_path_is_refused(tmp_path, capsys):
     # `worktree` is a resolved git repo; `outside` is a SIBLING directory
     # (not nested under `worktree`). `--plan` names a SYMLINK that lives

@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.testing import symlink_capability
+
 from coordinator_core._settings_home import (
     ClaudeConfigDivergenceError,
     SettingsHomeDivergenceError,
@@ -236,6 +238,7 @@ def test_divergence_noop_when_both_absent(tmp_path, monkeypatch):
     check_machine_local_divergence()  # must not raise
 
 
+@symlink_capability.requires_symlink_capability
 def test_divergence_noop_when_compat_symlink_resolves_equal(tmp_path, monkeypatch):
     claude_home = tmp_path / "claude-home"
     settings_home_dir = tmp_path / "settings-home"
@@ -311,6 +314,7 @@ def test_claude_config_divergence_noop_when_default_is_empty_husk(tmp_path, monk
     check_claude_config_divergence()  # must not raise
 
 
+@symlink_capability.requires_symlink_capability
 def test_claude_config_divergence_noop_when_symlink_resolves_equal(tmp_path, monkeypatch):
     claude_home = tmp_path / "claude-home"
     real = _populated_dir(tmp_path / "real-config-dir")

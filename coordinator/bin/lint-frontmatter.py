@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """lint-frontmatter.py — CLI trampoline over coordinator_core.frontmatter.schema_validate.main.
 
 Thin trampoline — lives in claude-klabauter's own coordinator/bin/ (this repo), NOT

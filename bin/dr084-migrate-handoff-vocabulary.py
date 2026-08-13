@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """DR-084 corpus migration: handoff-lifecycle vocabulary overhaul (open/claimed, continued/closed).
 
 Usage: dr084-migrate-handoff-vocabulary.py [-h] [--dry-run] [repo_root]

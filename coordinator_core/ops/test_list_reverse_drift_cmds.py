@@ -174,7 +174,7 @@ def test_production_metarepo_cross_drive(tmp_path: Path, monkeypatch: pytest.Mon
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
     out, _err, rc = _run_lister(
-        monkeypatch, reg_dir, "/c/Users/example-operator", ["--scope-repo", "C:/Users/example-operator/.claude"], ostype="msys"
+        monkeypatch, reg_dir, "/c/Users/alice", ["--scope-repo", "C:/Users/alice/.claude"], ostype="msys"
     )
     assert rc == 0
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
@@ -282,7 +282,7 @@ def test_norm_path_trailing_separator_stripped() -> None:
 
 
 def test_norm_path_posix_case_preserved() -> None:
-    assert _norm_path("/Users/example-operator/X/example-retrieval-repo") == "/Users/example-operator/X/example-retrieval-repo"
+    assert _norm_path("/Users/alice/X/example-retrieval-repo") == "/Users/alice/X/example-retrieval-repo"
 
 
 # 14. Per-key fallthrough: a copy_install row registered only in the tracked

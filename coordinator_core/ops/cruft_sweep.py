@@ -154,7 +154,7 @@ import re
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from coordinator_core.ipc import register_op
@@ -510,13 +510,11 @@ def _is_backup_name(name: str) -> bool:
 
 
 def _has_git_boundary(path: str) -> bool:
-    norm = path.replace("\\", "/")
-    return ".git" in norm.split("/")
+    return ".git" in PurePath(path).parts
 
 
 def _has_negative_spec_component(path: str) -> bool:
-    norm = path.replace("\\", "/")
-    parts = set(norm.split("/"))
+    parts = set(PurePath(path).parts)
     return bool(parts & _NEGATIVE_SPEC_COMPONENTS)
 
 

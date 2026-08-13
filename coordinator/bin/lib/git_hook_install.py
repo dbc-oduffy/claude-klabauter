@@ -22,7 +22,7 @@ unavoidable — but the body is bash-free. "Shell-free" in the de-bash mandate m
 Both installed hook shims `exec` their target synchronously at the shell level —
 there is no shell-level backgrounding (`nohup … &`) anywhere in this module.
 post-commit's target (coordinator-auto-push) owns its own async self-detach
-internally (claude-klabauter's auto_push.py: os.fork() on POSIX, detached Popen respawn on
+internally (the engine repo's auto_push.py: os.fork() on POSIX, detached Popen respawn on
 Windows) when async is wanted; the shim's job is only to resolve python + exec.
 
 Behavior (per hook), mirroring the bash oracle:
@@ -176,11 +176,11 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
 
     Post-2026-07 executable-surface migration (example-doctrine-repo commit b644d5a9), the
     coordinator-claude *executables* (`coordinator-auto-push`,
-    `coordinator-prepare-commit-msg`, ...) live under `claude-klabauter`'s
+    `coordinator-prepare-commit-msg`, ...) live under the engine repo's
     `coordinator/bin/`, while `plugin.mirrors.coordinator-claude.source_path`
     (example-doctrine-repo) still correctly means "where is coordinator-claude SOURCE" —
     it is consumed by the OSS-publish target resolution and must NOT be
-    repointed at claude-klabauter. Executable resolution is a genuinely separate
+    repointed at the engine repo. Executable resolution is a genuinely separate
     concern from source resolution, hence the dedicated rung below.
 
     Every rung validates the TARGET EXECUTABLE (`os.path.isfile`), never just
@@ -241,7 +241,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
             if os.path.isfile(os.path.join(cand_bin, script_name)):
                 return cand_bin
 
-    # Rung 3: machine-local registry — claude-klabauter repo path (the
+    # Rung 3: machine-local registry — engine-repo path (the
     # executable surface's post-migration home).
     claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")
     if claude_klabauter_root:
@@ -259,7 +259,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
 
 def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional[str]:
     """Best-effort, install-time-only read of `repos.claude_klabauter` for baking
-    a claude-klabauter-bin candidate into the shell fallback chain. Returns a forward-slash
+    an engine-repo-bin candidate into the shell fallback chain. Returns a forward-slash
     `sh`-literal path (`<claude-klabauter>/coordinator/bin/<script_name>`) or None if the
     key is unresolvable right now — the emitted shim still probes `[ -f ... ]`
     at hook-run time regardless, so a stale/absent bake-time value only means
@@ -278,7 +278,7 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
     both hooks now `exec` synchronously at the shell level; any async self-detach
     (post-commit's coordinator-auto-push) is owned by the invoked Python, not the shim.
 
-    The shell fallback chain (baked SCRIPT → .doe-root pointer → claude-klabauter-bin
+    The shell fallback chain (baked SCRIPT → .doe-root pointer → engine-repo-bin
     candidate → marketplace) means an already-installed hook can recover a dead
     baked path WITHOUT waiting for the next `_resolve_coord_bin` regeneration —
     self-healing at hook-run time, not only at install time.
@@ -327,7 +327,7 @@ def _append_block(
     killing any hook entries that follow. Wrapped so it never disturbs the
     parent hook's exit status.
 
-    Same claude-klabauter-bin self-heal candidate + loud-exhaustion stderr warning as
+    Same engine-repo-bin self-heal candidate + loud-exhaustion stderr warning as
     `_shim_body` — see that function's docstring.
 
     The returned text starts with the START marker (`# === {header} ===`,
@@ -482,7 +482,7 @@ def _ensure_hook(
 
     Why the classification exists at all (2026-08-08): a fleet audit found 12
     of 13 registered repos carrying a wrong hook — six a stale generation
-    baked to a script path deleted when it moved into claude-klabauter, six with no
+    baked to a script path deleted when it moved into the engine repo, six with no
     hook at all — and NOTHING reported it, because the only signal this
     function ever emitted was "0". A caller could not distinguish "already
     correct" from "just repaired a three-week-old silent breakage", so the
@@ -601,7 +601,7 @@ def ensure_post_commit_hook(
     """Install/repair .git/hooks/post-commit → execs coordinator-auto-push directly.
 
     Synchronous exec, not backgrounded at the shell level: coordinator-auto-push
-    (the Python trampoline into claude-klabauter's auto_push.py) self-detaches internally
+    (the Python trampoline into the engine repo's auto_push.py) self-detaches internally
     (os.fork() on POSIX, detached Popen respawn on Windows) when async is wanted,
     so the shim never needs shell-level `nohup … &`.
 
@@ -794,7 +794,7 @@ def ensure_hooks_fleet(bin_dir: str) -> int:
     way, the heal reported success while doing nothing for them. Measured
     before this fix: 12 of 13 repos on the primary drive were wrong (six a
     stale generation baked to a script path deleted when it moved into
-    claude-klabauter, six never installed at all), the oldest roughly three weeks
+    the engine repo, six never installed at all), the oldest roughly three weeks
     silent.
 
     Why detection is the load-bearing half, not the install: every wrong repo

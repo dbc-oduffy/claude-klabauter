@@ -67,6 +67,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from coordinator_core import launchable
 from coordinator_core._settings_home import home_dir
 from coordinator_core.install.resolution_journal import record_resolution
 from coordinator_core.install.write_surface import (
@@ -75,7 +76,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
-from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "register-discovered-repos.sh"  # literal program-name prefix — see negative-spec
 
@@ -137,14 +138,31 @@ def _resolve_machine_local(self_dir: Path) -> Optional[str]:
     """Resolve the `machine-local` CLI: PATH first, then the CLAUDE_HOME/.claude/bin
     fallback, exactly as the bash oracle's `command -v machine-local` / fixed-path
     fallback ladder does. Returns None (never raises) if unresolvable.
+
+    Existence alone gates the fallback candidate -- an exec bit is no longer
+    required now that every rung is launched through an interpreter (see
+    `_machine_local_launch_argv`); a PATH hit via `shutil.which` is already
+    exec-bit-verified by the OS's own PATH search.
     """
     found = shutil.which("machine-local")
     if found:
         return found
     fallback = home_dir() / ".claude" / "bin" / "machine-local"
-    if fallback.is_file() and is_executable(fallback):
+    if fallback.is_file():
         return str(fallback)
     return None
+
+
+def _machine_local_launch_argv(ml_bin: str) -> List[str]:
+    """Interpreter-prefix `ml_bin` for a bare-exec launch: `machine-local` is an
+    extensionless coordinator/bin sibling, so `resolve_launchable()` is POSIX-bare
+    by design and is not the fix there -- prefix `sys.executable` directly on
+    POSIX. On Windows keep `resolve_launchable()`'s `.cmd`-twin preference and
+    shebang sniffing, which are load-bearing on this repo's P0 primary platform.
+    """
+    if launchable._is_windows():
+        return launchable.resolve_launchable(ml_bin)
+    return [sys.executable, ml_bin]
 
 
 def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
@@ -177,6 +195,8 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         )
         return 0
 
+    ml_argv = _machine_local_launch_argv(ml_bin)
+
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
@@ -207,7 +227,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
             )
             continue
         has_rc = subprocess.run(
-            [ml_bin, "has", f"repos.{key}"],
+            [*ml_argv, "has", f"repos.{key}"],
             capture_output=True,
             check=False,
             **no_console_creationflags(),
@@ -259,7 +279,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         print(f"{_PROG}: registering repos.{key} = {path}")
         sys.stdout.flush()
         set_rc = subprocess.run(
-            [ml_bin, "set", f"repos.{key}", path],
+            [*ml_argv, "set", f"repos.{key}", path],
             check=False,
             **no_console_passthrough_kwargs(),
         ).returncode

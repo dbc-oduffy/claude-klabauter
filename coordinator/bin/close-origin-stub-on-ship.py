@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """close-origin-stub-on-ship.py — close the origin spinoff/spinoff-roadmap stub
 whose work just shipped, joining on (roadmap_id, stub_id) from the governing
@@ -150,8 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Success — print a concise summary from the op's result.
-    # {"exit_code":0,"closed":[{"stub_path","roadmap_id","stub_id","join_source"}],
-    #  "skipped":[...],"pairs_resolved":int,"message":str}
+    # {"exit_code":0,"closed":[{"stub_path","roadmap_id","stub_id","join_source",
+    #  "close_basis"}],"skipped":[...],"pairs_resolved":int,"message":str}
     closed = result.get("closed", []) if isinstance(result, dict) else []
     skipped = result.get("skipped", []) if isinstance(result, dict) else []
     message = result.get("message", "") if isinstance(result, dict) else ""

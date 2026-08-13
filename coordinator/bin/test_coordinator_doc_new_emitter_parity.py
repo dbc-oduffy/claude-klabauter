@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_coordinator_doc_new_emitter_parity.py — generic manifest-vs-emitter parity test.
 

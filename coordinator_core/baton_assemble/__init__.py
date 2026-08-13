@@ -182,6 +182,11 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_untrusted_gate_judgment_point,
 )
+from coordinator_core.contract.residue_segments import (
+    SegmentLoadError,
+    load_segments,
+    select_segments,
+)
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -200,6 +205,10 @@ from coordinator_core.ops.read_frontmatter_field import (
 from coordinator_core.ops.render_project_tracker import tracker_is_hand_curated
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 from coordinator_core.resolution.facade import resolve_operator_config
+from coordinator_core.resolve_coordinator_clone import (
+    ResolveCoordinatorCloneError,
+    resolve_content_root,
+)
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session.scope import project_self_scope
 from coordinator_core.win_portability import no_console_creationflags
@@ -1559,6 +1568,48 @@ def _walk_deliverable_ancestor_set(
     return seen
 
 
+def _addr_suffix(value: str) -> str:
+    """Shared `", send-message-address=..."` shape for the `reachable` and
+    `own_session` branches below -- structural, not convention-maintained
+    (Review: code-reviewer -- P3, near-duplicate suffix construction)."""
+    return f", send-message-address={value!r}"
+
+
+def _resolve_claimed_by_address_suffix(claimed_by: Optional[str]) -> str:
+    """Best-effort `" (send-message-address=...)"` suffix for a collision
+    warning's `claimed_by` UUID, or `""` on any resolution failure.
+
+    Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
+    registry.md` § 3, wiring the resolver into `baton-assemble`'s
+    deliverable-collision warning -- the strongest single-surface candidate
+    named there. Degrades to the current UUID-only message on every failure
+    path (empty `claimed_by`, an import error, or `resolve_address` itself
+    raising) -- resolution is advisory only and must never raise or block
+    this warning (per that section's own directive).
+
+    Negative-spec: the `coordinator_core.session.reachability` import is
+    deliberately LOCAL to this function body, not hoisted to module scope --
+    an import-time failure in that module (e.g. a future circular import)
+    then degrades identically to a runtime `resolve_address` failure,
+    through the same `except Exception: return ""` below, rather than
+    aborting this module's own import (Review: code-reviewer -- P3, local
+    import rationale)."""
+    if not claimed_by:
+        return ""
+    try:
+        from coordinator_core.session import reachability
+
+        result = reachability.resolve_address(claimed_by)
+    except Exception:
+        return ""
+
+    if result.outcome == "reachable" and result.address:
+        return _addr_suffix(result.address)
+    if result.outcome == "own_session":
+        return _addr_suffix("<this session>")
+    return ""
+
+
 def _scan_deliverable_collision(
     deliverable_id: Optional[str],
     exclude_path: Path,
@@ -2386,10 +2437,12 @@ def resolve_lineage(
     )
     if lineage["deliverable_collision"] is not None:
         _collision = lineage["deliverable_collision"]
+        _address_suffix = _resolve_claimed_by_address_suffix(_collision["claimed_by"])
         print(
             "baton-assemble: deliverable_id "
             f"{lineage['deliverable_id']!r} already held by a live baton at "
-            f"{_collision['path']!r} (claimed_by={_collision['claimed_by']!r}) "
+            f"{_collision['path']!r} (claimed_by={_collision['claimed_by']!r}"
+            f"{_address_suffix}) "
             "-- proceeding with this authoring anyway (warn-only).",
             file=sys.stderr,
         )
@@ -3926,6 +3979,159 @@ def _resolve_held_handoff_for_session(
     return primary, additional, degraded
 
 
+# ---------------------------------------------------------------------------
+# `/handoff` residue segments -- the consumer half of `residue_segments`'s
+# `filter_key`/`legal_values`/`active_values` parameterisation (73a9da8d3).
+# `coordinator_core.review_assemble.residue` is the reference/precedent
+# caller: same `resolve_content_root()` -> `load_segments` -> `select_segments`
+# idiom, deliberately mirrored here, NOT re-invented. See this section's
+# `_load_handoff_residue_segments` docstring for the one place this caller's
+# contract diverges from that precedent (fail-open, not fail-loud).
+# ---------------------------------------------------------------------------
+
+#: The closed enum of legal `case:` frontmatter values for the handoff
+#: residue segment corpus. The corpus itself lives in the coordinator
+#: content root (resolved via `resolve_content_root()`), NOT in this repo --
+#: `skills/handoff/residue/*.md`, one file per segment, each carrying a
+#: `case:` field drawn from this tuple.
+SEGMENT_CASES: tuple[str, ...] = ("shared", "dirty-tree", "carried-items", "predecessor")
+
+#: The one true handoff-residue segment directory, relative to the content
+#: root -- the `segment_dir` parameter passed to the shared loader. Mirrors
+#: `review_assemble.residue`'s `_RESIDUE_SEGMENT_DIR` naming/shape.
+_HANDOFF_RESIDUE_SEGMENT_DIR = os.path.join("skills", "handoff", "residue")
+
+
+def _predecessor_carried_items_active(root: "Optional[Path]", predecessor: "Optional[str]") -> bool:
+    """True iff `predecessor` (a `lineage["predecessor"]` value -- either
+    root-relative or absolute, per `resolve_lineage`'s own storage
+    convention) names a file whose frontmatter carries a `carried_items:`
+    value that is itself a non-empty YAML list. Mirrors `example-doctrine-repo@HEAD:
+    coordinator/hooks/scripts/handoff-segment-inject.py`'s
+    `_carried_items_active` exactly, list-type check included
+    (`isinstance(items, list) and len(items) > 0`) -- a `carried_items:`
+    key present but holding a mapping/scalar/empty value does NOT arm this
+    case, matching the consumer rather than the looser "non-empty raw
+    text" test this helper used before. A read/parse failure (missing
+    file, unreadable, undecodable, malformed frontmatter fence, invalid
+    YAML, non-mapping frontmatter, `carried_items:` absent or
+    present-but-not-a-non-empty-list) degrades to False -- fail-open,
+    never raises. `yaml` is imported locally here, same precedent as
+    `_walk_deliverable_ancestor_set`'s own local `import yaml` elsewhere in
+    this module, so this function's own frontmatter read (`path.read_text`
+    via `_read_frontmatter`, then `yaml.safe_load`) is caught locally
+    rather than relying on a broader caller-side `try` -- this helper is
+    itself fail-open end to end, independent of `brief()`'s own
+    `try/except` around segment loading."""
+    if not predecessor:
+        return False
+    candidate = Path(predecessor)
+    if not candidate.is_absolute() and root is not None:
+        candidate = root / predecessor
+    try:
+        fm_text = _read_frontmatter(candidate)
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not fm_text:
+        return False
+    import yaml
+
+    try:
+        fm_dict = yaml.safe_load(fm_text)
+    except yaml.YAMLError:
+        return False
+    if not isinstance(fm_dict, dict):
+        return False
+    items = fm_dict.get("carried_items")
+    return isinstance(items, list) and len(items) > 0
+
+
+def _resolve_handoff_residue_active_cases(
+    dirty_tree_attribution: dict[str, Any],
+    lineage: dict[str, Any],
+    root: "Optional[Path]",
+) -> set[str]:
+    """Resolve the active `case:` set for this `brief()` call, matched
+    signal-for-signal against `example-doctrine-repo@HEAD:coordinator/hooks/scripts/
+    handoff-segment-inject.py`'s `compute_active_cases` -- the consumer this
+    `segments` key is meant to let retire its own copy of this computation.
+    A drift here is not cosmetic: it silently changes what the consumer
+    renders once it adopts this key, so each conditional below cites the
+    consumer function it is deliberately matching, not just how this call
+    site's own inputs happen to be shaped.
+
+    `shared` is unconditional. `dirty-tree` arms when the tree is dirty AT
+    ALL, matching the consumer's `_is_dirty_tree` (a bare non-empty `git
+    status --porcelain`) -- NOT this call's own `mine`-only ("dirt
+    attributable to this session") test, which under-fires on a machine
+    running many concurrent sessions against one shared tree. This call's
+    own `_compute_dirty_tree_attribution(root)` result already carries both
+    halves of that whole-tree signal (`mine` plus `residue_count`, the
+    complement) from the SAME porcelain read `j-dirty-tree-case-c` uses, so
+    no second git probe is added here -- `len(mine) + residue_count > 0`
+    reconstructs "porcelain was non-empty" from values already in scope. A
+    `degraded=True` probe (no signal computed at all) degrades this case to
+    inactive, fail-open, same as every other predicate here -- matching,
+    not diverging from, the consumer: `_is_dirty_tree` returns `False`
+    whenever its own `_resolve_repo_root()` returns `None` (repo root
+    undeterminable), and that function's docstring names the exact same
+    choice ("callers degrade the `dirty-tree` case to inactive rather
+    than raising"). Verified directly against `example-doctrine-repo@HEAD:
+    coordinator/hooks/scripts/handoff-segment-inject.py` -- this is an
+    equivalent degrade path on both sides, not a signal-fidelity gap.
+    `carried-items`
+    arms when `lineage["predecessor"]` names a file whose OWN frontmatter
+    carries a non-empty `carried_items:` array, matching the consumer's
+    `_carried_items_active` -- NOT merely "a `d7` directive exists", which
+    the previous revision used as a stand-in and which fires for every
+    predecessor regardless of whether its `carried_items` array is empty or
+    absent (`d7` is gated only on `kind == "handoff" and <a predecessor>`).
+    See `_predecessor_carried_items_active` for the frontmatter read itself.
+    `predecessor` arms when `lineage["predecessor"]` is non-null -- already
+    correct, matched to the consumer's own `predecessor` case unchanged."""
+    active = {"shared"}
+    if not dirty_tree_attribution.get("degraded") and (
+        dirty_tree_attribution.get("mine") or dirty_tree_attribution.get("residue_count")
+    ):
+        active.add("dirty-tree")
+    if _predecessor_carried_items_active(root, lineage.get("predecessor")):
+        active.add("carried-items")
+    if lineage.get("predecessor"):
+        active.add("predecessor")
+    return active
+
+
+def _load_handoff_residue_segments(active_values: set[str]) -> list[dict[str, Any]]:
+    """Load and select the handoff-residue segments applicable to
+    *active_values*: `resolve_content_root()` -> `load_segments` ->
+    `select_segments`, mirroring `review_assemble.residue`'s idiom exactly.
+
+    Fail-open is this CALL SITE's contract alone, never this helper's or
+    the shared loader's: `brief()` catches `SegmentLoadError` /
+    `ResolveCoordinatorCloneError` around the call to this helper and
+    attaches nothing on either. That is a deliberate inversion of
+    `review_assemble.residue`'s fail-loud contract -- `/handoff` fires
+    under context pressure by definition, and a retrieval seam that
+    hard-fails there is worse than one that says nothing -- and it must
+    NOT be "harmonised" toward fail-loud in either direction. Zero
+    applicable segments is NOT this helper's error to raise: it returns
+    `[]` and the caller attaches an empty (present, not absent) list. This
+    helper itself stays exception-transparent -- it raises neither
+    exception itself; both propagate from `load_segments`/
+    `resolve_content_root` unchanged so the caller's `except` catches
+    them by name. The shared loader gains no `strict=`/`fail_open=`
+    parameter for this or any other caller -- that refusal is reaffirmed,
+    not revisited, here."""
+    content_root = Path(resolve_content_root())
+    segments = load_segments(
+        content_root,
+        _HANDOFF_RESIDUE_SEGMENT_DIR,
+        filter_key="case",
+        legal_values=SEGMENT_CASES,
+    )
+    return select_segments(segments, filter_key="case", active_values=active_values)
+
+
 def brief(
     kind: str,
     artifact_path: str,
@@ -4269,7 +4475,34 @@ def brief(
         narration=narration,
         next_move=next_move,
     )
-    return _emit(envelope, EXIT_OK)
+    result = _emit(envelope, EXIT_OK)
+    if kind == "handoff":
+        # Active-case resolution runs OUTSIDE the try below, on purpose:
+        # `_resolve_handoff_residue_active_cases` (and the
+        # `_predecessor_carried_items_active` frontmatter read it calls) is
+        # fail-open in its own right and never raises
+        # `SegmentLoadError`/`ResolveCoordinatorCloneError`, so widening the
+        # `try` to cover it would only risk silently swallowing a genuine
+        # bug in that resolution -- the opposite of what this call site's
+        # fail-open contract is for. Fail-open at THIS call site only --
+        # see `_load_handoff_residue_segments`'s docstring for why.
+        # Attached post-`_emit` (post-validation), mirroring
+        # `review_assemble.residue`'s `result["segments"] = selected`
+        # idiom exactly; never a ninth `build_envelope` key. On either
+        # named exception the `segments` key stays ABSENT and every other
+        # field of `result` is exactly what it is today -- never a bare
+        # `except Exception`, which would swallow a genuine bug in the
+        # brief computation above.
+        active_cases = _resolve_handoff_residue_active_cases(
+            dirty_tree_attribution, lineage, root
+        )
+        try:
+            selected_segments = _load_handoff_residue_segments(active_cases)
+        except (SegmentLoadError, ResolveCoordinatorCloneError):
+            pass
+        else:
+            result.decision_object["segments"] = selected_segments
+    return result
 
 
 # ---------------------------------------------------------------------------

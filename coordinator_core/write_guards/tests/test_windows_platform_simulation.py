@@ -150,10 +150,10 @@ def test_settings_guard_denies_posix_home_path_when_simulated_windows(monkeypatc
         lambda: __import__("pathlib").Path("/Users/x/.claude"),
     )
     result = guard_settings_json_write.check(
-        _write_payload('{"command": "/Users/example-operator/X/example-doctrine-repo/coordinator/hooks/scripts/x.py"}')
+        _write_payload('{"command": "/Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/x.py"}')
     )
     assert result is not None
-    assert "/Users/example-operator" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "/Users/alice" in result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "Windows" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 

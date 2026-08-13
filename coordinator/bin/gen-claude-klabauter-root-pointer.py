@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """gen-claude-klabauter-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.
 
 Purpose: reads repos.claude_klabauter from the machine-local registry and writes

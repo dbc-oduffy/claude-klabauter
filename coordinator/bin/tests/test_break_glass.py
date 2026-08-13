@@ -203,7 +203,7 @@ def test_is_tmp_shaped_positive(value):
 @pytest.mark.parametrize(
     "value",
     [
-        "/Users/example-operator/X/example-doctrine-repo",
+        "/Users/alice/X/example-doctrine-repo",
         r"C:\Users\pm\claude-klabauter",
         "/home/ci/repo",
     ],

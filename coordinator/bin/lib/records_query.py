@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """records_query.py — native records.query trampoline.
 
 Port of: records-query-facade.sh (example-doctrine-repo 9df969d2, 2026-07-19).

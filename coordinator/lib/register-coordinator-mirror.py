@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 register-coordinator-mirror.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.register_coordinator_mirror.

@@ -16,7 +16,7 @@ from coordinator_core.ops.register_coordinator_mirror import (
     resolve_registry_path,
 )
 
-_LIVE_PATH = "/Users/example-operator/X/example-doctrine-repo/coordinator"
+_LIVE_PATH = "/Users/alice/X/example-doctrine-repo/coordinator"
 
 
 @pytest.fixture(autouse=True)

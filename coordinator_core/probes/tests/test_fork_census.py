@@ -41,7 +41,7 @@ from coordinator_core.probes import fork_census
 
 
 def test_classify_platform_macos_users_path():
-    assert fork_census.classify_platform("/Users/example-operator/X/example-doctrine-repo") == "macos"
+    assert fork_census.classify_platform("/Users/alice/X/example-doctrine-repo") == "macos"
 
 
 def test_classify_platform_macos_private_tmp():
@@ -179,7 +179,7 @@ def _cwd_marker(cwd: str) -> str:
 def fixture_corpus(tmp_path: Path) -> Path:
     """Builds a two-machine fixture corpus with hand-computed expected totals.
 
-    macOS session (proj-a/s1.jsonl), cwd=/Users/example-operator/X/example-doctrine-repo:
+    macOS session (proj-a/s1.jsonl), cwd=/Users/alice/X/example-doctrine-repo:
       t1 "git status"              -> 1 external fork (git)
       t2 "echo hi"                 -> 1 builtin, 0 forks
       t3 "cd /tmp && git log"      -> 1 builtin (cd) + 1 fork (git), cd_then_git
@@ -203,7 +203,7 @@ def fixture_corpus(tmp_path: Path) -> Path:
     proj_b = base / "proj-b"
     proj_b.mkdir(parents=True)
 
-    macos_cwd = "/Users/example-operator/X/example-doctrine-repo"
+    macos_cwd = "/Users/alice/X/example-doctrine-repo"
     lines_a = [
         _cwd_marker(macos_cwd),
         _bash_tool_use("t1", "git status"),

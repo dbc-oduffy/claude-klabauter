@@ -13,7 +13,7 @@ Exposed names (reconstruction rules per manifest._reconstruction key):
   REDIRECT_ALIASES    — frozenset of example-doctrine-repo-canonical home/mirror redirect aliases
                          (identity.redirectAliases; cross-repo-memo's former
                          code-pinned _DOE_CANONICAL_REDIRECT_ALIASES literal.
-                         Cross-repo contract surface: claude-klabauter's
+                         Cross-repo contract surface: the engine repo's
                          coordinator_core/ops/fleet/_memo_resolver.py
                          read_redirect_aliases() is a downstream consumer.)
   RECEIVER_EM_ALIASES — dict shortname → registryKey  (inverse; for cross-repo-memo)
@@ -38,7 +38,7 @@ Shared state-root resolver (canonical, importable by all doctrine CLIs):
                                         (normalized, state/-gated) → registry live_path
                                         (normalized, state/-gated) → raise. REPO_EXAMPLE_DOCTRINE_REPO is
                                         the documented override (ambient, shell-exported by
-                                        claude-klabauter's install surface); DOE_ROOT is a permanent
+                                        the engine repo's install surface); DOE_ROOT is a permanent
                                         legacy alias retained for backward compatibility and
                                         still wins first among the two when both are set. The
                                         codename-free ladder must rank BELOW the registry per
@@ -73,9 +73,9 @@ from machine_local_impl_resolve import (  # noqa: E402
 #   1. Co-located    — schemas/ sits beside bin/ under the same coordinator root
 #                      (the pre-migration example-doctrine-repo layout, and any OSS install that
 #                      ships both halves together).
-#   2. Split-repo    — this code lives in claude-klabauter while schemas/ stayed
+#   2. Split-repo    — this code lives in the engine repo while schemas/ stayed
 #                      in example-doctrine-repo, because schemas are CONTRACT and DR-047
-#                      puts contract with example-doctrine-repo, engine with claude-klabauter. Resolve the
+#                      splits contract to example-doctrine-repo and the engine to here. Resolve the
 #                      example-doctrine-repo root the same way every other doctrine CLI does.
 #
 # Rung 1 first so the co-located case costs nothing and needs no registration.
@@ -254,9 +254,10 @@ def _mp_repo_root_from_plugin_root_candidate(candidate: str, *, allow_unchanged_
     os.path.isdir() happens to be true.
 
     Review: staff-eng MINOR-8 — normalizes via os.path.normpath before
-    stripping trailing separators (a bare rstrip turns a Windows drive root
-    "C:\\" into "C:", which Windows then resolves as CWD-relative, not the
-    drive root) and casefolds the "coordinator" basename compare (a
+    stripping trailing separators (a bare rstrip strips a trailing separator
+    off a bare drive-letter root, leaving a form Windows resolves as
+    CWD-relative rather than the drive root) and casefolds the "coordinator"
+    basename compare (a
     case-insensitive filesystem can hand back "...\\Coordinator", which a
     case-sensitive == would miss, falling through to the unchanged-candidate
     branch and reintroducing the content-root bug C1E fixed one rung up).
@@ -525,7 +526,7 @@ def _central_canonical_id() -> str:
 # once identity.redirectAliases is present (as it is in this manifest), that value
 # wins; this default only fires if the key is ever absent.
 #
-# Cross-repo contract surface: claude-klabauter's coordinator_core/ops/fleet/
+# Cross-repo contract surface: the engine repo's coordinator_core/ops/fleet/
 # _memo_resolver.py `read_redirect_aliases()` reads this same manifest field
 # declaratively (their negative-spec forbids hardcoding the literal on their side).
 _redirect_aliases_raw = _identity.get(
@@ -571,7 +572,7 @@ def _same_path(a: str, b: str) -> bool:
     consolidated primitive (state/sizings/2026-08-07-path-equality-
     consolidates-onto-one-prim.yaml).
 
-    ``coordinator_core`` is NOT ambiently importable outside a claude-klabauter
+    ``coordinator_core`` is NOT ambiently importable outside an engine-repo
     checkout with an editable install (see editable-install-masks-engine-
     import-defects hazard) -- callers elsewhere (e.g. coordinator-queue-append
     invoked without ``--from-repo``, from a caller repo's cwd) hit a bare
@@ -664,7 +665,7 @@ _DOE_ROOT_ENV = "DOE_ROOT"
 
 # Env var for REPO_EXAMPLE_DOCTRINE_REPO override — the documented, ambient name. Every
 # coordinator_core referent (26 of them, via ops/coordinator_doe_root.py)
-# binds this name, and claude-klabauter's generated shell shim exports it into cold
+# binds this name, and the engine repo's generated shell shim exports it into cold
 # login shells (see coordinator_core/install/sandbox_check.py AC2) — so in
 # normal operation it is already set, not merely available as an escape
 # hatch. DOE_ROOT (above) is a permanent legacy alias and still wins first

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_coordinator_lesson_promote.py — smoke tests for the coordinator-lesson-promote CLI.
 

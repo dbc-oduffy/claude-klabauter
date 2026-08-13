@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """workday-start-step0.py — deterministic Step 0 (Branch Setup) for /workday-start.
 
 Encapsulates the precedence switch documented in pipelines/workday-start-internals.md

@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """detect-existing-claude-home.py — three-state classifier for Claude home directories.
 
-Thin, argv-passthrough veneer over claude-klabauter's
+Thin, argv-passthrough veneer over the engine repo's
 coordinator_core.ops.detect_existing_claude_home. Classifies a target
 Claude home directory as pristine / used-vanilla / configured, driving the
 install flow's track A/B fork. Read-only, idempotent; degrades to

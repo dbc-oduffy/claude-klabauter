@@ -63,10 +63,11 @@ import subprocess
 import sys
 from typing import List, Optional
 
+from coordinator_core import launchable
 from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 # Review: code-reviewer — module-level alias (not a re-derived duplicate) so this
 # module's own tests can keep monkeypatching a local name; the actual
@@ -118,10 +119,18 @@ def _resolve_doe_content_root(claude_home: str) -> str:
             return candidate
 
     machine_local = os.path.join(claude_home, "bin", "machine-local")
-    if os.path.isfile(machine_local) and is_executable(machine_local):
+    # extensionless coordinator/bin sibling -- no exec bit/shebang required once
+    # launched through an interpreter, so existence alone is the precondition
+    # (see coordinator_core.launchable module docstring: POSIX-bare is not the
+    # fix here; Windows keeps resolve_launchable's .cmd-twin/shebang handling).
+    if os.path.isfile(machine_local):
+        if launchable._is_windows():
+            ml_argv = launchable.resolve_launchable(machine_local)
+        else:
+            ml_argv = [sys.executable, machine_local]
         try:
             proc = subprocess.run(
-                [machine_local, "get", "plugin.mirrors.coordinator-claude.live_path"],
+                [*ml_argv, "get", "plugin.mirrors.coordinator-claude.live_path"],
                 capture_output=True,
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT_SECS,

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 bin/claude-klabauter-revendor-cockpit-contract.py — repeatable cockpit-contract pin+bundle re-vendor
 with an inline magnitude-aware MAJOR-delta ack gate.

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """lib/coordinator_safe_name.py — cross-platform safe filename component primitives.
 
 Port of: coordinator-safe-name.sh (example-doctrine-repo 721a71f4, 2026-07-21). Defines the canonical NTFS-illegal charset and

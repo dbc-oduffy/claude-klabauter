@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_derive_file_attribution.py — Golden test for derive-file-attribution.py.
 
@@ -191,6 +190,84 @@ class TestParseBashForWrites(unittest.TestCase):
         self.assertFalse(result[0]['ambiguous'])
 
 
+class TestWindowsShapedRedirectTargets(unittest.TestCase):
+    """
+    Regression coverage for the 2026-08-13 fix: a Windows-shaped redirect
+    target (drive-letter or UNC prefix) must keep its backslash separators
+    through parse_bash_for_writes, instead of having them silently stripped
+    by extract_shell_token's POSIX backslash-unescaping. This is the bug
+    that produced 76 backslash-stripped `file_path` values (all
+    capture_source='derived', last_operation='bash') in
+    state/cockpit-emission.json's file_attributions.
+
+    abs-path-ok: every Windows path literal below is a synthetic fixture
+    string exercising the parser, not a real filesystem path this host or
+    any other must resolve.
+    """
+
+    def test_windows_absolute_double_quoted_keeps_backslashes(self):
+        result = parse_bash_for_writes(
+            r'echo hi > "C:\Users\example-operator\AppData\Local\Temp\out.txt"'
+        )
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['ambiguous'])
+        self.assertEqual(
+            result[0]['file_path'],
+            'C:\\Users\\example-operator\\AppData\\Local\\Temp\\out.txt',
+        )
+
+    def test_windows_absolute_unquoted_keeps_backslashes(self):
+        result = parse_bash_for_writes(
+            r'echo hi > C:\Users\example-operator\AppData\Local\Temp\out.txt'
+        )
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['ambiguous'])
+        self.assertEqual(
+            result[0]['file_path'],
+            'C:\\Users\\example-operator\\AppData\\Local\\Temp\\out.txt',
+        )
+
+    def test_windows_drive_relative_no_separator_preserved(self):
+        # Drive-relative form ("C:foo", no separator after the colon) — still
+        # recognized as Windows-shaped even though there's no backslash to
+        # strip; regression guard against the drive-letter regex requiring a
+        # trailing separator.
+        result = parse_bash_for_writes(
+            'echo hi > X:claude_klabautercoordinator_core.py'
+        )
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['ambiguous'])
+        self.assertEqual(
+            result[0]['file_path'], 'X:claude_klabautercoordinator_core.py'
+        )
+
+    def test_windows_unc_path_keeps_backslashes(self):
+        result = parse_bash_for_writes(
+            r'echo hi > \\server\share\out.txt'
+        )
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['ambiguous'])
+        self.assertEqual(result[0]['file_path'], '\\\\server\\share\\out.txt')
+
+    def test_genuine_posix_escape_still_unescapes(self):
+        # A real POSIX shell escape (not Windows-shaped) must still unescape
+        # correctly — this fix must not regress ordinary escaped-space
+        # handling in unquoted redirect targets.
+        result = parse_bash_for_writes(r'echo hi > foo\ bar.txt')
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['ambiguous'])
+        self.assertEqual(result[0]['file_path'], 'foo bar.txt')
+
+    def test_ambiguity_sentinel_still_fires_for_non_windows_targets(self):
+        # Non-Windows-shaped ambiguity (unquoted $VAR) must still hit the
+        # unknown sentinel — the Windows-shaped gate must not widen past its
+        # own case.
+        result = parse_bash_for_writes('echo hi > $OUTPUT')
+        self.assertEqual(len(result), 1)
+        self.assertIsNone(result[0]['file_path'])
+        self.assertTrue(result[0]['ambiguous'])
+
+
 class TestParsePatch(unittest.TestCase):
     def test_create_patch(self):
         patch = '--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+line1\n+line2\n'
@@ -225,12 +302,12 @@ class TestParsePatch(unittest.TestCase):
 
 class TestEncodeProjectPath(unittest.TestCase):
     def test_meta_repo(self):
-        result = encode_project_path('/Users/example-operator/.claude')
-        self.assertEqual(result, '-Users-example-operator--claude')
+        result = encode_project_path('/Users/alice/.claude')
+        self.assertEqual(result, '-Users-alice--claude')
 
     def test_no_dots(self):
-        result = encode_project_path('/Users/example-operator/X/example-os-repo')
-        self.assertEqual(result, '-Users-example-operator-X-example-os-repo')
+        result = encode_project_path('/Users/alice/X/example-os-repo')
+        self.assertEqual(result, '-Users-alice-X-example-os-repo')
 
     def test_multiple_dots(self):
         result = encode_project_path('/home/user/.config/my.app')

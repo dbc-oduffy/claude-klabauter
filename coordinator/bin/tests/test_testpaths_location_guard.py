@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_testpaths_location_guard.py — regression net for the 2026-07-28 rule
 "a test-shaped file parked outside `testpaths` is a defect, not a neutral
 file": every TRACKED file whose basename matches `test_*.py`, `*.test.py`,

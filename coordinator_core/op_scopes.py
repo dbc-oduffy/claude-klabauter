@@ -216,6 +216,25 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo_root/_origin_worktree entirely. Spec: docs/plans/2026-07-12-
     # workflow-skeleton-stamper-claude-klabauter-engine.md § C3.
     "workflow.scaffold":                     "none",
+    # compute_layer.scaffold — fleet-generic, COMPUTE_ONLY op with two modes,
+    # neither of which touches repo state through repo_root/_origin_worktree:
+    # `emit` composes producer module TEXT from caller-supplied
+    # skill_name/verbs and returns it (the caller writes), and `check` scores
+    # the Sub-shape B producers read-only. Listed explicitly rather than
+    # relying on this table's absent-entry default, for the same reason
+    # dispatch.emit below is: that default covers unclassified and test-only
+    # ops, and this is neither. Spec: docs/plans/2026-08-13-compute-layer-
+    # scaffolder.md § C4.
+    "compute_layer.scaffold":                "none",
+    # dispatch.emit — fleet-generic, MUTATING op: reads a caller-supplied plan
+    # path and writes an emitted Workflow script, with containment resolved from
+    # the `output_path`/`target_root` wire params rather than from
+    # repo_root/_origin_worktree — the same target-resolution model as
+    # workflow.validate. Listed explicitly rather than relying on this table's
+    # absent-entry default: that default is documented for unclassified and
+    # test-only ops, and dispatch.emit is neither. Both its siblings above are
+    # explicit for the same reason.
+    "dispatch.emit":                         "none",
     # strategic.generate — fleet-generic, MUTATING op (mirrors the cartography/
     # workflow target-resolution model): explicit REQUIRED `target_root` wire
     # param, any repo, NOT the caller's own dispatching tree. No repo-specific
@@ -396,6 +415,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry dispatch resolves repo_root=None and the op returns empty for every deliverable.
     # Spec: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § C2/C3.
     "deliverable.rollup":                    "common_dir",
+    # spec_backlink.resolve / spec_backlink.rewrite — keyed on git_common_dir: both
+    # read the same corpus shape (docs/plans/*.md, archive/specs/**, state/sizings/**)
+    # via main_worktree_root(common_dir), same class as deliverable.rollup above.
+    # Spec: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C1
+    "spec_backlink.resolve":                 "common_dir",
+    "spec_backlink.rewrite":                 "common_dir",
     # queue.* write ops — keyed on git_common_dir: handlers derive caller worktree via
     # main_worktree_root(common_dir) for project-scope path resolution (F1/AC13).
     # DR-213 sanctioned carve-out; spec: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C1/C2
@@ -721,6 +746,32 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # check surfaced it alongside handoff.correct_body; behaviorally inert, same as its
     # sibling, but an incomplete quad is exactly what that check exists to catch.
     "session.guard_hooks_kill_switch_detail": "none",
+    # session.resolve_address — read-only resolver mapping a session UUID to the live
+    # SendMessage address, reading <claude-config>/sessions/<pid>.json via
+    # coordinator_core.session.harness_registry.registry_dir(), which resolves through
+    # claude_config_dir() (CLAUDE_CONFIG_DIR/$HOME/.claude) and never from repo_root →
+    # scope "none", same resolution story as session.guard_settings_integrity above.
+    # The harness peer registry is machine-global, not per-worktree: two linked
+    # worktrees of one repo see the identical peer set, so neither "common_dir" nor
+    # "show_top" would key anything meaningful.
+    # Spec: state/handoffs/2026-08-13-session-owner-reachability-registry.md § 1.
+    "session.resolve_address":                "none",
+    # session.peer_roster — read-only cwd-filtered live peer roster, over the
+    # SAME machine-global harness registry as session.resolve_address just
+    # above (identical resolution story, identical reasoning for "none").
+    # Its wire-level repo_root filter param is read from params, never from
+    # this engine-injected repo_root kwarg.
+    # Spec: state/handoffs/2026-08-13-live-peer-roster.md § 1-2.
+    "session.peer_roster":                    "none",
+    # session.artifact_owner — read-only "who's on this?" read, keyed on an
+    # artifact path rather than a UUID or a repo. Its own file read is the
+    # caller-supplied artifact_path param, never repo_root-prefixed, and its
+    # owner-id resolution is a pass-through to session.resolve_address's own
+    # machine-global harness registry — same "none" story as both siblings
+    # above.
+    # Spec: state/handoffs/2026-08-13-live-peer-roster.md § "What this
+    # covers" amendment (L52-62).
+    "session.artifact_owner":                 "none",
     # handoff.author_fork — keyed on git_common_dir: creates a new fork handoff under
     # main-worktree-rooted state/handoffs/; handler derives worktree via
     # main_worktree_root(common_dir), matching the fleet.*/handoff.* precedent.

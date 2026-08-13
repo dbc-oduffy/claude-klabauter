@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # skills/repo-setup/SKILL.md Phase 3j invokes this file as
 # `"$PYTHON_BIN" "${PYTHON_ARGS[@]}" "${_PLUGIN_ROOT}/lib/setup-seed-health-ledger.py" "$(pwd)"`.
 """

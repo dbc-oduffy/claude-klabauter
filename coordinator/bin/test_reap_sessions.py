@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_reap_sessions.py — self-contained test suite for reap-sessions.py.
 
 Native-Python successor to the retired coordinator/bin/tests/test-reap-sessions-wrapper.sh

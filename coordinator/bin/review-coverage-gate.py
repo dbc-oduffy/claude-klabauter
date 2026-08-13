@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """review-coverage-gate.py — chain-end code-review coverage gate for
 /workstream-complete Step 2.9 and /merge-to-main.
 

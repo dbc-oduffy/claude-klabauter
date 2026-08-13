@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_pickup_kind_enum_parity.py — enum-parity CHARACTERIZATION test.
 

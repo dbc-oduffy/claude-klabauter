@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_install_maximalist_cmd_clean_stderr.py — Windows smoke test for the
 documented Windows entry point, `coordinator/scripts/install-maximalist.cmd`
 (INSTALL.md §§ "Entry point" / "Windows note" — operators launching a cold

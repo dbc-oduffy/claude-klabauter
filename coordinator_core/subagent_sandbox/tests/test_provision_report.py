@@ -829,6 +829,46 @@ def test_dispatch_feed_field_is_block_style_and_parses_as_object() -> None:
     assert dispatch_feed["write_files"] == []
 
 
+def test_dispatch_feed_frontmatter_validates_against_run_report_schema() -> None:
+    """AC7's own out-of-band gap: a shape assertion (block-style, parses as
+    a dict, gate_kind/write_files present) passes even when the emitted
+    object is schema-INVALID -- exactly how a prior revision of this
+    function shipped ``label: null``/``agent_type: null``/``model: null``/
+    ``effort: null``/``schema_ref: null``/``brief_ref: null``/
+    ``est_min: null`` (seven fields none of which admit null in
+    run-report.schema.json's declared sub-property types) with every shape
+    test above still green. This test runs the actual emitted frontmatter
+    through the real validator (``coordinator_core.frontmatter.
+    schema_validate``) against the claude-klabauter-owned
+    ``coordinator_core/frontmatter/schemas/run-report.schema.json`` and
+    asserts it is schema-VALID, not merely shape-plausible.
+
+    Spec backlink: C6 (commit 8571f7f22273) shipped the schema-invalid
+    all-null-subfields shape; corrected in C6b after a staff review caught
+    it downstream in coordinator/tests/test_flight_recorder_scaffolder.py.
+    """
+    from coordinator_core.frontmatter.schema_validate import (
+        load_schemas,
+        match_schema_for_path,
+        parse_frontmatter,
+        validate_frontmatter_obj,
+    )
+
+    schemas_dir = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas"
+    text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")
+    frontmatter = parse_frontmatter(text)["frontmatter"]
+
+    schemas = load_schemas(schemas_dir)
+    match = match_schema_for_path("state/subagent-share/probe-session/probe.md", schemas)
+    assert match is not None, "no schema matched state/subagent-share/*/*.md"
+
+    result = validate_frontmatter_obj(frontmatter, match["schema"])
+    assert result["ok"], (
+        f"provision_report._frontmatter's emitted dispatch_feed failed schema "
+        f"validation: {result.get('errors')!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # --type axis + template registry
 # ---------------------------------------------------------------------------
@@ -845,15 +885,8 @@ _LEGACY_RUN_REPORT_TEMPLATE = (
     "  diverged: false\n"
     "commits: []\n"
     "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter\n"
-    "  label: null\n"
-    "  agent_type: null\n"
-    "  model: null\n"
-    "  effort: null\n"
-    "  schema_ref: null\n"
-    "  brief_ref: null\n"
     "  gate_kind: none\n"
     "  write_files: []\n"
-    "  est_min: null\n"
     "---\n\n"
     "## Run notes\n\n"
     "## Observations\n\n"

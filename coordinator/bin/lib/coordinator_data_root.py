@@ -2,12 +2,12 @@
 (snippets/, schemas/, templates/, docs/) across the split-repo layout.
 
 The 2026-07-22 executable-surface migration moved ~1100 executables from
-Example-doctrine-repo/coordinator/{bin,lib,scripts,tests} into claude-klabauter/coordinator/,
+Example-doctrine-repo/coordinator/{bin,lib,scripts,tests} into the engine repo's coordinator/,
 but their sibling DATA dirs — schemas/, snippets/, templates/, docs/, hooks/ —
 correctly stayed in example-doctrine-repo (DR-047: contract/data lives with example-doctrine-repo, engine
-with claude-klabauter). Any migrated script that resolved a sibling data dir via a bare
+with the engine repo). Any migrated script that resolved a sibling data dir via a bare
 `__file__`-relative walk (the old `bin/../<data-dir>` shape) is now broken: that
-walk lands inside claude-klabauter, where the data dir no longer exists.
+walk lands inside the engine repo, where the data dir no longer exists.
 
 `coordinator_registry.py`'s `_MANIFEST_PATH` bootstrap (see that module, fix
 commit 4f74656c) was the first caller to hit this and fixed itself inline with
@@ -20,7 +20,7 @@ Two live layouts:
   1. Co-located    — the data dir sits beside bin/ under the same coordinator
                      root (the pre-migration example-doctrine-repo layout, and any OSS install
                      that ships both halves together). Free, no registration.
-  2. Split-repo    — this code lives in claude-klabauter while the data dir
+  2. Split-repo    — this code lives in the engine repo while the data dir
                      stayed in example-doctrine-repo. Resolve the example-doctrine-repo root the same way
                      every other doctrine CLI does (coordinator_registry.doe_root()).
 
@@ -232,9 +232,10 @@ def _cdr_repo_root_from_plugin_root_candidate(candidate: str) -> str:
     needed a stricter `allow_unchanged_fallback=False`).
 
     Review: staff-eng MINOR-8 — normalizes via os.path.normpath before
-    stripping trailing separators (a bare rstrip turns a Windows drive root
-    "C:\\" into "C:", CWD-relative rather than the drive root under
-    Windows) and casefolds the "coordinator" basename compare (a
+    stripping trailing separators (a bare rstrip strips a trailing separator
+    off a bare drive-letter root, leaving a form Windows resolves as
+    CWD-relative rather than the drive root) and casefolds the "coordinator"
+    basename compare (a
     case-insensitive filesystem can hand back "...\\Coordinator", which a
     case-sensitive == would miss).
     """

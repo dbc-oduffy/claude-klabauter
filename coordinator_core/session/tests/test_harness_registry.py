@@ -377,6 +377,133 @@ class TestCwdField:
         assert record.cwd is None
 
 
+class TestNameAndSocketFields:
+    """2026-08-13 session-owner-reachability-registry § 1: `name` and
+    `messagingSocketPath` parse the same optional-string-or-None way `cwd`
+    already does -- required by `coordinator_core.session.reachability`."""
+
+    def test_name_and_socket_parsed(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": "sess-named",
+            "pid": 1,
+            "procStart": ticks,
+            "name": "claude-klabauter-57",
+            "messagingSocketPath": "/tmp/cc-socks/57557.sock",
+        }
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-named")
+        assert record is not None
+        assert record.name == "claude-klabauter-57"
+        assert record.messaging_socket_path == "/tmp/cc-socks/57557.sock"
+
+    def test_name_and_socket_absent_default_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        _write_record(sessions_dir, "1.json", "sess-bare", 1, ticks)
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-bare")
+        assert record is not None
+        assert record.name is None
+        assert record.messaging_socket_path is None
+
+    def test_non_string_name_and_socket_yield_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        payload = {
+            "sessionId": "sess-weird",
+            "pid": 1,
+            "procStart": ticks,
+            "name": 12345,
+            "messagingSocketPath": [],
+        }
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-weird")
+        assert record is not None
+        assert record.name is None
+        assert record.messaging_socket_path is None
+
+
+class TestStatusField:
+    """2026-08-13 live-peer-roster § 3 amendment: `status` parses the same
+    optional-string-or-None way `cwd`/`name` already do -- display-only, no
+    verdict attached, and NEVER a liveness input (this module's own
+    negative-spec, amended not deleted)."""
+
+    def test_status_parsed(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": "sess-status",
+            "pid": 1,
+            "procStart": ticks,
+            "status": "busy",
+        }
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-status")
+        assert record is not None
+        assert record.status == "busy"
+
+    def test_status_absent_defaults_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        _write_record(sessions_dir, "1.json", "sess-nostatus", 1, ticks)
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-nostatus")
+        assert record is not None
+        assert record.status is None
+
+    def test_non_string_status_yields_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        payload = {
+            "sessionId": "sess-weird-status",
+            "pid": 1,
+            "procStart": ticks,
+            "status": 12345,
+        }
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        record = hr.lookup("sess-weird-status")
+        assert record is not None
+        assert record.status is None
+
+    def test_status_never_attaches_a_verdict(self, tmp_path, monkeypatch):
+        # A record's `status` field carries no liveness/reachability meaning
+        # of its own -- parsing it must not change what `lookup`/`snapshot`
+        # otherwise return for an out-of-band procStart, mirroring `cwd`'s
+        # own no-verdict contract.
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        out_of_band_ticks = _epoch_to_filetime_ticks(time.time() - hr._SANITY_BAND_PAST_SEC - 3600)
+        payload = {
+            "sessionId": "sess-dead-but-labeled-busy",
+            "pid": 1,
+            "procStart": out_of_band_ticks,
+            "status": "busy",
+        }
+        (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        # An out-of-band procStart still yields None for the whole record,
+        # regardless of what `status` says -- status is never consulted.
+        assert hr.lookup("sess-dead-but-labeled-busy") is None
+
+
 class TestSingleScanInvariant:
     def test_snapshot_performs_exactly_one_directory_scan(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_coordinator_harvest_deferrals.py — selection-rule tests for
 coordinator-harvest-deferrals, covering the C5b widening (D8).

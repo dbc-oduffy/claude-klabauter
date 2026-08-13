@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Deprecated location — forwards to coordinator/bin/distill-ripe-filter.py.
 
 DEC-3 (2026-07-23 claude-klabauter-driven-ceremony-redesign): the distill CLIs relocated to

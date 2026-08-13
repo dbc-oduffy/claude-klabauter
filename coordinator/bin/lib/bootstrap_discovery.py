@@ -44,7 +44,7 @@ re-fall into.
 The actual discriminator, confirmed by surveying every `sys.path.insert`/
 `.append` call site in this tree by hand rather than assumed: a genuine
 engine-root bootstrap's inserted expression is always named with `root`,
-`engine`, or `claude-klabauter` somewhere in an identifier in its expression tree
+`engine`, or the engine-repo name somewhere in an identifier in its expression tree
 (`claude_klabauter_root` is the dominant idiom, alongside `_ENGINE_ROOT`, `_REPO_ROOT`,
 `_REPO_ROOT_GUESS`, `_CLAUDE_KLABAUTER_ROOT`, `engine_root`, `_claude_klabauter_root`, or a
 `str(...)`-wrapped variant of any of those) — while a lib-helper-only insert
@@ -59,7 +59,7 @@ never is. So:
     (b) a `sys.path.insert(...)`/`sys.path.append(...)` call whose argument
         expression contains an identifier (`ast.Name.id`, `ast.Attribute
         .attr`, or a called function's name) matching `root`, `engine`, or
-        `claude-klabauter` case-insensitively, anywhere in that expression (so
+        the engine-repo name case-insensitively, anywhere in that expression (so
         `str(_REPO_ROOT)`, `coordinator_claude_klabauter_root()`, and a bare
         `claude_klabauter_root` Name all match the same way).
 
@@ -289,7 +289,7 @@ def _has_engine_root_bootstrap(tree: ast.AST) -> bool:
     and nothing else still dies importing `coordinator_core`), and
     deliberately NOT a bare "a root-shaped identifier exists anywhere in the
     file" check either — `repo_root` (the target repo's own root, orthogonal
-    to the engine/CLAUDE-KLABAUTER root this predicate cares about) is a near-universal
+    to the engine-root token this predicate cares about) is a near-universal
     local/parameter name across this tree's CLIs, so that check produces
     pervasive false negatives. The predicate stays tied to the actual
     `sys.path` mutation call site (directly, or one for-loop hop away).

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """STAGED FOR RELOCATION — final destination:
     X:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py
 (a confined general-purpose subagent cannot write outside the example-doctrine-repo repo

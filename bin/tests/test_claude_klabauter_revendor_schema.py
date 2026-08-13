@@ -352,6 +352,19 @@ class TestDeclineGate:
             _handoff_like_schema(True)
         )
 
+    def test_write_decline_rejects_malshaped_backout_sha(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        _commit_schema(fake_clone, "alpha", _dump(_handoff_like_schema(True)))
+        with pytest.raises(SystemExit):
+            _mod._write_decline(
+                schema_names=["alpha"],
+                doe_clone_arg=str(fake_clone),
+                ref="HEAD",
+                reason="reason",
+                backout_sha="not-a-sha!",
+            )
+
     def test_live_decline_blocks_matching_revendor_incident_regression(
         self, fake_clone: Path, sandbox: dict[str, Path]
     ) -> None:
@@ -423,6 +436,44 @@ class TestDeclineGate:
         assert rc == 0, "a decline must not block once upstream moved the version"
         assert (sandbox["schemas"] / "alpha.schema.json").read_bytes() == _dump(moved_shape)
 
+    def test_decline_self_expiry_prints_a_note(
+        self, fake_clone: Path, sandbox: dict[str, Path], capsys: pytest.CaptureFixture
+    ) -> None:
+        """A decline that lapses (version moved) must say so, not vanish silently."""
+        declined_shape = _handoff_like_schema(False)
+        _commit_schema(fake_clone, "alpha", _dump(declined_shape))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+        _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="reason",
+            backout_sha="a" * 40,
+        )
+
+        moved_shape = dict(declined_shape)
+        moved_shape["x-schema-version"] = "8.0.0"
+        _commit_schema(fake_clone, "alpha", _dump(moved_shape))
+
+        rc = _mod.run(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ack_major=True,
+            reason="example-doctrine-repo resolved the shape narrow by bumping to 8.0.0",
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "decline no longer applies" in out
+        assert "alpha" in out
+
+    def test_decline_gate_reasons_returns_expiry_note_on_version_move(self) -> None:
+        reasons, note = _mod._decline_gate_reasons(
+            "alpha",
+            _dump(_handoff_like_schema(False)),
+        )
+        # No record loaded (module-level path, no sandbox) -> no reason, no note.
+        assert reasons == [] and note is None
+
     def test_decline_for_different_schema_does_not_block(
         self, fake_clone: Path, sandbox: dict[str, Path]
     ) -> None:
@@ -446,10 +497,112 @@ class TestDeclineGate:
             _handoff_like_schema(True)
         )
 
+    def test_unparseable_incoming_at_matching_version_notes_but_does_not_block(
+        self, sandbox: dict[str, Path]
+    ) -> None:
+        """Fail-open on unparseable JSON stays fail-open, but must not go silent."""
+        sandbox["declines"].mkdir(parents=True, exist_ok=True)
+        (sandbox["declines"] / "alpha.json").write_text(
+            json.dumps(
+                {
+                    "schema": "alpha",
+                    "declined_shape_hash": "irrelevant",
+                    "declined_schema_version": "7.1.0",
+                    "reason": "r",
+                    "backout_sha": "a" * 40,
+                    "status": "active",
+                }
+            ),
+            encoding="utf-8",
+        )
+        # Invalid UTF-8 bytes: the lenient `errors="replace"` decode used to read
+        # x-schema-version still succeeds (the version key sits before the bad byte),
+        # but the strict decode used to parse+hash the shape raises — the exact split
+        # that makes this branch reachable rather than dead code shadowed by the
+        # version-mismatch check above.
+        malformed = b'{"x-schema-version": "7.1.0", "junk": "\xff\xfe"}'
+        reasons, note = _mod._decline_gate_reasons("alpha", malformed)
+        assert reasons == []
+        assert note is not None and "did not parse as JSON" in note
+
     def test_no_decline_record_is_a_pure_no_op_on_the_gate(
         self, sandbox: dict[str, Path]
     ) -> None:
-        assert _mod._decline_gate_reasons("nonexistent", _dump(_handoff_like_schema(True))) == []
+        assert _mod._decline_gate_reasons("nonexistent", _dump(_handoff_like_schema(True))) == ([], None)
+
+
+# ---------------------------------------------------------------------------
+# 3a. Decline record schema
+# ---------------------------------------------------------------------------
+
+class TestDeclineRecordSchema:
+    def test_well_formed_record_validates(self) -> None:
+        schema = _mod._load_decline_record_schema()
+        record = {
+            "schema": "alpha",
+            "declined_shape_hash": "sha256:" + "a" * 64,
+            "declined_schema_version": "7.1.0",
+            "reason": "that debt is not ours to import",
+            "backout_sha": "e" * 40,
+            "declared_ref": "HEAD",
+            "declared_doe_sha": "f" * 40,
+            "declared": "2026-08-13",
+            "status": "active",
+        }
+        errors = _mod._validate_json_schema_node(record, schema, schema, "")
+        assert errors == []
+
+    def test_missing_required_field_is_rejected(self) -> None:
+        schema = _mod._load_decline_record_schema()
+        record = {
+            "schema": "alpha",
+            "declined_shape_hash": "sha256:" + "a" * 64,
+            "declined_schema_version": "7.1.0",
+            "reason": "that debt is not ours to import",
+            # backout_sha missing
+            "declared_ref": "HEAD",
+            "declared_doe_sha": "f" * 40,
+            "declared": "2026-08-13",
+            "status": "active",
+        }
+        errors = _mod._validate_json_schema_node(record, schema, schema, "")
+        assert errors, "a record missing backout_sha must fail schema validation"
+
+    def test_malformed_backout_sha_is_rejected(self) -> None:
+        schema = _mod._load_decline_record_schema()
+        record = {
+            "schema": "alpha",
+            "declined_shape_hash": "sha256:" + "a" * 64,
+            "declined_schema_version": "7.1.0",
+            "reason": "that debt is not ours to import",
+            "backout_sha": "not-a-sha!",
+            "declared_ref": "HEAD",
+            "declared_doe_sha": "f" * 40,
+            "declared": "2026-08-13",
+            "status": "active",
+        }
+        errors = _mod._validate_json_schema_node(record, schema, schema, "")
+        assert errors, "a malformed backout_sha must fail schema validation"
+
+    def test_write_decline_round_trip_is_schema_valid(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        _commit_schema(fake_clone, "alpha", _dump(_handoff_like_schema(True)))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+
+        rc = _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="that debt is not ours to import",
+            backout_sha="e" * 40,
+        )
+        assert rc == 0
+        record = _mod._load_decline_record("alpha")
+        assert record is not None
+        schema = _mod._load_decline_record_schema()
+        errors = _mod._validate_json_schema_node(record, schema, schema, "")
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------

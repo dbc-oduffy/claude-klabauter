@@ -76,6 +76,22 @@ from ._dialect import _strip_ps_quotes
 #: dedicated tokenizer feature.
 _REDIRECT_OP_RE = re.compile(r"^\d*>{1,2}$")
 
+#: A plain redirect to exactly this literal token is never a write-sink
+#: candidate (2026-08-13, out-of-repo write-bump `/dev/null` false positive,
+#: `state/subagent-share/8d387a4c-8595-4b90-8714-f5775401fcb3/`). `/dev/null`
+#: is a null sink, not a write destination -- nothing is written, nothing
+#: leaves the repo, so there is no out-of-repo write to bump. Mirrors the
+#: sibling carve-out already shipped on
+#: `block_reviewer_bash_outside_allowlist._match_devnull_redirect`
+#: (Divergence 8, 2026-07-28) on the identical reasoning, narrowed the same
+#: way: EXACT match only, never a prefix or `/dev/*` pattern, and it exempts
+#: only THIS ONE redirect-operator token pair from candidate extraction --
+#: every other token in the same segment (another redirect to a real path, a
+#: `cp`/`mv`/`tee`/etc. positional target) is still extracted and evaluated
+#: normally, so `echo hi > /dev/null; cp x /elsewhere/y` still bumps on the
+#: `cp` leg.
+_DEVNULL_TARGET = "/dev/null"
+
 #: The plain-bash write-sink BINARY names this table classifies (the
 #: redirection-operator shape above is handled independently of binary
 #: name, since `echo x > /elsewhere/file` is a write sink regardless of
@@ -121,7 +137,14 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
 
     for i, tok in enumerate(tokens):
         if _REDIRECT_OP_RE.match(tok) and i + 1 < len(tokens):
-            targets.append(tokens[i + 1])
+            redirect_target = tokens[i + 1]
+            if redirect_target == _DEVNULL_TARGET:
+                # Exact `/dev/null` only -- see `_DEVNULL_TARGET`'s own
+                # docstring. Every other token in this segment is still
+                # scanned normally by this same loop and by the
+                # `head_base`-driven branches below.
+                continue
+            targets.append(redirect_target)
 
     if head_base not in WRITE_SINK_BINARIES:
         return targets

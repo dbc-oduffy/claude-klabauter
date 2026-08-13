@@ -74,7 +74,6 @@ def _write_watch(systems_dir, name, body):
     path = os.path.join(systems_dir, f"{name}.watch.py")
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
-    os.chmod(path, 0o755)
     return path
 
 

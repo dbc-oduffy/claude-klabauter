@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 bin/shell-init-guard.py — pure stdout emitter for the interactive-shell resource-cap guard.
 

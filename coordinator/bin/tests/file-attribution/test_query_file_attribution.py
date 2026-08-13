@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_query_file_attribution.py — Smoke test for query-file-attribution.py CLI.
 

@@ -27,6 +27,7 @@ from coordinator_core.chain_ancestry_waivers import (
     chain_waiver_dir,
     record_chain_ancestry_waiver,
 )
+from coordinator_core.testing import symlink_capability
 
 import pytest
 
@@ -98,6 +99,7 @@ def test_none_source_handoff_is_stored_unchanged(tmp_path: Path) -> None:
     assert record["source_handoff"] is None
 
 
+@symlink_capability.requires_symlink_capability
 def test_symlinked_repo_root_still_normalizes(tmp_path: Path) -> None:
     real_root = tmp_path / "real-repo"
     real_root.mkdir()

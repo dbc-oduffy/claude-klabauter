@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import sys
 
 import pytest
 
@@ -105,6 +106,16 @@ class _LookupResultStub(dict):
         self.abort_cause = abort_cause
 
 
+class _StubCore:
+    """Stand-in for coordinator_core.session.core, on its OWN seam
+    (_cli._import_core_module) -- clear-claim-if-dead's not-found precheck
+    (AC5) reads only ``sessions_dir``, the SAME public path-arithmetic
+    ``claims.clear_claim_if_dead`` itself calls."""
+
+    def __init__(self, *, sessions_dir=None):
+        self.sessions_dir = sessions_dir or (lambda cwd=None: "")
+
+
 class _StubHolderEvidence:
     """Stand-in for coordinator_core.pickup_assemble.holder_evidence, on its
     OWN seam (_cli._import_holder_evidence_module) — AC7/AC8 coverage."""
@@ -146,6 +157,17 @@ def stub_import_stale_claims_module():
 
     yield _apply
     _cli._import_stale_claims_module = orig
+
+
+@pytest.fixture()
+def stub_import_core_module():
+    orig = _cli._import_core_module
+
+    def _apply(stub):
+        _cli._import_core_module = lambda: stub
+
+    yield _apply
+    _cli._import_core_module = orig
 
 
 @pytest.fixture()
@@ -208,6 +230,136 @@ def test_clear_claim_if_dead_false_exits_1(stub_import_module):
     stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: False))
     rc = _cli.main(["clear-claim-if-dead", "handoff", "some-basename"])
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# AC5/AC6: clear-claim-if-dead distinguishes target-not-found from
+# refusal-holder-live, in both output and exit code -- pinned in the shape
+# the field report used (bogus basename, correct basename + live holder,
+# correct basename + dead holder). Fixture-based: sessions_dir is stubbed to
+# a tmp_path, never a real machine session store.
+# ---------------------------------------------------------------------------
+
+def test_clear_claim_if_dead_bogus_basename_emits_not_found_note_exit_0(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    # Real claim dir exists under a DIFFERENT basename; the bogus one is not
+    # on disk at all -- mirrors the field report's "claim still present"
+    # (a real claim exists) while the queried basename does not.
+    (tmp_path / "plan-claims" / "the-real-plan").mkdir(parents=True)
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
+
+    rc = _cli.main(["clear-claim-if-dead", "plan", "bogus-basename"])
+
+    # Review: staff-eng-review Finding 3 — the not-found note is
+    # distinguished from a refusal by exit code (0 here vs 1 there) and by
+    # the refusal's own distinct message, not by asserting "NOT a refusal"
+    # in prose (a B1 self-legitimacy violation the message no longer
+    # contains).
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no claim at" in err
+    assert "'plan'" in err
+    assert "'bogus-basename'" in err
+    assert "refusing to clear claim" not in err
+
+
+def test_clear_claim_if_dead_bogus_basename_with_md_suffix_hints_extension_trap(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
+
+    rc = _cli.main(["clear-claim-if-dead", "plan", "some-plan.md"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no claim at" in err
+    assert "'.md' extension" in err
+
+
+def test_clear_claim_if_dead_correct_basename_live_holder_refuses_no_not_found_note(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    (tmp_path / "plan-claims" / "real-plan").mkdir(parents=True)
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+
+    def _refuse(*a, **k):
+        print(
+            "cs_clear_claim_if_dead: refusing to clear claim 'real-plan' — "
+            "holder is live (session: some-sid)",
+            file=sys.stderr,
+        )
+        return False
+
+    stub_import_module(_StubClaims(clear_claim_if_dead=_refuse))
+
+    rc = _cli.main(["clear-claim-if-dead", "plan", "real-plan"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "refusing to clear claim" in err
+    assert "holder is live" in err
+    assert "no claim found" not in err
+
+
+def test_clear_claim_if_dead_correct_basename_dead_holder_clears_no_not_found_note(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    (tmp_path / "plan-claims" / "real-plan").mkdir(parents=True)
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
+
+    rc = _cli.main(["clear-claim-if-dead", "plan", "real-plan"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no claim found" not in err
+    assert "refusing to clear claim" not in err
+
+
+def test_clear_claim_if_dead_not_found_precheck_never_fires_for_artifact_class(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    """The 'artifact' class routes to the PATH-TOUCH plane inside claims.py,
+    a different lookup entirely -- the classed-form not-found precheck must
+    not fire for it."""
+
+    def _fail_if_called(cwd=None):
+        raise AssertionError("sessions_dir must not be consulted for 'artifact' class")
+
+    stub_import_core_module(_StubCore(sessions_dir=_fail_if_called))
+    stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
+
+    rc = _cli.main(["clear-claim-if-dead", "artifact", "some/repo/relative/path.txt"])
+
+    assert rc == 0
+    assert "no claim found" not in capsys.readouterr().err
+
+
+def test_clear_claim_if_dead_core_import_failure_skips_precheck_not_transport_fail(
+    stub_import_module, capsys
+):
+    """A resolution failure in the best-effort precheck (e.g. core module
+    unimportable) must never surface as _TRANSPORT_FAIL or change the
+    delegated result -- it is diagnostic-only, per
+    `_clear_claim_lookup_dir`'s own contract."""
+
+    def _raise_import_error():
+        raise ImportError("coordinator_core.session.core not importable in test")
+
+    orig = _cli._import_core_module
+    _cli._import_core_module = _raise_import_error
+    stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
+
+    try:
+        rc = _cli.main(["clear-claim-if-dead", "plan", "some-basename"])
+    finally:
+        _cli._import_core_module = orig
+
+    assert rc == 0
+    assert "no claim found" not in capsys.readouterr().err
 
 
 def test_claim_plan_true_exits_0(stub_import_module):
@@ -570,6 +722,25 @@ def test_dead_sid_reports_liveness_basis_line(
     # Baseline token (AC9): line 1 is exactly "dead", unchanged position/spelling.
     assert out_lines[0] == "dead"
     assert out_lines[1] == "liveness_basis:recency-window"
+
+
+def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
+    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
+):
+    # Review: staff-eng-review Finding 0 -- C1's ripple, unreviewed.
+    # session_live() stays False for a live foreign-repo peer (AC1: unchanged,
+    # unmigrated) but the basis is "harness-registry-elsewhere"; printing
+    # "dead" over that basis reproduces this plan's own Problem statement in
+    # this sibling CLI. Exit code is unchanged (_NOT_LIVE) for compat.
+    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
+    stub_import_holder_evidence_module(
+        _StubHolderEvidence(liveness_basis=lambda *a, **k: "harness-registry-elsewhere")
+    )
+    rc = _cli.main(["is-session-live", "peer-sid"])
+    assert rc == _cli._NOT_LIVE
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines[0] == "live-elsewhere"
+    assert out_lines[1] == "liveness_basis:harness-registry-elsewhere"
 
 
 def test_liveness_basis_call_reuses_holder_evidence_not_a_second_derivation(

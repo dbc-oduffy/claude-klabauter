@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
@@ -227,11 +228,17 @@ def main(argv: List[str]) -> int:
                 token_bearing.append(fpath)
     token_bearing.sort()
 
-    render_single_argv = resolve_launchable(render_single)
+    # render-template.py is always a Python script (co-located sibling or example-doctrine-repo-root
+    # fallback, both resolved above) -- on Windows keep resolve_launchable's shebang
+    # sniffing/.cmd-twin preference (a bare path is unexecutable there, WinError 193);
+    # on POSIX prefix sys.executable so a bare exec doesn't depend on the target's own
+    # shebang + exec bit (which C4 strips from coordinator/bin/*.py).
+    if launchable._is_windows():
+        render_single_argv = resolve_launchable(render_single)
+    else:
+        render_single_argv = [sys.executable, render_single]
 
     for fpath in token_bearing:
-        # resolve_launchable, not a bare path: render-template.py carries a shebang,
-        # which Windows CreateProcess cannot exec (WinError 193).
         proc = subprocess.run(
             [*render_single_argv, fpath, "-o", fpath, *kv_pairs],
             **no_console_passthrough_kwargs(),

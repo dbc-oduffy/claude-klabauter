@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """workday-complete-step3-consolidate.py — Step 3 Branch Consolidation for /workday-complete.
 
 Encapsulates the deterministic branch-consolidation procedure from

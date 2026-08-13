@@ -530,6 +530,17 @@ def test_module_provenance_survives_a_long_exception_message(monkeypatch, tmp_pa
     assert f"module={Path(auto_push.__file__).resolve().as_posix()}" in content
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="pins backslash-to-forward-slash normalization of a Windows-"
+    "shaped COORDINATOR_HOST_PYTHON value via the host-native `Path."
+    "as_posix()` -- on POSIX, Path is PosixPath, which treats a backslash "
+    "as an ordinary filename character and performs no conversion, so a "
+    "synthetic Windows-shaped literal round-trips unchanged; this is not "
+    "reachable in real production use either (COORDINATOR_HOST_PYTHON only "
+    "carries backslashes when set BY a Windows host, where Path is native "
+    "WindowsPath at the same time).",
+)
 def test_module_provenance_prefers_host_python_env_when_set(monkeypatch):
     """A wrapper-launched hook reports the real host interpreter, not the
     wrapper's own `sys.executable`, when COORDINATOR_HOST_PYTHON is set."""

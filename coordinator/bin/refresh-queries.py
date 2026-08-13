@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """refresh-queries.py — CLI trampoline over the query-callout refresh engine.
 
 Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter

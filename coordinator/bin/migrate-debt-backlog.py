@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 migrate-debt-backlog.py — one-shot migration of state/debt-backlog.md table rows
 and bullet-list entries into per-entry YAML files via coordinator-queue-append.

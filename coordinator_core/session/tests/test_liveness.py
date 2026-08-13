@@ -1075,6 +1075,15 @@ class TestSessionVerdict:
         assert liveness.session_verdict("foo/../bar", cwd=str(repo)) is None
         assert liveness.session_verdict("foo\\bar", cwd=str(repo)) is None
 
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="pins the Windows-only Path.__truediv__ drive-letter join "
+        "escape (a drive-absolute right operand discards the left "
+        "entirely) -- on POSIX, Path.__truediv__ treats a backslash as an "
+        "ordinary filename character, so the join never escapes `base` and "
+        "this assertion's premise does not hold; not a POSIX defect to fix, "
+        "this hazard is only real, and only exercisable, on Windows.",
+    )
     def test_colon_drive_letter_sid_returns_none(self, tmp_path):
         # Review: coordinator:code-reviewer — a blocklist of `/`, `\`, `..`,
         # NUL did not reject a bare drive-letter/colon component; on
@@ -1120,6 +1129,105 @@ class TestSessionVerdict:
         # whole-corpus loop gets for free from its own skip check.
         repo = _make_repo(tmp_path)
         assert liveness.session_verdict("no-session", cwd=str(repo)) is None
+
+
+class TestSessionVerdictHarnessRegistryElsewhere:
+    """C1, docs/plans/2026-08-13-liveness-stops-conflating-dead-with-
+    elsewhere.md: the no-verdict arm distinguishes a live-in-another-repo
+    session from one that does not exist anywhere. `session_live()`'s
+    boolean contract must stay byte-for-byte unchanged (AC1) -- these tests
+    pin that alongside the new `session_verdict` state (AC2/AC3/AC6)."""
+
+    def test_live_foreign_repo_session_is_distinguishable(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # No session dir for this sid in `repo` at all -- only a registry
+        # record, as if the session were live and working elsewhere.
+        _write_registry_record(
+            registry_dir,
+            "s.json",
+            "s-elsewhere",
+            os.getpid(),
+            _self_create_time(),
+            cwd="/some/other/repo",
+        )
+        verdict = liveness.session_verdict("s-elsewhere", cwd=str(repo))
+        assert verdict is not None
+        live, basis, elsewhere_cwd = verdict
+        assert live is True
+        assert basis == "harness-registry-elsewhere"
+        assert elsewhere_cwd == "/some/other/repo"
+
+    def test_live_foreign_repo_session_with_no_recorded_cwd(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_registry_record(
+            registry_dir, "s.json", "s-elsewhere-no-cwd", os.getpid(), _self_create_time()
+        )
+        live, basis, elsewhere_cwd = liveness.session_verdict(
+            "s-elsewhere-no-cwd", cwd=str(repo)
+        )
+        assert live is True
+        assert basis == "harness-registry-elsewhere"
+        assert elsewhere_cwd is None
+
+    def test_genuinely_nonexistent_sid_still_none(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # Registry dir exists but has no record for this sid at all.
+        registry_dir.mkdir(parents=True, exist_ok=True)
+        assert liveness.session_verdict("s-nowhere-at-all", cwd=str(repo)) is None
+
+    def test_registry_hit_but_pid_dead_falls_through_to_none(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        # A registry record whose birth-instant does not match any live
+        # process -- unconfirmed candidate, must fall through to None
+        # rather than being asserted live.
+        _write_registry_record(
+            registry_dir, "s.json", "s-elsewhere-dead", 2**31 - 1, 946684800, cwd="/dead/repo"
+        )
+        assert liveness.session_verdict("s-elsewhere-dead", cwd=str(repo)) is None
+
+    def test_live_same_repo_session_unchanged(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo, "s-same-repo-live", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        assert liveness.session_live("s-same-repo-live", cwd=str(repo)) is True
+        live, basis, _age = liveness.session_verdict("s-same-repo-live", cwd=str(repo))
+        assert live is True
+        assert basis == "recency-window"
+
+    def test_dead_same_repo_session_unchanged(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-same-repo-dead",
+            {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"},
+        )
+        assert liveness.session_live("s-same-repo-dead", cwd=str(repo)) is False
+        live, basis, _age = liveness.session_verdict("s-same-repo-dead", cwd=str(repo))
+        assert live is False
+        assert basis == "recency-window"
+
+    def test_harness_registry_lookup_exception_falls_through_to_none(
+        self, tmp_path, monkeypatch
+    ):
+        def _boom(sid):
+            raise RuntimeError("simulated harness_registry internal failure")
+
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(harness_registry, "lookup", _boom)
+        assert liveness.session_verdict("s-elsewhere-boom", cwd=str(repo)) is None
 
 
 class TestLivenessBasisMatchesVerdictSource:
@@ -1771,13 +1879,15 @@ class TestHolderEvidenceLivenessBasisSeam:
 # ---------------------------------------------------------------------------
 
 
-def _write_registry_record(registry_dir, filename, session_id, pid, epoch):
+def _write_registry_record(registry_dir, filename, session_id, pid, epoch, cwd=None):
     registry_dir.mkdir(parents=True, exist_ok=True)
     ticks = int(
         (epoch + harness_registry._FILETIME_EPOCH_OFFSET_SEC)
         * harness_registry._FILETIME_TICKS_PER_SEC
     )
     payload = {"sessionId": session_id, "pid": pid, "procStart": ticks}
+    if cwd is not None:
+        payload["cwd"] = cwd
     (registry_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
 
 

@@ -453,6 +453,8 @@ def _ne_darwin_bash_profile_repair(
     """C2: bash login-shell PATH reconstruction (Darwin only). Spec backlink:
     docs/plans/2026-06-22-coordinator-env-normalization-step-zero.md (C2).
     Triggered when shell_login_env probe reports 'fail'."""
+    if sys.platform == "win32":
+        return
     shell_env_status = _ne_probe_status_for(probe_output, "shell_login_env")
     if shell_env_status != "fail":
         return

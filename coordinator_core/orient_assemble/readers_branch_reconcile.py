@@ -20,7 +20,18 @@ than shelled out to their source scripts, per
    op's own `dry_run=True` default governs — observation only, never a
    transition).
 
+A `clear`/`narrow` verdict computed under dry_run=true never reaches
+`surfaced[]` (deliberate — see `handoff_reconcile.py`'s `_route_gate_clear`
+docstring; routing it through `surfaced[]` would raise a spurious D1
+conservation violation on the following run). Left unrendered, that steady
+state is indistinguishable from "nothing to do," so `_read_auto_reconcile`
+also renders `result.gates_cleared[]` entries where `dry_run` is truthy AND
+`blocker_ids` is non-empty — the same discriminator
+`coordinator/bin/check-auto-reconcile.py`'s `_render` uses for its own
+would-flip line.
+
 Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C2c
+Spec backlink: cross-repo/inbox/2026-08-13-example-cockpit-repo-em-clear-verdict-invisible-under-dry-run-so-gates-never-announce.md
 
 Negative-spec:
     - Does NOT import or invoke `cmd_reap_log` / `_run_reap_sessions` from
@@ -33,6 +44,14 @@ Negative-spec:
     - Does NOT re-implement `handoff.reconcile_open`'s verdict logic — the
       `surfaced[]` list from its response is translated into
       `judgment_points[]` as-is, one entry per surfaced handoff.
+    - Does NOT route a `gates_cleared[]` entry into `surfaced[]` or mutate
+      `handoff_reconcile.py` in any way — this module is a read-only
+      consumer of an already-computed response; it only renders an
+      ADDITIONAL judgment point from a field the op already returns.
+    - Does NOT render a `gates_cleared[]` entry whose `dry_run` is falsy or
+      whose `blocker_ids` is empty — that shape is a genuine no-op
+      (`_route_gate_clear`'s own guard: `if dry_run or not blocker_ids`)
+      with nothing to announce.
     - Does NOT wire these results into `brief()` — `__init__.py`'s cadence
       dispatch is shared write-surface across C2a-C2d (the plan's own
       "same package — serial, write-overlap" note); this chunk lands
@@ -168,6 +187,17 @@ def _read_auto_reconcile() -> ReaderResult:
     point's `list_command` is the complete, unordered view — cap order here
     carries no priority signal, so a withheld entry is not "less important,"
     only "later in an arbitrary order."
+
+    Legibility (spec: docs/plans/2026-08-13-legible-reconcile-surface-and-
+    single-baton-check.md, chunk C1; docs/decisions/DR-300-pickup-may-not-
+    call-the-reconcile-orchestrator.md): the arbitrary order is a non-issue
+    only because `cap_judgment_points`' overflow entry states the true
+    surfaced total (`"{total} total ... {cap} shown, {withheld} withheld"`)
+    whenever the cap binds — shape (a), an aggregate judgment point naming
+    the true total, not shape (b) a ranking key. A reader always sees
+    either every surfaced entry (count <= cap, nothing withheld) or the
+    exact count withheld and the command to list them all; "5 shown" can
+    never be mistaken for "5 exist."
     """
     from coordinator_core.ops.check_auto_reconcile import get_response
 
@@ -177,10 +207,18 @@ def _read_auto_reconcile() -> ReaderResult:
     result = response.get("result") or {}
     surfaced = result.get("surfaced") or []
     reconciled = result.get("reconciled") or []
+    gates_cleared = result.get("gates_cleared") or []
+    if not isinstance(gates_cleared, list):
+        gates_cleared = []
+    dry_run_clears = [
+        entry
+        for entry in gates_cleared
+        if isinstance(entry, dict) and entry.get("dry_run") and entry.get("blocker_ids")
+    ]
     failed_reconciles = [
         entry for entry in reconciled if entry.get("exit_code", 0) != 0
     ]
-    if not surfaced and not failed_reconciles:
+    if not surfaced and not failed_reconciles and not dry_run_clears:
         return ReaderResult()
 
     judgment_points: list[dict[str, Any]] = []
@@ -218,6 +256,42 @@ def _read_auto_reconcile() -> ReaderResult:
         list_command="check-auto-reconcile",
     )
 
+    gate_clear_points: list[dict[str, Any]] = []
+    for idx, entry in enumerate(dry_run_clears):
+        handoff_id = entry.get("handoff_id") or "?"
+        verdict = entry.get("verdict") or "clear"
+        target = "ready_to_fire" if verdict == "clear" else "awaiting_gate (narrowed)"
+        blocker_ids = entry.get("blocker_ids") or []
+        blockers = ", ".join(str(b) for b in blocker_ids)
+        gate_clear_points.append(
+            build_judgment_point(
+                None,
+                id=f"j-gate-cleared-{idx + 1}",
+                question=(
+                    f"Handoff {handoff_id!r} gate cleared (verdict={verdict}) — "
+                    f"would flip awaiting_gate → {target} (dry-run, not applied) — "
+                    "arm the reconciler?"
+                ),
+                dispositions=[
+                    build_disposition("pm_reviews_manually"),
+                    build_disposition("leave_for_now"),
+                ],
+                evidence=(
+                    f"blockers cleared: {blockers} | dry_run=true, no transition "
+                    "applied — handoff.reconcile_open computed this verdict but "
+                    "arming (dry_run=false) is a separate, named posture change"
+                ),
+                reason="recommendation-forbidden",
+            )
+        )
+    gate_clear_points = cap_judgment_points(
+        gate_clear_points,
+        cap=_AUTO_RECONCILE_JUDGMENT_POINT_CAP,
+        overflow_id="j-overflow-gate-cleared",
+        item_label="dry-run gate-cleared handoffs",
+        list_command="check-auto-reconcile",
+    )
+
     desync_points: list[dict[str, Any]] = []
     for idx, entry in enumerate(failed_reconciles):
         message = truncate_external_text(entry.get("message") or "no message")
@@ -241,7 +315,7 @@ def _read_auto_reconcile() -> ReaderResult:
         item_label="failed desync repairs",
         list_command="check-auto-reconcile",
     )
-    return ReaderResult(judgment_points=judgment_points + desync_points)
+    return ReaderResult(judgment_points=judgment_points + gate_clear_points + desync_points)
 
 
 def collect(cadence: str) -> ReaderResult:

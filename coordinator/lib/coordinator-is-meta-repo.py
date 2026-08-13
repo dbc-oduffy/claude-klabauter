@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """coordinator-is-meta-repo.py — canonical boolean primitive: is a git root
 the coordinator meta-repo?
 

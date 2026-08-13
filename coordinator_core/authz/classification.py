@@ -774,6 +774,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The stamped shipped_in + shipped deployment_state are observable after return.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.close_origin_stub": OpClass.MUTATING,
+    # handoff.backfill_claim_stamp — MUTATING: stamps claim provenance onto a
+    # worked-but-unstamped baton's frontmatter, gated on --evidence-commit SHAs that
+    # must resolve in-tree before any write (ops/handoff_backfill_claim_stamp.py AC2).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "handoff.backfill_claim_stamp": OpClass.MUTATING,
     # handoff.reconcile_open — MUTATING: orchestrating op that enumerates the open
     # handoff set and, per handoff, DELEGATES mutation to handoff.ship_and_archive /
     # handoff.transition gate-cascade-clear (both already classified MUTATING above).
@@ -927,6 +932,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The new handoff file is read by git, the shell layer, and rag ingestion.
     # Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
     "handoff.author_fork": OpClass.MUTATING,
+    # plan.persist_capture — MUTATING: scaffolds a new docs/plans/*.md plan artifact
+    # (via a coordinator-doc-new subprocess) from a captured harness plan-mode body,
+    # and may unlink a superseded frontmatter-less duplicate under docs/plans/.
+    # DR-208 five-question affirmation (citing ops/plan_capture_persist.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Writes a new docs/plans/<date>-<slug>.md; may unlink a duplicate raw dump
+    #      at a different docs/plans/*.md path.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only coordinator docs/plans/; dual-write ban (DR-208) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Reads the coordinator-doc-new subprocess's own write, then re-writes it
+    #      in place with the spliced body/task-spine.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      docs/plans/*.md is coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The new plan file is read by git, other sessions, and rag ingestion.
+    # Spec backlink: state/handoffs/2026-08-13-vanilla-plan-mode-capture-safety-net.md § Part 2
+    "plan.persist_capture": OpClass.MUTATING,
     # handoff.lineage_ancestry — COMPUTE_ONLY: reads state/handoffs/*.md frontmatter under the
     # main worktree via dag.walk_forward(edge_kinds={'origin_handoff'}), and returns a computed
     # ordered ancestry list. No file writes, no git ops, no subprocess spawns.
@@ -982,6 +1005,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     # Spec backlink: docs/plans/2026-07-31-plan-orphan-ownership-resolver.md § C2
     "plan.list_orphaned": OpClass.COMPUTE_ONLY,
+    # plan.suggest_completion_steps — COMPUTE_ONLY: scans
+    # <repo_root>/docs/plans/*.md (frontmatter reads) and
+    # state/review-trail/*.json + archive/review-trail/*.json (read-only,
+    # via list_review_trail_records._collect() rooted at the explicit
+    # repo_root) plus `git log`/`git rev-list` queries, returning the
+    # computed completion-steps list. Assist surface for the vanilla-plan-
+    # mode safety net (Part 3, state/handoffs/
+    # 2026-08-13-vanilla-plan-mode-capture-safety-net.md); sibling of
+    # plan.list_orphaned immediately above.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Reads plan frontmatter, review-trail JSON, and git history only.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    # Spec backlink: state/handoffs/2026-08-13-vanilla-plan-mode-capture-safety-net.md § Part 3
+    "plan.suggest_completion_steps": OpClass.COMPUTE_ONLY,
     # roadmap.serve — COMPUTE_ONLY: reads state/handoffs/*.md and archive/handoffs/**/*.md
     # under the main worktree, assembles a per-roadmap DAG + scalars via
     # assemble_roadmap_dag(), and returns the computed payload. Explicitly zero-spawn:
@@ -1925,6 +1966,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-4 (act-time re-verify): handler re-checks deployment_state + shipped_in at act time.
     #   D2-5 (UDS-only): no HTTP route added; negative-spec in archive_shipped_handoffs.py.
     "fleet.archive_shipped_handoffs": OpClass.MUTATING,
+    # fleet.archive_terminal_sizings — MUTATING: git-mv terminal sizing objects into
+    # archive/sizings/YYYY-MM/, via the shared archive_and_commit batch path
+    # (ops/fleet/archive_sizings.py, dest-collision handling + git-mv + commit).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "fleet.archive_terminal_sizings": OpClass.MUTATING,
     # fleet.archive_actioned_memos — MUTATING: git-mv actioned memos from cross-repo/inbox/
     # into cross-repo/archive/ (flat layout), reusing archive_and_commit.
     # DR-208 five-question affirmation (citing ops/fleet/archive_actioned_memos.py):
@@ -2020,6 +2066,51 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"text": str} only.
     "session.guard_hooks_kill_switch_detail": OpClass.COMPUTE_ONLY,
+    # session.resolve_address — COMPUTE_ONLY: resolves a session UUID to its live
+    # SendMessage address by parsing coordinator_core.session.harness_registry.
+    # snapshot() (a pure directory scan over sessions/*.json). Pre-existing gap:
+    # this op landed (077440e23) without a classification entry; fixed here
+    # (break-class, not deferred) rather than added to the frozen
+    # _KNOWN_UNCLASSIFIED_OPS_DEBT baseline.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      reachability.resolve_address / harness_registry.snapshot() are pure
+    #      parsers — no write call anywhere in either module.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"outcome", "session_id", "address", "candidates"} only.
+    "session.resolve_address": OpClass.COMPUTE_ONLY,
+    # session.peer_roster — COMPUTE_ONLY: cwd-filtered live peer roster, built
+    # over the same harness_registry.snapshot() as session.resolve_address just
+    # above, plus reachability.resolve_candidates() (both pure parsers/readers).
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      peer_roster.build_roster() only reads harness_registry.snapshot()
+    #      and reachability.resolve_candidates(); persists nothing (spec
+    #      Anti-scope: "no durable roster file, cache, or published registry").
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"rows": [...]} only.
+    "session.peer_roster": OpClass.COMPUTE_ONLY,
+    # session.artifact_owner — COMPUTE_ONLY: opens the caller-supplied
+    # artifact_path for READ ONLY, extracts owner id(s) via frontmatter
+    # primitives, and resolves each through reachability.resolve_address()
+    # (already COMPUTE_ONLY above) — every call in the chain is a pure
+    # reader.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      artifact_owner.resolve_artifact_owner() opens the artifact with
+    #      mode "r" only; no write call anywhere in the module.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"artifact_path", "owners": [...], "file_error"} only.
+    "session.artifact_owner": OpClass.COMPUTE_ONLY,
     # session.self_probe_hook_generation — NO ENTRY HERE, BY RESOLUTION, and this
     # comment is the record so the next reader does not re-derive it or re-add one.
     # ops/session/guard_hook_generation_self_probe.py carried @register_op with an
@@ -2388,6 +2479,34 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   No subprocess call, and no file read, is made here at all.
     # Spec: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C3
     "workflow.scaffold": OpClass.COMPUTE_ONLY,
+    # compute_layer.scaffold — COMPUTE_ONLY for BOTH its wire modes. mode=emit
+    # composes a Sub-shape B producer-skeleton TEXT from caller-supplied
+    # skill_name/verbs (ops/compute_layer_scaffold/emit.py), no file write.
+    # mode=check scores the five Sub-shape B producers' own source against the
+    # conformance clauses and RETURNS the rendered report TEXT to the caller
+    # (ops/compute_layer_scaffold/check.py) — it reads producer source files
+    # read-only and writes NOTHING (no sidecar, no cache, no state file), so it
+    # stays under this single COMPUTE_ONLY entry rather than a separate
+    # classification. If a future check-mode revision starts writing a report
+    # sidecar, that write path must be split into its own op name and its own
+    # affirmation block — not folded into this entry.
+    # DR-208 five-question affirmation (citing ops/compute_layer_scaffold/op.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?    No.
+    #      emit builds a string in memory; check reads producer source read-only
+    #      and renders a report string. No file is opened for write.
+    #   2. Writes into rag's relational store?                                   No.
+    #      Returns a structured dict to the caller; no rag interaction of any kind.
+    #   3. Opens any file for write (including sentinel creation)?               No.
+    #      emit performs no file I/O; check opens producer source read-only via
+    #      Path.read_text (ops/compute_layer_scaffold/check.py).
+    #   4. Mutates shared mutable state outside its own module?                  No.
+    #      Every returned value is freshly built per call; no shared/global
+    #      state is written by this handler.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    #      Nothing is written to disk by either mode; the only observable effect
+    #      is the return value handed back to the caller.
+    # Spec: docs/plans/2026-08-13-compute-layer-scaffolder.md § C4
+    "compute_layer.scaffold": OpClass.COMPUTE_ONLY,
     # memo.triage — COMPUTE_ONLY: deterministic pre-filter over cross-repo/archive/*.md
     # memos (frontmatter score + already-captured cross-check + legacy backfill +
     # observability). Does NOT call Haiku/Sonnet and does NOT decide final promotion —
@@ -3226,6 +3345,32 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # ops/__init__.py/_registry_map.py — scratchpad.sweep is the first sweep
     # op registered for JSON-RPC dispatch, not a copy of an existing pattern.
     "scratchpad.sweep": OpClass.MUTATING,
+    # dispatch.emit — MUTATING: writes the composed Workflow .mjs script text
+    # to a caller-named path (ops/dispatch_emit/op.py). The only handler in
+    # the dispatch-emit pipeline that touches disk — every upstream module
+    # (spine_read.py, wave_map.py, pathspec.py, emit.py) is pure/COMPUTE_ONLY
+    # in nature and none is separately registered as a JSON-RPC op.
+    # DR-208 five-question affirmation (citing ops/dispatch_emit/op.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      op.py — guarded_path.write_text(script, encoding="utf-8") writes the
+    #      emitted script to the caller-named, path-guarded output_path.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the single target output_path; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      guarded_path.write_text(...) opens the target for write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      output_path is caller-named repo/state, not scoped to this module's
+    #      own package directory.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The written script is a durable file, readable by other sessions
+    #      and by the Workflow tool once dispatched.
+    #   Path containment: output_path is guarded via
+    #   coordinator_core.ops._path_guard.contained_path against target_root
+    #   (defaults to output_path's parent) BEFORE the write — same seam most
+    #   write-ops in this package family use; see op.py module docstring.
+    # Spec: docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C5
+    "dispatch.emit": OpClass.MUTATING,
 })
 
 

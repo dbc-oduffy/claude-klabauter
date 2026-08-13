@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_seed_marketplace_enabledplugins.py — tests for seed-marketplace-enabledplugins.py.
 

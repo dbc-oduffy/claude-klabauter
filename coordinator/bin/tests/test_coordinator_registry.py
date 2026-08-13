@@ -498,7 +498,7 @@ def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkey
     BLOCKER-2) on `<repo_root>/state` being a directory."""
     with _tempfile.TemporaryDirectory() as _repo_root:
         os.makedirs(os.path.join(_repo_root, ".claude-plugin"))
-        with open(os.path.join(_repo_root, ".claude-plugin", "plugin.json"), "w") as _f:
+        with open(os.path.join(_repo_root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as _f:
             _f.write("{}")
         os.makedirs(os.path.join(_repo_root, "state"))
         _content_root = os.path.join(_repo_root, "coordinator")
@@ -515,7 +515,7 @@ def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatc
     `<flat_root>/state` being a directory."""
     with _tempfile.TemporaryDirectory() as _flat_root:
         os.makedirs(os.path.join(_flat_root, ".claude-plugin"))
-        with open(os.path.join(_flat_root, ".claude-plugin", "plugin.json"), "w") as _f:
+        with open(os.path.join(_flat_root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as _f:
             _f.write("{}")
         os.makedirs(os.path.join(_flat_root, "state"))
         _clear_doe_root_env(monkeypatch)
@@ -544,7 +544,7 @@ def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
     unconverted) and gated on `<cand>/state` being a directory (BLOCKER-2)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         os.makedirs(os.path.join(_fake_root, ".claude-plugin"))
-        with open(os.path.join(_fake_root, ".claude-plugin", "plugin.json"), "w") as _f:
+        with open(os.path.join(_fake_root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as _f:
             _f.write("{}")
         os.makedirs(os.path.join(_fake_root, "state"))
         _clear_doe_root_env(monkeypatch)

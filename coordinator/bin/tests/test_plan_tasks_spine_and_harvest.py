@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 """
 test_plan_tasks_spine_and_harvest.py — coordinator-side proving tests for the

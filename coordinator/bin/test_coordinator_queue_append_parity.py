@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_coordinator_queue_append_parity.py — field-parity CHARACTERIZATION tests.
 

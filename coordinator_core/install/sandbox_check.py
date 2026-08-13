@@ -380,7 +380,8 @@ def _tier1_filesystem_shape(
         sandbox_wrapper = os.path.join(sandbox_local_bin, "claude-doe")
         os.makedirs(sandbox_local_bin, exist_ok=True)
         shutil.copy2(wrapper_src, sandbox_wrapper)
-        os.chmod(sandbox_wrapper, 0o755)
+        if os.name != "nt":
+            os.chmod(sandbox_wrapper, 0o755)
         if os.path.isfile(sandbox_wrapper) and is_executable(sandbox_wrapper):
             r.ok(f"claude-doe wrapper installed and executable (exec-bit set): {sandbox_wrapper}")
         else:
@@ -501,7 +502,8 @@ def _tier1_filesystem_shape(
         wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe")
         f5_wrapper = os.path.join(f5_dir, "claude-doe")
         shutil.copy2(wrapper_src, f5_wrapper)
-        os.chmod(f5_wrapper, 0o755)
+        if os.name != "nt":
+            os.chmod(f5_wrapper, 0o755)
 
         # gen-settings-hooks.sh dropped from this sibling-leak check: it is
         # retired repo-wide (see check 7's comment above), so its absence

@@ -107,6 +107,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -114,6 +115,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from coordinator_core.ipc import register_op
+from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.win_portability import is_executable
@@ -435,8 +437,13 @@ def _gather_signal(
         try:
             from coordinator_core.win_portability import no_console_creationflags
 
+            if launchable._is_windows():
+                qc_argv = resolve_launchable(str(qc_path))
+            else:
+                qc_argv = [sys.executable, str(qc_path)]
+
             proc = subprocess.run(
-                [*resolve_launchable(str(qc_path)), "--since", since, "--format", "json"],
+                [*qc_argv, "--since", since, "--format", "json"],
                 capture_output=True,
                 text=True,
                 timeout=30,

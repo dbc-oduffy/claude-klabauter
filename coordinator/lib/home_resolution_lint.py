@@ -1221,7 +1221,7 @@ class HomeResolutionLintEngine:
 #
 # This ledger is deliberately a SEPARATE artifact from a repo's pytest-shim
 # baseline (``_home_resolution_lint_baseline.py``) where one exists --
-# claude-klabauter itself has both after this CLI lands, and that is by
+# the engine repo itself has both after this CLI lands, and that is by
 # design, not drift: the pytest shim's ratchet is enforced at test-collection
 # time with per-rule ``warnings.warn`` visibility; the CLI's ledger is
 # enforced at process-exit-code time for callers with no pytest tier at all.

@@ -274,7 +274,7 @@ class TestRealScopeEqualsStatedScope:
         machine's real example-doctrine-repo checkout's CLAUDE.md byte content.
         """
         monkeypatch.setattr(guard, "_is_growth", lambda *a, **kw: True)
-        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/example-operator/X/example-doctrine-repo")
+        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/example-doctrine-repo")
 
     @pytest.mark.parametrize(
         "file_path",

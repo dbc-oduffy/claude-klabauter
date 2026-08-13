@@ -69,6 +69,20 @@ prompt.
    from *inside* the session that hit the deny: no relaunch, no waiting for
    a future session to inherit a pre-launch var. It is additive, not a
    replacement — the env-var route above stays fully supported.
+   **Reversed for the EM specifically, on a small named allowlist (PM
+   ruling, 2026-08-13; `DR-298`, superseding `DR-260`'s human-only framing
+   for route 4 only — DR-260's forgery-leg reasoning is unchanged): the EM
+   may itself mint this sentinel, without a PM utterance at the moment of
+   use, for the guards in `_GRANTABLE_GUARDS` — currently
+   `bump-foreign-repo-write` and `bump-outside-repo-write`.** No other guard
+   is EM-grantable; every guard outside that allowlist keeps this route
+   exactly as human-only as stated above, and a dispatched subagent remains
+   barred from acquiring any grant regardless of guard. This is not a
+   re-litigation of AC4 above — which guards a human operator may reach via
+   this route stays universal and unexempted — it is a separate, narrower
+   axis: which guards the EM may self-grant. See `DR-298` for the full
+   record, including the failure-mode discriminator that keeps
+   IRREVERSIBLE-tier guards off this allowlist at any scope.
 
 **`GuardBand.CONFINEMENT_DENY` is never suppressible by the blanket-disarm
 marker, at any scope, with any marker content, full stop.** Its guards
@@ -150,115 +164,58 @@ useful in particular when the same override is needed repeatedly across a
 run, where re-typing a one-shot sentinel on every hit would be the wrong
 tool for the job.
 
-**Exact deny-message wording.** Both engine seams (`write_guards/engine.py`,
-`bash_guards/dispatch.py`) append one line to `permissionDecisionReason` on
-every hard-deny they return. As of 2026-08-11 (PM ruling, "a guard's block
-message must STOP carrying its own unlock recipe") that line is
-INFORMATIONAL only — it names that the unlock exists and routes to a
-pointer, but it does **not** hand the reader a resolved sentinel path or a
-create-then-retry recipe. The operator takes one extra hop (this doc, or the
-wiki once it lands) to construct the sentinel path themselves; that hop is
-the point, not an oversight — see "Why the recipe was removed" below. The
-block is APPENDED after the guard's own reason, not prepended before it (see
-"Why appended, not prepended" below):
+**Exact deny-message wording — corrected 2026-08-13, break-class.** This
+section previously documented a rendered unlock block, including a passage
+instructing future editors not to collapse an inlined filename-shape/
+identifier rendering back out. **That rendering no longer exists at all,
+and the "do not collapse" instruction is now false** — verified against
+`coordinator_core/session/guard_unlock_sentinel.py::annotate_deny`, whose
+body is `return out` unmodified on every call (item 10, 2026-08-13,
+staff-eng review). Neither engine seam (`write_guards/engine.py`,
+`bash_guards/dispatch.py`) appends anything to `permissionDecisionReason`
+for the in-session unlock any more; a hard-deny's message is exactly the
+firing guard's own reason, with no unlock-block suffix of any kind.
 
-The rendered line, unconditional — one form, on every machine, with no
-Example-doctrine-repo-checkout branch to pick between:
+The history, briefly, so a reader is not left guessing why the shape moved
+this much: item 3 (2026-08-11, PM ruling) first stripped a resolved
+sentinel path and create-then-retry recipe out of an appended block,
+leaving a human-only-affordance sentence plus doc/wiki pointers and the
+bare `session_id`/`guard_name` values as data. Item 6 (2026-08-12)
+regressed that — re-inlining the filename shape, drop-location
+description, and both identifiers as live parameters — which is the state
+this section used to document, including its "future edit must not
+collapse this back" instruction. **Item 7 (2026-08-13, C3) reverted item
+6**, restoring the doc/wiki-pointers-only form. **Item 9 (2026-08-13, C4d)
+went further still**: even that pointers-only sentence tripped
+`message_register._rules` rule B8 leg (d) — B8 treats any pointer into the
+override-key/unlock doc surface as a gate-referent, and no narrower
+rendered form between "the full disclosure paragraph" and "nothing" grades
+clean. `annotate_deny` was changed to return its input unmodified on every
+call. Item 10 then removed the ~20 lines of identity-resolution logic item
+9 had kept live-but-unbranching as speculative insurance, since running a
+resolver for zero effect on every deny made AC-6-style "is this seam
+reachable" lints vacuous.
 
-```
-<the guard's own deny reason>
+**What this means for an operator today.** A hard-deny's message names the
+guard and the reason it fired, and nothing about the unlock channel at
+all — not a resolved path, not a filename shape, not even the fact that an
+in-session unlock exists. This doc (and, for the EM specifically on the
+allowlisted route-4 guards, `_GRANTABLE_GUARDS`) is the sole discoverability
+surface for the mechanism described in this section; nothing in a deny
+message points here any more. `guard_unlock_sentinel.py`'s own docstring
+carries a companion negative-spec: "Do NOT re-inline the sentinel's
+filename shape, its drop location, or the per-firing identifiers into any
+rendered deny/advisory text — this was tried (item 6) and reverted (item
+7)." A future edit reintroducing any rendered form must re-check it
+against `message_register._rules` B8 first, since that is what foreclosed
+the narrower form in item 9, not a stylistic preference.
 
-An in-session unlock exists for this guard, but it is a human-only affordance: it is granted by a human operator from a terminal outside this session, it cannot be granted by this agent, and creating it from inside the session is a doctrine violation, not a shortcut. The unlock takes the form of a file named "coordinator-guard-unlock-<session_id>.<guard_name>" in the platform's temp directory, built from session <session_id> and guard <guard_name> of this firing; ~/.coordinator-claude-settings/coordinator-claude/docs/wiki/ and docs/reference/guard-override-keys.md document the convention.
-```
-
-(2026-08-12) The example-doctrine-repo-source-tree pointer branch — and the process-lifetime-
-cached helper function that used to resolve it at render time — are both gone: the
-dedicated wiki page (`guard-unlock-channel.md`) never landed in example-doctrine-repo's seed
-set, so the settings-root pointer (`_SETTINGS_ROOT_WIKI_POINTER` in
-`guard_unlock_sentinel.py`) is now the only form, named unconditionally
-alongside this doc rather than selected at render time. The line also
-inlines the sentinel's filename shape directly (built from this firing's
-`session_id`/`guard_name`) rather than only pointing at where the shape is
-documented — the temp-directory portion of the path is still left for the
-operator to supply from platform knowledge, so this is not the fully
-assembled path either (same portability constraint as
-`_resolve_override_keys_doc_display`, § "Exact deny-message wording"'s
-sibling history in `bash_guards._helpers`).
-
-**The message supplies data; the wiki supplies shape — that division is the
-whole design.** `<session_id>` and `<guard_name>` above are the exact, bare
-values from this firing (never assembled into a path, never paired with an
-imperative) — this doc and the pending wiki page carry the fixed SHAPE
-(`<tempdir>/coordinator-guard-unlock-<session_id>.<guard_name>`, § "In-session
-unlock" below), which cannot vary per firing and so belongs on a static page;
-the two identifiers CAN only vary per firing, and so belong in the message,
-as data, not as part of any assembled path. Removing the identifiers (as an
-earlier draft of this fix did) makes the unlock effectively unreachable — no
-static page can ever render a value it doesn't have — so they stay; what
-came out of the message is only the ASSEMBLED path, the imperative, and the
-create-then-retry sequencing (see "Why the recipe was removed" below). A
-future edit must not collapse this back in either direction: folding the
-shape into the per-firing message re-creates the recipe; dropping the
-identifiers from the message re-creates the unreachability this paragraph
-exists to prevent.
-
-**Constructing the full sentinel path.** The deny message inlines the
-filename shape (`coordinator-guard-unlock-<session_id>.<guard_name>`) built
-from this firing's own `session_id`/`guard_name`, but not the temp-directory
-portion — the operator supplies that from platform knowledge (or the exact
-shape documented in § "In-session unlock" above:
-`<tempdir>/coordinator-guard-unlock-<session_id>.<guard_name>`) rather than
-having it handed over as a ready-to-paste absolute path.
-
-This block is appended at the two engine seams only — never hand-written
-into an individual guard module — so a guard added tomorrow inherits it for
-free (C4, docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md).
-
-**Why appended, not prepended (2026-08-11).** The original design put this
-block FIRST, ahead of the guard's own reason, on the theory that the
-in-session channel is the one usable without leaving the denied session.
-That theory held, but the execution didn't: four independently-dispatched
-agents in a sibling repo hit the (then-prepended) line and three classified
-it as prompt injection
-(`cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-banner-still-reads-
-as-agent-instruction.md`). An agent under a hard-deny reads top-to-bottom
-and acts on the first actionable thing it meets — and the old single-
-sentence form fused the disclaimer with a fully-resolved path, a bare
-imperative ("create ... FIRST"), and success-sequencing advice, all of
-which were actionable regardless of the disclaimer leading it. The fix: the
-guard's own "you are blocked, and why" text now leads unconditionally, and
-the unlock block trails it, separated by a blank line. Within the block the
-human-only-affordance statement still leads the bypass-naming sentence, and
-the block is de-imperativized and made explicitly self-limiting (states
-outright that this sentinel is created from a terminal outside the session
-and that an agent creating it is a doctrine violation) — the same
-self-limiting property `operator_override_note`'s own payload already has
-by construction (an in-session agent cannot act on a key that is unsettable
-from inside a running session either way, so its leading position never
-posed this problem).
-
-**Why the recipe was removed (2026-08-11, PM ruling).** Reordering the block
-(above) was not the whole fix — the appended block still handed the reader a
-working, fully-parameterized bypass recipe: the literal, ASSEMBLED sentinel
-path, plus the create-then-retry ordering fact framed as "how to make a
-combined call succeed." In the PM's own words, that is "here, take a bite
-out of this lovely apple," not an informational pointer. The unlock stays
-discoverable — it is documented in full here, and will be on the wiki once
-that page lands — but the deny message itself now only names that it
-exists and where to look, via an extra hop, never a ready-to-paste path.
-The two bare `session_id`/`guard_name` values were briefly removed along
-with the recipe in an earlier pass of this same fix, then reinstated as
-DATA (not recipe) once it became clear no static page could substitute for
-them — see the paragraph above.
-
-Both this block and `operator_override_note`'s line state the same
-human-only-affordance fact — plainly, not through a disclaimer register (the
-2026-08-11 reshape retired the old "Bypass options for a human operator, not
-this agent: ..." phrasing from both builders, since that framing was itself
-an injection tell, not a safeguard; see the note above § "Human-only
-affordances") — and a missing/unresolvable `session_id` (the fail-closed
-case) simply omits the in-session block rather than printing a sentinel path
-keyed to nothing.
+`operator_override_note`'s own per-guard pointer (the pre-launch env-var
+key table's rendering) is a **separate** mechanism from the in-session
+unlock block described above, and is unaffected by items 7-10: it still
+renders its one-line pointer to this doc on the routes that use it. Do not
+conflate the two — this section's history is about the in-session
+guard-unlock sentinel's block only.
 
 **What this channel does not claim.** A file in the temp directory is not
 cryptographically operator-only — an agent with shell access could write one.
@@ -353,10 +310,15 @@ test/mechanism:
    agent-invocable equivalent; it is not a tool call this suite's guards
    ever see.
 
-Net effect: an agent cannot self-grant any of the routes above. This doc's
-key table below therefore is not "how a subagent gets around a guard" — a
-subagent that reads it gains nothing actionable from it — it is a reference
-for the human operator deciding whether to intervene.
+Net effect, bounded rather than unqualified as of 2026-08-13: an agent
+cannot self-grant any of routes 1-3, and cannot self-grant route 4 either
+**except** that the EM specifically may self-grant route 4's sentinel for
+the guards named in `_GRANTABLE_GUARDS` (see route 4's own entry above and
+`DR-298`) — a dispatched subagent still cannot, for any guard, on any
+route. This doc's key table below therefore is not "how a subagent gets
+around a guard" — a subagent that reads it gains nothing actionable from
+it — it is a reference for the human operator, and, for the allowlisted
+route-4 guards only, the EM, deciding whether to intervene.
 
 ## Scope of the table below
 

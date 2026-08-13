@@ -267,6 +267,42 @@ def test_ac3_output_redirection_to_outside_repo_bumps(env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 2026-08-13 `/dev/null` redirect false-positive fix -- see
+# `_write_bump_sink_shapes._DEVNULL_TARGET`'s own docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_devnull_redirect_does_not_bump(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-devnull-1")
+    cmd = 'while pgrep -f "x" > /dev/null; do sleep 20; done'
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-1", str(env["anchor"]), {})
+
+    assert result is None
+
+
+def test_devnull_stderr_redirect_does_not_bump(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-devnull-2")
+    cmd = "grep foo bar 2>/dev/null"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-2", str(env["anchor"]), {})
+
+    assert result is None
+
+
+def test_devnull_redirect_plus_genuine_outside_write_still_bumps(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-devnull-3")
+    dest = env["outside"] / "compound.txt"
+    cmd = f"echo hi > /dev/null; cp {_posix(env['anchor'] / 'src.txt')} {_posix(dest)}"
+    (env["anchor"] / "src.txt").write_text("x\n", encoding="utf-8")
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-3", str(env["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+# ---------------------------------------------------------------------------
 # C4e (2026-08-07, guard-dialect-coverage.md row 15) -- PowerShell dialect
 # gate. This guard's write-sink verb table lives in `_write_bump_sink_
 # shapes.py`, outside C4e's owned-file scope -- see `check_bump_outside_

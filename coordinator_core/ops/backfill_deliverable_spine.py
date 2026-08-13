@@ -8,16 +8,26 @@ human-reviewable GROUPING REPORT, then (with ``write=True``) stamp
 reported (derive-at-emit) but NEVER written. Already-threaded artifacts
 (carrying ``deliverable_id``) are never re-minted.
 
-Corpus: handoff / plan / spinoff / roadmap / completion / sizing entities.
+Corpus: handoff / plan / spinoff / roadmap / completion / archived-spec / sizing entities.
     In scope:  state/handoffs/*.md   (active + spinoffs)
                archive/handoffs/**   (archived handoffs — immutable)
                docs/plans/*.md       (non-sidecar plans)
                archive/completed/**  (completion entries — immutable)
+               archive/specs/**      (archived specs, moved there by
+                                       ``fleet.archive_plans`` — MUTABLE, unlike
+                                       archive/handoffs and archive/completed; a
+                                       mint-where-absent leg, never a migration
+                                       of an existing id)
                state/roadmap/**/OVERVIEW.md  (roadmaps)
                docs/ROADMAP.md
                state/sizings/*.yaml  (whole-document YAML, no frontmatter fence — see
                                        ``read_yaml_document``)
     Out of scope: lessons, backlogs, memos, decisions, wiki, tasks/, templates/
+
+    A fourth, orthogonal leg mints ``plan_id`` (``pln-<slug>-<6hex>``, per-file
+    identity, never shared across a group the way ``deliverable_id`` is) onto
+    ``docs/plans/*.md`` and ``archive/specs/**`` records lacking one. See
+    ``extract_plan_id`` / ``_mint_plan_id`` / ``run_plan_id_leg``.
 
 Grouping key:
     Plans / handoffs / spinoffs: ``workstream:`` frontmatter field.
@@ -163,9 +173,13 @@ Sizing corpus extension (C5, this module's second parser class):
     threaded).
 
     Backfilling the live `state/sizings/` corpus (an actual `--write` run
-    over it) is out of scope for this plan entirely (example-doctrine-repo asked for the
-    capability, not the run) — this module enumerates and groups the corpus
-    but nothing invokes `--write` against it here.
+    over it) WAS out of scope for an earlier plan (example-doctrine-repo asked for the
+    capability, not the run, at that time) — a later plan
+    (docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C2)
+    explicitly re-scopes it back in: 148 of 266 sizings measured lacking a
+    `deliverable_id` are backfilled by an ordinary `--write` run the same as
+    any other in-scope corpus member, via the existing sizing-only-group
+    `AC6` write-pass branch below.
 
 Write scoping (`--only-kind`):
     `--write` is corpus-wide by construction: the named-group write set on
@@ -344,6 +358,25 @@ def extract_deliverable_id(path: str, artifact_class: str) -> str:
     return extract_fm_field(path, "deliverable_id")
 
 
+def extract_plan_id(path: str, artifact_class: str) -> str:
+    """`plan_id` for `path`, dispatched by `artifact_class` — mirrors
+    `extract_deliverable_id`'s shape/dispatch exactly (see that function's
+    docstring for why a sizing must route through `read_yaml_document`
+    rather than the fence-scanning `extract_fm_field`). The `plan_id` leg
+    itself only ever walks `docs/plans/`/`archive/specs/` (see
+    `run_plan_id_leg`), but this helper stays fully dispatched for parity
+    with its sibling and to avoid a silent "" on a future caller that does
+    pass a sizing path.
+    """
+    if artifact_class == "sizing":
+        doc = read_yaml_document(path)
+        val = doc.get("plan_id")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        return ""
+    return extract_fm_field(path, "plan_id")
+
+
 def is_immutable_path(path: str) -> bool:
     """True when `path` lives in an immutable archive path (never written)."""
     norm = path.replace(os.sep, "/")
@@ -384,7 +417,7 @@ def is_sidecar_plan(path: str) -> bool:
 
 
 def classify_artifact(path: str) -> str:
-    """Artifact class: plan | handoff | handoff-archived | completion | roadmap | sizing | unknown."""
+    """Artifact class: plan | handoff | handoff-archived | completion | archived-spec | roadmap | sizing | unknown."""
     norm = path.replace(os.sep, "/")
     if "/docs/plans/" in norm and norm.endswith(".md"):
         return "plan"
@@ -394,6 +427,8 @@ def classify_artifact(path: str) -> str:
         return "handoff-archived"
     if "/archive/completed/" in norm:
         return "completion"
+    if "/archive/specs/" in norm and norm.endswith(".md"):
+        return "archived-spec"
     if norm.endswith("/docs/ROADMAP.md"):
         return "roadmap"
     if "/state/roadmap/" in norm and norm.endswith("/OVERVIEW.md"):
@@ -557,6 +592,15 @@ def enumerate_corpus(coordinator_root: str) -> List[str]:
             corpus.append(f)
 
     corpus.extend(_list_md_files(os.path.join(coordinator_root, "archive", "completed"), recursive=True))
+    # archive/specs/** is `fleet.archive_plans` relocating whole plan
+    # families — including their sidecar review artifacts
+    # (.prior-art-check.md / .plan-coverage-check.md / etc). Those sidecars
+    # are excluded here exactly as `is_sidecar_plan` already excludes them
+    # from `docs/plans/*.md` above — a sidecar is not itself a plan-shaped
+    # artifact warranting its own deliverable_id/plan_id.
+    for f in _list_md_files(os.path.join(coordinator_root, "archive", "specs"), recursive=True):
+        if not is_sidecar_plan(f):
+            corpus.append(f)
     corpus.extend(_find_named(os.path.join(coordinator_root, "state", "roadmap"), "OVERVIEW.md"))
 
     roadmap_doc = os.path.join(coordinator_root, "docs", "ROADMAP.md")
@@ -688,6 +732,34 @@ def _rel(path: str, coordinator_root: str) -> str:
         return path
 
 
+def _derive_sizing_slug(path: str) -> str:
+    """Own-slug for a sizing (C2-leg3): a sizing has no `workstream:`/plan
+    group to derive an id FROM when it is UNKEYED (no citing plan), so an
+    unkeyed sizing mints a STANDALONE `deliverable_id` off its own slug
+    instead — mirrors `_derive_plan_slug`'s own "slug field, else filename
+    minus date prefix" fallback, since no sizing record in this corpus
+    carries a `slug:` field today (checked empirically), only the
+    date-prefixed filename.
+    """
+    doc = read_yaml_document(path)
+    slug = doc.get("slug")
+    if isinstance(slug, str) and slug.strip():
+        return slug.strip()
+    base = os.path.basename(path)
+    if base.endswith(".yaml"):
+        base = base[: -len(".yaml")]
+    return _DATE_PREFIX_RE.sub("", base)
+
+
+def _propose_unkeyed_sizing_id(path: str) -> str:
+    """Dry-run-only preview string for a standalone unkeyed-sizing mint —
+    parallels `_propose_id`'s hex-mint preview but keyed off the sizing's
+    OWN slug (`_derive_sizing_slug`), never a workstream string."""
+    slug = _derive_sizing_slug(path)
+    ws_slug = re.sub(r"[^a-zA-Z0-9_-]", "-", slug)[:40]
+    return f"dlv-{ws_slug}-??????  [standalone, minted from own slug at --write time]"
+
+
 def _propose_id(ws_key: str, gfiles: List[str]) -> str:
     """Dry-run-only preview string — never a real mint (no `mint()` call).
 
@@ -734,17 +806,22 @@ def _find_group_id(gfiles: List[str], ws_key: str, out: IO[str], err: IO[str]) -
     return group_id
 
 
-def _stamp_file(path: str, deliverable_id: str) -> bool:
-    """Atomically inject `deliverable_id: <id>` after the opening `---` fence.
+def _stamp_file(path: str, deliverable_id: str, field_name: str = "deliverable_id") -> bool:
+    """Atomically inject `<field_name>: <value>` after the opening `---` fence.
 
     Faithful port of the oracle's awk injection: insert once, immediately
-    after the first `---` line; drop any pre-existing `deliverable_id:` line
+    after the first `---` line; drop any pre-existing `<field_name>:` line
     inside the first frontmatter block (idempotency guard — should not exist
     given the caller's already-threaded exclusion, but kept for parity).
+
+    `field_name` defaults to `"deliverable_id"` (the oracle's only field);
+    the `plan_id` leg (C2) reuses this same injection point with
+    `field_name="plan_id"` rather than duplicating the fence-scan logic.
     """
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         lines = fh.readlines()
 
+    prefix = f"{field_name}:"
     out_lines: List[str] = []
     fence_count = 0
     injected = False
@@ -754,10 +831,10 @@ def _stamp_file(path: str, deliverable_id: str) -> bool:
             fence_count += 1
             out_lines.append(line)
             if fence_count == 1 and not injected:
-                out_lines.append(f"deliverable_id: {deliverable_id}\n")
+                out_lines.append(f"{field_name}: {deliverable_id}\n")
                 injected = True
             continue
-        if fence_count == 1 and stripped.startswith("deliverable_id:"):
+        if fence_count == 1 and stripped.startswith(prefix):
             continue
         out_lines.append(line)
 
@@ -970,6 +1047,124 @@ def _stamp_deliverable_id(path: str, artifact_class: str, deliverable_id: str, r
     return _stamp_file(path, deliverable_id)
 
 
+# ---------------------------------------------------------------------------
+# unit 4b — plan_id leg (C2, fourth leg): per-file identity, no grouping.
+# `plan_id` is minted per-plan off that plan's OWN slug ("pln-<slug>-<6hex>",
+# schema: plan.schema.json § plan_id), never shared across a workstream group
+# the way `deliverable_id` is — so this leg needs none of unit 3's
+# grouping/ambiguity machinery.
+# ---------------------------------------------------------------------------
+
+
+def _mint_plan_id(slug: str) -> str:
+    """Mint a `pln-<slug>-<6hex>` plan_id.
+
+    Deliberately NOT `mint_deliverable_id.mint()` — that function's slug path
+    hardcodes the `dlv-` prefix (see its own module docstring); a `plan_id`
+    is a distinct namespace (`pln-`) per `plan.schema.json`'s `plan_id`
+    field. Same hash recipe as `mint()`'s slug path (slug + wall-clock
+    seconds + pid + a random component -> sha1 -> first 6 hex chars) for
+    uniqueness parity — not cryptographic, matching that function's own
+    documented caveat.
+    """
+    import hashlib  # noqa: PLC0415 — function-local, mirrors this module's other deferred imports
+    import random  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    hash_input = f"{slug}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
+    six_hex = hashlib.sha1(hash_input.encode("utf-8")).hexdigest()[:6]
+    return f"pln-{slug}-{six_hex}"
+
+
+_PLAN_ID_CLASSES = ("plan", "archived-spec")
+
+# `is_sidecar_plan`'s suffix list is a documented, deliberately
+# non-exhaustive port of the bash oracle (see this module's docstring
+# negative-spec) — a newer sidecar-naming convention invented after that
+# port landed (e.g. `<reviewer-name>-review.md`, such as
+# `.sonnet-review.md`) is silently NOT excluded by it, and that function is
+# never touched to "catch up" (byte-parity is load-bearing for the other
+# legs' corpus enumeration and grouping behaviour). The plan_id leg has no
+# workstream/grouping fallback to accidentally shield such a sidecar the
+# way the deliverable_id legs' "no workstream -> skip" path does, so it
+# needs its own narrow, leg-local generalization of that naming family.
+_REVIEW_SIDECAR_RE = re.compile(r"\.[A-Za-z0-9]+-review\.md$")
+
+
+@dataclass
+class _PlanIdLegResult:
+    population_lacking: int = 0
+    stamped: int = 0
+    write_failed: int = 0
+
+
+def run_plan_id_leg(
+    corpus: List[str],
+    coordinator_root: str,
+    mode: str,
+    out: IO[str],
+    err: IO[str],
+) -> _PlanIdLegResult:
+    """Mint-where-absent `plan_id` onto `docs/plans/`/`archive/specs/` records.
+
+    Never-re-mint (carry rule D1), same as every other leg: a file already
+    carrying a real `plan_id` is skipped before anything else runs. No
+    grouping/ambiguity concept applies here — `plan_id` is per-file identity,
+    not shared across a workstream group.
+    """
+    result = _PlanIdLegResult()
+    print("", file=out)
+    print("-" * 60, file=out)
+    print("PLAN_ID LEG (C2, fourth leg)", file=out)
+    print("-" * 60, file=out)
+
+    for f in corpus:
+        artifact_class = classify_artifact(f)
+        if artifact_class not in _PLAN_ID_CLASSES:
+            continue
+
+        if is_sidecar_plan(f):
+            continue
+
+        if _REVIEW_SIDECAR_RE.search(os.path.basename(f)):
+            continue
+
+        if artifact_class == "plan" and not _DATE_PREFIX_RE.match(os.path.basename(f)):
+            # Undated `docs/plans/` document (INDEX.md, README.md,
+            # config-slash-*.md, ...) — not a real plan record, never mint.
+            continue
+
+        existing = extract_plan_id(f, artifact_class)
+        if existing:
+            continue
+
+        result.population_lacking += 1
+        rel = _rel(f, coordinator_root)
+
+        if mode != "write":
+            print(f"  [would-mint] {rel}  (lacks plan_id)", file=out)
+            continue
+
+        slug = _derive_plan_slug(f)
+        plan_id = _mint_plan_id(slug)
+        landed = _stamp_file(f, plan_id, field_name="plan_id")
+        if landed:
+            print(f"  [stamp] {rel}  -> {plan_id}", file=out)
+            result.stamped += 1
+        else:
+            print(f"  [skip-write-failed] {rel}  (write refused — see stderr)", file=out)
+            result.write_failed += 1
+
+    print("", file=out)
+    print("PLAN_ID LEG SUMMARY:", file=out)
+    print(f"  Lacking plan_id:    {result.population_lacking}", file=out)
+    if mode == "write":
+        print(f"  Stamped:            {result.stamped}", file=out)
+        if result.write_failed:
+            print(f"  Write failures:     {result.write_failed}", file=out)
+    return result
+
+
 def _emit_report(
     coordinator_root: str,
     mode: str,
@@ -1066,15 +1261,17 @@ def _emit_report(
         print("UNKEYED SIZINGS (no citing plan)", file=out)
         print("  A sizing with no plan citing it via `sizing_object:` — or", file=out)
         print("  whose citing plan has no `deliverable_id` of its own yet —", file=out)
-        print("  has nothing to inherit and therefore no grouping key.", file=out)
-        print("  Distinct from UNKNOWN and from `ambiguous` — this is not a", file=out)
-        print("  defect, and no synthetic key is invented for it. Report-only", file=out)
-        print("  in this run.", file=out)
+        print("  has nothing to inherit and therefore no shared group key.", file=out)
+        print("  Distinct from UNKNOWN and from `ambiguous` — no synthetic", file=out)
+        print("  GROUP key is invented for it. Each such sizing instead mints", file=out)
+        print("  its OWN standalone deliverable_id at --write time, derived", file=out)
+        print("  from the sizing's own slug (C2-leg3).", file=out)
         print("  Artifacts:", file=out)
         for sf in result.group_files[_UNKEYED_SIZING_GROUP_KEY]:
             sf_class = classify_artifact(sf)
             sf_rel = _rel(sf, coordinator_root)
-            print(f"    [{sf_class}] {sf_rel}  (unkeyed — no citing plan, skip)", file=out)
+            proposed = _propose_unkeyed_sizing_id(sf)
+            print(f"    [{sf_class}] {sf_rel}  (unkeyed — would mint: {proposed})", file=out)
         print("", file=out)
 
     if ambiguous_keys:
@@ -1124,15 +1321,20 @@ Purpose: Group the board-relevant artifact corpus by workstream, emit a human-
          at-emit) but NEVER written. Already-threaded artifacts (carrying
          deliverable_id) are never re-minted.
 
-Corpus: handoff / plan / spinoff / roadmap / completion / sizing entities.
+Corpus: handoff / plan / spinoff / roadmap / completion / archived-spec / sizing entities.
   In scope:  state/handoffs/*.md   (active + spinoffs)
              archive/handoffs/**   (archived handoffs — immutable)
              docs/plans/*.md       (non-sidecar plans)
              archive/completed/**  (completion entries — immutable)
+             archive/specs/**      (archived specs — MUTABLE, mint-where-absent)
              state/roadmap/**/OVERVIEW.md  (roadmaps)
              docs/ROADMAP.md
              state/sizings/*.yaml  (whole-document YAML, no frontmatter fence)
   Out of scope: lessons, backlogs, memos, decisions, wiki, tasks/, templates/
+
+  A fourth leg additionally mints plan_id (pln-<slug>-<6hex>, per-file) onto
+  docs/plans/*.md and archive/specs/** records lacking one, reported as a
+  separate PLAN_ID LEG count — never summed with the deliverable_id counts.
 
 Usage:
   backfill-deliverable-spine [--dry-run] [--root <coordinator-root>]
@@ -1142,7 +1344,8 @@ Usage:
                               artifact class(es) (repeatable) — does not filter
                               enumeration, grouping, or the report. Accepted:
                               plan, handoff, handoff-archived, completion,
-                              roadmap, sizing.
+                              archived-spec, roadmap, sizing. Does not scope
+                              the plan_id leg, which is unconditional.
 
 Exit codes:
   0 — clean (no ambiguities; write applied or dry-run report emitted)
@@ -1165,7 +1368,7 @@ def main(
     mode = "dry-run"
     root_override: Optional[str] = None
     only_kind: List[str] = []
-    _VALID_KINDS = ("plan", "handoff", "handoff-archived", "completion", "roadmap", "sizing")
+    _VALID_KINDS = ("plan", "handoff", "handoff-archived", "completion", "archived-spec", "roadmap", "sizing")
 
     i = 0
     while i < len(argv):
@@ -1244,6 +1447,7 @@ def main(
     _emit_report(coordinator_root, mode_label, result, ambiguous_keys, metrics, out, ambiguous_sizing_refs)
 
     total_ambiguous = len(ambiguous_keys) + len(ambiguous_sizing_refs)
+    write_failed = 0
 
     if mode == "write":
         if total_ambiguous:
@@ -1258,6 +1462,7 @@ def main(
         print("-" * 60, file=out)
 
         stamped = 0
+        stamped_unkeyed_sizing = 0
         skipped_immutable = 0
         skipped_unknown = 0
         skipped_out_of_scope = 0
@@ -1371,25 +1576,65 @@ def main(
                     skipped_unknown += 1
 
         if _UNKEYED_SIZING_GROUP_KEY in result.group_files:
+            # C2-leg3: an unkeyed sizing (no citing plan, so no shared
+            # workstream GROUP to derive an id FROM) is not left un-mintable
+            # — it mints its OWN standalone deliverable_id off its own slug
+            # via `mint(slug=...)`'s existing slug arm (never a second
+            # minting function). Each file mints independently — there is no
+            # group here, unlike the named-groups loop above.
             for sf in result.group_files[_UNKEYED_SIZING_GROUP_KEY]:
-                print(
-                    f"  [skip-unkeyed-sizing] {_rel(sf, coordinator_root)}  (no citing plan — cannot assign id)",
-                    file=out,
-                )
-                skipped_unknown += 1
+                sf_class = classify_artifact(sf)  # always "sizing"
+
+                existing_id = extract_deliverable_id(sf, sf_class)
+                if existing_id:
+                    print(
+                        f"  [skip-threaded] {_rel(sf, coordinator_root)}  (already has id: {existing_id})",
+                        file=out,
+                    )
+                    continue
+
+                if only_kind and sf_class not in only_kind:
+                    print(
+                        f"  [skip-out-of-scope] {_rel(sf, coordinator_root)}  (class: {sf_class}, not in --only-kind scope)",
+                        file=out,
+                    )
+                    skipped_out_of_scope += 1
+                    continue
+
+                slug = _derive_sizing_slug(sf)
+                sizing_id, _label = _mint(slug=slug)
+                print(f"  [mint-unkeyed] {_rel(sf, coordinator_root)} -> {sizing_id}", file=out)
+                landed = _stamp_deliverable_id(sf, sf_class, sizing_id, coordinator_root)
+                if landed:
+                    print(f"  [stamp] {_rel(sf, coordinator_root)}  -> {sizing_id}", file=out)
+                    stamped_unkeyed_sizing += 1
+                else:
+                    print(
+                        f"  [skip-write-failed] {_rel(sf, coordinator_root)}  (write refused — see stderr)",
+                        file=out,
+                    )
+                    write_failed += 1
 
         print("", file=out)
         print("WRITE COMPLETE:", file=out)
-        print(f"  Stamped:            {stamped}", file=out)
-        print(f"  Skipped (immutable): {skipped_immutable}", file=out)
-        print(f"  Skipped (unknown):   {skipped_unknown}", file=out)
+        print(f"  Stamped:                  {stamped + stamped_unkeyed_sizing}", file=out)
+        print(f"  Stamped (named groups):   {stamped}", file=out)
+        print(f"  Stamped (unkeyed sizings): {stamped_unkeyed_sizing}", file=out)
+        print(f"  Skipped (immutable):      {skipped_immutable}", file=out)
+        print(f"  Skipped (unknown):        {skipped_unknown}", file=out)
         if only_kind:
-            print(f"  Skipped (out-of-scope): {skipped_out_of_scope}", file=out)
+            print(f"  Skipped (out-of-scope):   {skipped_out_of_scope}", file=out)
         if write_failed:
-            print(f"  Write failures:     {write_failed}", file=out)
+            print(f"  Write failures:           {write_failed}", file=out)
 
-        if write_failed:
-            return 4
+    # plan_id leg (C2, fourth leg) — per-file identity, no grouping/ambiguity
+    # concept, reported as its OWN separate count (never summed with the
+    # deliverable_id populations above — a sizing/plan/archived-spec are
+    # different lifecycles per AC2).
+    plan_id_leg = run_plan_id_leg(corpus, coordinator_root, mode, out, err)
+
+    if write_failed or plan_id_leg.write_failed:
+        return 4
 
     if total_ambiguous:
         return 2

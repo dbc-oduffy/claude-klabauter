@@ -255,6 +255,7 @@ def test_deferral_detect_partial_strangle_has_common_dir_scope():
 _BUDGET_OVERRIDES = {
     "cartography.tree": 105,
     "cartography.edges": 89,
+    "cartography.op_edges": 89,
     "cartography.count_references": 106,
     "cartography.chunk_table": 74,
 }

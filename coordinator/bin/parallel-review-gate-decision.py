@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """parallel-review-gate-decision.py — gate-decision assembler for the weekly
 parallel-code-review gate (example-doctrine-repo coordinator/skills/parallel-code-review/

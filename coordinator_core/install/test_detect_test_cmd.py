@@ -186,7 +186,8 @@ def test_upsert_preserves_permission_bits(tmp_path):
     # comparing against whatever mode chmod actually produced on this
     # platform, rather than asserting the literal POSIX octal.
     md = _local_md(tmp_path)
-    os.chmod(md, 0o755)
+    if os.name != "nt":
+        os.chmod(md, 0o755)
     mode_before = stat.S_IMODE(os.stat(md).st_mode)
     upsert_frontmatter_key(md, "fast_test_cmd", "pytest")
     mode_after = stat.S_IMODE(os.stat(md).st_mode)

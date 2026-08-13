@@ -106,14 +106,36 @@ def _same_path(a: str, b: str) -> bool:
 
 
 def _machine_local_get(key: str) -> Optional[str]:
-    """Best-effort `machine-local get <key>` subprocess call; None on any failure."""
+    """Best-effort `machine-local get <key>` subprocess call; None on any failure
+    or when `machine-local` is not resolvable on PATH.
+
+    `machine-local` is an extensionless coordinator/bin sibling -- a bare-path
+    launch depends on the target's own shebang + exec bit, which is not
+    guaranteed once C4 strips coordinator/bin/*.py shebangs. Resolve the full
+    path via PATH search first, then launch through an interpreter:
+    `resolve_launchable()` on Windows (its `.cmd`-twin preference and shebang
+    sniffing are load-bearing on this repo's P0 primary platform), a direct
+    `sys.executable` prefix on POSIX (`resolve_launchable()` is POSIX-bare by
+    design and is not the fix for this bug class).
+    """
+    import shutil
     import subprocess
 
+    from coordinator_core import launchable
     from coordinator_core.win_portability import no_console_creationflags
+
+    ml_bin = shutil.which("machine-local")
+    if ml_bin is None:
+        return None
+
+    if launchable._is_windows():
+        ml_argv = launchable.resolve_launchable(ml_bin)
+    else:
+        ml_argv = [sys.executable, ml_bin]
 
     try:
         result = subprocess.run(
-            ["machine-local", "get", key],
+            [*ml_argv, "get", key],
             capture_output=True,
             text=True,
             timeout=5,

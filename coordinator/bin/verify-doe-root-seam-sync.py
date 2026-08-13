@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """verify-doe-root-seam-sync.py — verify (or fix) that every cold-path `.doe-root`
 literal READ in the coordinator corpus is durable-first (DR-072): it must try
 the settings-home pointer

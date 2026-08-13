@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """workday_ceremony_lib — shared helpers for the workday-ceremony Python entrypoints.
 
 Consumed by the native ports of the four /workday-{start,complete} ceremony step

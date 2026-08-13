@@ -33,6 +33,19 @@
 #   claim-artifact <class> <basename> [baton_repo_root] -> claims.claim_artifact(...)
 #   release-artifact <class> <basename> [baton_repo_root] -> claims.release_artifact(...)
 #   clear-claim-if-dead <class> <basename> [baton_repo_root] -> claims.clear_claim_if_dead(...)
+#     AC5 (docs/plans/2026-08-13-liveness-stops-conflating-dead-with-
+#     elsewhere.md): for the three classed forms (handoff/memo/plan — NOT
+#     the artifact/path-touch plane), a target that cannot be found is
+#     self-diagnosing rather than silent. Before dispatching, the CLI
+#     resolves the SAME claim directory claims.clear_claim_if_dead itself
+#     resolves (core.sessions_dir — the identical public path-arithmetic,
+#     never a second parser) and, if absent, emits a stderr note naming the
+#     class/basename/path looked up and stating plainly this is NOT a
+#     refusal, plus a hint when basename ends in ".md" (the claim key
+#     carries no extension). Exit code is UNCHANGED (idempotent no-op ->
+#     0, same as before) — the note is additive output only, distinct in
+#     BOTH output and exit code from a live-holder refusal (which prints
+#     "refusing to clear claim ... holder is live" and exits 1).
 #   claim-plan <slug> -> claims.claim_plan(slug)
 #   list-claims-by-session <sid> [cwd] -> claims.list_claims_by_session(sid, cwd)
 #     stdout: one line per match, TAB-delimited "<class>-claims\t<basename>"
@@ -44,20 +57,28 @@
 #                 list-stale-claim-handoffs.
 #     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError).
 #   is-session-live <SID> [cwd] -> liveness.session_live(SID, cwd)
-#     stdout line 1: exactly one word — "live" | "dead" | "indeterminate".
-#       UNCHANGED position/spelling from before liveness_basis was added
-#       (AC9) — an existing caller that parses only this first token/line
-#       sees no difference.
-#     stdout line 2 (live/dead verdicts ONLY, i.e. exit 0 or exit 1 below):
+#     stdout line 1: exactly one word — "live" | "live-elsewhere" | "dead" |
+#       "indeterminate". "live" | "dead" | "indeterminate" are UNCHANGED
+#       position/spelling from before liveness_basis was added (AC9) — an
+#       existing caller that parses only this first token/line sees no
+#       difference. "live-elsewhere" (Review: staff-eng-review, C1's ripple)
+#       is the exit-1 arm's basis carrying "harness-registry-elsewhere": the
+#       session has no dir in THIS repo but the harness registry confirms it
+#       live in another one — printing "dead" over that basis reproduced
+#       this plan's own Problem statement in this CLI.
+#     stdout line 2 (live/dead/live-elsewhere verdicts ONLY, i.e. exit 0 or
+#       exit 1 below):
 #       "liveness_basis:<value>", where <value> is holder_evidence.
 #       liveness_basis()'s vocabulary ("harness-registry" | "stable-pid" |
-#       "recency-window" | "recency-window-mtime" | "unknown") — additive
-#       output (AC7/AC8), never emitted on the malformed-SID or transport-
-#       failure paths since those carry no decided verdict to attach a basis
-#       to. A basis-derivation failure degrades to "unknown" on this line;
-#       it never changes the line-1 token or the exit code.
+#       "recency-window" | "recency-window-mtime" | "harness-registry-
+#       elsewhere" | "unknown") — additive output (AC7/AC8), never emitted
+#       on the malformed-SID or transport-failure paths since those carry no
+#       decided verdict to attach a basis to. A basis-derivation failure
+#       degrades to "unknown" on this line; it never changes the line-1
+#       token or the exit code.
 #     exit 0   -> live.
-#     exit 1   -> NOT live (dead) — a determinate "confirmed dead" verdict.
+#     exit 1   -> NOT live in THIS repo (dead, or live-elsewhere) — see line
+#                 1 to distinguish; exit code is UNCHANGED for compat.
 #     exit 2   -> usage error (missing SID arg).
 #     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError),
 #                 OR liveness.session_live itself raised unexpectedly (e.g.
@@ -137,6 +158,7 @@ convention as archive-stamp-cli)."""
 
 import os
 import sys
+from pathlib import Path
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
@@ -175,6 +197,21 @@ def _import_stale_claims_module():
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     import coordinator_core.session.stale_claims as _mod
+
+    return _mod
+
+
+def _import_core_module():
+    """Separate seam from ``_import_module`` (claims) so
+    ``clear-claim-if-dead``'s not-found precheck (AC5) can be stubbed
+    independently in tests, mirroring the per-functional-area seam split
+    above. Only reads ``core.sessions_dir`` — the SAME public path-arithmetic
+    ``claims.clear_claim_if_dead`` itself calls, never a second liveness
+    parser."""
+    claude_klabauter_root = _resolve_claude_klabauter_root()
+    if claude_klabauter_root not in sys.path:
+        sys.path.insert(0, claude_klabauter_root)
+    import coordinator_core.session.core as _mod
 
     return _mod
 
@@ -273,6 +310,59 @@ def _usage(prog: str) -> int:
 
 def _bool_to_exit(result: bool) -> int:
     return 0 if result else 1
+
+
+# AC5 — clear-claim-if-dead's classed forms (mkdir-based claim-record store,
+# NOT the artifact/path-touch plane, which is a different lookup entirely).
+_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan")
+
+
+def _clear_claim_lookup_dir(class_: str, basename: str, baton_repo_root: str):
+    """Best-effort resolution of the SAME claim directory
+    ``claims.clear_claim_if_dead`` will inspect, so the CLI can tell a caller
+    what was looked up and under which key BEFORE the call, when that
+    directory turns out not to exist (AC5). Mirrors ``clear_claim_if_dead``'s
+    own base resolution byte for byte — ``core.sessions_dir`` is the SAME
+    public path-arithmetic function that module already calls, so this is
+    not a second parser of anything liveness-shaped, just the identical
+    directory-join claims.py performs.
+
+    Returns ``None`` on ANY resolution failure (bad/absent baton root,
+    unresolvable sessions dir, transport failure) — callers MUST treat
+    ``None`` as "skip the not-found precheck", never as evidence either way;
+    ``claims.clear_claim_if_dead`` itself remains the sole authority on the
+    actual outcome.
+    """
+    try:
+        if baton_repo_root:
+            if not (Path(baton_repo_root) / ".git").is_dir():
+                return None
+            base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
+        else:
+            base = _import_core_module().sessions_dir(None)
+        if not base:
+            return None
+        return Path(base) / f"{class_}-claims" / basename
+    except Exception:  # noqa: BLE001 - best-effort diagnostic only, see docstring
+        return None
+
+
+def _emit_clear_claim_not_found_note(class_: str, basename: str, claim_dir) -> None:
+    """AC5: the basename convention is part of the trap — the claim key
+    carries no ``.md`` while a caller naturally holds a path that does. Name
+    what was looked up and under which key, so a wrong basename is
+    self-diagnosing rather than silent. The distinction from a refusal is
+    already carried by exit 0 vs exit 1 and by the refusal's own distinct
+    message; asserting it in prose is a message-register violation (Review:
+    staff-eng-review, docs/wiki/guard-messaging.md B1/B2) and is not
+    repeated here."""
+    note = (
+        f"session-claim-cli: clear-claim-if-dead: no claim at {claim_dir} "
+        f"(class {class_!r} basename {basename!r})"
+    )
+    if basename.endswith(".md"):
+        note += " — claim keys carry no '.md' extension"
+    print(note, file=sys.stderr)
 
 
 def _call_claim_bool(subcmd: str, fn, *args) -> int:
@@ -377,6 +467,10 @@ def _dispatch(argv: list[str]) -> int:
             return _usage("session-claim-cli clear-claim-if-dead <class> <basename> [baton_repo_root]")
         class_, basename = rest[0], rest[1]
         baton_repo_root = rest[2] if len(rest) > 2 else ""
+        if class_ in _CLASSED_CLAIM_CLASSES:
+            claim_dir = _clear_claim_lookup_dir(class_, basename, baton_repo_root)
+            if claim_dir is not None and not claim_dir.is_dir():
+                _emit_clear_claim_not_found_note(class_, basename, claim_dir)
         return _call_claim_bool("clear-claim-if-dead", mod.clear_claim_if_dead, class_, basename, baton_repo_root)
 
     if subcmd == "claim-plan":
@@ -429,8 +523,19 @@ def _dispatch(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return _TRANSPORT_FAIL
-        print("live" if live else "dead")
-        print(f"liveness_basis:{_liveness_basis_for(sid, cwd)}")
+        basis = _liveness_basis_for(sid, cwd)
+        # Review: staff-eng-review — a live-elsewhere peer has no session
+        # dir in this repo, so `live` is False here (AC1, session_live's
+        # boolean is untouched); printing "dead" over that basis reproduces
+        # this plan's own Problem statement in this sibling CLI. "dead" is
+        # reserved for every OTHER not-live basis.
+        if live:
+            print("live")
+        elif basis == "harness-registry-elsewhere":
+            print("live-elsewhere")
+        else:
+            print("dead")
+        print(f"liveness_basis:{basis}")
         return 0 if live else _NOT_LIVE
 
     if subcmd == "who-claims-path":

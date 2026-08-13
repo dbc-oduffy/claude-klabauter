@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_reap_orphaned_in_flight_handoffs.py — path-scoped tests for
 reap-orphaned-in-flight-handoffs.py's C13 batching fix.
 

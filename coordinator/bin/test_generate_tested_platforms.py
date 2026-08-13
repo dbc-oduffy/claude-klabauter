@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_generate_tested_platforms.py — tests for coordinator/bin/generate-tested-platforms.
 
 Drives the generator end-to-end against a scratch repo fixture (temp dir with its

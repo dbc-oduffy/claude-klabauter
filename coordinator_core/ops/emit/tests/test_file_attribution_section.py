@@ -17,6 +17,21 @@ ephemeral paths are excluded from ``file_attributions`` AND counted/visible as a
 dropped. Windows-shaped inputs (drive letters, backslashes, mixed separators, sibling-repo
 prefix collisions) are covered directly at the ``_relativize_or_exclude`` unit level so the
 containment logic is exercised the same way regardless of the host OS running the suite.
+
+F2b (break-class): a producer-side bug strips path separators before emitting
+``file_path``, so a Windows-absolute path can arrive as a drive letter glued directly to a
+separator-less rest-of-path (e.g. a mangled ``<drive>:somedirfile.py``). The old
+``_WINDOWS_DRIVE_RE`` required a separator right after the colon and missed this shape
+entirely, so it fell through the POSIX branch and F2 waved it through unchanged. These
+tests assert the widened regex now routes it into exclusion instead.
+
+F4 (break-class): the producer's own ``(session_id, file_path)`` aggregation runs BEFORE
+this porter's F2 relativization, so two producer rows that relativize to the identical
+path are distinct producer keys and both survive unmerged — a duplicate natural key in the
+emitted array, sometimes with conflicting attribute values. These tests assert
+``_merge_duplicate_key_records``'s per-field merge rule: counts sum, line deltas sum
+null-aware, honesty markers take the worst case, and ``last_operation`` prefers non-null
+then edit-class then input order.
 """
 
 from __future__ import annotations
@@ -29,8 +44,12 @@ import pytest
 
 from coordinator_core.ops.emit.sections.file_attribution import (
     _PRODUCER_TIMEOUT_SECONDS,
+    _merge_duplicate_key_records,
+    _merge_last_operation,
+    _null_aware_sum,
     _relativize_or_exclude,
     _run_producer,
+    _worst_marker,
     collect,
 )
 
@@ -429,3 +448,224 @@ def test_relativize_windows_shaped_unc_out_of_repo():
         Path(r"\\server\share\claude-klabauter"),
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# F2b — drive-relative (separator-stripped) Windows paths are excluded, not
+# waved through as "already repo-relative". Regression coverage for the guard
+# gap that would have missed the 76 mangled rows on the 2026-08-10 emission.
+# ---------------------------------------------------------------------------
+
+def test_relativize_drive_relative_no_separator_is_excluded():
+    """A drive letter glued directly to the rest of the path, with every separator
+    stripped (the confirmed producer-side bug shape), must be excluded rather than
+    passed through as POSIX-relative."""
+    result = _relativize_or_exclude(
+        "C:Usersxclaude_klabautercoordinator_coresome_file.py",
+        Path(r"C:\Users\x\claude-klabauter"),
+    )
+    assert result is None
+
+
+def test_relativize_drive_relative_no_separator_is_excluded_other_drive_letter():
+    result = _relativize_or_exclude(
+        "X:claude_klabautercoordinator_coreops.py",
+        Path(r"C:\Users\x\claude-klabauter"),
+    )
+    assert result is None
+
+
+def test_collect_drive_relative_path_is_excluded_and_counted(tmp_path):
+    """End-to-end: a mangled drive-relative file_path from the producer must land in
+    malformed_records.file_attributions as an excluded marker, not in file_attributions."""
+    ctx = _make_ctx(str(tmp_path))
+    mangled = "C:Usersxclaude_klabautercoordinator_coresome_file.py"
+    raw = [
+        {
+            "session_id": "s1",
+            "file_path": mangled,
+            "provenance": {"derivation": "derived", "ref": None},
+        }
+    ]
+    with patch(_RUN_PRODUCER_TARGET, return_value=(raw, None)):
+        records, malformed = collect(ctx)
+
+    assert records == []
+    assert len(malformed) == 1
+    assert malformed[0]["excluded"] is True
+    assert malformed[0]["path"] == mangled
+
+
+# ---------------------------------------------------------------------------
+# F4 — post-relativization natural-key collapse: _merge_duplicate_key_records,
+# _null_aware_sum, _worst_marker, _merge_last_operation
+# ---------------------------------------------------------------------------
+
+def test_null_aware_sum_both_none_stays_none():
+    assert _null_aware_sum(None, None) is None
+
+
+def test_null_aware_sum_none_plus_value():
+    assert _null_aware_sum(None, 5) == 5
+    assert _null_aware_sum(5, None) == 5
+
+
+def test_null_aware_sum_both_values():
+    assert _null_aware_sum(5, 3) == 8
+
+
+def test_worst_marker_none_handling():
+    order = {"complete": 0, "partial": 1, "unknown": 2}
+    assert _worst_marker(order, None, "partial") == "partial"
+    assert _worst_marker(order, "partial", None) == "partial"
+
+
+def test_worst_marker_picks_worse_value():
+    order = {"complete": 0, "partial": 1, "unknown": 2}
+    assert _worst_marker(order, "complete", "unknown") == "unknown"
+    assert _worst_marker(order, "unknown", "complete") == "unknown"
+    assert _worst_marker(order, "complete", "partial") == "partial"
+
+
+def test_merge_last_operation_prefers_non_null():
+    assert _merge_last_operation(None, "edit") == "edit"
+    assert _merge_last_operation("edit", None) == "edit"
+
+
+def test_merge_last_operation_both_null_stays_null():
+    assert _merge_last_operation(None, None) is None
+
+
+def test_merge_last_operation_prefers_edit_class_over_non_edit_class():
+    assert _merge_last_operation("edit", "unrecognized-read-op") == "edit"
+    assert _merge_last_operation("unrecognized-read-op", "edit") == "edit"
+
+
+def test_merge_last_operation_tie_breaks_by_input_order():
+    """Both values are edit-class and conflict — no correctness rule distinguishes
+    them, so the merge must be deterministic (first occurrence wins), not arbitrary."""
+    assert _merge_last_operation("edit", "create") == "edit"
+    assert _merge_last_operation("create", "edit") == "create"
+
+
+def test_merge_duplicate_key_records_no_duplicates_is_unchanged():
+    records = [
+        {"repo": "r", "session_id": "s1", "file_path": "a.py", "edited_count": 1},
+        {"repo": "r", "session_id": "s2", "file_path": "a.py", "edited_count": 1},
+    ]
+    result = _merge_duplicate_key_records(records)
+    assert result == records
+
+
+def test_merge_duplicate_key_records_sums_counts():
+    """Regression for the root cause: two producer rows for the same (session, file)
+    that only collide AFTER F2 relativization (e.g. one arrived absolute, one arrived
+    already-relative) must have their counts summed, not one discarded."""
+    records = [
+        {
+            "repo": "r", "session_id": "s1", "file_path": "a.py",
+            "edited_count": 2, "read_count": 0, "referenced_count": 0,
+            "lines_added": 13, "lines_removed": 2,
+            "last_operation": "edit",
+            "completeness": "complete", "provenance_completeness": "complete",
+            "capture_source": "derived",
+        },
+        {
+            "repo": "r", "session_id": "s1", "file_path": "a.py",
+            "edited_count": 0, "read_count": 1, "referenced_count": 0,
+            "lines_added": None, "lines_removed": None,
+            "last_operation": None,
+            "completeness": "unknown", "provenance_completeness": "unknown",
+            "capture_source": "derived",
+        },
+    ]
+    result = _merge_duplicate_key_records(records)
+
+    assert len(result) == 1
+    merged = result[0]
+    assert merged["edited_count"] == 2
+    assert merged["read_count"] == 1
+    assert merged["referenced_count"] == 0
+    assert merged["lines_added"] == 13
+    assert merged["lines_removed"] == 2
+    assert merged["last_operation"] == "edit"
+    assert merged["completeness"] == "unknown"  # worst-case
+    assert merged["provenance_completeness"] == "unknown"  # worst-case
+
+
+def test_merge_duplicate_key_records_lines_all_null_stays_null():
+    """Both occurrences report no line counts at all — the merged total must stay
+    None (genuinely unknown), never be coerced to 0."""
+    records = [
+        {
+            "repo": "r", "session_id": "s1", "file_path": "a.py",
+            "edited_count": 1, "read_count": 0, "referenced_count": 0,
+            "lines_added": None, "lines_removed": None, "last_operation": None,
+            "completeness": "unknown", "provenance_completeness": "unknown",
+            "capture_source": "derived",
+        },
+        {
+            "repo": "r", "session_id": "s1", "file_path": "a.py",
+            "edited_count": 1, "read_count": 0, "referenced_count": 0,
+            "lines_added": None, "lines_removed": None, "last_operation": None,
+            "completeness": "unknown", "provenance_completeness": "unknown",
+            "capture_source": "derived",
+        },
+    ]
+    result = _merge_duplicate_key_records(records)
+    assert result[0]["lines_added"] is None
+    assert result[0]["lines_removed"] is None
+
+
+def test_merge_duplicate_key_records_distinct_repo_or_session_not_merged():
+    """The natural key is (repo, session_id, file_path) — same file_path alone must
+    not merge rows from different sessions or repos."""
+    records = [
+        {"repo": "r", "session_id": "s1", "file_path": "a.py", "edited_count": 1},
+        {"repo": "r", "session_id": "s2", "file_path": "a.py", "edited_count": 1},
+        {"repo": "r2", "session_id": "s1", "file_path": "a.py", "edited_count": 1},
+    ]
+    result = _merge_duplicate_key_records(records)
+    assert len(result) == 3
+
+
+def test_collect_relativization_collapse_is_merged_not_duplicated(tmp_path):
+    """End-to-end root-cause regression: a producer emitting one absolute and one
+    already-relative row for the SAME file in the SAME session — the exact shape F2's
+    relativization collapses onto one key — must yield a single merged record, not two
+    duplicate rows in file_attributions."""
+    ctx = _make_ctx(str(tmp_path))
+    absolute_form = str(tmp_path / "sub" / "file.py")
+    raw = [
+        {
+            "session_id": "s1",
+            "file_path": absolute_form,
+            "edited_count": 2, "read_count": 0, "referenced_count": 0,
+            "lines_added": 13, "lines_removed": 2,
+            "last_operation": "edit",
+            "completeness": "complete", "provenance_completeness": "complete",
+            "capture_source": "derived",
+            "provenance": {"derivation": "derived", "ref": None},
+        },
+        {
+            "session_id": "s1",
+            "file_path": "sub/file.py",
+            "edited_count": 0, "read_count": 1, "referenced_count": 0,
+            "lines_added": None, "lines_removed": None,
+            "last_operation": None,
+            "completeness": "unknown", "provenance_completeness": "unknown",
+            "capture_source": "derived",
+            "provenance": {"derivation": "derived", "ref": None},
+        },
+    ]
+    with patch(_RUN_PRODUCER_TARGET, return_value=(raw, None)):
+        records, malformed = collect(ctx)
+
+    assert malformed == []
+    assert len(records) == 1
+    merged = records[0]
+    assert merged["file_path"] == "sub/file.py"
+    assert merged["edited_count"] == 2
+    assert merged["read_count"] == 1
+    assert merged["last_operation"] == "edit"
+    assert merged["completeness"] == "unknown"

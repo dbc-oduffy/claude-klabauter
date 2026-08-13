@@ -26,6 +26,15 @@ is precisely the local judgment call this forbids.
 
 Sites are anchored on the enclosing function (stable across edits); line numbers are hints only.
 
+**Artifact-class disposition is a distinct question from site sanction, and this doc does not
+answer it.** "May a pre-existing `.sh`/extensionless FILE persist at all?" is adjudicated by
+`coordinator_core/ops/check_posix_exec_assumptions.py`'s `EXEMPTIONS` / `EXEMPT_PREFIXES`
+registers, not by this doc's `Sites:` lists — those govern only "may Python spawn a shell at this
+call-site?" The two governing rules above bind both questions alike: contingent irreducibility is
+migration debt regardless of which register would record it, and enumeration is constitutive in
+both (a granted `EXEMPTIONS`/`EXEMPT_PREFIXES` entry, not a rationale match, is what makes a file
+invisible to that guard). See that module's own docstring for the artifact-side admission tests.
+
 ## (a) 3rd-party upstream installer invoked as-published
 
 Homebrew's and fnm's own `curl | bash` / `curl | sh -s` installer contracts, run verbatim as

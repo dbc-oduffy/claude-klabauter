@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """coordinator-session-loe.py — Read helper: compute LoE (Level of Effort)
 metrics for a coordinator session and emit a t-shirt size.

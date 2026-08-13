@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """cc_invoke — Python-side transport for coordinator_core.invoke.
 
 Port of: coordinator-core-invoke.sh (example-doctrine-repo c6d97219, 2026-07-22) — the bash transport's

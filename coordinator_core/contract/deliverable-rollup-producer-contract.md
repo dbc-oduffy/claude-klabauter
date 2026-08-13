@@ -31,6 +31,18 @@
 > memo before any breaking change.
 >
 > **Changelog:**
+> - **2026-08-13 (breaking-semantics widen, PENDING — not yet shipped):** `artifacts_matched`'s
+>   scan surface is documented to widen from four roots to five, adding `state/sizings/**`
+>   alongside the existing `docs/plans`, `state/handoffs`, `archive/handoffs`, `archive/specs`.
+>   Classified BREAKING per § 5.2 (semantics changed, not merely additive) because it changes
+>   what an existing count already means, not just what it can also include. Flagged to
+>   claude-central-em via `coordinator/bin/cross-repo-memo` (delivered alongside C6's convention
+>   memo as one delivery with two separated asks). Per § 5.2's breaking-change clause, this
+>   MUST NOT ship until example-doctrine-repo has landed its widen AND explicitly acknowledged the breaking shape —
+>   this entry documents the pending, gated change only; the writer (`_scan_artifacts_by_deliverable_id`
+>   in `deliverable_rollup.py`) has NOT been flipped. Also corrects a pre-existing, unrelated
+>   staleness in the `scan_incomplete` row and § 1.3: `archive/specs` was already a live scan
+>   root in the scanner but was missing from both tables before this edit.
 > - **2026-07-26 (additive widen, post-freeze v1.0):** `scan_incomplete` (bool) added to the
 >   emitted payload. Followed the § 5.2 reader-widen-before-writer-flips protocol: example-doctrine-repo widened
 >   their `coordinator_render_rollup` reader first (`be8b5d88`, additive/absent-safe), replied
@@ -116,9 +128,9 @@ never as a filesystem path component (see § 3, security note).
 |-------|--------|-------|-------------|-------|
 | `deliverable_id` | echoed from wire param | deliverable-grain | **1** (always present; echo) | Identity echo — the queried id; enables response correlation |
 | `resolution_mode` | literal constant | op-shape | **1** (always `"direct"` in slice-1) | Documents which resolution semantics produced the payload; leaves room for an additive `"transitive"` mode later without a breaking schema change |
-| `artifacts_matched` | count of artifacts (plan/handoff) carrying the queried `deliverable_id` | artifact-count | **1** (integer ≥ 0) | 0 → unknown deliverable → `advances_initiatives` is empty; N > 1 is the EXPECTED case (a deliverable spans multiple artifacts by design — see § 1.2) |
+| `artifacts_matched` | count of artifacts (plan/handoff/sizing) carrying the queried `deliverable_id` | artifact-count | **1** (integer ≥ 0) | 0 → unknown deliverable → `advances_initiatives` is empty; N > 1 is the EXPECTED case (a deliverable spans multiple artifacts by design — see § 1.2). **PENDING breaking-semantics widen (not yet shipped):** see Changelog entry below — the sizing root's inclusion is documented here as gated, not live |
 | `advances_initiatives` | UNION of non-null `initiative` FKs across all matching artifacts, deduped by `id`, each resolved to its `state/initiatives/<id>.yaml` entry | initiative-grain | **0..N** (empty list is the safe null and the COMMON case today — see § 2 recall envelope) | Each entry included ONLY when the FK is non-null AND resolves to a real `state/initiatives/<id>.yaml`; precision-over-recall at the edge level |
-| `scan_incomplete` | True when any scan root (`docs/plans`, `state/handoffs`, `archive/handoffs`) could not be fully enumerated (e.g. permission-denied) | scan-shape | **1** (always present; bool) | Additive field, landed 2026-07-26 per the § 5.2 bump protocol — example-doctrine-repo's reader widened first (`be8b5d88`), appending `" (partial scan)"` per rendered line when set. `True` means this payload may be missing artifacts/initiatives; treat as "incomplete", never as "genuinely empty" |
+| `scan_incomplete` | True when any scan root (`docs/plans`, `state/handoffs`, `archive/handoffs`, `archive/specs`, `state/sizings/**`) could not be fully enumerated (e.g. permission-denied) | scan-shape | **1** (always present; bool) | Additive field, landed 2026-07-26 per the § 5.2 bump protocol — example-doctrine-repo's reader widened first (`be8b5d88`), appending `" (partial scan)"` per rendered line when set. `True` means this payload may be missing artifacts/initiatives; treat as "incomplete", never as "genuinely empty". `archive/specs` was a pre-existing gap in this row (the scanner already walked it; the table just never named it) — corrected here alongside the `state/sizings/**` addition, unrelated to the breaking-semantics widen below |
 
 ### 1.2 `advances_initiatives` entry shape
 
@@ -143,6 +155,12 @@ The op scans:
   co-occurrence (plans mint `deliverable_id` and most often carry the `initiative` FK).
 - `state/handoffs/*.md` frontmatter — secondary surface (stubs; may carry `deliverable_id`).
 - `archive/handoffs/**/*.md` frontmatter — archived stubs; same scan.
+- `archive/specs/**/*.md` frontmatter — archived plans (`fleet.archive_completed_plans` moves a
+  plan from `docs/plans/` to `archive/specs/<YYYY-MM>/` on completion). This root was already
+  live in the scanner; it was missing from this list, pre-existing drift unrelated to the
+  widen below — corrected here.
+- `state/sizings/**` — **PENDING, not yet live** (breaking-semantics widen, see Changelog; gated
+  on § 5.2 reader-widen-before-writer-flips and example-doctrine-repo's explicit ack before the writer flips).
 
 A handoff-only scan under-counts direct recall because the `initiative` FK co-occurs with
 `deliverable_id` predominantly in plan frontmatter, not handoff frontmatter.

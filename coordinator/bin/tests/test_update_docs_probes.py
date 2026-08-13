@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import updatedocs_gates as _gates_mod
+
 # Declared, not excused: `test_cli_subcommand_smoke` and
 # `test_retired_snippet_sync_sweep_verb_is_still_accepted` spawn a real
 # `sys.executable` child running update-docs-probes.py because the property
@@ -144,7 +146,7 @@ def test_repomap_gate_stale_generates_with_fallback_note(tmp_path, capsys):
     rc = _mod._cmd_repomap_gate(args)
     assert rc == 0
     out = capsys.readouterr().out
-    assert "RAG-fallback (RAG state: stale)" in out
+    assert "repomap generated (rag_state=stale, fallback)" in out
 
 
 def test_repomap_gate_missing_generator_is_non_fatal(tmp_path, capsys):
@@ -156,7 +158,7 @@ def test_repomap_gate_missing_generator_is_non_fatal(tmp_path, capsys):
     )
     rc = _mod._cmd_repomap_gate(args)
     assert rc == 0
-    assert "unresolvable" in capsys.readouterr().err
+    assert "unresolvable" in capsys.readouterr().out
 
 
 def test_repomap_gate_generator_failure_propagates(tmp_path):
@@ -207,7 +209,7 @@ def test_queue_prune_sweep_reports_delta(tmp_path, capsys):
     args = _ns(repo_root=str(tmp_path), prune_cli=str(cli), queue=["state/bug-backlog.md"])
     rc = _mod._cmd_queue_prune_sweep(args)
     assert rc == 0
-    assert "Pruned 1 lines from state/bug-backlog.md" in capsys.readouterr().out
+    assert "pruned 1 lines from state/bug-backlog.md" in capsys.readouterr().out
 
 
 def test_queue_prune_sweep_failure_aggregates(tmp_path):
@@ -228,9 +230,8 @@ def test_queue_prune_sweep_neither_leg_present_is_loud(tmp_path, capsys):
     rc = _mod._cmd_queue_prune_sweep(args)
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Legacy queue absent" in out
-    assert "YAML queue family absent" in out
-    assert "NEITHER legacy markdown queues NOR YAML queue families were found" in out
+    assert "no legacy markdown queues and no YAML queue families found under" in out
+    assert "verify repo_root" in out
 
 
 def test_queue_prune_sweep_yaml_leg_invokes_wrapper_when_family_present(tmp_path, capsys):
@@ -247,21 +248,26 @@ def test_queue_prune_sweep_yaml_leg_invokes_wrapper_when_family_present(tmp_path
     calls = []
 
     class _FakeSubprocess:
-        # Rebinding _mod.subprocess to this stand-in (rather than mutating the
-        # real, process-shared `subprocess` module's `.run` attribute) keeps
-        # the fake scoped to this test's own module reference.
+        # Rebinding _gates_mod.subprocess to this stand-in (rather than
+        # mutating the real, process-shared `subprocess` module's `.run`
+        # attribute) keeps the fake scoped to this test's own module
+        # reference. The actual spawn now lives in
+        # coordinator_core.ops.updatedocs_gates._run (2026-08-06
+        # updatedocs-gates-structured-verdicts port), not in
+        # update-docs-probes.py itself -- _mod carries no `subprocess`
+        # attribute of its own to rebind.
         @staticmethod
         def run(cmd, **kwargs):
             calls.append(cmd)
             return subprocess.run([sys.executable, "-c", "print('fake prune-closed-bugs.py invoked')"], **kwargs)
 
-    orig_subprocess = _mod.subprocess
-    _mod.subprocess = _FakeSubprocess
+    orig_subprocess = _gates_mod.subprocess
+    _gates_mod.subprocess = _FakeSubprocess
     try:
         args = _ns(repo_root=str(tmp_path), prune_cli=None, queue=None)
         rc = _mod._cmd_queue_prune_sweep(args)
     finally:
-        _mod.subprocess = orig_subprocess
+        _gates_mod.subprocess = orig_subprocess
 
     assert rc == 0
     invoked = [c for c in calls if str(fake_cli) in c]
@@ -306,7 +312,7 @@ def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
     assert rc == 0
-    assert "not needed" in capsys.readouterr().out
+    assert "harvest threshold not met" in capsys.readouterr().out
 
 
 def test_distill_threshold_count_fires(tmp_path, capsys):
@@ -314,7 +320,7 @@ def test_distill_threshold_count_fires(tmp_path, capsys):
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
     assert rc == 1
-    assert "Chaining into /distill" in capsys.readouterr().out
+    assert "harvest threshold met — total count 50 >= 50" in capsys.readouterr().out
 
 
 def test_distill_threshold_no_log_count_20_fires(tmp_path):

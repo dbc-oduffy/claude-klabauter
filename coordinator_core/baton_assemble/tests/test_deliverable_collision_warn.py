@@ -206,6 +206,159 @@ class TestCollisionRecordShapeAC1AC3:
         assert "already held by a live baton" not in captured.err
 
 
+class TestResolvedAddressWiringAC6:
+    """2026-08-13 session-owner-reachability-registry § 3: the collision
+    warning also prints the resolved `SendMessage` address alongside the
+    `claimed_by` UUID it already prints, and degrades to the current
+    UUID-only shape when resolution fails."""
+
+    def test_a_reachable_claimed_by_prints_the_resolved_address(self, tmp_path, capsys, monkeypatch):
+        import coordinator_core.session.reachability as reach
+
+        predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR")
+        _write_handoff(
+            tmp_path,
+            "state/handoffs/colliding.md",
+            "DEL-ADDR",
+            "in_flight",
+            claimed_by="the-claim-holder",
+        )
+        monkeypatch.setattr(
+            reach,
+            "resolve_address",
+            lambda owner_id: reach.ResolveResult(
+                outcome="reachable", session_id=owner_id, address="claude-klabauter-57 [b2afcd]"
+            ),
+        )
+        capsys.readouterr()
+        ba.resolve_lineage("handoff", str(predecessor), tmp_path)
+        captured = capsys.readouterr()
+        assert "claude-klabauter-57 [b2afcd]" in captured.err
+        assert "the-claim-holder" in captured.err
+
+    def test_a_not_reachable_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
+        """Review: code-reviewer -- P2, regression coverage for the
+        `not_reachable` branch of `_resolve_claimed_by_address_suffix`
+        falling through to `return ""` rather than the `reachable`
+        rendering."""
+        import coordinator_core.session.reachability as reach
+
+        predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-NOTREACH")
+        _write_handoff(
+            tmp_path,
+            "state/handoffs/colliding.md",
+            "DEL-ADDR-NOTREACH",
+            "in_flight",
+            claimed_by="the-claim-holder",
+        )
+        monkeypatch.setattr(
+            reach,
+            "resolve_address",
+            lambda owner_id: reach.ResolveResult(
+                outcome="not_reachable", session_id=owner_id
+            ),
+        )
+        capsys.readouterr()
+        ba.resolve_lineage("handoff", str(predecessor), tmp_path)
+        captured = capsys.readouterr()
+        assert "the-claim-holder" in captured.err
+        assert "already held by a live baton" in captured.err
+        assert "send-message-address" not in captured.err
+
+    def test_an_ambiguous_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
+        """Review: code-reviewer -- P2, regression coverage for the
+        `ambiguous` branch, with two candidates present so a regression
+        that started rendering a candidate's address would be caught."""
+        import coordinator_core.session.reachability as reach
+
+        predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-AMBIG")
+        _write_handoff(
+            tmp_path,
+            "state/handoffs/colliding.md",
+            "DEL-ADDR-AMBIG",
+            "in_flight",
+            claimed_by="the-claim-holder",
+        )
+        monkeypatch.setattr(
+            reach,
+            "resolve_address",
+            lambda owner_id: reach.ResolveResult(
+                outcome="ambiguous",
+                session_id=owner_id,
+                candidates=[
+                    reach.Candidate(
+                        session_id="session-aaaaaa",
+                        name="claude-klabauter-11",
+                        ref="aaaaaa",
+                        address="claude-klabauter-11 [aaaaaa]",
+                    ),
+                    reach.Candidate(
+                        session_id="session-bbbbbb",
+                        name="claude-klabauter-11",
+                        ref="bbbbbb",
+                        address="claude-klabauter-11 [bbbbbb]",
+                    ),
+                ],
+            ),
+        )
+        capsys.readouterr()
+        ba.resolve_lineage("handoff", str(predecessor), tmp_path)
+        captured = capsys.readouterr()
+        assert "the-claim-holder" in captured.err
+        assert "already held by a live baton" in captured.err
+        assert "send-message-address" not in captured.err
+        assert "claude-klabauter-11 [aaaaaa]" not in captured.err
+        assert "claude-klabauter-11 [bbbbbb]" not in captured.err
+
+    def test_own_session_claimed_by_renders_the_own_session_marker(self, tmp_path, capsys, monkeypatch):
+        """Review: code-reviewer -- P3, regression coverage for the
+        `own_session` rendering path -- the branch previously flagged for a
+        bare-vs-`!r`-quoted inconsistency."""
+        import coordinator_core.session.reachability as reach
+
+        predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-OWN")
+        _write_handoff(
+            tmp_path,
+            "state/handoffs/colliding.md",
+            "DEL-ADDR-OWN",
+            "in_flight",
+            claimed_by="the-claim-holder",
+        )
+        monkeypatch.setattr(
+            reach,
+            "resolve_address",
+            lambda owner_id: reach.ResolveResult(outcome="own_session", session_id=owner_id),
+        )
+        capsys.readouterr()
+        ba.resolve_lineage("handoff", str(predecessor), tmp_path)
+        captured = capsys.readouterr()
+        assert "send-message-address='<this session>'" in captured.err
+        assert "the-claim-holder" in captured.err
+
+    def test_resolution_failure_degrades_to_the_uuid_only_message(self, tmp_path, capsys, monkeypatch):
+        import coordinator_core.session.reachability as reach
+
+        predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-FAIL")
+        _write_handoff(
+            tmp_path,
+            "state/handoffs/colliding.md",
+            "DEL-ADDR-FAIL",
+            "in_flight",
+            claimed_by="the-claim-holder",
+        )
+
+        def _raise(owner_id):
+            raise RuntimeError("simulated resolution failure")
+
+        monkeypatch.setattr(reach, "resolve_address", _raise)
+        capsys.readouterr()
+        ba.resolve_lineage("handoff", str(predecessor), tmp_path)
+        captured = capsys.readouterr()
+        assert "the-claim-holder" in captured.err
+        assert "already held by a live baton" in captured.err
+        assert "send-message-address" not in captured.err
+
+
 class TestSelfExclusionAC5:
     """A re-run over an already-written baton carrying this `deliverable_id`
     must not warn about that same path. Reproduced via the module's own

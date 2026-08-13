@@ -224,7 +224,7 @@ def test_load_family_records_bare_repo_shaped_common_dir_raises(tmp_path: Path) 
     (bare_dir / "objects").mkdir()
     (bare_dir / "refs").mkdir()
     # bare_dir.parent ("somewhere") has no .git entry -> derived root fails verification.
-    with pytest.raises(ValueError, match="derived worktree root"):
+    with pytest.raises(ValueError, match="refusing to guess"):
         load_family_records("improvement-queue", bare_dir)
 
 

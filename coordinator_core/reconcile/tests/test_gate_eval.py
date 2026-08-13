@@ -1566,7 +1566,7 @@ class TestC5ContinuedIntoPathFallback:
         terminus = _terminus(
             "shipped",
             shipped_in=_TERMINUS_SHA,
-            path="/Users/example-operator/X/example-doctrine-repo/archive/handoffs/2026-07/"
+            path="/Users/alice/X/example-doctrine-repo/archive/handoffs/2026-07/"
             "2026-07-22_152437_dr084-skill-layer-dual-read.md",
         )
 

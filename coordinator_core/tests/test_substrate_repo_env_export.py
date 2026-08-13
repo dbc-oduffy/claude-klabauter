@@ -20,12 +20,12 @@ def test_repo_key_to_env_var_dots_and_dashes():
 
 def test_resolve_exports_rc0_resolved():
     def getter(key):
-        return (0, "/Users/example-operator/X/example-retrieval-repo")
+        return (0, "/Users/alice/X/example-retrieval-repo")
 
     exports, warnings, errors = resolve_repo_env_exports(
         ["repos.example-retrieval-repo"], getter, preexisting_env={}
     )
-    assert exports == {"REPO_EXAMPLE_RETRIEVAL_REPO": "/Users/example-operator/X/example-retrieval-repo"}
+    assert exports == {"REPO_EXAMPLE_RETRIEVAL_REPO": "/Users/alice/X/example-retrieval-repo"}
     assert warnings == []
     assert errors == []
 

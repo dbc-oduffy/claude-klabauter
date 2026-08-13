@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """regen-cockpit-schema.py — Regenerate the canonical cockpit-contract schema.
 
@@ -173,14 +172,14 @@ def _resolve_doe_root() -> str:
 
 
 def _build_trampoline_env(mak_root: str) -> dict[str, str]:
-    """Build the subprocess env for a source-trampoline spawn into claude-klabauter.
+    """Build the subprocess env for a source-trampoline spawn into the engine repo.
 
     Passes os.environ through, sets CLAUDE_KLABAUTER_ROOT, and prepends mak_root to
     PYTHONPATH only if not already present (idempotency fence). Mirrors
     `_build_subprocess_env()` in `coordinator/bin/lib/cc_invoke.py` — this is
     the same sanctioned source-trampoline pattern, not a fresh convention.
-    This reaches claude-klabauter's SOURCE tree only; it never resolves or spawns a
-    claude-klabauter-resident interpreter (see module docstring).
+    This reaches the engine repo's SOURCE tree only; it never resolves or spawns
+    an engine-resident interpreter (see module docstring).
     """
     env: dict[str, str] = {**os.environ, "CLAUDE_KLABAUTER_ROOT": mak_root}
     existing_pp = env.get("PYTHONPATH", "")

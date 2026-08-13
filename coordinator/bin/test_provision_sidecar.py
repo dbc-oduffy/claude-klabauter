@@ -266,7 +266,7 @@ def test_lookup_miss_still_provisions_with_the_legacy_shape(
 
     This is the fail-open arm, and it is deliberately not loud: whether a given
     agent_type has a report_type_map row is a fact about a policy file
-    claude-klabauter does not own, so its absence is not a precondition failure.
+    the engine repo does not own, so its absence is not a precondition failure.
     """
     rc, out, err = run_cli(
         git_repo,

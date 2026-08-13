@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """standup.py — Deterministic daily inventory for /workday-complete Step 4a
 and /workday-start Step 1 reconciliation.
 

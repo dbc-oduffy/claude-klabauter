@@ -48,7 +48,36 @@ def test_valid_fixture_policy_loads_verbatim(tmp_path: Path) -> None:
     assert result.policy["mechanical_commit_denylist"] == _VALID_POLICY["mechanical_commit_denylist"]
     assert result.policy["cross_handoff_attribution"] is True
     assert result.policy["dry_run"] is True
+    assert result.policy["auto_ship_enabled"] is False
+
+
+def test_valid_policy_explicit_auto_ship_enabled_true_is_honored(tmp_path: Path) -> None:
+    """auto_ship_enabled is author-writable -- an explicit `true` in the file
+    must load as `True`, proving the key is not silently pinned to False."""
+    policy_file = tmp_path / "auto-reconcile-policy.yaml"
+    armed = dict(_VALID_POLICY)
+    armed["auto_ship_enabled"] = True
+    _write_policy(policy_file, armed)
+
+    result = load_policy(str(policy_file))
+
+    assert result.source == "loaded"
+    assert result.warning is None
     assert result.policy["auto_ship_enabled"] is True
+
+
+def test_malformed_policy_auto_ship_enabled_wrong_type_is_fail_closed_loud(tmp_path: Path) -> None:
+    policy_file = tmp_path / "auto-reconcile-policy.yaml"
+    broken = dict(_VALID_POLICY)
+    broken["auto_ship_enabled"] = "yes"  # should be a bool
+    _write_policy(policy_file, broken)
+
+    result = load_policy(str(policy_file))
+
+    assert result.source == "malformed"
+    assert result.warning is not None
+    assert "auto_ship_enabled" in result.warning
+    assert result.policy["auto_ship_enabled"] is False
 
 
 def test_absent_policy_is_fail_closed_silent(tmp_path: Path) -> None:

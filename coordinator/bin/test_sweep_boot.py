@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_sweep_boot.py — self-contained test suite for sweep-boot.py.
 
 Port of: test-sweep-boot-wrapper.sh (example-doctrine-repo a920e2de, 2026-07-19). Retargets the bash oracle's

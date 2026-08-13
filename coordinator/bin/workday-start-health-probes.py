@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workday-start-health-probes.py — day-start health-probe imperative logic,
 ported off example-doctrine-repo's `coordinator/commands/workday-start.md`.

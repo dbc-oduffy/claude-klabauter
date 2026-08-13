@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 """
 test_harvest_idempotency_env_override.py — regression test for the

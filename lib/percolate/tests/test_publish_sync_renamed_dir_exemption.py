@@ -58,6 +58,17 @@ if str(_COORDINATOR_LIB) not in sys.path:
 
 from percolate import publish_sync  # noqa: E402
 
+# Real exception class production's `publish.py::process_target` matches on
+# (`except (KeyError, rewrite_basename_module.DirectoryRenamePairShapeError)`)
+# when unioning a static `basename_rename` section into the ledger-derived
+# exemption set -- attached below to `_FakeRewriteBasenameModule` so that
+# except-tuple evaluation resolves even though the fake never raises it
+# itself (it only stands in for the ledger-load half of the module's
+# contract, per its own docstring).
+from coordinator_core.percolate.rewrite_basename import (  # noqa: E402
+    DirectoryRenamePairShapeError as _RealDirectoryRenamePairShapeError,
+)
+
 # `coordinator/tests/_repo_paths.py` centralizes the two-rung `setup/` directory
 # resolution `process_target` needs for `publish_sync_module` -- reused here rather
 # than hand-rolled again (that file's own docstring names five prior hand-rolled
@@ -189,6 +200,11 @@ class _FakeRewriteBasenameModule:
     `process_target`'s ledger-load call-site contract (`rename_ledger_path` then
     `read_directory_rename_ledger`) without touching the real engine module or a
     real ledger file on disk."""
+
+    # Real production exception type (not a duplicated stand-in) -- see the
+    # module-level import above for why this is required and why the fake
+    # never needs to raise it itself.
+    DirectoryRenamePairShapeError = _RealDirectoryRenamePairShapeError
 
     def __init__(self, names=(), *, raise_on_read=None):
         self._names = list(names)

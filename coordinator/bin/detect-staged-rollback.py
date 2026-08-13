@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-detect-staged-rollback — CLI trampoline over claude-klabauter
+detect-staged-rollback — CLI trampoline over the engine-repo's
 coordinator_core.ops.detect_staged_rollback.
 
 Read-and-report only against git; never mutates a repo. This IS wired into

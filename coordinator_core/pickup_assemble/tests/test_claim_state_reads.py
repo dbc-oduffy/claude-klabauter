@@ -112,16 +112,29 @@ def _seed_handoff(
     return path
 
 
-def _make_ledger_claim(repo: Path, basename: str, holder_sid: str) -> Path:
+def _make_ledger_claim(
+    repo: Path, basename: str, holder_sid: str, *, stamped: bool = False
+) -> Path:
     """Writes a live-shaped ledger claim dir for `state/handoffs/<basename>`
     — the branch-independent half of the split that survives a branch
     switch untouched. Liveness itself is mocked separately
     (`cs_claim_holder_live`/`session_live`), never derived from real process
-    state, per this repo's existing test convention."""
+    state, per this repo's existing test convention.
+
+    `stamped` (default False) controls whether the claim dir also carries
+    the `session.claims.mark_claim_stamped` durable marker — the fact
+    `pickup_assemble`'s `stamp_evidence` fallback now reads (cross-repo/inbox/
+    2026-08-13-example-doctrine-repo-em-pickup-already-satisfied-masks-a-refused-write.md),
+    in place of the old (unsound) `claim_stage(...) == CLAIM_STAGE_APPLY`
+    inference. A bare ledger claim with no `stamped` marker is exactly the
+    "reservation taken, stamp never confirmed" state that invariant was
+    fixed to stop misreading as landed evidence."""
     claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(f"{holder_sid}\n", encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+    if stamped:
+        (claim_dir / "stamped").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
     return claim_dir
 
 
@@ -271,13 +284,25 @@ def test_classify_no_ledger_claim_and_dropped_deployment_state_stays_ambiguous(t
 # ---------------------------------------------------------------------------
 
 
-def test_brief_self_claimed_ledger_only_marks_d2_already_satisfied(tmp_path, monkeypatch):
+def test_brief_self_claimed_ledger_only_stamped_marks_d2_already_satisfied(
+    tmp_path, monkeypatch
+):
+    """Row 35, repaired for cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+    already-satisfied-masks-a-refused-write.md: ledger-sourced stamp evidence
+    now requires the durable `stamped` marker (`session.claims.
+    mark_claim_stamped`), not merely `claim_stage(...) == CLAIM_STAGE_APPLY`
+    — a stage the claim reaches unconditionally, pre-directive, regardless of
+    whether the frontmatter stamp attempt that follows actually lands. This
+    test still pins the thing it was built to pin (a ledger-only holder, with
+    a reverted mirror, satisfying `d2`) — it just sources that evidence from
+    the marker a confirmed-successful stamp writes, mirroring
+    `test_pickup_claim_stage_stamp_evidence.py`'s own fixture shape."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     # Reverted mirror: status stays "open", no claimed_by at all — as if a
     # prior pass's `d2` stamp never survived a branch switch.
     _seed_handoff(repo, "h1.md", status="open")
-    _make_ledger_claim(repo, "h1.md", "self-sid")
+    _make_ledger_claim(repo, "h1.md", "self-sid", stamped=True)
 
     # This session holds the ledger claim (row 34's own primitive, untouched
     # by this chunk).
@@ -287,6 +312,29 @@ def test_brief_self_claimed_ledger_only_marks_d2_already_satisfied(tmp_path, mon
 
     directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
     assert directives_by_id["d2"]["already_satisfied"] is True
+
+
+def test_brief_self_claimed_ledger_only_unstamped_does_not_mark_d2_already_satisfied(
+    tmp_path, monkeypatch
+):
+    """Companion to the stamped case above, pinning the new invariant's
+    negative side: a ledger-only holder with NO `stamped` marker (a
+    reservation taken, or a stamp attempt that was refused — the memo's exact
+    incident shape) must NOT satisfy `d2`, even though the claim dir has no
+    `stage` file at all (`claim_stage` therefore reads `CLAIM_STAGE_APPLY` by
+    its own no-stage-file-means-apply default) — proving the fallback no
+    longer draws a stamp-landed inference from stage alone."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", status="open")
+    _make_ledger_claim(repo, "h1.md", "self-sid", stamped=False)
+
+    monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: True)
+
+    result = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
+
+    directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
+    assert directives_by_id["d2"]["already_satisfied"] is False
 
 
 def test_brief_self_claimed_frontmatter_still_works_pre_revert(tmp_path, monkeypatch):

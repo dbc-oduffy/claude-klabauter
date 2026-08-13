@@ -105,7 +105,9 @@ lead_session_id: <requesting EM/lead session_id, raw (unsanitized), or literal n
 divergence:
   diverged: false
 commits: []
-dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter
+dispatch_feed:  # gate_kind/write_files only — see below for the rest
+  gate_kind: none
+  write_files: []
 ---
 ```
 
@@ -132,12 +134,21 @@ pre-populated with four fixed questions verbatim at provision time — the agent
 question, it does not invent or reorder the prompts.
 
 `status`/`agent_type`/`spawned_at`/`divergence` are the original narrow field set; `commits: []`,
-`dispatch_feed: null`, and `lead_session_id` are SUBSUME additions that make this scaffold a
+`dispatch_feed`, and `lead_session_id` are SUBSUME additions that make this scaffold a
 **superset** of what the flight-recorder and example-doctrine-repo's spawn-hook migration expect to find on a
 freshly-provisioned doc — `commits` is a plain accumulator list (empty at spawn time, appended to
-over the agent's lifetime), `dispatch_feed` is forward-declared but **inert**: the engine never
-writes to it past this `null` placeholder until the pcli-04 emitter lands, at which point it
-becomes a live field, not a schema change, and `lead_session_id` is the raw (unsanitized)
+over the agent's lifetime). `dispatch_feed` is now the **live field**: the pcli-04 emitter
+(`coordinator_core/ops/dispatch_emit/`) has landed, and an emitted Workflow script may dispatch
+this agent as an executor/commit/test phase per the forward-binding constraint below. The engine
+writes only the two `dispatch_feed` sub-fields that have a real value at scaffold time —
+`gate_kind: none` and `write_files: []` — never the full seven-field set with nulls filled in:
+`run-report.schema.json`'s `dispatch_feed` sub-properties (`label`/`agent_type`/`model`/
+`effort`/`schema_ref`/`brief_ref` = `type: string`, `est_min` = `type: number`) admit no `null`,
+only the `dispatch_feed` object itself is `["object", "null"]`, and `additionalProperties: true`
+with no `required` list means a valid block-style object may simply omit every field it has no
+value for. A prior revision emitted all seven fields with null values, which is schema-invalid —
+found and fixed under C6b (staff review + `coordinator/tests/test_flight_recorder_scaffolder.py`
+Case 3/6h). `lead_session_id` is the raw (unsanitized)
 `session_id` value off the stdin payload — the REQUESTING EM/lead's session id, stamped verbatim
 (falls back to the literal `null` only when the underlying value is absent, which in practice
 never happens via `_provision` since `session_id` is required for eligibility in the first
@@ -161,13 +172,14 @@ and parses one as a raw string instead of a dict, silently tripping the object-s
 every provisioned sidecar (see `cross-repo/inbox/2026-07-25-example-doctrine-repo-em-provision-report-
 divergence-flow-style.md`).
 
-**Forward-binding constraint on the pcli-04 emitter — commit-phase pathspec provenance.** When the
-emitter lands and `dispatch_feed` goes live, an emitted Workflow MAY interleave
-`coordinator:git-commit-agent` phases between executor waves: example-doctrine-repo took the "not yet dispatchable"
-banner down 2026-08-12 (DR-153, example-doctrine-repo `79be06759`), discharging SC-DR-021's consumer-repo
-condition, and their `execute-plan` RACI now names the EM Accountable for every commit with the
-Responsible keystroke delegable. **Every emitted commit phase's pathspec MUST carry real
-provenance** — the preceding wave's executor-reported touched-file set, or the chunk's
+**Shipped rule — commit-phase pathspec provenance.** The pcli-04 emitter has landed and
+`dispatch_feed` is live: an emitted Workflow interleaves `coordinator:git-commit-agent` phases
+between executor waves — one commit phase immediately following each executor wave, per the
+emitter's own composition (`coordinator_core/ops/dispatch_emit/emit.py`). Example-doctrine-repo took the "not yet
+dispatchable" banner down 2026-08-12 (DR-153, example-doctrine-repo `79be06759`), discharging SC-DR-021's
+consumer-repo condition, and their `execute-plan` RACI now names the EM Accountable for every
+commit with the Responsible keystroke delegable. **Every emitted commit phase's pathspec MUST
+carry real provenance** — the preceding wave's executor-reported touched-file set, or the chunk's
 `surface:`/`writes:` list off the plan spine (`plan-tasks.schema.json` ≥ 1.7.0). Never a tree
 survey, never an invented set. This binds harder here than in a consumer repo because SC-DR-021
 population (c) is unchanged: **a path written by a raw Bash heredoc carries no session claim and is

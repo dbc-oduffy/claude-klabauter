@@ -265,7 +265,14 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     means. O(1): reads that one session's meta.json directly (never scans every
     dir — that is ``live_session_ids``' job).
 
-    Two-layer decision:
+    Source 0 + two-layer decision: Source 0 (the harness's own session
+    registry, ``harness_registry.lookup(sid)``) is consulted FIRST, ahead of
+    both layers below. A registry hit is a CANDIDATE, not proof of
+    reachability -- the harness itself socket-probes it and lazily unlinks
+    unreachable records -- so a hit is confirmed here via the same
+    ``core.stable_pid_alive`` seam Layer 1 uses before it is trusted; only a
+    confirmed hit returns True early. A miss, or a hit that fails
+    confirmation, falls through unchanged to Layer 1:
       Layer 1 (PPID-authoritative): if ``stable_pid`` is non-empty in
         meta.json AND EITHER ``stable_pid_lstart`` OR
         ``stable_pid_start_epoch`` is present (either is a sufficient
@@ -498,6 +505,42 @@ def claim_held_by_me(
 #:                              established ambiguous-failure bias (see
 #:                              ``core.stable_pid_alive``'s own
 #:                              ``_WinLivenessAmbiguous`` handling).
+#:   "harness-registry-elsewhere" — ``session_verdict``-ONLY (C1, docs/plans/
+#:                              2026-08-13-liveness-stops-conflating-dead-
+#:                              with-elsewhere.md); never produced by
+#:                              ``live_session_verdicts``'/``_verdict_for_sdir``'s
+#:                              whole-corpus scan, which only ever visits
+#:                              THIS repo's own session dirs. Means: no
+#:                              session dir for this sid exists in THIS
+#:                              repo, but a confirmed harness-registry
+#:                              record for it does. This is inferred from
+#:                              dir-absence alone (Review: staff-eng-review
+#:                              Finding 6), NOT from comparing the peer's
+#:                              cwd to this repo's -- a session whose dir was
+#:                              reaped, deleted, or not yet created HERE
+#:                              while live HERE takes this same branch, so
+#:                              "the session is live, working in ANOTHER
+#:                              repo" is the common case, not a proven one.
+#:                              The THIRD tuple slot carries that peer's
+#:                              ``cwd`` (``str`` or ``None``) on this basis
+#:                              ONLY, not an ``age_sec`` int -- see
+#:                              ``session_verdict``'s own docstring for the
+#:                              full derivation and why this is worded
+#:                              "elsewhere", never "confirmed reachable".
+
+
+#: Review: staff-eng-review Finding 4 -- named aliases for the punned third
+#: tuple slot. Both collapse to ``tuple[bool, str, int | str | None]`` under
+#: any type checker (a plain ``tuple[bool, str, Optional[int]] |
+#: tuple[bool, str, Optional[str]]`` union provides zero static protection
+#: against the arithmetic-on-a-cwd-string hazard), so this buys nothing
+#: mechanically -- it exists purely to give the pun a greppable name so a
+#: reader/reviewer/grep can find every producer and consumer of each shape.
+#: ``SessionVerdict`` is every ordinary basis (age_sec int or None in slot
+#: 3); ``ElsewhereVerdict`` is the ONE "harness-registry-elsewhere" basis
+#: (peer cwd str or None in slot 3, never an elapsed-seconds value).
+SessionVerdict = tuple[bool, str, Optional[int]]
+ElsewhereVerdict = tuple[bool, str, Optional[str]]
 
 
 def _verdict_for_sdir(
@@ -505,7 +548,7 @@ def _verdict_for_sdir(
     sdir: str,
     record: Optional[harness_registry.RegistryRecord],
     now_epoch: int,
-) -> tuple[bool, str, Optional[int]]:
+) -> "SessionVerdict":
     """One id's verdict, factored out of ``live_session_verdicts``' loop body
     (Review: staff-eng-review C) so ``session_verdict`` below can compute the
     SAME per-id verdict without an O(n) whole-corpus scan. ``record`` is the
@@ -570,7 +613,7 @@ def _verdict_for_sdir(
 
 def live_session_verdicts(
     cwd: Optional[str] = None,
-) -> dict[str, tuple[bool, str, Optional[int]]]:
+) -> dict[str, "SessionVerdict"]:
     """THE ONE shared per-id liveness seam: ``id -> (live, basis, age_sec)``.
 
     Ships to close the fourth-derivation defect (Review: staff-eng second
@@ -650,7 +693,7 @@ def live_session_verdicts(
         registry = harness_registry.snapshot()
     except Exception:
         registry = {}
-    verdicts: dict[str, tuple[bool, str, Optional[int]]] = {}
+    verdicts: dict[str, "SessionVerdict"] = {}
     for sdir_path in basep.iterdir():
         if not sdir_path.is_dir():
             continue
@@ -669,7 +712,7 @@ def live_session_verdicts(
 
 def session_verdict(
     sid: str, cwd: Optional[str] = None
-) -> Optional[tuple[bool, str, Optional[int]]]:
+) -> Optional["SessionVerdict | ElsewhereVerdict"]:
     """ONE-id verdict, computed via the SAME per-arm derivation
     ``live_session_verdicts`` uses (``_verdict_for_sdir``) — never a second
     computation — but without that function's whole-corpus scan (Review:
@@ -678,7 +721,28 @@ def session_verdict(
     ``sid``'s directory via ``core.session_dir`` directly, O(1) like
     ``session_live``.
 
-    Returns ``None`` when ``sid`` would have no entry in
+    No-verdict arm (C1, docs/plans/2026-08-13-liveness-stops-conflating-
+    dead-with-elsewhere.md): when this repo has no session dir for ``sid``
+    at all, that used to mean bare ``None`` whether ``sid`` is a live
+    session working in ANOTHER repo or does not exist anywhere -- 9/51
+    under-reports in the oracle audit were every single one this case
+    (``state/audits/2026-08-13-session-live-vs-listagents-oracle.md``).
+    Before returning ``None`` in that case, this function now also consults
+    ``harness_registry`` (the SAME Source 0 read below, via the SAME
+    ``lookup()`` helper -- no second parser, AC3) and, on a confirmed hit
+    (routed through the one ``core.stable_pid_alive`` seam, D5), returns
+    ``(True, "harness-registry-elsewhere", record.cwd)`` -- the THIRD tuple
+    slot carries the peer's ``cwd`` (a ``str`` or ``None``) on this ONE
+    basis only, not an ``age_sec`` int; existing callers that unpack and
+    discard the third field (e.g. ``holder_evidence.liveness_basis``) are
+    unaffected. A registry record is a CANDIDATE, not proof of reachability
+    -- the harness probes the socket separately and lazily unlinks -- so
+    this basis is worded "elsewhere", never "confirmed live" or "reachable".
+    An unconfirmed or absent record falls through to the unchanged
+    ``None``. This branch never touches ``session_live()``'s own boolean
+    arm (AC1) and introduces no DEAD arm (module negative-spec).
+
+    Otherwise returns ``None`` when ``sid`` would have no entry in
     ``live_session_verdicts``' dict: empty sid, no sessions dir, the session
     dir doesn't exist, or ``sid`` is one of ``_NON_SESSION_DIR_NAMES`` (the
     per-sid path does NOT inherit that filtering for free the way the
@@ -712,6 +776,36 @@ def session_verdict(
         return None
     sdir = core.session_dir(sid, cwd)
     if not sdir or not Path(sdir).is_dir():
+        # No-verdict arm (C1, docs/plans/2026-08-13-liveness-stops-
+        # conflating-dead-with-elsewhere.md): this repo has no session dir
+        # for `sid` at all, which used to return bare None regardless of
+        # whether `sid` is a live session working in ANOTHER repo or does
+        # not exist anywhere. Consult harness_registry -- the SAME Source 0
+        # this function already reads below, via the SAME `lookup()` helper
+        # (no second parser, AC3) -- before giving up. A hit still routes
+        # through the one core.stable_pid_alive seam (D5); an unconfirmed
+        # or absent record falls through to the unchanged `None` (AC1:
+        # session_live's own boolean arm is untouched by this branch).
+        try:
+            record = harness_registry.lookup(sid)
+        except Exception:
+            record = None
+        if record is not None:
+            try:
+                if core.stable_pid_alive(
+                    str(record.pid), "", str(int(record.start_epoch))
+                ):
+                    # `cwd` is carried in the age_sec slot ONLY on this
+                    # basis -- it is not an elapsed-seconds value, and no
+                    # existing caller reads that slot for this basis (see
+                    # "harness-registry-elsewhere" in the vocabulary block
+                    # above `_verdict_for_sdir`). A registry record is a
+                    # CANDIDATE, not proof of reachability -- the harness
+                    # probes the socket separately and lazily unlinks -- so
+                    # this is worded as "elsewhere", never "confirmed".
+                    return (True, "harness-registry-elsewhere", record.cwd)
+            except Exception:
+                pass
         return None
     try:
         record = harness_registry.lookup(sid)

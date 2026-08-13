@@ -382,16 +382,31 @@ def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str
 
 def _unstage_or_chain(repo_root: Path, paths: list[str], original_exc: BaseException) -> None:
     """Reverses `paths` via `_unstage_paths` before `original_exc`
-    propagates. If `_unstage_paths` itself fails — its own `git reset` goes
-    through `run_with_lock_retry` (`_unstage_paths`'s own docstring), so
-    exhaustion under exactly the contention this module targets is
-    plausible, not hypothetical — that SECOND failure must never silently
-    replace `original_exc` in flight (that would mask a `BranchMismatch`/
-    the original `_commit_one`/`_stage_paths` failure from any caller doing
-    `except BranchMismatch`). Chains the cleanup failure as `__cause__`
-    instead of raising it: `raise original_exc from cleanup_exc` re-raises
-    the SAME original exception object (unmasked), with the cleanup
-    failure attached for diagnosis rather than substituted in its place."""
+    propagates. If `_unstage_paths` itself fails with an `Exception` — its
+    own `git reset` goes through `run_with_lock_retry` (`_unstage_paths`'s
+    own docstring), so exhaustion under exactly the contention this module
+    targets is plausible, not hypothetical — that SECOND failure must never
+    silently replace `original_exc` in flight (that would mask a
+    `BranchMismatch`/the original `_commit_one`/`_stage_paths` failure from
+    any caller doing `except BranchMismatch`). Chains the cleanup failure as
+    `__cause__` instead of raising it: `raise original_exc from cleanup_exc`
+    re-raises the SAME original exception object (unmasked), with the
+    cleanup failure attached for diagnosis rather than substituted in its
+    place.
+
+    Scope (Review: code-reviewer — P3, deferred, docstring-only follow-up):
+    this guarantee is bounded to the `Exception` hierarchy, deliberately —
+    the `except Exception` below (mirrored at both this function's call
+    sites, `_dispatch_commit_per_item`'s pre-loop guard and its per-item
+    loop) does NOT catch `BaseException` subclasses outside `Exception`
+    (`KeyboardInterrupt`, `SystemExit`). A `KeyboardInterrupt` raised by
+    `_unstage_paths` here propagates on its own rather than being chained —
+    deliberately not widened to `except BaseException`, which would instead
+    swallow that interrupt and deliver `original_exc` in its place,
+    fighting the operator's own Ctrl-C rather than honoring it. Widening is
+    declined; this docstring previously implied unconditional "never
+    silently replace" coverage, which overstated what the code actually
+    guarantees."""
     try:
         _unstage_paths(repo_root, paths)
     except Exception as cleanup_exc:

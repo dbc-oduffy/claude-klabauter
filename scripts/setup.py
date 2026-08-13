@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """scripts/setup.py — claude-klabauter standalone setup script (cross-platform).
 
 AUTHORITATIVE REGISTRATION SURFACE for the agent-install contract of BOTH

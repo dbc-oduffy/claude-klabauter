@@ -106,8 +106,9 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core import launchable
 from coordinator_core.git_lock_retry import run_with_lock_retry
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -216,10 +217,18 @@ def _content_root_rungs_2_to_4(claude_home: str) -> str:
             return candidate
 
     machine_local = os.path.join(claude_home, "bin", "machine-local")
-    if os.path.isfile(machine_local) and is_executable(machine_local):
+    # extensionless coordinator/bin sibling -- no exec bit/shebang required once
+    # launched through an interpreter, so existence alone is the precondition
+    # (see coordinator_core.launchable module docstring: POSIX-bare is not the
+    # fix here; Windows keeps resolve_launchable's .cmd-twin/shebang handling).
+    if os.path.isfile(machine_local):
+        if launchable._is_windows():
+            ml_argv = launchable.resolve_launchable(machine_local)
+        else:
+            ml_argv = [sys.executable, machine_local]
         try:
             proc = subprocess.run(
-                [machine_local, "get", "plugin.mirrors.coordinator-claude.live_path"],
+                [*ml_argv, "get", "plugin.mirrors.coordinator-claude.live_path"],
                 capture_output=True,
                 text=True,
                 timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
@@ -296,6 +305,7 @@ def _git(
     root: Optional[str] = None,
     timeout: int = _GIT_TIMEOUT_SECS,
     capture: bool = True,
+    env: Optional[dict] = None,
 ) -> subprocess.CompletedProcess:
     """Run one `git <args>` subprocess.
 
@@ -333,6 +343,15 @@ def _git(
     `capture_output`, `.stderr` is `None` on the returned
     `CompletedProcess`, and `run_with_lock_retry`'s `is_lock_contention()`
     substring test crashes on a `None` `.stderr`.
+
+    `env` (Review: code-reviewer P3 follow-up on
+    `_extract_failed_path_from_git_stderr`): when given, REPLACES the
+    subprocess environment outright (not merged over `os.environ`) — the
+    ONE caller that passes it (the staging `add` in `main()`'s Stage 5)
+    needs a locale-pinned environment so git's stderr wording is
+    deterministic and anchorable; every other caller passes `env=None` and
+    inherits the ambient environment exactly as before this parameter
+    existed.
     """
     cmd = ["git"]
     if root is not None:
@@ -346,6 +365,7 @@ def _git(
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
+            env=env,
             **_CREATIONFLAGS,
         )
 
@@ -395,16 +415,73 @@ def _batch_paths_by_byte_budget(
     return batches
 
 
+#: Environment forced onto the `git add` batching subprocess ONLY (Review:
+#: code-reviewer P3 follow-up — `_extract_failed_path_from_git_stderr`
+#: previously matched ANY quoted substring anywhere in stderr, which can
+#: misattribute an unrelated quoted fragment -- a hint/advice line, or a
+#: quoted token inside a DIFFERENT path -- as the failing path. Anchoring
+#: the parse to git's own known message templates (below) only makes the
+#: parse SAFE if git's wording is deterministic; git's stderr is a gettext
+#: string that translates under `LC_ALL`/`LANG`/`LANGUAGE`, so without this
+#: the anchored English patterns would silently stop matching under a
+#: non-English locale (fails safe -- degrades to the honest batch-scoped
+#: message) but a caller relying on THIS message being English could not
+#: prove that. Pinning explicitly removes the ambiguity: the `add` call
+#: this dict is applied to always produces English git messages, so a
+#: pattern match here is a real match, never a locale-dependent guess.
+_GIT_ADD_LOCALE_ENV_OVERRIDES = {"LC_ALL": "C", "LANG": "C", "LANGUAGE": "C"}
+
+
+def _git_add_batch_env() -> dict:
+    """Ambient environment, with git's message locale forced to `C` (see
+    `_GIT_ADD_LOCALE_ENV_OVERRIDES`) -- a copy of `os.environ`, never a
+    replacement of it, so PATH/HOME/etc. the subprocess needs to find and
+    run `git` at all stay intact."""
+    env = dict(os.environ)
+    env.update(_GIT_ADD_LOCALE_ENV_OVERRIDES)
+    return env
+
+
+#: Git's own KNOWN, C-locale `add`-failure message shapes only -- never a
+#: bare "any quoted substring" scan (the misattribution this replaces).
+#: Anchored at the start of a line (`re.MULTILINE`) so a quoted fragment
+#: embedded mid-sentence in an unrelated advice/hint line cannot match.
+#: Deliberately narrow: a git version/message this list doesn't cover
+#: degrades to `None` (the honest batch-scoped fallback), which is the
+#: correct outcome for an unrecognized shape -- see the module's own
+#: fail-safe contract below.
+_GIT_ADD_STDERR_PATTERNS = [
+    re.compile(r"^fatal: pathspec '([^']+)' did not match any files", re.MULTILINE),
+    re.compile(r'^error: open\("([^"]+)"\)', re.MULTILINE),
+    re.compile(r"^error: unable to index file '([^']+)'", re.MULTILINE),
+    re.compile(r"^fatal: '([^']+)' is beyond a symlink", re.MULTILINE),
+]
+
+
 def _extract_failed_path_from_git_stderr(stderr: Optional[str]) -> Optional[str]:
     """Best-effort extraction of the single path git's own stderr names as
-    the cause of a failed `add` (e.g. `fatal: pathspec '<path>' did not
-    match any files`, `error: open("<path>"): ...`). Returns None when no
-    quoted path is found -- callers must fall back to an honest
-    whole-batch-scoped message rather than assuming which file failed."""
+    the cause of a failed `add`, ANCHORED to `_GIT_ADD_STDERR_PATTERNS` --
+    git's own known C-locale message templates -- rather than matching any
+    quoted substring anywhere in stderr (a prior version did this and could
+    misattribute an unrelated quoted fragment as the failing path). Only
+    sound because the caller invokes git with `_git_add_batch_env()`
+    (`LC_ALL=C`/`LANG=C`/`LANGUAGE=C`), which guarantees these English
+    templates are the ones git actually emits -- without that pinning a
+    translated locale would either stop matching (fails safe) or, for an
+    untranslated substring that happens to echo the English wording, could
+    still be trusted for the wrong reason. Returns None when no known
+    template matches -- callers must fall back to an honest
+    whole-batch-scoped message rather than assuming which file failed; a
+    narrower/wrong-guess extraction is never preferred over the honest
+    fallback (naming a path is a STRONGER claim than naming the batch, so
+    it needs stronger evidence)."""
     if not stderr:
         return None
-    match = re.search(r"'([^']+)'", stderr) or re.search(r'"([^"]+)"', stderr)
-    return match.group(1) if match else None
+    for pattern in _GIT_ADD_STDERR_PATTERNS:
+        match = pattern.search(stderr)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _prompt(text: str, default_yes: bool) -> bool:
@@ -730,7 +807,7 @@ def main(argv: List[str]) -> int:
     stage_targets = untracked + modified
     for batch in _batch_paths_by_byte_budget(stage_targets, root_path):
         try:
-            proc = _git(["add", "--", *batch], root=root_path)
+            proc = _git(["add", "--", *batch], root=root_path, env=_git_add_batch_env())
             if proc.returncode != 0:
                 # Scope-honest (Review: code-reviewer P3): a nonzero rc means
                 # AT LEAST ONE of `batch` failed to stage, not necessarily

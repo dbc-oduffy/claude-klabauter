@@ -10,7 +10,19 @@ Public surface (pinned contract — do not change without updating consumers):
     def snapshot() -> dict[str, RegistryRecord]
     def lookup(session_id: str) -> RegistryRecord | None
     def self_record() -> tuple[str, RegistryRecord] | None
-    class RegistryRecord: pid: int; start_epoch: float; cwd: str | None
+    class RegistryRecord: pid: int; start_epoch: float; cwd: str | None;
+                           name: str | None; messaging_socket_path: str | None
+
+`name` and `messaging_socket_path` (added
+`state/handoffs/2026-08-13-session-owner-reachability-registry.md` § 1) are
+parsed exactly like `cwd`: optional string fields, `None` when absent or
+non-string, no verdict attached. They exist so
+`coordinator_core.session.reachability` can build a `SendMessage` address
+without a second parser over this same directory — see that module's
+docstring for the ref-derivation and ambiguity-disambiguation this unlocks.
+Like every other field here, reading them attaches no liveness meaning:
+`session_live()` and this module's own callers continue to key off `pid` +
+`start_epoch` only.
 
 `self_record()` (added `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
 § C1, spike-verified anchor; cite `example-doctrine-repo@642195ba` / follow-up
@@ -59,12 +71,22 @@ Negative-spec:
       "simplifying" a `None` return into a dead verdict reintroduces a
       wrongful-takeover failure this fleet has already suffered twice
       (example-doctrine-repo 642195ba, follow-up 88929bea).
-    - `updatedAt`, `statusUpdatedAt`, and `status` are read NOWHERE in this
-      module. They track busy/idle transitions, not process liveness: a
-      continuously-working session was measured carrying a 1465-second-old
-      `updatedAt` — worse than the existing 30-minute recency window, not
-      better. A grep for those three names inside `coordinator_core/session/`
-      must return hits only in this block.
+    - `updatedAt` and `statusUpdatedAt` are read NOWHERE in this module, at
+      any call site, forever. They track busy/idle transitions, not process
+      liveness: a continuously-working session was measured carrying a
+      1465-second-old `updatedAt` — worse than the existing 30-minute
+      recency window, not better. `status` is the ONE exception, added
+      `state/handoffs/2026-08-13-live-peer-roster.md` § 3: it MAY be parsed,
+      display-only, exactly like `cwd`/`name` (string-or-None, no verdict
+      attached) — it must NEVER be read as an input to any liveness,
+      reachability, or claim-verdict computation anywhere in this tree. The
+      1465-second measurement above is the reason why, and that finding
+      stands unchanged. A grep for `updatedAt`/`statusUpdatedAt` inside
+      `coordinator_core/session/` must return hits only in this block; a
+      grep for `status` may additionally hit `_parse_one`'s parse line,
+      `RegistryRecord.status`'s field, and a display-only consumer (e.g.
+      `coordinator_core.session.peer_roster`) — never a verdict/liveness
+      call site.
     - This module never calls `core.stable_pid_alive`, `psutil.pid_exists`,
       or any raw `pid`-only liveness check — see the RAW-PID-LIVENESS floor
       in `liveness.py`. The registry's `pid` is admissible only paired with
@@ -157,11 +179,31 @@ class RegistryRecord:
     own. Consumers compose a verdict over it (e.g.
     `pickup_assemble.compute_repo_identity_gate`'s containment + plausibility
     check) — this module stays a pure parser.
+
+    `name` is the harness-rendered peer label (e.g. `"claude-klabauter-57"`,
+    ONE cryptographically-random-byte suffix over `slug(basename(cwd))` —
+    see `coordinator_core.session.reachability`, which does not attempt to
+    derive or validate it). `messaging_socket_path` is the opaque string the
+    harness hashes to build a peer's disambiguating `[ref]` — never parsed
+    as a POSIX path here or by any consumer; treat it as bytes-in, hash-out.
+    Both are `None` when the raw record omits them or the field is not a
+    string — same parse-only, no-verdict contract as `cwd`.
+
+    `status` (added `state/handoffs/2026-08-13-live-peer-roster.md` § 3) is
+    the harness's busy/idle label, parsed exactly like `cwd`/`name` — an
+    optional string, `None` when absent or non-string, no verdict attached.
+    It exists for DISPLAY ONLY (`coordinator_core.session.peer_roster`);
+    liveness/reachability/claim-verdict computation must never read it — see
+    this module's own negative-spec above for why `status` is measured worse
+    than the existing liveness window.
     """
 
     pid: int
     start_epoch: float
     cwd: str | None = None
+    name: str | None = None
+    messaging_socket_path: str | None = None
+    status: str | None = None
 
 
 def _proc_start_to_epoch(raw) -> float | None:
@@ -271,7 +313,23 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
     raw_cwd = data.get("cwd")
     cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None
 
-    return session_id, RegistryRecord(pid=pid, start_epoch=start_epoch, cwd=cwd)
+    raw_name = data.get("name")
+    name = raw_name if isinstance(raw_name, str) and raw_name else None
+
+    raw_socket = data.get("messagingSocketPath")
+    messaging_socket_path = raw_socket if isinstance(raw_socket, str) and raw_socket else None
+
+    raw_status = data.get("status")
+    status = raw_status if isinstance(raw_status, str) and raw_status else None
+
+    return session_id, RegistryRecord(
+        pid=pid,
+        start_epoch=start_epoch,
+        cwd=cwd,
+        name=name,
+        messaging_socket_path=messaging_socket_path,
+        status=status,
+    )
 
 
 def snapshot() -> dict[str, RegistryRecord]:

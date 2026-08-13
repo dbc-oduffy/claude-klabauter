@@ -43,9 +43,10 @@ import sys
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 
+from coordinator_core import launchable
 from coordinator_core._settings_home import settings_home
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -370,19 +371,37 @@ def _tier_a() -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _resolve_machine_local() -> Optional[str]:
-    """PATH first, then settings-home, then the legacy ~/.claude/bin fallback."""
+    """PATH first, then settings-home, then the legacy ~/.claude/bin fallback.
+
+    Existence alone gates the settings-home/fallback candidates -- an exec bit
+    is no longer required now that every rung is launched through an
+    interpreter (see `_machine_local_launch_argv`); a PATH hit via
+    `shutil.which` is exec-bit-verified by the OS's own PATH search already.
+    """
     found = shutil.which("machine-local")
     if found:
         return found
 
     settings_home_candidate = settings_home() / "bin" / "machine-local"
-    if settings_home_candidate.is_file() and is_executable(settings_home_candidate):
+    if settings_home_candidate.is_file():
         return str(settings_home_candidate)
 
     fallback = Path.home() / ".claude" / "bin" / "machine-local"
-    if fallback.is_file() and is_executable(fallback):
+    if fallback.is_file():
         return str(fallback)
     return None
+
+
+def _machine_local_launch_argv(ml_bin: str) -> List[str]:
+    """Interpreter-prefix `ml_bin` for a bare-exec launch: `machine-local` is an
+    extensionless coordinator/bin sibling, so `resolve_launchable()` is POSIX-bare
+    by design and is not the fix there -- prefix `sys.executable` directly on
+    POSIX. On Windows keep `resolve_launchable()`'s `.cmd`-twin preference and
+    shebang sniffing, which are load-bearing on this repo's P0 primary platform.
+    """
+    if launchable._is_windows():
+        return launchable.resolve_launchable(ml_bin)
+    return [sys.executable, ml_bin]
 
 
 def _tier_a5() -> List[str]:
@@ -394,9 +413,10 @@ def _tier_a5() -> List[str]:
     ml_bin = _resolve_machine_local()
     if ml_bin is None:
         return []
+    ml_argv = _machine_local_launch_argv(ml_bin)
     try:
         proc = subprocess.run(
-            [ml_bin, "keys"],
+            [*ml_argv, "keys"],
             capture_output=True,
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
@@ -413,7 +433,7 @@ def _tier_a5() -> List[str]:
     for key in keys:
         try:
             get_proc = subprocess.run(
-                [ml_bin, "get", key],
+                [*ml_argv, "get", key],
                 capture_output=True,
                 text=True,
                 timeout=_MACHINE_LOCAL_TIMEOUT_SECS,

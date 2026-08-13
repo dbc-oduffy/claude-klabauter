@@ -53,6 +53,13 @@ Consumes manifest (the Director of Engineering F3, AC16) — orchestrates, reimp
     archive-stamp-cli / session-claim-cli / coordinator-queue-append /
         coordinator-tasks-mirror / refresh-roadmap-callout -> named directives[],
         never invoked in-process (they mutate; this module does not)
+    coordinator_core.reconcile.commit_reality.evaluate_commit_reality -> gates.
+        commit_reality (C2, DR-300 route (d)) — the single-baton HEAD-consistency
+        verdict for the artifact under pickup, called exactly as
+        `handoff_reconcile._handler` constructs it (including
+        `_chain_ancestor_norm_paths`/`_norm_path` ancestor exclusion from the
+        cross-handoff attribution guard's `other_open_handoffs`); never
+        `handoff.reconcile_open` itself (see Negative-spec below)
 
 Negative-spec:
     - Do NOT add a mutating code path here. A finding that "the assembler should
@@ -116,6 +123,11 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
     format_addressee_message as _format_addressee_message,
 )
 from coordinator_core.ops.handoff_gate_aging import check_one as _gate_aging_check_one
+from coordinator_core.ops.handoff_reconcile import (
+    _chain_ancestor_norm_paths,
+    _collect_open_handoffs,
+    _norm_path,
+)
 from coordinator_core.pickup_assemble.holder_evidence import (
     holder_evidence as _holder_evidence,
 )
@@ -123,6 +135,8 @@ from coordinator_core.ops.parse_completeness_item import (
     _Malformed as _CompletenessMalformed,
     parse_completeness_item as _parse_completeness_item,
 )
+from coordinator_core.reconcile.commit_reality import evaluate_commit_reality
+from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import harness_registry as _harness_registry
@@ -4262,6 +4276,123 @@ _SUCCESSOR_LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
 _SUCCESSOR_LIVE_STATUSES = frozenset({"open", "active"})
 
 
+#: `compute_commit_reality`'s programming-error class — judged against what
+#: this function's own new logic (not the corpus walk it wraps) can
+#: actually raise: a `TypeError`/`AttributeError` from an unexpected
+#: `this_handoff`/`fm` shape, or a `NameError` from a future edit. Logged
+#: via `_LOG.exception` (traceback) rather than `_LOG.warning`, distinct
+#: from the environmental class (unreadable policy file, malformed
+#: frontmatter elsewhere in the open set, git spawn failure) the fail-soft
+#: wrap was written for.
+_PROGRAMMING_ERROR_TYPES = (TypeError, AttributeError, NameError)
+
+
+def compute_commit_reality(root: Path, fm: dict[str, Any], artifact_live_path: Path) -> dict[str, Any]:
+    """`gates.commit_reality` (C2, DR-300 route (d)) — the single-baton
+    HEAD-consistency verdict for the ONE artifact under pickup, EM-judgment
+    evidence only, never a directive.
+
+    Mirrors `handoff_reconcile._handler`'s own call construction
+    (docs/decisions/DR-300-pickup-may-not-call-the-reconcile-orchestrator.md;
+    mechanism proven standalone by
+    docs/research/spike-verdicts/2026-08-13-evaluate-commit-reality-standalone-single-baton.md):
+    an open-set walk (`_collect_open_handoffs`) populates
+    `other_open_handoffs` — passing `[]` would silently disable the
+    cross-handoff attribution guard and over-claim `auto-ship`, measured on 2
+    of 6 candidate-producing batons in the spike — and
+    `_chain_ancestor_norm_paths`/`_norm_path` exclude this artifact's own
+    pinned-lineage ancestors from that guard set, the same exclusion the
+    orchestrator applies to itself. NOT a literal mirror at the self-
+    exclusion mechanism itself: the handler excludes by object identity
+    (`h is not handoff`), this function by path equality
+    (`_norm_path(...) != this_norm_path`). The adaptation is necessary, not
+    optional — `this_handoff` here is a freshly built `dict(fm)` that is
+    never identity-present in the walked `open_handoffs` set, so identity
+    exclusion would be a silent no-op on this call path; path equality is
+    the correct rewrite of the same intent, not a drift from it.
+
+    `load_policy(None)` resolves the shared policy read-only (no
+    `policy_path` override, no env var set here) — `dry_run` plays no part in
+    this call since `evaluate_commit_reality` itself never writes; only the
+    denylist/attribution-guard/three-signal tunables it carries are read.
+
+    Calls `evaluate_commit_reality` directly — the pure per-handoff function
+    — never `handoff.reconcile_open`, which writes `surfaced-history.json` in
+    every mode it has (DR-300 § "Why the decline holds").
+
+    Fail-soft (house pattern — see `_holder_from_claim_state`'s
+    `resolve_claim_state` guard above): unlike ~83 other `brief()` compute
+    sites, this one walks the ENTIRE open-handoff corpus
+    (`_collect_open_handoffs`, ~132 files on the live corpus), loads policy
+    from disk, and spawns git (`evaluate_commit_reality`) — any one of a
+    malformed frontmatter file elsewhere in the open set, an unreadable
+    policy file, or a git failure must not take down `brief()` for the ONE
+    baton actually being picked up. A raise here degrades to a
+    `verdict: "unavailable"` result carrying the same dict shape (so callers
+    never special-case it) with the failure reason folded into `evidence[]`,
+    never propagated — the EM reading the brief learns the check could not
+    run rather than losing the whole brief. The degrade itself stays
+    unconditional (availability on the pickup path outranks loudness — a
+    propagating error takes pickup down for every baton, worse than a quiet
+    degrade) but the *signal* is not: `_PROGRAMMING_ERROR_TYPES` (`TypeError`,
+    `AttributeError`, `NameError` — the classes this function's own new
+    logic, not the corpus walk, can raise) log via `_LOG.exception` so the
+    traceback reaches the log and the `evidence[]` entry names it a
+    "(likely a pickup_assemble bug)"; everything else (malformed frontmatter,
+    unreadable policy, git spawn failure — the environmental class the wrap
+    was written for) still logs at `_LOG.warning` with no such tag. Either
+    way the returned dict shape is identical — callers never special-case it.
+    """
+    try:
+        this_handoff = dict(fm)
+        this_handoff["_path"] = str(artifact_live_path)
+        this_norm_path = _norm_path(str(artifact_live_path))
+
+        open_handoffs = _collect_open_handoffs(root)
+        ancestor_norm_paths = _chain_ancestor_norm_paths(this_handoff)
+        other_open = [
+            h for h in open_handoffs
+            if _norm_path(str(h.get("_path") or "")) != this_norm_path
+            and _norm_path(str(h.get("_path") or "")) not in ancestor_norm_paths
+        ]
+
+        policy_result = load_policy(None)
+        return evaluate_commit_reality(this_handoff, root, policy_result.policy, other_open)
+    except _PROGRAMMING_ERROR_TYPES as exc:
+        # Review: coordinator:code-reviewer — a defect in this call site's
+        # own logic must not read forever as "policy unavailable this run"
+        # at a level easy to miss; log loud, still degrade rather than
+        # propagate (availability on the pickup path is the reason the wrap
+        # exists at all).
+        _LOG.exception(
+            "pickup_assemble: commit_reality check failed for %s — likely a "
+            "pickup_assemble programming error, not an environmental "
+            "failure; surfacing as unavailable rather than failing the brief",
+            artifact_live_path,
+        )
+        return {
+            "handoff_id": fm.get("id") or fm.get("title") or "",
+            "candidate_sha": None,
+            "confidence": "none",
+            "evidence": [f"commit_reality check unavailable (likely a pickup_assemble bug): {exc}"],
+            "verdict": "unavailable",
+        }
+    except Exception as exc:
+        _LOG.warning(
+            "pickup_assemble: commit_reality check failed for %s — %s; "
+            "surfacing as unavailable rather than failing the brief",
+            artifact_live_path,
+            exc,
+        )
+        return {
+            "handoff_id": fm.get("id") or fm.get("title") or "",
+            "candidate_sha": None,
+            "confidence": "none",
+            "evidence": [f"commit_reality check unavailable: {exc}"],
+            "verdict": "unavailable",
+        }
+
+
 def compute_successor_handoffs(
     root: Path,
     artifact_path: str,
@@ -6939,6 +7070,7 @@ def brief(
     if classification in ("handoff", "spinoff"):
         artifact_live_path = root / artifact["path"]
         aging_verdict = compute_aging_verdict(artifact_live_path)
+        commit_reality = compute_commit_reality(root, fm, artifact_live_path)
         # Claim FIRST, then read the claim state: both reads below must see
         # the post-acquisition truth, or this brief would narrate "no
         # competing claim" about a lock it just took itself.
@@ -7098,6 +7230,7 @@ def brief(
                         "aging_verdict": aging_verdict,
                         "liveness_signal": liveness_fired,
                         "competing_claim": competing_claim,
+                        "commit_reality": commit_reality,
                         "coast": compute_coast(
                             live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
                         ),
@@ -7242,6 +7375,7 @@ def brief(
             "aging_verdict": aging_verdict,
             "liveness_signal": liveness_fired,
             "competing_claim": competing_claim,
+            "commit_reality": commit_reality,
             "coast": compute_coast(judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence),
         }
         if gate_check is not None:

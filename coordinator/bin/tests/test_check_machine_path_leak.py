@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """tests/test_check_machine_path_leak.py — Tests for bin/check-machine-path-leak.py.
 
 Purpose: Verifies that the machine-path-leak guard correctly blocks settings.json

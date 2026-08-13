@@ -31,9 +31,34 @@ confidence -- the tier determines whether a class can block or only report:
     narrow and, when hit, surfaces as an immediately-resolvable EXEMPTIONS
     case rather than a silent trap -- see the per-class failure-message
     text in `check_against_baseline`.
-  - **Tier D** (part of `REPORT_ONLY_CLASSES`) — `unresolved_cross_path`,
-    a config/content class that must reconcile with (not duplicate)
-    `check-machine-path-leak.py`.
+  - **Tier C, narrowed and promoted** (part of `CLASSES`) —
+    `unresolved_cross_path`, promoted to BLOCKING 2026-08-13 (eng-director
+    ruling, `state/audits/2026-08-13-the Director of Engineering-carveout-and-cross-path-ruling.md`
+    § Q2.1) after its WIDE definition was re-measured and found defective,
+    not merely unread: a live re-run against this tree produced 178
+    findings, of which **127 (~71%) matched only the class's own
+    `<drive-letter>:[\\/]` arm** and were, in the main, this repo's own
+    Windows-portability layer being flagged for existing --
+    `pyresolve.py`'s `os.path.join("C:\\Program Files", ...)` interpreter-
+    discovery ladder, `break_glass.py`'s `_TMP_SHAPE_MARKERS` Windows
+    temp-path SYNTAX RECOGNITION. That is the identical defect shape that
+    got `path_separator`/`posix_mode_bits` demoted then promoted back on
+    2026-07-28 -- a blocking class this noisy trains authors to route
+    around the guard, the module's own stated reason for that July
+    precision fix. **The drive-letter arm is dropped entirely** (a
+    precision decision, not a scope reduction -- see the class's own
+    Report-only-turned-blocking entry below for the measurement and the
+    negative-spec bullet closing the re-widening path). The surviving
+    home-rooted arm is further narrowed to CURRENT-MACHINE operator-home
+    literals only, reusing (not reinventing) the discrimination
+    `coordinator/bin/check-machine-path-leak.py` already draws for
+    `working-repos.yaml` ("current-machine-home-rooted only") -- see
+    `_current_machine_home()` below. After both narrowings the tracked
+    population is a small, fixable drain, not a debt corpus, so this class
+    is gated at ZERO from day one like `implicit_encoding` and Tier A --
+    **no baseline entry for it, ever** (a baseline here would be the
+    grandfather-list failure this same ruling's evidence names: a baseline
+    that sat unmoved from the day it was frozen).
   - **Residual** (part of `REPORT_ONLY_CLASSES`) — `unclassified`, a
     permanent catch-all so a Windows-hostile construct is never silently
     passed merely because no precise named class fits it yet.
@@ -121,30 +146,89 @@ Tier B / blocking classes (ratcheted against a frozen baseline):
     docstring for the stated gap; hitting it surfaces as an EXEMPTIONS-
     resolvable failure message, not a silent trap.
 
-Tier D / residual — report-only classes (scanned, counted, and listed every
-run, but NEVER fail `check_against_baseline` or `assert_baseline_not_grown`
-— see Report-only contract below):
-
-  - `unresolved_cross_path` — a tracked `.py` file containing a hardcoded
+  - `unresolved_cross_path` — BLOCKING, zero-tolerance (no baseline, ever),
+                            promoted 2026-08-13 from a WIDE, report-only
+                            definition (2026-08-13 eng-director ruling,
+                            `state/audits/2026-08-13-the Director of Engineering-carveout-and-
+                            cross-path-ruling.md` § Q2.1). The WIDE
+                            definition this class used to carry was: a
+                            tracked `.py` file containing a hardcoded
                             cross-machine/cross-drive path literal
-                            (`/Users/<name>/...`, `/home/<name>/...`,
-                            `<drive-letter>:\\...`) that does not resolve via
-                            `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-
-                            claude-settings}` or the machine-local `repos.*`
-                            registry. Scanned via AST on `.py` files only,
+                            (`/Users/<name>/...`, `/home/<name>/...`, OR
+                            `<drive-letter>:\\...`) that does not resolve
+                            via `${COORDINATOR_SETTINGS_HOME:-$HOME/
+                            .coordinator-claude-settings}` or the
+                            machine-local `repos.*` registry. A live
+                            re-measurement against this tree found that
+                            definition DEFECTIVE, not merely unread: 178
+                            findings, of which **127 (~71%) matched only
+                            the `<drive-letter>:[\\/]` arm** and were, in
+                            the main, this repo's own Windows-portability
+                            layer being flagged for existing --
+                            `pyresolve.py`'s Windows interpreter-discovery
+                            ladder (`os.path.join("C:\\Program Files",
+                            ...)`), `break_glass.py`'s
+                            `_TMP_SHAPE_MARKERS` Windows temp-path SYNTAX
+                            RECOGNITION. That is the identical false-
+                            positive shape that got `path_separator`/
+                            `posix_mode_bits` demoted-then-repromoted on
+                            2026-07-28: a blocking class this noisy trains
+                            authors to route around the guard, the same
+                            reason cited for that July precision fix.
+
+                            THE NARROWED DEFINITION (current, live): the
+                            `<drive-letter>:[\\/]` arm is DROPPED
+                            ENTIRELY -- a precision decision, not a scope
+                            reduction, evidenced by the 127/178
+                            measurement above. The surviving home-rooted
+                            arm (`/Users/<name>/...`, `/home/<name>/...`)
+                            is narrowed FURTHER to literals rooted at the
+                            CURRENT MACHINE's own operator home directory
+                            only -- a synthetic `/Users/alice` in a
+                            fixture is test data, not a leak; a literal
+                            matching THIS machine's `$HOME` (or
+                            `os.path.expanduser("~")`/`%USERPROFILE%`
+                            fallback) breaks on every other machine and on
+                            Windows. This reuses, rather than reinvents,
+                            the exact discrimination
+                            `coordinator/bin/check-machine-path-leak.py`
+                            already draws for `working-repos.yaml`
+                            ("current-machine-home-rooted only") -- see
+                            `_current_machine_home()` below; that script
+                            is a hyphenated `coordinator/bin/` CLI
+                            (fleet-wide convention: invoked as a
+                            subprocess, never imported -- see its own test
+                            suite), so its logic is REUSED by mirroring
+                            its two-line computation with a citation, not
+                            by a fragile `importlib.util` load of a
+                            dash-named script. After both narrowings the
+                            live population is small enough to fix
+                            outright (twelve tracked files at ruling
+                            time), so this class is gated at ZERO like
+                            `implicit_encoding` and Tier A -- no baseline
+                            entry for it, ever; see `CLASSES`' own comment
+                            for why a baseline here would reproduce this
+                            plan's own thesis.
+
+                            NEGATIVE-SPEC: re-widening this class's
+                            literal-matching back to include a
+                            `<drive-letter>:[\\/]` arm re-flags this
+                            repo's own correct Windows-portability code
+                            (the 127/178 measurement above) -- it is not a
+                            safe restoration of coverage, it is
+                            reintroducing the exact defect this narrowing
+                            fixes. Scanned via AST on `.py` files only,
                             deliberately narrower than a repo-wide text-grep
                             (see Reconciliation with check-machine-path-
                             leak.py below) -- markdown/wiki prose citing an
                             example path is out of scope by construction, not
-                            merely tolerated. The drive-letter pattern is
-                            anchored to the ABSOLUTE start of the string (no
-                            `re.MULTILINE`), closing the fleet's known
-                            `[A-Za-z]:[/\\]`-matches-"https://" trap -- see
-                            the pattern's own inline comment and
-                            `test_scan_does_not_flag_url_with_single_letter_
-                            looking_scheme` / `test_scan_does_not_flag_
-                            short_scheme_url_variants` for the fixtures
-                            proving it holds.
+                            merely tolerated (docstrings are excluded from
+                            literal matching, see Negative-spec below).
+
+Tier D / residual — report-only classes (scanned, counted, and listed every
+run, but NEVER fail `check_against_baseline` or `assert_baseline_not_grown`
+— see Report-only contract below):
+
   - `unclassified`         — a residual bucket for other POSIX-only-smelling
                             constructs that don't yet warrant a dedicated
                             named class: `os.fork`/`os.uname`/
@@ -245,6 +329,46 @@ on Windows) and are governed by the parallel, sanctioned two-way test in
 `docs/reference/posix-portability-fix-vs-carveout.md` instead, not by this
 paragraph. Do not weaken this paragraph's bar for the entrypoint-identity
 classes it does govern.
+
+A THIRD admission test governs a grant the two-leg-pair test cannot reach:
+**permanent artifact-shape irreducibility** (2026-08-13 eng-director
+ruling, `state/audits/2026-08-13-the Director of Engineering-carveout-and-cross-path-ruling.md`
+§ Q1.c). This is not a fourth carve-out concept -- it is the artifact-side
+RESTATEMENT of the rule `docs/reference/shell-out-carve-outs.md` already
+carries for call-sites: its classes (c)/(d)/(e) are sanctioned because
+"their subject is the interpreter or shell itself." Where a FILE's own
+subject is the interpreter or shell that would have to run its port, the
+two-leg-pair test's "a Windows-invocable counterpart exists" bar has no
+content to deliver -- porting is not an available action, so the override
+is inapplicable by construction, not overridden. A grant under this test
+needs all four items below, or no grant, same discipline as every other
+EXEMPTIONS bar in this module:
+
+  1. **The mechanism, stated concretely, not a bucket label.** "bootstrap-
+     circular" is a label; "resolves PYTHON_BIN before any Python exists
+     to run" is a mechanism.
+  2. **Permanence, not contingency.** The port must be impossible by the
+     artifact's OWN nature, not impossible merely while some peer artifact
+     happens to stay shell-shaped -- a row whose impossibility depends on a
+     peer artifact's current shape is migration debt, not this test, and
+     belongs in a baseline instead.
+  3. **The Windows leg, named -- or explicitly stated absent.** Either the
+     artifact that carries this capability on Windows, or a plain
+     statement that none exists. Windows is P0: no Windows leg on a hot
+     path is break-class, and no register entry here saves it.
+  4. **A live caller, named -- or an explicit statement that none was
+     found in this repo.**
+
+Elimination-target clause, required alongside the four items above --
+without it this test becomes a permanent home for anything that merely
+runs early. Where porting is unavailable by construction, hot-path status
+does NOT authorize the artifact to persist: it sets the PRIORITY of
+eliminating the need for it by other means -- resolving the interpreter
+(or probing the shell) at install time and writing the resolved answer, so
+no runtime shim runs at all. Hot-path + unportable is a standing reduction
+target with an owner, not a settled row -- the same "standing reduction
+target" teeth class (b) in `shell-out-carve-outs.md` already carries for
+local git hooks.
 
 Keying (repo-scoped, closed 2026-08-03 — was the example-doctrine-repo memo of
 2026-07-28's open caveat): EXEMPTIONS is keyed
@@ -436,13 +560,21 @@ CLASSES: Tuple[str, ...] = (
     "mode_100755",
     "path_separator",
     "posix_mode_bits",
+    "unresolved_cross_path",
 )
 
 # Report-only classes: scanned and printed every run, never gate the build,
 # never persisted into the baseline JSON, never counted by the append-
 # forbidden growth check.
+#
+# `unresolved_cross_path` is NOT here -- it was promoted to BLOCKING (above)
+# 2026-08-13 after being narrowed (module docstring, Q2.1 ruling). It stays
+# gated at zero with NO baseline entry, same discipline as
+# `implicit_encoding`/Tier A, not ratcheted like the rest of `CLASSES`; a
+# test asserts its absence from this tuple so a future demotion back to
+# report-only fails red instead of passing quietly (see
+# `test_unresolved_cross_path_is_not_report_only`).
 REPORT_ONLY_CLASSES: Tuple[str, ...] = (
-    "unresolved_cross_path",
     "unclassified",
 )
 
@@ -868,6 +1000,86 @@ _REASON_MSYS_TRANSLATE_WINDOWS_GUARDED = (
     "failure message forbids."
 )
 
+_REASON_PS51_TARGET_SYNTAX = (
+    "_build_ps_command() escapes a path to backslash form before embedding "
+    "it in a single-quoted PowerShell literal handed to a `powershell.exe` "
+    "subprocess -- the string's destination interpreter is Windows PowerShell "
+    "5.1, unconditionally, regardless of which host is running this Python "
+    "process. os.sep reflects the host running THIS code, not the syntax the "
+    "downstream interpreter parses; PS 5.1 itself accepts forward slashes "
+    "fine (own comment), so this exists purely for byte-parity with the "
+    "predecessor bash oracle's Windows-native path form, not correctness. "
+    "The construct is still not a local filesystem operation -- no open()/ "
+    "os.path call ever sees the backslashed value -- so os.sep would be "
+    "orthogonal to what it does, not a stronger fix."
+)
+
+_REASON_CHMOD_HOOK_POSIX_EXEC = (
+    "Sets the POSIX exec bit (0o755) on a generated git-hook script whose "
+    "own first line is a hardcoded `#!/bin/sh` shebang -- git invokes hooks "
+    "by direct execution (shebang dispatch), which requires the exec bit on "
+    "POSIX. On Windows the bit is a harmless no-op (NTFS has no POSIX mode "
+    "bits; os.chmod's exec argument is silently ignored) and Windows git's "
+    "own hook-execution path does not consult it, so this call is neither "
+    "wrong nor a decision Windows lies about -- it is dead weight there, not "
+    "a portability bug. Nothing here reads the bit back as a decision input "
+    "(the FIX-class shape); it only sets the one mode the hook needs to fire "
+    "on the platform where the mode matters at all."
+)
+
+_REASON_NORMALIZE_ENV_CHMOD_WINDOWS_GUARDED = (
+    "_ne_darwin_bash_profile_repair()'s body (including its os.chmod call "
+    "preserving the pre-existing ~/.bash_profile mode across an atomic swap) "
+    "is gated by a bare `if sys.platform == \"win32\": return` early return "
+    "with no `else:`, added in this same convergence -- exactly the KNOWN, "
+    "NAMED gap in `_is_windows_guarded()` this module's own docstring "
+    "describes (a bare early-return guard clause is not yet recognized as "
+    "branch-guarding the sibling statements that follow it). The call is "
+    "also only ever reached from main() behind its own `if os_name == "
+    "\"Darwin\":` call-site guard, a second, cross-function layer "
+    "`_is_windows_guarded()` cannot see at all since it only walks the "
+    "enclosing function's own AST. Adding a cosmetic `else:` purely to "
+    "satisfy the detector is exactly what the gate's own failure message "
+    "forbids."
+)
+
+_REASON_CHMOD_RMTREE_UNBLOCK = (
+    "os.chmod(target_path, 0o777) runs inside shutil.rmtree's onerror "
+    "callback to clear a read-only file/directory that is blocking "
+    "deletion, then immediately retries the delete. This is a write-only "
+    "state-setting op, never a decision input: nothing reads the bit back "
+    "afterward, so the FIX-class concern (Windows silently lying about a "
+    "value a decision depends on) does not apply -- os.chmod's write side "
+    "works correctly on both platforms (on Windows it clears the "
+    "FILE_ATTRIBUTE_READONLY flag, the documented stdlib workaround for "
+    "this exact rmtree failure mode). Trimming the exec bits out of the "
+    "literal is not a real port either: target_path may be a directory "
+    "here (onerror fires for both file and directory removal failures), "
+    "and a directory needs its execute bit set on POSIX to be traversed/ "
+    "emptied at all -- narrowing to 0o666 would silently reintroduce the "
+    "same rmtree failure for a read-only directory tree. The broad literal "
+    "is the correct, minimal construct for a callback that does not know "
+    "in advance which of the two node types it was called for."
+)
+
+_REASON_ASSERT_EXEC_BIT_BARE_EARLY_RETURN_GUARDED = (
+    "assert_exec_bit()'s `st.st_mode & 0o111` check is the sole caller-side "
+    "user of the `path.stat().st_mode & 0o111` construct this module "
+    "flags, and it only runs after `if os.name == \"nt\": return` -- a bare "
+    "early-return guard with no `else:`, the exact KNOWN, NAMED gap in "
+    "`_is_windows_guarded()` documented in that function's own docstring "
+    "(it recognizes a nested `If` and the short-circuit `and`-chain shape, "
+    "not this one). The function's own docstring already states the real "
+    "invariant: NTFS has no POSIX exec bit, so the assertion would be a "
+    "no-op false-negative on Windows regardless of what the installer did, "
+    "and git execs hooks through its own bundled sh rather than a "
+    "PATHEXT/CreateProcess launch, so the bit is a genuine no-op there too "
+    "-- there is nothing to port; the guard already exists and is correct, "
+    "just in a shape this detector's cross-statement analysis does not "
+    "see. Adding a cosmetic `else:` purely to satisfy the detector is the "
+    "anti-pattern this module's own docstring rejects."
+)
+
 _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
     "`os.access(script_path, os.X_OK)` in `_run_one_entrypoint` only runs "
     "when `interpreter is None`, and `_resolve_entrypoint_gate_interpreter` "
@@ -881,6 +1093,172 @@ _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
     "would otherwise lie (returns True for any readable file). Restructuring "
     "the call site to satisfy the detector would not change what actually "
     "runs; the invariant already holds."
+)
+
+_REASON_GEN_SETTINGS_HOOKS_C7 = (
+    "Two distinct path_separator constructs, both carve-outs, in "
+    "gen_settings_hooks.py: (1) `_DRIVE_LETTER_RE = re.compile(r\"[A-Za-z]:"
+    "[\\\\/]\")`, consulted only by `_assert_portable_command`'s structural "
+    "backstop that a resolved coordinator_root never leaked a raw Windows "
+    "drive-letter form into an emitted hook command -- this parses Windows "
+    "path SYNTAX appearing in scanned command text, never opens a "
+    "filesystem path (REASON_WIN_SYNTAX_IN_TEXT's territory). (2) "
+    "`coordinator_root = coordinator_root.replace(\"\\\\\", \"/\")`: "
+    "Review: an earlier draft of this reason claimed the normalized value "
+    "is never opened -- false. `run()` calls `os.path.isdir(coordinator_root)` "
+    "on the very next statement after this normalization, a real filesystem "
+    "stat on the literal-normalized string. The carve-out still holds, on "
+    "different grounds: `os.path.isdir` (and the Windows filesystem API it "
+    "wraps) accepts forward-slash paths interchangeably with backslash, so "
+    "the normalization does not break that call. It is also required "
+    "independently for `coordinator_root`'s OTHER consumers in the same "
+    "function -- it is resolved once per run and then interpolated into "
+    "emitted hook command strings (via `_rewrite_cpr`) that are themselves "
+    "invoked through POSIX sh even under Git-Bash on Windows (own comment: "
+    "'mirrors bash's belt-and-suspenders normalisation ... canonical fix "
+    "lives at the machine-local cmd_get emission point, this is "
+    "defense-in-depth') -- forward-slash form is the CORRECT form for that "
+    "downstream shell dialect regardless of host, the same territory "
+    "REASON_CANON_STRING/REASON_SHELL_EMBED_FORWARD_SLASH cover elsewhere. "
+    "os.sep would reflect the host running this generator, not the shell "
+    "dialect the emitted command is later parsed by -- wrong for both the "
+    "`isdir` check (though tolerated there) and the shell-interpolation "
+    "consumers (not tolerated there)."
+)
+
+_REASON_GEN_SETTINGS_HOOKS_TEST_C7 = (
+    "Two distinct path_separator constructs, both carve-outs, mirroring the "
+    "module under test: (1) `_DRIVE_LETTER_RE`, a copy of the production "
+    "regression-detection regex used by this test module's own assertions "
+    "that no Windows drive-letter form leaked into generated settings.json "
+    "-- parses Windows path SYNTAX in scanned output text, not a filesystem "
+    "path (REASON_WIN_SYNTAX_IN_TEXT). (2) "
+    "`backslashed = str(coordinator_root).replace(\"/\", \"\\\\\")` in "
+    "test_windows_backslash_coordinator_root_is_normalised: constructs a "
+    "Windows-shaped FIXTURE value fed to `generate()` to exercise the "
+    "backslash-normalization arm directly -- the backslash is the shape "
+    "under test, so os.sep would silently rewrite the specimen back to "
+    "forward-slash form on POSIX and the test would stop exercising the "
+    "arm it exists for (REASON_WIN_SYNTAX_AS_FIXTURE's territory)."
+)
+
+_REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP = (
+    "The two flagged `dst.stat().st_mode & stat.S_IXUSR` sites (in "
+    "test_install_one_identical_dst_still_applies_exec_bit and "
+    "test_install_one_diverging_dst_force_overwrite_applies_exec_bit) are "
+    "both inside functions decorated `@_EXEC_BIT_SKIP` -- a module-level "
+    "`pytest.mark.skipif(os.name == \"nt\", reason=...)` (own docstring: "
+    "'NTFS has no POSIX exec bit ... this exec-bit-only assertion has no "
+    "Windows analogue'). This is a real, structural Windows guard, but at "
+    "the pytest-decorator level -- `_is_windows_guarded()` walks enclosing "
+    "`If`/`and`-chain AST nodes only, per its own docstring, and does not "
+    "see a decorator attached to the enclosing FunctionDef. The sibling "
+    "assertions at the SAME construct shape, guarded inline instead "
+    "(`if os.name != \"nt\": assert dst.stat().st_mode & stat.S_IXUSR`, "
+    "lines ~281/~339) are correctly recognized and do not fire -- proving "
+    "the gap is specifically the decorator shape, not the construct itself. "
+    "Rewriting these two sites to use the inline-guard shape purely to "
+    "satisfy the detector would be the same class of cosmetic churn the "
+    "module's own guidance forbids for the bare-early-return gap; the "
+    "decorator already fully guards the code on the platform where the "
+    "assertion is meaningless."
+)
+
+_REASON_CONFIG_PATH_FOREIGN_AUTHORED = (
+    "Normalizes a config-supplied path value (plugin manifest "
+    "`live_path`/`source_path`) that may have been authored on either "
+    "platform to forward-slash form before resolving it via `pathlib.Path` "
+    "on this host. os.sep only reflects the host running this code, not "
+    "the platform the config was written on, and would leave a "
+    "foreign-authored backslash unrecognized by `PurePosixPath` parsing on "
+    "a POSIX host; forward-slash is the one separator `pathlib.Path` "
+    "accepts natively on every platform, making this the correct "
+    "normalize-before-resolve idiom."
+)
+
+_REASON_CHMOD_RELATIVE_INVARIANT = (
+    "Sets an arbitrary starting file mode via `os.chmod` only to assert an "
+    "atomic-write preserves it -- a before/after relative invariant, not a "
+    "specific POSIX bit pattern. On a platform with no real POSIX mode "
+    "bits (`os.stat().st_mode & 0o777` always the same degenerate value "
+    "regardless of `chmod`'s argument), both sides of the comparison read "
+    "that same value and the assertion still holds; this is a platform "
+    "semantic gap no code change can close, not a POSIX assumption in the "
+    "test."
+)
+
+_RESOLVE_PYTHON_SH_IRREDUCIBILITY_REASON = (
+    "coordinator/lib/resolve-python.sh -- granted under the third "
+    "EXEMPTIONS admission test (permanent artifact-shape irreducibility, "
+    "2026-08-13 eng-director ruling), not the two-leg-pair test above: "
+    "porting this file to Python is literally circular, since its entire "
+    "job is resolving PYTHON_BIN/PYTHON_ARGS before any Python interpreter "
+    "exists to run a ported replacement. Mechanism: resolves the Python "
+    "interpreter itself (python.org install-dir probe, PATH via `command "
+    "-v` rejecting WindowsApps, `py`/`pyw` launcher fallback) -- nothing to "
+    "invoke a port with. Permanence: the impossibility is intrinsic to "
+    "what the file DOES, not contingent on any peer artifact staying "
+    "shell-shaped. Windows leg: this file IS its own Windows leg -- its "
+    "body branches on Windows-specific resolution logic (python.org "
+    "install dirs, the `py` launcher) and runs under the POSIX-compatible "
+    "shell (git-bash/MSYS) any Windows caller of a sourced bash lib "
+    "already requires; there is no separate counterpart artifact because "
+    "resolution spans both platforms in one script by design. Live "
+    "caller: none found by grep inside claude-klabauter -- the file's own "
+    "docstring states it is sourced by coordinator-claude-plane skills/"
+    "hooks (e.g. strangler-facade.sh via /pickup's consume block), outside "
+    "this repo's Tier-3 reach; per the ruling's Q1.b(ii), that unverified "
+    "fact is not load-bearing for this grant. Elimination-target: hot-path "
+    "status (if confirmed) does not authorize this file to persist -- it "
+    "sets the priority of resolving the interpreter at install time and "
+    "writing the resolved path, so no runtime shim runs at all."
+)
+
+_INVOKING_SHELL_BASH4_PROBE_IRREDUCIBILITY_REASON = (
+    "coordinator/scripts/lib/invoking-shell-bash4-probe.sh -- granted "
+    "under the third EXEMPTIONS admission test (permanent artifact-shape "
+    "irreducibility), the behaviour-under-test twin of resolve-python.sh's "
+    "bootstrap-circularity: porting it to Python would replace the exact "
+    "thing it exists to detect. Mechanism: detects whether the INVOKING "
+    "shell is bash>=4 and emits loud remediation when it is not -- its own "
+    "docstring states it must parse and run correctly under bash 3.2 and "
+    "plain /bin/sh, because that failure mode is the specimen. Permanence: "
+    "the invoking shell IS the subject under test; a Python port could "
+    "only ever observe its OWN interpreter, never the shell that invoked "
+    "it, so the impossibility is intrinsic, not contingent on any peer "
+    "artifact. Windows leg: this file is its own Windows leg -- the same "
+    "/bin/sh-compatible probe runs under whatever POSIX shell (git-bash) "
+    "a Windows caller's sourcing chain already provides; no separate "
+    "counterpart exists because the probe's whole point is to be callable "
+    "from any invoking shell. Live caller: none found by grep inside "
+    "claude-klabauter; per its own docstring and the 2026-08-13 triage it is "
+    "consumed by /pickup's coordinator-claude-plane wiring, outside this "
+    "repo's Tier-3 reach -- not load-bearing for this grant per the "
+    "ruling's Q1.b(ii). Elimination-target: hot-path status does not "
+    "authorize persistence -- the priority is resolving the invoking-shell "
+    "check earlier (e.g. at install time) so fewer runtime probes are "
+    "needed, mirroring class (b)'s standing reduction-target teeth."
+)
+
+_TEST_BIN_SH_POLYGLOT_DIRECT_INVOCATION_IRREDUCIBILITY_REASON = (
+    "coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh -- "
+    "granted under the third EXEMPTIONS admission test (permanent "
+    "artifact-shape irreducibility), behaviour-under-test bucket: it "
+    "verifies cross-repo-memo's POST-RETIREMENT invocation contract (own "
+    "docstring -- the sh/python polyglot trampoline this suite once "
+    "exercised was itself retired 2026-07-21) by spawning real "
+    "interpreters and asserting which one actually runs; the harness's own "
+    "subject is direct-interpreter invocation, so it stays a shell-invoked "
+    "scaffold by design rather than something a Python port would "
+    "preserve unchanged. Mechanism: constructs a scratch PATH exposing "
+    "only a python3 symlink and asserts cross-repo-memo --help resolves "
+    "it directly, no sh trampoline. Windows leg / hot-path: NONE NEEDED -- "
+    "this file's own line 2 self-declares non-hot-path ('interpreter "
+    "spawns run in the CI/local test harness, never the Windows "
+    "interactive coordinator hot-path'), confirmed by 2026-08-13 triage as "
+    "the one row with positive in-file evidence rather than inference. "
+    "Live caller: this repo's own test tier invokes it directly; it is "
+    "not sourced or consumed elsewhere."
 )
 
 #: Fleet repo keys these exemptions are granted FOR. Values are the
@@ -903,6 +1281,8 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator/scripts/setup.py": _CHAIN_WALK_SETUP_SHIM_REASON,
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             "coordinator/bin/scoped-git-commit": _SCOPED_GIT_COMMIT_REASON,
+            "coordinator/lib/resolve-python.sh": _RESOLVE_PYTHON_SH_IRREDUCIBILITY_REASON,
+            "coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh": _TEST_BIN_SH_POLYGLOT_DIRECT_INVOCATION_IRREDUCIBILITY_REASON,
         },
     },
     "extensionless_exec": {
@@ -924,6 +1304,9 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator/scripts/setup.py": _CHAIN_WALK_SETUP_SHIM_REASON,
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             "coordinator/bin/scoped-git-commit": _SCOPED_GIT_COMMIT_REASON,
+            "coordinator/lib/resolve-python.sh": _RESOLVE_PYTHON_SH_IRREDUCIBILITY_REASON,
+            "coordinator/scripts/lib/invoking-shell-bash4-probe.sh": _INVOKING_SHELL_BASH4_PROBE_IRREDUCIBILITY_REASON,
+            "coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh": _TEST_BIN_SH_POLYGLOT_DIRECT_INVOCATION_IRREDUCIBILITY_REASON,
         },
     },
     "path_separator": {
@@ -1004,6 +1387,274 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/write_guards/nudge_shell_shaped_spawn.py": _REASON_TOOL_INPUT_PATH,
             "coordinator_core/write_guards/tests/test_ac5_flip_runtime_probes.py": _REASON_CANON_STRING,
             "coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py": _REASON_CANON_STRING,
+            # C7-guards (2026-08-13): `_normalize`/`_normalize_path`/`_collapse_slashes`
+            # helpers in every one of these `check()`-shaped write guards normalize
+            # `tool_input.file_path` (or `notebook_path`) -- a string supplied by the
+            # editing tool that may already contain either separator depending on the
+            # invoking platform -- to forward-slash form purely so the guard's own
+            # regex/glob/prefix match runs consistently. None of these hand the
+            # normalized value to `open()`/`os.path`/`Path` I/O; `os.sep` would only
+            # recognize this host's native separator and miss a payload written with
+            # the other one. Same idiom already exempted under this reason for
+            # `nudge_new_sh_file_naked_python.py`/`nudge_prose_queue_append.py`/etc.
+            "coordinator_core/write_guards/block_completion_monolith_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_consumed_handoff_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_cutover_phase_hand_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_dev_side_mirror_wiki.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_em_hand_edit_pending_review_integration.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_memo_status_hand_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_priority_ledger_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_subagent_archive_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_subagent_plan_body_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_tracker_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_unauthorized_claude_md_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_baton_body_bar.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_improvement_queue_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_tasks_state_folder_split.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_terminal_artifact_edit.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_windows_subprocess_popup.py": _REASON_TOOL_INPUT_PATH,
+            # `_rel()` test helper normalizes a `Path.relative_to()` result -- a
+            # resolved-path string -- to forward-slash form purely for a test
+            # assertion's string comparison, never a live I/O path; same shape as
+            # `test_bump_out_of_repo_tool_write.py` above.
+            "coordinator_core/write_guards/tests/test_block_cutover_phase_hand_edit.py": _REASON_CANON_STRING,
+            # `_normalize_windows_argv0_head_path_with_spaces`/`_normalize_windows_git_argv0`
+            # rewrite a Windows-drive-letter/root-rooted, backslash-separated argv0
+            # path -- recognized as Windows path SYNTAX appearing in the raw bash
+            # command TEXT being scanned, before tokenization -- to forward-slash form
+            # so the allowlist's basename-identity check recognizes it. The command
+            # string is never opened as a filesystem path by this guard; only parsed
+            # and pattern-matched. Same shape as `_REASON_WIN_SYNTAX_IN_TEXT`'s existing
+            # `fix_concrete_path_citations.py`/`guard_concrete_path_citations.py` entries.
+            "coordinator_core/bash_guards/block_reviewer_bash_outside_allowlist.py": _REASON_WIN_SYNTAX_IN_TEXT,
+            # Same argv0-rewrite idiom as above (3 sites), plus one additional site
+            # (`_git_root_relative_path_denies_repo_root`) that canonicalizes a
+            # repo-relative dirty-file-path STRING (from `git diff --name-only`) and
+            # a `git_root` string for a literal-equality/containment comparison via
+            # `posixpath` -- never resolved against this host's real filesystem via
+            # `os.path`/`Path` I/O. Both shapes are host-independent string handling,
+            # not a live filesystem decision.
+            "coordinator_core/bash_guards/block_subagent_commit.py": _REASON_WIN_SYNTAX_IN_TEXT,
+            # Same argv0-rewrite idiom, 2 sites (git/coordinator-safe-commit-family
+            # and shell/python-interpreter-family basenames) -- Windows path syntax
+            # appearing in scanned command text, never opened by this guard.
+            "coordinator_core/bash_guards/block_subagent_destructive_action.py": _REASON_WIN_SYNTAX_IN_TEXT,
+            # `_base`/`_norm_path` normalize a shlex-split command-line ARGUMENT
+            # (an executable basename, or a testpaths-comparison token) that may have
+            # been typed with either separator by whichever agent/OS composed the
+            # dispatched bash command, to forward-slash form for string comparison
+            # against this module's own configured testpaths/interpreter-name sets.
+            # The one call site that reaches real I/O (`os.path.isdir(os.path.join(cwd,
+            # norm))`) is unaffected: Windows' filesystem API accepts a forward-slash
+            # `norm` component in `os.path.join`/`os.path.isdir` interchangeably with
+            # a backslash one, so the canonicalization does not break that lookup --
+            # it is purely for the preceding string-equality/prefix comparison against
+            # testpaths.
+            "coordinator_core/bash_guards/check_test_suite_invocation.py": _REASON_CANON_STRING,
+            # Multiple sites, all the same underlying shape: (1) `_abs_path` resolves
+            # a path via native `os.path.join`/`Path.resolve()` (correct, host-native
+            # separator throughout) and ONLY THEN forward-slash-normalizes the
+            # resulting STRING for a later substring/containment comparison (deny-
+            # message text, `/coordinator-sessions/`-prefix check) -- the resolve
+            # itself never depends on the literal; (2) `os.path.basename(tok.replace(
+            # "\\", "/"))` extracts a basename from an already-tokenized argv0/env
+            # command token that may carry either separator; (3) `out_gd.strip()
+            # .replace("\\", "/")` canonicalizes `git rev-parse --git-dir` subprocess
+            # TEXT OUTPUT before a `/worktrees/` substring check. None of these three
+            # shapes builds a path this process hands to `open()`/`os.path` I/O using
+            # the literal as the separator -- each is string canonicalization for
+            # comparison, matching `_REASON_CANON_STRING`'s own listed "resolved-path
+            # fallback" and command-token categories.
+            "coordinator_core/bash_guards/dispatch_checks.py": _REASON_CANON_STRING,
+            # C7-ops (2026-08-13): 17 files under coordinator_core/ops/, all
+            # string-canonicalization-for-comparison shapes -- never a hardcoded
+            # separator building a path this process hands to open()/os.path/Path
+            # I/O. `records_query.py` is the one exception (regex escape emission,
+            # REASON_NOT_A_PATH); `verify_ps51_clean.py` is another (emits
+            # Windows path syntax for a powershell.exe subprocess's own literal
+            # syntax, REASON_PS51_TARGET_SYNTAX). `cruft_sweep.py`'s
+            # `_has_git_boundary`/`_has_negative_spec_component` sites (a live
+            # os.walk() Path's own components) WERE ported to
+            # `PurePath(path).parts`; its third site, `_is_pruned_child`, was
+            # tried the same way and reverted -- its own test
+            # (`test_is_pruned_child_recognizes_both_separators`) feeds a
+            # Windows-form string on any host and asserts it still matches,
+            # which `PurePath` (host-native) cannot do -- so it stays the
+            # explicit both-separator check, exempted below as REASON_CANON_STRING.
+            "coordinator_core/ops/bootstrap_orchestrate.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/bootstrap_repo.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/central_run_due.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/ceremony/commit_exec_bit.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/ceremony/renderers.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/check_windows_ssh_binary.py": _REASON_CANON_STRING,
+            # Multiple sites: a dedup-key normalizer for Claude Code's own
+            # activity-log path strings (may be native-Windows or POSIX form,
+            # authored by a different process/platform than this one) plus a
+            # decode helper reconstructing a Windows drive-letter path STRING
+            # from this repo's own encoded project-dir naming scheme -- neither
+            # ever reaches open()/os.path I/O with the literal as the separator.
+            "coordinator_core/ops/discover_working_repos.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/emit/normalizers.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/list_reverse_drift_cmds.py": _REASON_CANON_STRING,
+            # `git ls-files <rel_dir>` pathspecs are POSIX-form by git's own
+            # convention regardless of host; `os.path.relpath(...).replace(...)`
+            # canonicalizes the argument for that consumer, and the sibling
+            # `rel` sites canonicalize for error-text/result-dict comparison --
+            # neither is a hardcoded-separator os.path/Path I/O build.
+            "coordinator_core/ops/normalize_claimed_frontmatter.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/records_query.py": _REASON_NOT_A_PATH,
+            "coordinator_core/ops/setup_rag_decision.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/test_discover_working_repos.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/tests/test_handoff_author_fork.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/verify_ps51_clean.py": _REASON_PS51_TARGET_SYNTAX,
+            "coordinator_core/ops/cruft_sweep.py": _REASON_CANON_STRING,
+            # C7-install (2026-08-13): coordinator_core/install/ cluster, 7 of
+            # 10 files. All path_separator hits here canonicalize a caller-
+            # or env-sourced path STRING (shape (a)) or scan/mock Windows
+            # path SYNTAX (shape (b)) -- none build a hardcoded-separator
+            # path this process hands to open()/os.path/Path I/O.
+            "coordinator_core/install/check_install_singularity.py": _REASON_CANON_STRING,
+            "coordinator_core/install/gen_settings_hooks.py": _REASON_GEN_SETTINGS_HOOKS_C7,
+            "coordinator_core/install/scaffold_structure.py": _REASON_CANON_STRING,
+            "coordinator_core/install/test_check_install_singularity.py": _REASON_WIN_SYNTAX_AS_FIXTURE,
+            "coordinator_core/install/test_gen_settings_hooks.py": _REASON_GEN_SETTINGS_HOOKS_TEST_C7,
+            "coordinator_core/install/tests/test_scaffold_structure.py": _REASON_WIN_SYNTAX_AS_FIXTURE,
+            "coordinator_core/install/tests/test_substrate_migrate.py": _REASON_WIN_SYNTAX_AS_FIXTURE,
+            # C7-coordinator (2026-08-13): encode_project_path() replicates Claude
+            # Code's own directory-naming encoding (every '/', '\\', ':', '.'
+            # becomes '-') so a Windows-authored coordinator_root produces the
+            # same transcript-directory name as a forward-slash one -- see the
+            # function's own Review comment naming the 2026-07-28 2566-row
+            # silent-attribution-loss incident this guards against. os.sep is
+            # the wrong fix: Claude Code's encoding treats BOTH separators as
+            # literal characters to collapse, regardless of the host running
+            # this code.
+            "coordinator/bin/derive-file-attribution.py": _REASON_CANON_STRING,
+            # `_sh_path()`'s own docstring: normalizes a path for interpolation
+            # into a POSIX-`sh` git-hook body -- the hook file is always run
+            # through `sh` (git's hook-execution model) regardless of which
+            # host authored the Python-side value, so the destination's
+            # separator convention is fixed at forward-slash independent of
+            # os.sep. Paths used for actual Python filesystem operations in
+            # this same module are explicitly called out as NOT going through
+            # this helper.
+            "coordinator/bin/lib/git_hook_install.py": _REASON_CANON_STRING,
+            # canonicalize_wiki_target()'s own docstring: collapses the several
+            # equivalent input shapes different routers emit for "the same"
+            # wiki target -- including a backslash-separated variant -- to one
+            # canonical string so two callers' YAML/dedupe keys agree. Not a
+            # filesystem path; os.sep is orthogonal to a router-emitted
+            # semantic identifier.
+            "coordinator/bin/lib/target_wiki_canon.py": _REASON_CANON_STRING,
+            # `_normalise_path()`'s own docstring: normalizes for CROSS-PLATFORM
+            # matching between a CLI-supplied query path and attribution rows
+            # that may have been recorded on a different host/OS than the one
+            # running this query. os.sep only recognizes the querying host's
+            # own convention, missing a row recorded with the other one.
+            "coordinator/bin/query-file-attribution.py": _REASON_CANON_STRING,
+            # Every `.replace("\\\\", "/")` site normalizes a repo-relative
+            # path STRING before a comparison/regex match (`.repomapignore`
+            # patterns, UE Build.cs module-prefix matching, include-graph
+            # in-degree lookups) -- never a live `open()`/`os.path` join. The
+            # source of these strings is a MIX within a single run: `git
+            # ls-files` output (always forward-slash, even on Windows) when
+            # git is available, falling back to `Path.relative_to()` (native
+            # separator) when it is not (see `get_git_tracked_files`'s
+            # caller). os.sep would only recognize the current host's own
+            # convention and miss the git-ls-files-sourced form even on the
+            # SAME Windows host where both code paths coexist.
+            "coordinator/bin/repomap/generate-repomap.py": _REASON_CANON_STRING,
+            # Two sites: (1) `os.path.relpath(memo_path, tmpdir)` normalized
+            # before matching a hardcoded, forward-slash-spelled glob regex
+            # (`cross-repo/inbox/[0-9]*.md`) -- the regex's syntax is fixed
+            # regardless of host, so os.sep (which would only emit the SAME
+            # host's native separator the relpath is already in) cannot make
+            # the comparison target match; (2) `git diff-tree --name-only`
+            # output normalized before set-membership comparison, same idiom
+            # as `diff_scoped_tests.py`'s existing REASON_CANON_STRING entry.
+            "coordinator/bin/test_cross_repo_memo_roundtrip.py": _REASON_CANON_STRING,
+            # `_testpaths_forward_slash()`'s own docstring: normalizes
+            # `[tool.pytest.ini_options] testpaths` values read from
+            # `pyproject.toml` -- a recorded config string, not a live
+            # filesystem path this process opens -- to forward-slash form for
+            # comparison against the tracked-file set.
+            "coordinator/bin/tests/test_testpaths_location_guard.py": _REASON_CANON_STRING,
+            # `_xplatform_patterns()`/`_win_home_patterns()`/`_drive_letter_patterns()`
+            # build REGEX PATTERNS matching Windows-drive-letter home-path
+            # SYNTAX (a drive letter, colon, backslash-separated Users path,
+            # JSON-escaped and raw forms) appearing as literal text in a
+            # scanned publish-log/artifact -- mirroring
+            # publish.sh's own bash pattern derivation (module docstring).
+            # These backslashes are the syntax being recognized, not a
+            # filesystem operation; os.sep would corrupt the very Windows
+            # shape this audit exists to detect.
+            "coordinator/lib/percolate/phase4_audit.py": _REASON_WIN_SYNTAX_IN_TEXT,
+            # `_resolve_machine_local_bin()`: normalizes the `MACHINE_LOCAL_BIN`
+            # env var -- which may be set with either separator convention
+            # depending on the invoking shell/platform -- purely to run a
+            # `'/../' in normalized` traversal-syntax SECURITY check. The
+            # unmodified `env_bin` (not the normalized value) is what gets
+            # returned and later used for real filesystem operations; os.sep
+            # would miss a `..\\` traversal attempt spelled with the other
+            # separator on the same host.
+            "coordinator/lib/percolate/resolve_target.py": _REASON_CANON_STRING,
+            # `str(live_dir).replace("\\\\", "/")` compares this test's own
+            # live_dir against text written inside `direct_url.json` by the
+            # venv-install tool under test (uv/pip) -- that tool's own output
+            # convention is not controlled by this test's host, so os.sep
+            # (this host's convention) cannot substitute for tolerating
+            # either form the tool may have written.
+            "coordinator/tests/test_refresh_plugin_live_install_integration.py": _REASON_CANON_STRING,
+            # Normalizes `proc.stdout` -- the scaffold CLI's own printed path,
+            # a cross-process TEXT payload whose separator convention is set
+            # by that subprocess, not by this test's os.sep -- before joining
+            # it onto `repo` to locate the scaffolded file.
+            "coordinator/tests/test_review_findings_scaffold.py": _REASON_CANON_STRING,
+            # C7-rest-a (2026-08-13): 11 path_separator carve-outs, mostly
+            # canonicalizing a recorded/frontmatter/tool-input path string
+            # for comparison, never a live filesystem resolve.
+            #
+            # candidates.py is the one entry here that is a carve-out ON TOP OF a
+            # port, not instead of one. Its `_parent_dir()` previously called
+            # os.path.dirname() on the RAW frontmatter string before normalizing,
+            # so on a POSIX host a Windows-authored value had no separator for
+            # dirname to split and silently returned an empty parent dir. That
+            # was a live cross-platform bug and it was ported (normalize first,
+            # then rsplit) with a 5-case regression test. The residual
+            # `.replace("\\", "/")` the detector still trips on IS the fix: the
+            # value is a recorded frontmatter field of unknown authoring
+            # platform, so os.sep -- this host's separator -- is the wrong tool
+            # by construction. Porting further would reintroduce the defect.
+            "coordinator_core/clustering/candidates.py": _REASON_CANON_STRING,
+            "coordinator_core/cartography/churn.py": _REASON_CANON_STRING,
+            "coordinator_core/cartography/file_index.py": _REASON_CANON_STRING,
+            "coordinator_core/frontmatter/schema_validate.py": _REASON_CANON_STRING,
+            "coordinator_core/hooks/nudge_em_code_dispatch.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/hooks/nudge_unauthorized_handoff.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/orientation/regenerate_cache.py": _REASON_CANON_STRING,
+            "coordinator_core/plugin_health/bin_inventory_gate.py": _REASON_CANON_STRING,
+            # 3 functions, 5 `.replace("\\", "/")` sites (lines 343-344,
+            # 480-481, 606) -- each immediately wrapped in Path(...) and
+            # resolved (.is_dir()) against THIS host's filesystem. The
+            # config value (plugin manifest live_path/source_path) may have
+            # been authored on either platform.
+            "coordinator_core/plugin_health/drift.py": _REASON_CONFIG_PATH_FOREIGN_AUTHORED,
+            "coordinator_core/plugin_health/relocation_ledger.py": _REASON_CANON_STRING,
+            "coordinator_core/reconcile/commit_reality.py": _REASON_CANON_STRING,
+            "coordinator_core/reconcile/gate_eval.py": _REASON_CANON_STRING,
+            # C7-rest-b2 (2026-08-13): 11 path_separator carve-outs (the
+            # 12th finding in this cluster is posix_mode_bits, see below).
+            "coordinator_core/resolution/test_facade.py": _REASON_CANON_STRING,
+            "coordinator_core/review_assemble/residue.py": _REASON_CANON_STRING,
+            "coordinator_core/snippet_sync/tests/test_verify.py": _REASON_CANON_STRING,
+            "coordinator_core/test_baton_assemble.py": _REASON_CANON_STRING,
+            "coordinator_core/test_trusted_root_guard.py": _REASON_CANON_STRING,
+            "coordinator_core/tests/test_hooks_bookkeeping.py": _REASON_CANON_STRING,
+            "coordinator_core/tests/test_no_bash_dependency.py": _REASON_WIN_SYNTAX_IN_TEXT,
+            "coordinator_core/tests/test_win_portability.py": _REASON_CANON_STRING,
+            "coordinator_core/text/query_record_display.py": _REASON_CANON_STRING,
+            "coordinator_core/trusted_root_guard.py": _REASON_CANON_STRING,
+            "coordinator_core/win_portability.py": _REASON_CANON_STRING,
         },
         REPO_EXAMPLE_DOCTRINE_REPO: {
             # Compares a COMMAND-LINE ARGUMENT against a path-shaped substring to decide whether
@@ -1028,6 +1679,46 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/bash_guards/tests/test_write_bump_marker.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/tests/test_verify_templates_bin_sync.py": _REASON_CHMOD_MODE_PRESERVATION,
             "coordinator_core/percolate/engine.py": _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY,
+            "coordinator/bin/refresh-plugin-live-install.py": _REASON_CHMOD_RMTREE_UNBLOCK,
+            "coordinator/tests/test_coordinator_ensure_post_commit_hook.py": _REASON_ASSERT_EXEC_BIT_BARE_EARLY_RETURN_GUARDED,
+            # C7-install (2026-08-13): shape (c), the one place an
+            # EXEMPTIONS entry is the FIRST choice -- a pytest.mark.skipif
+            # decorator gap _is_windows_guarded() cannot see. See reason
+            # text for the two flagged sites and their inline-guarded
+            # siblings that already suppress correctly.
+            "coordinator_core/install/test_install_one_overwrite_policy.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
+            # C7-ops (2026-08-13): git installs/execs these `#!/bin/sh` hooks by
+            # shebang dispatch, which needs the exec bit on POSIX only.
+            "coordinator_core/ops/install_meta_repo_precommit_hook.py": _REASON_CHMOD_HOOK_POSIX_EXEC,
+            "coordinator_core/ops/install_publish_repo_precommit_hook.py": _REASON_CHMOD_HOOK_POSIX_EXEC,
+            # `test_write_preserves_executable_permission_bit`'s own comment
+            # already states the Windows-degrade rationale (mode always 0o666
+            # there); same shape as test_verify_templates_bin_sync.py above.
+            "coordinator_core/ops/test_backfill_deliverable_spine.py": _REASON_CHMOD_MODE_PRESERVATION,
+            # Asserts the exec bit survives install_claude_doe_wrapper.py's
+            # `cp -p`-equivalent copy (module docstring: preserves the doc
+            # oracle's `cp -p` semantics verbatim) -- a POSIX-only mode-bit
+            # value assertion, same shape as REASON_CHMOD_MODE_PRESERVATION's
+            # existing entries.
+            "coordinator_core/ops/test_install_claude_doe_wrapper.py": _REASON_CHMOD_MODE_PRESERVATION,
+            # fake_bin stub-gate scripts are invoked by the `#!/bin/sh`-executed
+            # hook via its own PATH lookup by filename (direct exec, not
+            # `sh <script>`), so they need the exec bit on the POSIX-only
+            # invocation this test file already depends on end to end -- same
+            # shape as test_install_meta_repo_precommit_hook_install_all.py.
+            "coordinator_core/ops/test_install_meta_repo_precommit_hook.py": _REASON_CHMOD_EXEC_FOR_SH,
+            "coordinator_core/ops/test_install_post_sync_hooks.py": _REASON_CHMOD_EXEC_FOR_SH,
+            "coordinator_core/ops/test_verify_coverage.py": _REASON_CHMOD_DIR_GAP,
+            "coordinator_core/ops/normalize_env.py": _REASON_NORMALIZE_ENV_CHMOD_WINDOWS_GUARDED,
+            # C7-rest-a (2026-08-13): sets an arbitrary starting mode via
+            # os.chmod only to assert atomic_write preserves it -- a
+            # before/after relative invariant, not an absolute POSIX octal.
+            "coordinator_core/hooks/test_platform_localize.py": _REASON_CHMOD_RELATIVE_INVARIANT,
+            # C7-rest-b2 (2026-08-13): twelve os.chmod(script, 0o755) sites
+            # setting the exec bit on a generated #!/usr/bin/env bash
+            # drop-in script that install_health_run.main() invokes via
+            # resolve_by_shebang + subprocess.call -- POSIX-only invocation.
+            "coordinator_core/tests/test_install_health_run.py": _REASON_CHMOD_EXEC_FOR_SH,
         },
     },
     "unresolved_cross_path": {},
@@ -1069,9 +1760,35 @@ PREFIX_EXCLUDABLE_CLASSES: Tuple[str, ...] = tuple(
 #: directory_scoped` enforces it). Repo-scoped for the same reason EXEMPTIONS
 #: is: `state/review-trail/` exists in more than one fleet repo and a grant
 #: to one must never silently cover another's.
+_FROZEN_FIXTURE_BYTES_REASON = (
+    "FROZEN FIXTURE BYTES -- the third EXEMPTIONS admission test's "
+    "'frozen fixture bytes' bucket (permanent artifact-shape "
+    "irreducibility, 2026-08-13 eng-director ruling), granted here via "
+    "EXEMPT_PREFIXES per the drain plan's own citation of this exact "
+    "bucket as EXEMPT_PREFIXES' textbook case. Covers two golden/input "
+    "fixture-tree pairs: coordinator_core/percolate/tests/fixtures/"
+    "doe-golden/ + doe-input-tree/, and coordinator_core/publish/tests/"
+    "fixtures/golden-tree/sub/ + input-tree/sub/. Mechanism: each pair's "
+    "golden-tree diff test asserts an input tree, once transformed, "
+    "equals its golden tree byte-for-byte -- the .sh fixture's shebang "
+    "and mode bits are themselves part of the bytes under assertion, so "
+    "editing them would falsify the comparison rather than fix anything. "
+    "Permanence: not contingent on any peer artifact's shape -- a "
+    "fixture's job IS to be a fixed specimen. Windows leg: none, and none "
+    "is needed -- nothing under either prefix is executed, imported, or "
+    "installed by this repo or by anything this repo installs, so the "
+    "portability question has no referent here. Live caller: the sibling "
+    "percolate/publish diff-test suites read these trees as fixed input "
+    "data; they never execute the .sh files inside them."
+)
+
 EXEMPT_PREFIXES: Dict[str, Dict[str, str]] = {
     REPO_CLAUDE_KLABAUTER: {
         "dist/mirror-native/": _MIRROR_NATIVE_DESTINATION_REASON,
+        "coordinator_core/percolate/tests/fixtures/doe-golden/": _FROZEN_FIXTURE_BYTES_REASON,
+        "coordinator_core/percolate/tests/fixtures/doe-input-tree/": _FROZEN_FIXTURE_BYTES_REASON,
+        "coordinator_core/publish/tests/fixtures/golden-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
+        "coordinator_core/publish/tests/fixtures/input-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
     },
     REPO_EXAMPLE_DOCTRINE_REPO: {
         "state/review-trail/diffs/m8-baseline/": _M8_REVIEW_TRAIL_SNAPSHOT_REASON,
@@ -1383,21 +2100,43 @@ def check_implicit_encoding_zero_tolerance(
 
 _EXEC_BIT_MASK = 0o111  # any owner/group/other exec bit
 
+# Home-rooted candidate shape ONLY -- the `<drive-letter>:[\\/]` and UNC
+# (`\\\\server\share`) arms this class used to carry were DROPPED 2026-08-13
+# (module docstring, `unresolved_cross_path` entry, Q2.1 ruling): a live
+# re-measurement found the drive-letter arm alone responsible for 127/178
+# findings, almost entirely this repo's own correctly-written Windows-
+# portability code (`pyresolve.py`'s interpreter-discovery ladder,
+# `break_glass.py`'s Windows temp-path syntax recognition) being flagged
+# for existing. A candidate match here is necessary but not sufficient --
+# `_current_machine_home()` below narrows it further to THIS machine's own
+# operator-home literal before it becomes a finding, so a synthetic
+# `/Users/alice` fixture string never fires.
 _CROSS_PATH_PATTERNS = [
     re.compile(r"^/Users/[^/]+/"),
     re.compile(r"^/home/[^/]+/"),
-    # Anchored to the ABSOLUTE start of the string (no re.MULTILINE, so `^`
-    # cannot re-anchor mid-string) -- this is the fleet's known drive-letter
-    # trap: an UNANCHORED `[A-Za-z]:[/\\]` matches the "s:" inside
-    # "https://", because re.search() with no `^` will happily match that
-    # substring anywhere. Anchoring to true string-start means the string
-    # would have to itself BE a one-letter scheme ("s://...") to false-fire,
-    # which no real URL scheme is (http, https, ftp, ssh, git, s3, ws, wss
-    # are all 2+ characters) -- see test_scan_does_not_flag_url_with_single_
-    # letter_looking_scheme for the fixture proving this holds.
-    re.compile(r"^[A-Za-z]:[\\/]"),
-    re.compile(r"^\\\\"),  # UNC \\server\share
 ]
+
+
+def _current_machine_home() -> str:
+    """The current machine's operator-home path, for narrowing a candidate
+    home-rooted literal (matched by `_CROSS_PATH_PATTERNS` above) down to
+    ONE that actually leaks THIS machine's identity, vs. synthetic fixture
+    text like `/Users/alice` that merely has the right shape.
+
+    Deliberately mirrors -- does not reinvent -- the discrimination
+    `coordinator/bin/check-machine-path-leak.py`'s `main()` already draws
+    for `working-repos.yaml` ("current-machine-home-rooted only"):
+    `current_home = os.environ.get("HOME") or os.path.expanduser("~")`,
+    which honors `$HOME` where set and falls back to
+    `os.path.expanduser("~")` (which itself honors `%USERPROFILE%` on
+    stock Windows) rather than silently no-oping the check off-POSIX. That
+    script is a hyphenated `coordinator/bin/` CLI, invoked as a subprocess
+    everywhere else in this fleet (including its own test suite) rather
+    than imported -- importing a dash-named script via `importlib.util`
+    here would be a second, more fragile discrimination mechanism, not a
+    reuse of the first, so the two-line computation is mirrored instead
+    with this citation rather than duplicated silently."""
+    return os.environ.get("HOME") or os.path.expanduser("~")
 
 _UNCLASSIFIED_CALL_TARGETS = {
     "os": {"fork", "uname", "geteuid", "getegid", "setuid", "setgid"},
@@ -1602,6 +2341,7 @@ def _scan_python_file(relpath: str, abspath: Path, hits: Dict[str, Set[str]]) ->
 
     docstring_ids = _docstring_const_ids(tree)
     parent_map = _build_parent_map(tree)
+    current_home = _current_machine_home()
 
     for node in ast.walk(tree):
         # -- posix_mode_bits: os.access(path, os.X_OK) --------------------
@@ -1684,7 +2424,11 @@ def _scan_python_file(relpath: str, abspath: Path, hits: Dict[str, Set[str]]) ->
             and id(node) not in docstring_ids
         ):
             s = node.value
-            if any(p.search(s) for p in _CROSS_PATH_PATTERNS):
+            if (
+                any(p.search(s) for p in _CROSS_PATH_PATTERNS)
+                and current_home
+                and s.startswith(current_home)
+            ):
                 hits["unresolved_cross_path"].add(relpath)
             if s.startswith("/tmp/"):
                 hits["unclassified"].add(relpath)

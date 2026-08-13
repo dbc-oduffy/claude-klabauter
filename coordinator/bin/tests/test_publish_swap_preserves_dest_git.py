@@ -535,6 +535,330 @@ def test_arm_h_ensure_dest_ready_virgin_subdir_bootstraps(tmp_path):
     assert dest_dir.is_dir()
 
 
+# ---------------------------------------------------------------------------
+# arm i — staging-directory leak regression (docs: publish leaves
+# `.<name>.publish-staging-*` behind in the destination repo after a fully
+# successful run). Two shapes: (1) the happy path through `process_target`
+# leaves nothing behind, already covered structurally by arm e/g at the
+# `_swap_publish_staging_into_dest` level — this arm pins it at the
+# `process_target` level, where the real leak was observed. (2) a row that
+# raises mid-flight (post-staging) must not leak its staging dir either.
+# ---------------------------------------------------------------------------
+def test_arm_i_successful_row_leaves_no_staging_dir_via_process_target(tmp_path, monkeypatch):
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    dest_dir = tmp_path / "dest"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+
+    target = publish.ResolvedTarget(
+        name="arm-i-row",
+        mode="manifest",
+        source_dir=src_dir,
+        dest_dir=dest_dir,
+    )
+
+    monkeypatch.setattr(
+        publish,
+        "run_pre_sync_gates",
+        lambda *a, **k: publish.GateResult(proceed=True, source_dir=src_dir),
+    )
+    monkeypatch.setattr(publish, "dispatch_percolate_pre_rsync", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "dispatch_standalone_guards", lambda *a, **k: None)
+    monkeypatch.setattr(
+        publish, "sync_manifest", lambda src, dst, totals, dry_run, out: True
+    )
+    monkeypatch.setattr(
+        publish,
+        "dispatch_percolate_post_rsync",
+        lambda engine_ctx, store_path, sync_target, effective_source_dir, visited_sink=None: None,
+    )
+    monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())
+    monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=object(), store={})
+
+    publish.process_target(
+        target,
+        tmp_path,
+        totals,
+        identity_file_exists=True,
+        identity=None,
+        dry_run=False,
+        engine_ctx=engine_ctx,
+        percolate_store_path=tmp_path / "store.yaml",
+        out=out,
+    )
+
+    assert totals.processed == 1
+    leaked_staging = list(dest_dir.parent.glob(f".{dest_dir.name}.publish-staging-*"))
+    assert leaked_staging == []
+
+
+def test_arm_i_row_that_raises_after_staging_leaves_no_staging_dir(tmp_path, monkeypatch):
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    dest_dir = tmp_path / "dest"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+
+    target = publish.ResolvedTarget(
+        name="arm-i-raise-row",
+        mode="manifest",
+        source_dir=src_dir,
+        dest_dir=dest_dir,
+    )
+
+    monkeypatch.setattr(
+        publish,
+        "run_pre_sync_gates",
+        lambda *a, **k: publish.GateResult(proceed=True, source_dir=src_dir),
+    )
+    monkeypatch.setattr(publish, "dispatch_percolate_pre_rsync", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "dispatch_standalone_guards", lambda *a, **k: None)
+    monkeypatch.setattr(
+        publish, "sync_manifest", lambda src, dst, totals, dry_run, out: True
+    )
+
+    def failing_post_rsync(*a, **k):
+        raise publish.EngineUnavailableError("simulated engine unavailable after staging")
+
+    monkeypatch.setattr(publish, "dispatch_percolate_post_rsync", failing_post_rsync)
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=object(), store={})
+
+    publish.process_target(
+        target,
+        tmp_path,
+        totals,
+        identity_file_exists=True,
+        identity=None,
+        dry_run=False,
+        engine_ctx=engine_ctx,
+        percolate_store_path=tmp_path / "store.yaml",
+        out=out,
+    )
+
+    assert totals.processed == 0
+    leaked_staging = list(dest_dir.parent.glob(f".{dest_dir.name}.publish-staging-*"))
+    assert leaked_staging == []
+
+
+def test_arm_i_copytree_failure_during_staging_creation_leaves_no_orphan(tmp_path, monkeypatch):
+    """Regression for the real defect: `_create_publish_staging_dir` used to
+    `mkdtemp` then `copytree` with no cleanup of its own -- a raise from
+    `copytree` propagated past the `staging_dir = ...` assignment in
+    `process_target`, so the caller's local stayed `None` and the `finally`
+    block's `_discard_publish_staging_dir(None)` was a no-op, permanently
+    orphaning the already-created directory. This is the actual mechanism
+    that stranded `.bin.publish-staging-9z8ye65a` /
+    `.coordinator_core.publish-staging-o32a9q31` in the real mirror."""
+    dest_dir = tmp_path / "dest"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+
+    def failing_copytree(*a, **k):
+        raise OSError("simulated copytree failure mid-copy")
+
+    monkeypatch.setattr(publish.shutil, "copytree", failing_copytree)
+
+    with pytest.raises(OSError):
+        publish._create_publish_staging_dir(dest_dir)
+
+    leaked_staging = list(dest_dir.parent.glob(f".{dest_dir.name}.publish-staging-*"))
+    assert leaked_staging == []
+
+
+# ---------------------------------------------------------------------------
+# arm j — `_sweep_stale_publish_staging_dirs` (orphan-staging-dir cleanup).
+# See docs/wiki/machine-load-norm.md for the concurrency context: a `kill
+# -9`, a machine reboot, or a session killed mid-publish leaves one of these
+# behind, and this box runs 50-70 concurrent sessions, so a live sibling
+# publish's own staging dir must never be swept.
+# ---------------------------------------------------------------------------
+def test_arm_j_stale_staging_dir_is_removed(tmp_path):
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    stale = Path(
+        tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent))
+    )
+    (stale / "leftover.txt").write_text("orphaned\n", encoding="utf-8")
+    old_time = publish.time.time() - 7200  # 2 hours ago, past the 1h default threshold
+    os.utime(stale, (old_time, old_time))
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    publish._sweep_stale_publish_staging_dirs(dest_dir, totals, out=out)
+
+    assert not stale.exists()
+    assert totals.warnings == 0
+
+
+def test_arm_j_recent_staging_dir_is_left_alone(tmp_path):
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    live = Path(
+        tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent))
+    )
+    (live / "in-progress.txt").write_text("still being written\n", encoding="utf-8")
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    publish._sweep_stale_publish_staging_dirs(dest_dir, totals, out=out)
+
+    assert live.exists()
+    assert (live / "in-progress.txt").read_text(encoding="utf-8") == "still being written\n"
+
+
+def test_arm_j_partially_copied_orphan_is_removed(tmp_path):
+    """Reproduces the actual old-bug orphan shape, not just a clean
+    `tempfile.mkdtemp` fixture: `_create_publish_staging_dir` used to leave
+    a directory `mkdtemp`'d but only PARTWAY through `copytree` when the
+    copy itself raised (§ `test_arm_i_copytree_failure_during_staging_creation_leaves_no_orphan`,
+    the fix for the create-path). This arm proves the SWEEP independently
+    clears that exact partially-populated shape once it ages past the
+    threshold, rather than only proving it matches a directory freshly
+    minted and left empty."""
+    dest_dir = tmp_path / "dest"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    (dest_dir / "nested").mkdir()
+    (dest_dir / "nested" / "more.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+
+    orphan = Path(
+        tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent))
+    )
+    # Simulate a `copytree` that raised after copying one file but before
+    # reaching the rest -- the exact partial shape the old bug left behind,
+    # not an empty `mkdtemp` result.
+    (orphan / "payload.txt").write_text("original\n", encoding="utf-8")
+
+    old_time = publish.time.time() - 7200  # 2 hours ago, past the 1h default threshold
+    os.utime(orphan, (old_time, old_time))
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    publish._sweep_stale_publish_staging_dirs(dest_dir, totals, out=out)
+
+    assert not orphan.exists()
+    assert totals.warnings == 0
+    # The real destination and its .git are untouched by the sweep.
+    assert (dest_dir / ".git").exists()
+    assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_arm_j_non_matching_directory_is_untouched(tmp_path):
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    # Not this tool's naming shape at all -- the blast-radius test.
+    unrelated = dest_dir.parent / "some-other-directory"
+    unrelated.mkdir()
+    (unrelated / "payload.txt").write_text("not ours\n", encoding="utf-8")
+    old_time = publish.time.time() - 7200
+    os.utime(unrelated, (old_time, old_time))
+
+    # Also confirm a `.prior` directory (a DIFFERENT lifecycle) is untouched
+    # even when old and matching the staging prefix otherwise.
+    prior_shaped = Path(
+        tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent))
+    )
+    prior = prior_shaped.with_name(prior_shaped.name + ".prior")
+    prior_shaped.rename(prior)
+    os.utime(prior, (old_time, old_time))
+
+    totals = publish.RunTotals()
+    out = io.StringIO()
+    publish._sweep_stale_publish_staging_dirs(dest_dir, totals, out=out)
+
+    assert unrelated.exists()
+    assert (unrelated / "payload.txt").read_text(encoding="utf-8") == "not ours\n"
+    assert prior.exists()
+
+
+# ---------------------------------------------------------------------------
+# arm h (glob-metachar regression) — a `dest_dir.name` containing `[`/`]`
+# must not let the `.prior` sweep's glob under- or over-match against a
+# look-alike sibling. Mirrors `_sweep_stale_publish_staging_dirs`'s own
+# glob-metachar coverage, but for `_swap_publish_staging_into_dest`'s
+# stranded-`.prior` guard (the second interpolation site, § dispatch brief).
+# ---------------------------------------------------------------------------
+def test_arm_h_stranded_prior_glob_metachar_dest_name_still_matched(tmp_path):
+    dest_dir = tmp_path / "app[1]"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+    original_head = publish._git_head(dest_dir)
+
+    # This dest's own stranded `.prior`, minted with the literal bracketed
+    # name -- an unescaped `[1]` in the glob would be read as a one-char
+    # class matching "1", NOT as literal brackets, so this would go
+    # UNDER-matched (missed) by a regressed, unescaped pattern.
+    stranded_prior = _stranded_prior_dir(dest_dir)
+    stranded_head = publish._git_head(stranded_prior)
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    (staging_dir / "payload.txt").write_text("new content\n", encoding="utf-8")
+
+    with pytest.raises(publish.PublishSwapPartial) as excinfo:
+        publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    exc = excinfo.value
+    assert exc.content_swapped is False
+    assert publish._git_head(dest_dir) == original_head
+    assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "original\n"
+    assert publish._git_head(stranded_prior) == stranded_head
+    assert staging_dir.exists()
+    assert str(dest_dir) in str(exc)
+    assert str(stranded_prior) in str(exc)
+
+
+def test_arm_h_stranded_prior_glob_metachar_dest_name_ignores_lookalike_sibling(tmp_path):
+    dest_dir = tmp_path / "app[1]"
+    _init_git_repo(dest_dir)
+    (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "payload"], dest_dir)
+    original_head = publish._git_head(dest_dir)
+
+    # A look-alike sibling that an UNESCAPED `.app[1].publish-staging-*.prior`
+    # pattern would over-match: `[1]` read as a one-char class matches the
+    # single literal character "1", so this bracket-free `.app1...` name
+    # would falsely satisfy a regressed pattern for `app[1]`'s own sweep.
+    lookalike = Path(
+        tempfile.mkdtemp(prefix=".app1.publish-staging-", dir=str(dest_dir.parent))
+    )
+    lookalike_prior = lookalike.with_name(lookalike.name + ".prior")
+    lookalike.rename(lookalike_prior)
+    _init_git_repo(lookalike_prior, seed_name="lookalike-seed.txt")
+    lookalike_head = publish._git_head(lookalike_prior)
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    (staging_dir / "payload.txt").write_text("new content\n", encoding="utf-8")
+
+    # No refuse: the look-alike is not this dest's own stranded `.prior`.
+    publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    assert publish._git_head(dest_dir) == original_head
+    assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "new content\n"
+    # The look-alike sibling is completely untouched by this dest's swap.
+    assert lookalike_prior.exists()
+    assert publish._git_head(lookalike_prior) == lookalike_head
+
+
 def test_arm_h_ensure_dest_ready_absent_no_git_ancestor_refuses(tmp_path):
     dest_dir = tmp_path / "nowhere" / "dest"
 

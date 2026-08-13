@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
-check-forwarder-drift.py — CLI trampoline over claude-klabauter
+check-forwarder-drift.py — CLI trampoline over the engine repo's
 coordinator_core.plugin_health.forwarder_drift.
 
 Read-only staleness probe for generated agent-helper bin/ forwarders: compares
-the DERIVED forwarder set (a live scan of claude-klabauter's own `coordinator/bin/`)
+the DERIVED forwarder set (a live scan of the engine repo's own `coordinator/bin/`)
 against the INSTALLED forwarders in the settings-home `bin/` and the
 `~/.claude/bin` compat mirror, in both directions. Surfaces daily via
 /workday-start Step 1.10 Addon Health, alongside its sibling
 `check-plugin-drift.py` (git/venv/SHA drift) and `check-claude-klabauter-doctor-
-sentinel.py` (claude-klabauter's own doctor sentinel) — this probe closes the adjacent
+sentinel.py` (the engine's own doctor sentinel) — this probe closes the adjacent
 gap those two don't cover: a CLI landing in (or removed from) `coordinator/
 bin/` with no forwarder regenerated since, because no install has run.
 
@@ -28,12 +27,12 @@ for-claude-klabauter-instal.md § C2): the NAME axis above answers only "does an
 installed file with this name exist" — it never opens the file. The
 2026-08-12 incident (this plan's Problem section) was exactly that gap: this
 probe reported `364 derived == 364 installed` while the installed
-`_resolve_claude_klabauter.py` — the resolve-claude-klabauter-bin shim every forwarder execs,
+`_resolve_claude_klabauter.py` — the shim every forwarder execs,
 NOT itself one of the counted forwarders — was 486 lines behind its source
 and missing the entire two-tier engine gate. `_check_content_axis` below
 compares installed bytes for that lib (and any sibling `resolve-claude-klabauter`-
 family lib substrate installs) against the source-of-truth copy under the
-resolved claude-klabauter root. Same CITED-VS-UNCITED posture as the name axis'
+resolved engine root. Same CITED-VS-UNCITED posture as the name axis'
 UNCITED leg: this axis is ALWAYS advisory (never affects the exit code, see
 AC7) — a byte mismatch here is expected transient state between a source
 edit and the next re-install, not a live-invocation failure the way a
@@ -44,7 +43,7 @@ Usage:
 
 Exit codes:
   0 — no drift, uncited-only drift, orphaned-forwarder drift, CONTENT-axis
-      drift, or a clean skip (claude-klabauter root unresolvable) — every case except
+      drift, or a clean skip (engine root unresolvable) — every case except
       the one below.
   1 — the cited-but-missing set (forwarder_drift.py's `cited_missing`) is
       non-empty: at least one settings-home/bin forwarder that a live
@@ -209,7 +208,7 @@ def main() -> None:
         claude_klabauter_root, op_module = _import_module()
     except RuntimeError as exc:
         print(f"check-forwarder-drift.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        # Unresolvable claude-klabauter root is a clean skip for this probe, not a
+        # Unresolvable engine root is a clean skip for this probe, not a
         # failure (see forwarder_drift.py's own resolution-ladder contract) —
         # never fail the calling ceremony.
         sys.exit(0)

@@ -9,6 +9,13 @@ mode selection, opportunistic-vs-hard-fail error handling, argv parsing — not
 the engine behind `handoff.archive_transition` or `handoff.has_live_children`
 (those are coordinator_core's own test surfaces).
 
+Review: code-reviewer (P3) — exception: `ClosedTargetSupersedeChokePointTest`
+below deliberately does the opposite, calling the real op handler
+(`coordinator_core.ops.handoff_archive_transition._handler`) directly against
+a real on-disk worktree, because the `cc_invoke.route_mutation` seam every
+other class here patches is precisely the op choke point that test needs to
+exercise (see that class's own docstring).
+
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since the CLI
 module has a `.py` extension but is not on `sys.path` as an importable
 package member — same load idiom used across coordinator/bin/tests/.
@@ -22,6 +29,7 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -483,6 +491,135 @@ class MainArgvTest(_StubHarness):
         params = self.route_mutation.calls[0]["params"]
         self.assertEqual(params["sha"], "cafebabe")
         self.assertIs(params["force"], True)
+
+
+class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
+    """AC4 (docs/plans/2026-08-13-closed-baton-is-terminal-d6-declines-per-
+    predecessor.md, chunk C2): exercises the REAL op handler
+    (`coordinator_core.ops.handoff_archive_transition._handler`), not the
+    CLI-stub harness above — `_StubHarness` monkeypatches
+    `cc_invoke.route_mutation`, which is precisely the seam that stands in
+    for the op under test everywhere else in this file, so it cannot assert
+    anything about the op's own choke point. This class builds a minimal
+    on-disk worktree (`.git` marker + `state/handoffs/`) and calls `_handler`
+    directly instead."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.worktree = Path(self._tmp.name).resolve()
+        (self.worktree / ".git").mkdir()
+        (self.worktree / "state" / "handoffs").mkdir(parents=True)
+        self.handoff_path = self.worktree / "state" / "handoffs" / "closed-target.md"
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _seed_closed_frontmatter(self, closed_reason: str):
+        self.handoff_path.write_text(
+            "---\n"
+            "status: claimed\n"
+            "claimed_at: 2026-07-20T10:00:00Z\n"
+            "claimed_by: test-session\n"
+            "deployment_state: closed\n"
+            f"closed_reason: {closed_reason}\n"
+            "---\n"
+            "body\n",
+            encoding="utf-8",
+        )
+
+    def test_supersede_against_closed_target_refuses(self):
+        """AC4: mode='supersede' against a `deployment_state: closed` target
+        returns `superseded: False` with the closed-target refusal, and the
+        target file is byte-unchanged."""
+        from coordinator_core.ops.handoff_archive_transition import _handler
+
+        self._seed_closed_frontmatter("displaced")
+        before = self.handoff_path.read_text(encoding="utf-8")
+
+        result = self._run(
+            _handler(
+                {
+                    "handoff_path": str(self.handoff_path),
+                    "mode": "supersede",
+                    "continued_into": "state/handoffs/successor.md",
+                },
+                self.worktree / ".git",
+            )
+        )
+
+        self.assertIs(result.get("superseded"), False)
+        self.assertIs(result.get("retained"), False)
+        self.assertEqual(result.get("exit_code"), 1)
+        error = result.get("error") or ""
+        self.assertIn("closed", error)
+        self.assertIn("displaced", error)
+        after = self.handoff_path.read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+
+
+class RoadmapBatonGateOrderingTest(unittest.TestCase):
+    """Pins the intentional gate ORDER inside the `if mode == "supersede":`
+    block when a target is simultaneously `kind: roadmap-baton` AND
+    `deployment_state: closed`: the roadmap-baton `blocked_by` gate (module
+    docstring § roadmap-baton blocked_by gate) runs BEFORE the closed-baton
+    gate (§ closed-baton-is-terminal gate) and wins unconditionally, per
+    DR-126 — the roadmap-baton refusal fires on `kind` alone, with no
+    dependents condition, so it is unconditional relative to
+    `deployment_state` and the closed-baton gate never gets evaluated for
+    this target. Until now this ordering was intent-only (asserted in prose
+    in both gates' comments, never in a test); this pins it so a future
+    reorder of the two gates is caught, not silently accepted — same defect
+    class (unstated precedence between two gates) closed repeatedly in
+    `baton_assemble` this session."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.worktree = Path(self._tmp.name).resolve()
+        (self.worktree / ".git").mkdir()
+        (self.worktree / "state" / "handoffs").mkdir(parents=True)
+        self.handoff_path = self.worktree / "state" / "handoffs" / "roadmap-baton-closed.md"
+        self.handoff_path.write_text(
+            "---\n"
+            "status: claimed\n"
+            "claimed_at: 2026-07-20T10:00:00Z\n"
+            "claimed_by: test-session\n"
+            "kind: roadmap-baton\n"
+            "deployment_state: closed\n"
+            "closed_reason: displaced\n"
+            "---\n"
+            "body\n",
+            encoding="utf-8",
+        )
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_roadmap_baton_gate_wins_over_closed_baton_gate(self):
+        from coordinator_core.ops.handoff_archive_transition import _handler
+
+        before = self.handoff_path.read_text(encoding="utf-8")
+
+        result = self._run(
+            _handler(
+                {
+                    "handoff_path": str(self.handoff_path),
+                    "mode": "supersede",
+                    "continued_into": "state/handoffs/successor.md",
+                },
+                self.worktree / ".git",
+            )
+        )
+
+        self.assertIs(result.get("superseded"), False)
+        self.assertEqual(result.get("exit_code"), 1)
+        error = result.get("error") or ""
+        # The roadmap-baton gate's message, not the closed-baton gate's.
+        self.assertIn("roadmap-baton", error)
+        self.assertNotIn("closed_reason", error)
+        after = self.handoff_path.read_text(encoding="utf-8")
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

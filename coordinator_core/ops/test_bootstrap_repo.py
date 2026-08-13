@@ -25,6 +25,8 @@ import textwrap
 import pytest
 
 from coordinator_core.ops.bootstrap_repo import (
+    _extract_failed_path_from_git_stderr,
+    _git_add_batch_env,
     _validate_target_root_is_git_repo,
     _validate_target_root_op,
     main,
@@ -772,3 +774,97 @@ def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
     assert attempts["add"] == 3, "expected exactly 2 lock-contention retries before success"
     assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
     assert (target / "state" / "orientation_cache.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# _extract_failed_path_from_git_stderr — Review: code-reviewer P3 (misattri-
+# bution risk). Before this fix, `re.search(r"'([^']+)'", stderr) or
+# re.search(r'"([^"]+)"', stderr)` matched ANY quoted substring anywhere in
+# stderr and would confidently name the WRONG path when an unrelated quoted
+# fragment (a hint/advice line, or a quoted token inside a different
+# sentence) appeared before git's real failing-path message. These tests pin
+# the fail-safe: an unrelated quoted string must never produce a named path,
+# and a genuine known-template message must still extract correctly.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_failed_path_ignores_unrelated_quoted_substring():
+    """A hint/advice-shaped stderr line containing an unrelated quoted
+    string, with NO known git add-failure template present, must fall back
+    to None (the honest batch-scoped message) rather than misattributing
+    that unrelated quote as the failing path. This is exactly the
+    misattribution the prior "any quoted substring anywhere" regex was
+    vulnerable to."""
+    stderr = (
+        "hint: Waiting for your editor to close the file... 'core.editor' is unset\n"
+        "hint: see 'git help config' for more details\n"
+    )
+    assert _extract_failed_path_from_git_stderr(stderr) is None
+
+
+def test_extract_failed_path_matches_known_pathspec_template():
+    stderr = "fatal: pathspec 'state/foo/bar.md' did not match any files\n"
+    assert _extract_failed_path_from_git_stderr(stderr) == "state/foo/bar.md"
+
+
+def test_extract_failed_path_ignores_unrelated_quote_preceding_real_failure():
+    """Even when a genuine known-template failure IS present, an unrelated
+    quoted fragment earlier in stderr must not be picked up instead -- the
+    anchored per-template patterns only match git's own message shape, never
+    an arbitrary preceding quote."""
+    stderr = (
+        "hint: see 'git help config' for more details\n"
+        "fatal: pathspec 'state/real-failure.md' did not match any files\n"
+    )
+    assert _extract_failed_path_from_git_stderr(stderr) == "state/real-failure.md"
+
+
+def test_extract_failed_path_returns_none_for_no_stderr():
+    assert _extract_failed_path_from_git_stderr(None) is None
+    assert _extract_failed_path_from_git_stderr("") is None
+
+
+def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch):
+    """`_git_add_batch_env` must force C-locale git messages (so the
+    anchored English patterns above are sound) while still copying the rest
+    of the ambient environment (PATH, etc.) rather than replacing it --
+    dropping PATH would break the `git` subprocess spawn entirely."""
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    monkeypatch.setenv("SOME_UNRELATED_VAR", "keep-me")
+    env = _git_add_batch_env()
+    assert env["LC_ALL"] == "C"
+    assert env["LANG"] == "C"
+    assert env["LANGUAGE"] == "C"
+    assert env["SOME_UNRELATED_VAR"] == "keep-me"
+    assert env.get("PATH") == os.environ.get("PATH")
+
+
+def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, monkeypatch, capfd):
+    """End-to-end: a failed `git add` batch during Stage 5 must invoke git
+    with the locale-pinned env (`_git_add_batch_env`) so that
+    `_extract_failed_path_from_git_stderr`'s anchored templates are sound
+    against whatever git actually emits -- pinned by asserting the captured
+    `env` kwarg on the `add` subprocess call carries `LC_ALL=C`."""
+    target = tmp_path / "target"
+    target.mkdir()
+    _init_git(str(target))
+    _baseline_commit(str(target))
+
+    import coordinator_core.ops.bootstrap_repo as bootstrap_repo
+
+    real_run = bootstrap_repo.subprocess.run
+    seen_envs = []
+
+    def _spy_run(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and cmd[0] == "git" and "add" in cmd:
+            seen_envs.append(kwargs.get("env"))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(bootstrap_repo.subprocess, "run", _spy_run)
+
+    rc = main(["--root", str(target), "--non-interactive"])
+    assert rc == 0
+    assert seen_envs, "expected at least one git add call to be observed"
+    for env in seen_envs:
+        assert env is not None
+        assert env.get("LC_ALL") == "C"
