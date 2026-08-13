@@ -1472,6 +1472,57 @@ def handoff_edges(node_meta: dict, edge_kinds: Set[str]) -> List[str]:
 # Exported: walk_forward — forward DFS accumulation with gray/black cycle detection
 # ---------------------------------------------------------------------------
 
+class _LazyHandoffIdIndex:
+    """Drop-in stand-in for a pre-built handoff_id -> abs-path dict, for
+    resolve_target's `id_index` parameter, that defers the repo-wide
+    corpus scan (build_handoff_id_index(_scan_handoff_corpus_paths(...)))
+    until the FIRST time resolve_target actually needs it — i.e. the first
+    id-shaped ref (`not target.endswith('.md')`) it is asked to look up.
+
+    resolve_target's only interactions with id_index are: `if id_index`,
+    `target in id_index`, and `id_index[target]` — this class implements
+    exactly those three, and none of the rest of the Mapping protocol,
+    because that's all resolve_target's contract requires.
+
+    walk_forward's common case (edge_kinds={'predecessor'}, zero id-shaped
+    refs on the walked path — the corpus scan is eligible by edge-kind but
+    never actually triggered) never calls __contains__ with a non-'.md'
+    ref, so the scan never runs. A walk that DOES hit one or more
+    id-shaped refs triggers the scan on the first such ref and reuses the
+    built dict (memoized on self) for every subsequent lookup in the same
+    call — one scan per walk_forward() call, not one per id-shaped ref.
+    """
+
+    __slots__ = ('_repo_root', '_index')
+
+    def __init__(self, repo_root: str) -> None:
+        self._repo_root = repo_root
+        self._index: Optional[Dict[str, str]] = None
+
+    def _ensure_built(self) -> Dict[str, str]:
+        if self._index is None:
+            self._index = build_handoff_id_index(
+                _scan_handoff_corpus_paths(self._repo_root)
+            )
+        return self._index
+
+    def __bool__(self) -> bool:
+        # Always truthy: this object stands in for an eligible-but-not-yet-
+        # built index, mirroring the pre-lazy code's `if id_index:` where
+        # id_index was already a (possibly empty) dict — an empty dict is
+        # falsy in Python, but the eager code never reached that branch
+        # with an empty dict short-circuiting the `if repo_root and any(...)`
+        # eligibility check, so truthiness here does not need to model
+        # "built and empty" — only "eligible to be consulted".
+        return True
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._ensure_built()
+
+    def __getitem__(self, key: str) -> str:
+        return self._ensure_built()[key]
+
+
 def walk_forward(
     start_path: str,
     edge_kinds: Optional[Set[str]] = None,
@@ -1532,9 +1583,9 @@ def walk_forward(
     # (EDGE_KIND_FIELD_ALIASES) — the common walk_forward({'predecessor'})
     # call always qualifies (predecessor_id is aliased), but a caller
     # restricted to e.g. {'forked_from'} alone skips the scan entirely.
-    id_index: Optional[Dict[str, str]] = None
+    id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None
     if repo_root and any(EDGE_KIND_FIELD_ALIASES.get(k) for k in edge_kinds):
-        id_index = build_handoff_id_index(_scan_handoff_corpus_paths(repo_root))
+        id_index = _LazyHandoffIdIndex(repo_root)
 
     nodes: Dict[str, dict] = {}
     ordered_paths: List[str] = []

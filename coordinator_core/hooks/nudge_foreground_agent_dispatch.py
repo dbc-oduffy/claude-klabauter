@@ -101,9 +101,12 @@ ENV-HATCH RE-PLUMB (D6):
     resident engine runs at server-spawn time with a fixed env, so that env var is
     unreachable at hook-call time. Re-plumbed to a session-scoped sentinel file:
         .git/coordinator-sessions/<session_id>/.foreground-ok
-    UX change: instead of ``export COORDINATOR_AGENT_FOREGROUND_OK=1`` in the shell,
-    touch the file to enable intentional foreground dispatch for that session:
-        touch .git/coordinator-sessions/<session_id>/.foreground-ok
+    An operator enables intentional foreground dispatch for a session by touching that
+    file directly. As of 2026-08-13 (docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md), neither rendered message names this path, the touch command, or
+    the session id any more — a dispatched subagent must never be handed a pasteable
+    unlock recipe. This docstring names the mechanism because it is source prose, not
+    rendered text; the check() logic below still reads the same sentinel unchanged.
 
 NOTICE ON EVERY REROUTE (D9, standing rule since the 2026-07-30 revert):
     A prior version of this reroute (2026-07-29) suppressed the escape-hatch advisory after
@@ -181,18 +184,19 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 # Resident long-lived engine — persists across calls; no file I/O needed.
 _BG_CAPABLE_SESSIONS: set[str] = set()
 
-# Review: code-reviewer — A-F7: deny message uses real session_id at deny time
-# (falls back to "<session_id>" placeholder only when session_id is empty/malformed).
+# Audience-gated (2026-08-13, docs/plans/2026-08-13-guard-messages-stop-handing-
+# agents-the-keys.md, AC-2/AC-3): neither template names the escape-hatch
+# mechanism (no `touch`, no sentinel path, no session id, no hand-rolled doc
+# pointer) any more. Any operator-facing pointer is appended at render time via
+# `bash_guards._helpers.operator_override_note`, which degrades to "" for any
+# audience that is not a positively-resolved EM — see the handler's call sites
+# below, matching `validate_frontmatter_schema_advisory.build_violation_payload_
+# advisory`'s reference pattern (commit d385e2ed3).
 _DENY_MSG_TEMPLATE = (
     "FOREGROUND AGENT DISPATCH BLOCKED — retry with `run_in_background: true`. "
     "Coordinator default is backgrounded dispatch: foreground blocks the EM until "
     "the subagent returns, wasting cycles that could process other waves, reconcile "
     "plans, or handle PM messages in parallel. "
-    "Escape hatch for rare legitimate foreground (inline result needed for the very "
-    "next statement): touch "
-    ".git/coordinator-sessions/{session_id}/.foreground-ok "
-    "(resident engine; the old env-var hatch is no longer reachable — "
-    "see module docstring D6 and docs/reference/guard-override-keys.md). "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 
@@ -201,8 +205,6 @@ _REROUTE_NOTICE = (
     "FOREGROUND AGENT DISPATCH AUTO-REROUTED TO BACKGROUND — rewritten with "
     "`run_in_background: true`; result is a task notification, not inline. "
     "Locks the EM till backgrounded. "
-    "Escape hatch: touch .git/coordinator-sessions/{session_id}/.foreground-ok — "
-    "persists for session, firing till then. "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 
@@ -371,7 +373,17 @@ def _handler(params: dict, repo_root=None) -> dict:
                 foreground_ok, exc_info=True,
             )
 
-    effective_sid = session_id if session_id else "<session_id>"
+    # Audience-gated operator pointer (2026-08-13, guard-messages-stop-handing-agents-
+    # the-keys.md, AC-2/AC-3): threaded through the shared composer so it degrades to
+    # "" for anything short of a positively-resolved EM audience — see
+    # `bash_guards._helpers.operator_override_note`'s own docstring, and
+    # `write_guards.validate_frontmatter_schema_advisory.build_violation_payload_
+    # advisory` (commit d385e2ed3) for the reference threading pattern this mirrors.
+    from coordinator_core.bash_guards._helpers import operator_override_note
+
+    override_note = operator_override_note(
+        "COORDINATOR_AGENT_FOREGROUND_OK", payload=params, git_root=git_root
+    )
 
     # present-and-false, or calibrated absent → rewrite the call into a backgrounded one.
     # tool_input is read raw: field() stringifies, and this value is a dict.
@@ -387,11 +399,15 @@ def _handler(params: dict, repo_root=None) -> dict:
         # override only run_in_background (D8).
         updated = dict(tool_input)
         updated["run_in_background"] = True
-        context = _REROUTE_NOTICE.format(session_id=effective_sid)
+        context = _REROUTE_NOTICE
+        if override_note:
+            context = context + " " + override_note
         return rewrite_input("PreToolUse", updated, context)
 
     # No forwardable tool_input → no correct rewrite exists; fall back to the historical
     # bounce-back rather than letting a foreground dispatch through unremarked (D8).
     # UNDOCUMENTED-DENY: see module docstring and _envelope.deny() docstring.
-    # Review: code-reviewer — A-F7: fill real session_id into escape-hatch path.
-    return deny("PreToolUse", _DENY_MSG_TEMPLATE.format(session_id=effective_sid))
+    deny_message = _DENY_MSG_TEMPLATE
+    if override_note:
+        deny_message = deny_message + " " + override_note
+    return deny("PreToolUse", deny_message)

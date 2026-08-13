@@ -123,6 +123,52 @@ def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch, ca
     assert captured.out.strip() == "no-resolving-commits"
 
 
+def test_malformed_trailer_drop_is_named_on_stderr(git_repo, monkeypatch, capsys):
+    """A `Resolves:` line outside the final trailer block is the one drop reason
+    the caller can act on -- stdout keeps the quiet token, stderr names the count
+    and the SHA so the reader does not conclude the primitive is broken.
+    """
+    monkeypatch.chdir(git_repo)
+    message = (
+        "close out the deliverable\n\n"
+        "Resolves: dlv-lvv-09\n\n"
+        "Co-Authored-By: Someone <someone@example.com>\n"
+    )
+    sha = _commit(git_repo, message)
+
+    rc = main(["dlv-lvv-09"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "no-resolving-commits"
+    assert "1 commit(s) name" in captured.err
+    assert sha in captured.err
+
+
+def test_prefix_sharing_drop_is_not_reported_on_stderr(git_repo, monkeypatch, capsys):
+    """The prefix-sharing narrowing is correct behaviour, not a defect -- reporting
+    it would train the reader to ignore the malformed-trailer line.
+    """
+    monkeypatch.chdir(git_repo)
+    _commit(git_repo, "commit with longer id\n\nResolves: hnd-abc-def456\n")
+
+    rc = main(["hnd-abc"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "no-resolving-commits"
+    assert captured.err == ""
+
+
+def test_true_zero_candidates_emits_no_diagnostic(git_repo, monkeypatch, capsys):
+    monkeypatch.chdir(git_repo)
+    _commit(git_repo, "unrelated commit")
+
+    rc = main(["never-mentioned-id"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "no-resolving-commits"
+    assert captured.err == ""
+
+
 def test_shipped_all_resolving_commits_on_origin_main(tmp_path, monkeypatch, capsys):
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"

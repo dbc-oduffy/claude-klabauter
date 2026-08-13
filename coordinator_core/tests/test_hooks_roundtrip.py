@@ -72,6 +72,20 @@ def _assert_allow_advisory(result: dict, event_name: str = "PreToolUse") -> None
     assert "additionalContext" in hso, hso
 
 
+def _assert_no_unlock_mechanism(text: str, session_id: str = "") -> None:
+    """Assert `text` hands a subagent audience no pasteable unlock recipe.
+
+    docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2/AC-3:
+    no key, path, command, env var, sentinel name, CLI invocation, or doc pointer.
+    """
+    assert "touch" not in text, text
+    assert ".foreground-ok" not in text, text
+    assert ".git/coordinator-sessions" not in text, text
+    assert "guard-override-keys" not in text, text
+    if session_id:
+        assert session_id not in text, text
+
+
 def _assert_context_only(result: dict, event_name: str = "PreToolUse") -> None:
     """Assert a context_only D2 envelope (no permissionDecision key)."""
     hso = _hso(result)
@@ -299,8 +313,14 @@ def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
     }
 
     first = _run(_handler(dict(params), repo_root=str(git_root)))
-    assert "AUTO-REROUTED" in _hso(first)["additionalContext"]
-    assert sid in _hso(first)["additionalContext"], "hatch path names the real session"
+    first_ctx = _hso(first)["additionalContext"]
+    assert "AUTO-REROUTED" in first_ctx
+    # EM audience (no agent_id) — the doc-pointer form of the override note is
+    # permitted (plan AC-2), but the mechanism itself must still never render.
+    assert "touch" not in first_ctx, first_ctx
+    assert ".foreground-ok" not in first_ctx, first_ctx
+    assert ".git/coordinator-sessions" not in first_ctx, first_ctx
+    assert sid not in first_ctx, "session id must never render, EM audience included"
     assert not (git_root / "coordinator-sessions" / sid / ".foreground-reroute-noticed").exists(), (
         "no notice-once marker is ever written any more"
     )
@@ -471,6 +491,45 @@ def test_foreground_dispatch_absent_calibrated_deny() -> None:
 
     # Cleanup: remove the test session_id so it doesn't affect subsequent tests
     mod._BG_CAPABLE_SESSIONS.discard(calibrated_sid)
+
+
+def test_foreground_deny_message_carries_no_unlock_mechanism() -> None:
+    """docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2/AC-3.
+
+    A subagent-audience deny (no `agent_id`/backpointer resolvable to a real EM) must
+    not carry the `.foreground-ok` touch recipe, the sentinel path, the session id, or
+    a hand-rolled doc pointer.
+    """
+    from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
+    sid = "test-no-unlock-deny-01"
+    result = _run(_handler(
+        {
+            "tool_name": "Agent",
+            "run_in_background": "false",
+            "session_id": sid,
+            "agent_id": "subagent-abc123",
+        }
+    ))
+    _assert_deny(result, "PreToolUse")
+    _assert_no_unlock_mechanism(_hso(result)["permissionDecisionReason"], sid)
+
+
+def test_foreground_reroute_notice_carries_no_unlock_mechanism() -> None:
+    """docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2/AC-3.
+
+    A subagent-audience reroute notice must not carry the `.foreground-ok` touch
+    recipe, the sentinel path, the session id, or a hand-rolled doc pointer either.
+    """
+    from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
+    sid = "test-no-unlock-reroute-01"
+    result = _run(_handler({
+        "tool_name": "Agent",
+        "run_in_background": "false",
+        "session_id": sid,
+        "tool_input": {"prompt": "go"},
+        "agent_id": "subagent-abc123",
+    }))
+    _assert_no_unlock_mechanism(_hso(result)["additionalContext"], sid)
 
 
 # ---------------------------------------------------------------------------

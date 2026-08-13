@@ -164,6 +164,35 @@ def test_gitignored_file_beneath_directory_is_never_reported(tmp_path):
 # name promised.
 
 
+# Review: staff-eng -- `_collect_untracked_omitted` enumerated every
+# untracked file beneath each directory-shaped pathspec element without
+# subtracting files the caller ALSO named explicitly in the same `paths`
+# list. When a caller passed both a directory and an untracked file under
+# it, that file WAS staged and committed (via the explicit element), yet
+# the response reported it as "NOT staged" -- a false advisory.
+def test_explicitly_named_untracked_file_under_a_named_directory_is_not_reported(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "pkg/tracked.txt", "seed")
+    _git(["add", "--", "pkg/tracked.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "pkg/tracked.txt", "modified tracked content")
+    _seed_file(repo, "pkg/fresh_module.py", "new module")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["pkg", "pkg/fresh_module.py"],
+            "message": "update pkg, explicitly stage the new module too",
+        }
+    )
+
+    assert result["committed"] is True
+    committed_files = _committed_files_at_head(repo)
+    assert "pkg/fresh_module.py" in committed_files
+    assert "untracked_paths_omitted" not in result
+
+
 def test_untracked_sample_is_capped_and_reports_true_count(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "pkg/tracked.txt", "seed")

@@ -28,6 +28,7 @@ Coverage:
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +41,18 @@ from coordinator_core.workstream_complete.directives_review import (
     chain_partition_verdict_discharged,
     verify_trail_range_termination,
 )
+
+# Declared, not excused: `_git`'s callers below spawn real `git` processes
+# because the properties under test are real DAG-mode chain re-derivation
+# and commit-clock/history plumbing (`_derive_dag_chain_set`,
+# ceremony-bookkeeping exclusion) that no mock stands in for. Each test
+# builds its own scratch repo via the per-test `_git`/`_make_commit`
+# call sites rather than a shared module-scoped fixture, since these are
+# mutation-heavy (fresh commit histories per scenario) and a shared repo
+# would leak commits across tests. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for
+# this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
 
@@ -1230,6 +1243,151 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
     assert "Sanctioned exits: a PM vouch waiver, or /handoff." not in err
     assert "REMEDY: record a per-commit" not in err
     assert 'basis: "' in err
+
+
+# ---------------------------------------------------------------------------
+# spec-dispatch PLANNING exemption, live-path wiring (2026-08-13 dispatch:
+# "spec-dispatch route and the wsc-brightline gate disagree on plan
+# review"). `coverage.run_coverage_gate`'s own conditional exemption
+# (`coverage._spec_dispatch_exempt_planning_shas`) never reached THIS
+# HALT — it reads `_resolve_chain_planning_shas`/`_classify_bookkeeping_
+# shas` directly, not `run_coverage_gate`'s result. These pin the
+# re-derivation via `_resolve_chain_spec_dispatch_exempt_shas`.
+# ---------------------------------------------------------------------------
+
+
+def test_brightline_gate_spec_dispatch_exempt_planning_discharges_and_caps_cleanly(
+    monkeypatch, tmp_path, capsys,
+):
+    """A PLANNING commit that clears both exemption gates (its plan's
+    `scope_mode: spec-dispatch`, and a qualifying code review elsewhere in
+    the chain) must be fully discharged — subtracted from `uncovered`, not
+    merely relabeled — so the chain caps cleanly, and the discharge reason
+    is surfaced on stderr."""
+    chain_code_shas = ["planonly1", "code1"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    _patch_chain_scoping(monkeypatch, chain_code_shas=chain_code_shas)
+    monkeypatch.setattr(_mod, "_resolve_chain_planning_shas", lambda from_handoff: ["planonly1"])
+    monkeypatch.setattr(
+        _mod,
+        "_resolve_chain_spec_dispatch_exempt_shas",
+        lambda from_handoff, planning_shas: (
+            frozenset(planning_shas),
+            {sha: _mod.SPEC_DISPATCH_EXEMPT_REASON for sha in planning_shas},
+        ),
+    )
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record(sha="code1")])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 0, err  # both chain members discharged: code1 by trail, planonly1 by exemption
+    assert "HALT: brightline verdict=PARTITION-MANDATORY" not in err
+    assert "chain code commit(s) carry no discharging review-trail" not in err
+    assert f"1 PLANNING commit(s) {_mod.SPEC_DISPATCH_EXEMPT_REASON}" in err
+    assert "['planonly1']" in err
+
+
+def test_brightline_gate_spec_dispatch_exemption_absent_still_halts(
+    monkeypatch, tmp_path, capsys,
+):
+    """Negative case: no qualifying code review means no exemption, always
+    — the same PLANNING commit stays uncovered and the chain still halts,
+    with no spec-dispatch NOTE printed."""
+    chain_code_shas = ["planonly1", "code1"]
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    _patch_chain_scoping(monkeypatch, chain_code_shas=chain_code_shas)
+    monkeypatch.setattr(_mod, "_resolve_chain_planning_shas", lambda from_handoff: ["planonly1"])
+    monkeypatch.setattr(
+        _mod,
+        "_resolve_chain_spec_dispatch_exempt_shas",
+        lambda from_handoff, planning_shas: (frozenset(), {}),
+    )
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record(sha="code1")])
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "HALT: brightline verdict=PARTITION-MANDATORY" in err
+    assert _mod.SPEC_DISPATCH_EXEMPT_REASON not in err
+
+
+def test_resolve_chain_spec_dispatch_exempt_shas_wires_the_two_gates(monkeypatch, tmp_path):
+    """Unit-level pin on the resolver itself, mirroring `coverage.py`'s own
+    `test_spec_dispatch_exemption_applies_with_qualifying_code_review`: a
+    PLANNING sha whose plan carries `scope_mode: spec-dispatch` and is
+    backed by a qualifying (non-waived, non-pending, diff-shaped)
+    code-reviewer trail record over a CODE chain member is exempt; import
+    reuses `coverage._spec_dispatch_exempt_planning_shas` rather than a
+    second implementation (per the dispatch brief's constraint)."""
+    from coordinator_core import coverage as cov_mod
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    _make_commit(repo, "seed.txt", "C0: initial")
+
+    plan_rel = "docs/plans/2026-08-13-spec-dispatch-example.md"
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / plan_rel).write_text(
+        "---\nscope_mode: spec-dispatch\ndeliverable_id: dlv-example-1\n"
+        "scope:\n  - src_example.py\n---\n\n"
+        "# author plan\n",
+        encoding="utf-8",
+    )
+    _git("add", plan_rel, cwd=repo)
+    _git("commit", "-m", "author plan", cwd=repo)
+    plan_sha = _git("rev-parse", "HEAD", cwd=repo)
+
+    # The plan's own `scope:` frontmatter is the CODE-side attribution join
+    # key (`_plan_scope_paths` + `_path_matches_scope`) — a reviewed code
+    # commit touching a path under the plan's `scope:` supplies the
+    # compensating control, plan-scoped, not chain-wide. (The
+    # `Deliverable-Id` trailer below is fixture noise only — it names the
+    # SESSION's held-claim deliverable in real chains, never the plan's own
+    # `deliverable_id`, so it is deliberately NOT the join key here.)
+    (repo / "src_example.py").write_text("implement plan")
+    _git("add", "src_example.py", cwd=repo)
+    _git(
+        "commit", "-m", "implement plan\n\nDeliverable-Id: dlv-example-1",
+        cwd=repo,
+    )
+    code_sha = _git("rev-parse", "HEAD", cwd=repo)
+
+    record_path = tmp_path / "code_record.json"
+    record_path.write_text(
+        json.dumps({
+            "sha_range": f"{plan_sha}..{code_sha}",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "scope_kind": "diff",
+            "session_id": "own-sid",
+        }),
+        encoding="utf-8",
+    )
+
+    dag_shas = [plan_sha, code_sha]
+    monkeypatch.setattr(_mod, "_derive_dag_shas", lambda from_handoff: (str(repo), dag_shas))
+    monkeypatch.setattr(_mod, "_list_review_trail_paths", lambda: [str(record_path)])
+
+    exempt, reasons = _mod._resolve_chain_spec_dispatch_exempt_shas(
+        "state/handoffs/x.md", [plan_sha],
+    )
+    assert exempt == frozenset([plan_sha])
+    assert reasons[plan_sha] == cov_mod.SPEC_DISPATCH_EXEMPT_REASON
+
+
+def test_resolve_chain_spec_dispatch_exempt_shas_empty_input_is_a_noop(monkeypatch):
+    """No candidate PLANNING shas at all must never even attempt DAG
+    derivation — the cheapest possible fail-safe, matching every other
+    resolver in this module."""
+    def _boom(from_handoff):
+        raise AssertionError("must not resolve the DAG for an empty candidate set")
+
+    monkeypatch.setattr(_mod, "_derive_dag_shas", _boom)
+    exempt, reasons = _mod._resolve_chain_spec_dispatch_exempt_shas("state/handoffs/x.md", [])
+    assert exempt == frozenset()
+    assert reasons == {}
 
 
 # ---------------------------------------------------------------------------

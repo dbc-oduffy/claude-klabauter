@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import subprocess
 import sys
 import textwrap
@@ -118,6 +119,9 @@ from coordinator_core.ops.fleet.consumer_corpus_preflight import (  # noqa: E402
     PreflightOracleError,
     run_preflight as _run_consumer_corpus_preflight,
 )
+from coordinator_core.frontmatter.schema_shape import (  # noqa: E402
+    semantic_shape_hash,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -131,6 +135,22 @@ _PIN_REGISTRY_SYMBOL = "_QUEUE_SCHEMA_PINS"
 _SCHEMA_SUFFIX = ".schema.json"
 
 _GIT_TIMEOUT = 30
+
+# ---------------------------------------------------------------------------
+# Decline records — a durable, machine-checkable record of "we looked at this
+# upstream shape and deliberately did not import it," so that decision
+# survives the session that made it.
+#
+# Home: a new narrow `state/` family, not `state/cross-repo-declarations/` or
+# `state/cross-repo-commitments/`. Both were read before choosing this: both
+# are cross-repo MEMO records (title/body free prose, `declared_to`/
+# `committed_by`, a `memo:` backlink to a sent cross-repo/ file) — shaped for
+# "we told another repo something," not for a same-repo machine-checkable key
+# this gate can look up by schema name and compare a hash against. Extending
+# either would mean teaching a memo-shaped reader to also carry a shape hash
+# it has no other reason to hold. `state/` is still the right substrate (load-
+# bearing corpus, CLAUDE.md), just a directory of its own.
+_DECLINE_RECORDS_DIR = _REPO_ROOT / "state" / "schema-decline-records"
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +570,72 @@ def _major_bump_reasons(
 
 
 # ---------------------------------------------------------------------------
+# Decline gate — a live decline record blocks re-importing the exact shape it
+# declined, at the exact version it was declined at.
+# ---------------------------------------------------------------------------
+
+def _decline_record_path(schema: str) -> Path:
+    return _DECLINE_RECORDS_DIR / f"{schema}.json"
+
+
+def _load_decline_record(schema: str) -> dict | None:
+    """Return the live decline record for `schema`, or None if absent or not active.
+
+    Fails loud on a present-but-unparseable record — a decline record this script
+    cannot read must never silently stop gating (that is the exact hole this
+    feature closes), so "unreadable" is not treated the same as "absent."
+    """
+    path = _decline_record_path(schema)
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _die(f"Decline record {path} is unreadable ({exc}); fix or remove it before re-vendoring {schema}.")
+        raise AssertionError  # unreachable
+    if not isinstance(record, dict):
+        _die(f"Decline record {path} is not a JSON object; cannot read it safely.")
+        raise AssertionError  # unreachable
+    if record.get("status") != "active":
+        return None
+    return record
+
+
+def _decline_gate_reasons(name: str, incoming_bytes: bytes) -> list[str]:
+    """A live decline blocks a re-vendor that reproduces the DECLINED shape at the
+    SAME `x-schema-version` the decline was made at.
+
+    Self-expires the moment either signal moves: if the incoming
+    `x-schema-version` differs from the version the decline was recorded
+    against, OR the incoming shape hash differs from the declined one, this
+    returns no reason. That is deliberate — the real-world resolution path for
+    a decline is upstream bumping the version (the DR-097 handoff-schema
+    episode this feature responds to resolved exactly that way, example-doctrine-repo later
+    landing 8.0.0), and an operator must never have to hand-clear a decline
+    that upstream already resolved.
+    """
+    record = _load_decline_record(name)
+    if record is None:
+        return []
+    incoming_text = incoming_bytes.decode("utf-8", errors="replace")
+    incoming_version = _read_schema_string_key(incoming_text, "x-schema-version")
+    if incoming_version != record.get("declined_schema_version"):
+        return []
+    try:
+        incoming_schema = json.loads(incoming_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    if semantic_shape_hash(incoming_schema) != record.get("declined_shape_hash"):
+        return []
+    reason = str(record.get("reason") or "")
+    backout_sha = str(record.get("backout_sha") or "")
+    return [
+        f"{name} was declined at this exact shape and version ({incoming_version}): "
+        f"{reason} (backout {backout_sha})."
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Name normalisation
 # ---------------------------------------------------------------------------
 
@@ -584,6 +670,7 @@ class _Plan:
     needs_repin: bool
     major_reasons: list[str]
     version_notes: list[str]
+    decline_reasons: list[str]
 
     @property
     def pin_tracked(self) -> bool:
@@ -610,6 +697,7 @@ def _build_plan(
     current = vendored_path.read_bytes() if vendored_path.exists() else None
     pin = pins.get(name)
     major_reasons, version_notes = _major_bump_reasons(current, incoming)
+    decline_reasons = _decline_gate_reasons(name, incoming)
     return _Plan(
         name=name,
         vendored_path=vendored_path,
@@ -621,6 +709,7 @@ def _build_plan(
         needs_repin=pin is not None and pin.sha != sha,
         major_reasons=major_reasons,
         version_notes=version_notes,
+        decline_reasons=decline_reasons,
     )
 
 
@@ -681,6 +770,7 @@ def run(
     ref: str = "HEAD",
     reason: str | None = None,
     ack_major: bool = False,
+    ack_declined: bool = False,
     dry_run: bool = False,
     all_drifted: bool = False,
 ) -> int:
@@ -785,9 +875,13 @@ def run(
     # exists is that the previous remediation left the operator guessing.
     majors = [p for p in actionable if p.major_reasons]
     repins = [p for p in actionable if p.needs_repin]
+    declines = [p for p in actionable if p.decline_reasons]
     reason_text = (reason or "").strip()
 
     blockers: list[str] = []
+    if declines and not ack_declined:
+        detail = " ".join(r for p in declines for r in p.decline_reasons)
+        blockers.append(f"--ack-declined is required: {detail}")
     if majors and not ack_major:
         blockers.append(
             "--ack-major is required: this is a MAJOR schema advance. Advancing a vendored "
@@ -803,14 +897,19 @@ def run(
             "no recorded reason is the unaccountable drift this script exists to prevent."
         )
     noted = [p for p in actionable if p.version_notes]
-    if majors or noted:
+    if majors or noted or declines:
         _info("")
+        for p in declines:
+            for r_ in p.decline_reasons:
+                _info(f"  DECLINED: {p.name} — {r_}")
         for p in majors:
             for r_ in p.major_reasons:
                 _info(f"  MAJOR: {p.name} — {r_}")
         for p in noted:
             for n_ in p.version_notes:
                 _info(f"  note:  {p.name} — {n_}")
+        if declines and ack_declined:
+            _info("  --ack-declined provided — decline overridden for this run.")
         if majors and ack_major:
             _info("  --ack-major provided — MAJOR advance acknowledged.")
 
@@ -1034,6 +1133,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--ack-declined",
+        action="store_true",
+        help=(
+            "Import a shape a decline record says was deliberately declined at this exact "
+            "version. Without it, a matching decline is refused."
+        ),
+    )
+    p.add_argument(
+        "--decline",
+        action="store_true",
+        help=(
+            "Write a decline record for the named schema's current example-doctrine-repo incoming shape "
+            "instead of vendoring it — requires --reason and --backout-sha."
+        ),
+    )
+    p.add_argument(
+        "--backout-sha",
+        metavar="SHA",
+        help="Commit SHA of the local backout that reverted this shape. Required with --decline.",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Report the full plan (bytes, pin moves, gates) and write nothing.",
@@ -1041,16 +1161,101 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _write_decline(
+    *,
+    schema_names: list[str],
+    doe_clone_arg: str | None,
+    ref: str,
+    reason: str | None,
+    backout_sha: str | None,
+) -> int:
+    """Record a deliberate decline of the example-doctrine-repo incoming shape for each named schema.
+
+    The cheap-path counterpart to `run()`'s import path (CLAUDE.md north star: the
+    correct path must be cheaper than the wrong one). An operator who just reverted a
+    bad re-vendor already has, in hand from that same investigation, everything this
+    needs: the schema name, why, and the backout SHA — writing the record costs one
+    more invocation of the same CLI, not a hand-authored file in a new shape.
+    """
+    reason_text = (reason or "").strip()
+    if not reason_text:
+        _die("--reason is required with --decline.")
+    if not backout_sha:
+        _die("--backout-sha is required with --decline.")
+    names = [_normalize_schema_name(n) for n in schema_names]
+    if not names:
+        _die("No schema named. Pass one or more schema names with --decline.")
+    unknown = [n for n in names if not (_SCHEMAS_DIR / f"{n}{_SCHEMA_SUFFIX}").exists()]
+    if unknown:
+        _die(
+            f"Not vendored in this repo: {', '.join(unknown)}. "
+            f"Known: {', '.join(_vendored_names())}."
+        )
+
+    if doe_clone_arg:
+        clone = Path(doe_clone_arg).expanduser().resolve()
+        if not clone.is_dir():
+            _die(f"--doe-clone path does not exist or is not a directory: {clone}")
+    else:
+        try:
+            clone = resolve_doe_clone()
+        except DoeResolveError as exc:
+            _die(str(exc))
+            raise AssertionError  # unreachable
+    if not (clone / ".git").exists():
+        _die(f"example-doctrine-repo clone at {clone} does not look like a git repo (no .git).")
+    sha = _resolve_ref_sha(clone, ref)
+
+    _DECLINE_RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        doe_rel = f"{_DOE_SCHEMAS_REL}/{name}{_SCHEMA_SUFFIX}"
+        r = _git(clone, "cat-file", "-e", f"{sha}:{doe_rel}")
+        if r.returncode != 0:
+            _die(f"Precondition FAILED: '{doe_rel}' not found in the example-doctrine-repo clone at {sha}.")
+        incoming = _git_show_bytes(clone, sha, doe_rel)
+        incoming_text = incoming.decode("utf-8", errors="replace")
+        version = _read_schema_string_key(incoming_text, "x-schema-version")
+        try:
+            incoming_schema = json.loads(incoming.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            _die(f"Incoming {name} at {sha} is not valid JSON ({exc}); cannot hash it.")
+            raise AssertionError  # unreachable
+        record = {
+            "schema": name,
+            "declined_shape_hash": semantic_shape_hash(incoming_schema),
+            "declined_schema_version": version,
+            "reason": reason_text,
+            "backout_sha": backout_sha,
+            "declared_ref": ref,
+            "declared_doe_sha": sha,
+            "declared": time.strftime("%Y-%m-%d", time.gmtime()),
+            "status": "active",
+        }
+        path = _decline_record_path(name)
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _info(f"Wrote decline record {_rel(path)} for {name} at {sha} (version {version}).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.list:
         return _print_list()
+    if args.decline:
+        return _write_decline(
+            schema_names=list(args.schema),
+            doe_clone_arg=args.doe_clone,
+            ref=args.ref,
+            reason=args.reason,
+            backout_sha=args.backout_sha,
+        )
     return run(
         schema_names=list(args.schema),
         doe_clone_arg=args.doe_clone,
         ref=args.ref,
         reason=args.reason,
         ack_major=args.ack_major,
+        ack_declined=args.ack_declined,
         dry_run=args.dry_run,
         all_drifted=args.all_drifted,
     )

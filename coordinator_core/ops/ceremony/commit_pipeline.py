@@ -2139,8 +2139,9 @@ def _preflight_reap_stale_lock(worktree_root: str) -> None:
         `<worktree_root>/.git/index.lock` can never exist there and a
         directory-only gate would silently never fire. This function does
         NOT parse that pointer file itself (that is git-dir-discovery
-        reimplementation, reserved to the reaper); it pays one `os.stat` to
-        tell directory from file, and for the file case delegates entirely
+        reimplementation, reserved to the reaper); it pays one
+        `os.path.isdir` call to tell directory from file, and for the file
+        case delegates entirely
         to `reap_stale_locks.main()`, which already resolves the real git
         dir correctly via `--absolute-git-dir` / `--git-common-dir`.
 

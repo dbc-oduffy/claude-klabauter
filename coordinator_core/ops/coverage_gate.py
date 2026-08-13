@@ -166,6 +166,34 @@ Disk artifact — coverage gate result (cockpit read contract):
                                         //   classifier. Additive field, schema_version NOT
                                         //   bumped (same backward-compatible-addition
                                         //   rationale as bookkeeping_shas above).
+        "unrecordable_shas": [str, ...],// SUBSET of uncovered_shas (never excluded from
+                                        //   it — same subset-not-excluded contract as
+                                        //   planning_shas above) classified structurally
+                                        //   UNRECORDABLE for this chain: a
+                                        //   foreign-attributed commit (own Session-Id
+                                        //   trailer names a different session) seen only
+                                        //   when the DAG walk collapsed to a genuine
+                                        //   single-node predecessor: none (schema rule
+                                        //   C2-4, every spinoff baton, by construction —
+                                        //   len(coverage.py's _DagChainResult.
+                                        //   ordered_ancestry) == 1 AND
+                                        //   _DagChainResult.terminated_early == ""). Membership means
+                                        //   "cannot be recorded for this chain, ever" — no
+                                        //   chain-ancestry waiver can be minted over a
+                                        //   single-node walk (nothing to mint ancestry
+                                        //   over) and _guard_foreign_session_range refuses
+                                        //   the record permanently — ruled:
+                                        //   docs/decisions/DR-294-pickup-claim-as-guard-
+                                        //   evidence-is-declin.md. Deliberately NOT
+                                        //   populated on a 'missing-link' collapse — a
+                                        //   broken predecessor pointer is a bug, not a
+                                        //   ruled limit. Exposed so a consumer can derive
+                                        //   the ACTIONABLE uncovered count
+                                        //   (len(uncovered_shas) -
+                                        //   len(unrecordable_shas)) without re-running the
+                                        //   classifier. Additive field, schema_version NOT
+                                        //   bumped (same backward-compatible-addition
+                                        //   rationale as bookkeeping_shas above).
         "notes":          [str, ...],   // diagnostic messages + "uncovered: <sha>" lines
         "generated_at":   str           // ISO 8601 commit timestamp of HEAD at write time
                                         //   (git log -1 --format=%cI HEAD); OMITTED if
@@ -517,6 +545,8 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
             "bookkeeping_shas": list,  # see disk-artifact schema doc above
             "planning_shas":    list,  # see disk-artifact schema doc above — SUBSET of
                                        #   uncovered_shas, not excluded from the verdict
+            "unrecordable_shas": list, # see disk-artifact schema doc above — SUBSET of
+                                       #   uncovered_shas, not excluded from the verdict
         }
 
     (The persisted disk artifact additionally carries "coverage_ratio" — see the
@@ -792,6 +822,7 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
         "uncovered_shas": list(result.uncovered_shas),
         "bookkeeping_shas": list(result.bookkeeping_shas),
         "planning_shas": list(result.planning_shas),
+        "unrecordable_shas": list(result.unrecordable_shas),
         "notes": notes,
     }
     generated_at = await asyncio.to_thread(_git_head_timestamp, repo_root_path)
@@ -807,6 +838,7 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
         "exit_code": result.exit_code,
         "bookkeeping_shas": list(result.bookkeeping_shas),
         "planning_shas": list(result.planning_shas),
+        "unrecordable_shas": list(result.unrecordable_shas),
     }
 
 

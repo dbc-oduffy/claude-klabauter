@@ -26,6 +26,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+# Real-git spawn is load-bearing: the drift-check coverage (module docstring
+# above) validates against a real example-doctrine-repo HEAD comparison -- a mocked git cannot
+# exhibit true divergence/match against actual repo state. Per-test
+# isolation for the fixtures that build throwaway repos.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -3027,51 +3033,39 @@ class TestSchemaVersionGate:
 # ---------------------------------------------------------------------------
 
 class TestDriftCheck:
-    @pytest.mark.pending_fix
     def test_handoff_schema_matches_doe_head_after_dr084_revendor(self):
         """Vendored handoff.schema.json is byte-parity with example-doctrine-repo HEAD again, and both
         sides carry last_gate_recheck + the if/then construct as upstream-owned example-doctrine-repo
         constructs.
 
-        PENDING_FIX (2026-08-13): deliberately red, for TWO reasons that must BOTH
-        clear before the mark comes off. Sibling schemas handoff-archived and plan
-        were re-vendored clean at this pass; this file was deliberately not.
+        The `pending_fix` mark this test carried from 2026-08-06 to 2026-08-13 is
+        GONE, and the two halves it was gated on both cleared upstream in a single
+        example-doctrine-repo commit (`3e6da5ce4e40`), re-vendored here at `8.0.0`:
 
-        1. `properties.additional_predecessors.description`. Claude-klabauter carries a local
-           correction there (the "ENGINE-DERIVED, not PM-directed" amendment, roadmap
-           stub sedge-02) that example-doctrine-repo's copy still describes as "Optional; requires
-           explicit PM direction." — a sentence the engine's own `baton_assemble`
-           behavior (writes this field at successor-scaffold time) already
-           contradicts.
+        1. `properties.additional_predecessors.description` — claude-klabauter's local
+           "ENGINE-DERIVED, not PM-directed" correction (roadmap stub sedge-02) is
+           adopted VERBATIM upstream, so it is now an upstream-owned construct and a
+           direct-copy re-vendor carries it rather than reverting it. The reason it
+           had to move upstream and could not stay a local correction: a
+           description-level fork is invisible to the obvious re-vendor move, which
+           is exactly how the clobber at `1825e7771` came to exist.
 
-        2. Example-doctrine-repo's `711ea128f` REMOVED `hand-authored` from
-           `x-producer-typed-command.mapping` — a validation-shape change — while
-           leaving `x-schema-version` at 7.1.0. Vendoring that lands shape debt here
-           under an unmoved version, which is exactly what
-           `test_vendored_schema_shape_bump_parity` exists to refuse; a re-vendor was
-           attempted at `4e0d47e88` and reverted for that reason. We cannot bump our
-           copy to clear it either — example-doctrine-repo's own
-           `test_vendored_schema_matches_doe_source` asserts version equality HARD,
-           so a local bump makes their gate red instead of ours. The version move is
-           theirs to make.
+        2. `x-schema-version` `7.1.0 -> 8.0.0`, `x-bump-class` `major` — example-doctrine-repo's
+           `711ea128f` had removed `hand-authored` from
+           `x-producer-typed-command.mapping` (a validation-SHAPE change) under an
+           UNMOVED `7.1.0` that claude-klabauter had already vendored, deadlocking both trees:
+           `test_vendored_schema_shape_bump_parity` here refuses a shape move at an
+           unmoved version, and example-doctrine-repo's `test_vendored_schema_matches_doe_source`
+           asserts version equality hard, so neither side could clear it alone. The
+           version move was theirs and they made it. Byte-parity, not reachability,
+           is what both gates read — deliberately: whether a consumer COULD have held
+           the removed member is not a judgment a shape gate makes on a version
+           string's behalf.
 
-        The two went to example-doctrine-repo-em in SEPARATE memos, not one. (1) rode
-        `2026-08-13-claude-klabauter-em-adopt-additional-predecessors-engine-derived-correction.md`,
-        sent 13:58 — which also stated we had ADOPTED the mapping removal, true when
-        written and falsified two minutes later by the `e6af1c6cf` backout. (2) and
-        the retraction of that line rode
-        `2026-08-13-claude-klabauter-em-handoff-schema-version-move-is-yours-and-a-retraction.md`.
-        Reason it matters to whoever clears this mark: only the second memo carries
-        the version-move ask, and only example-doctrine-repo can discharge it — their
-        `test_vendored_schema_matches_doe_source[handoff.schema.json]` is red against
-        our HEAD right now, printing a "re-vendor" remedy our own shape gate refuses,
-        so the two gates are pointed at each other until the version moves.
-
-        Remove this mark only once example-doctrine-repo's copy carries claude-klabauter's
-        `additional_predecessors.description` text AND has moved `x-schema-version`
-        off 7.1.0 for the mapping removal — do not remove it to chase green on either
-        half alone, and do not remove it for any other divergence this test might
-        start catching.
+        Negative-spec for a future re-vendor: do NOT re-add `pending_fix` here to
+        park a fresh divergence. This gate is live again; a new red means the
+        vendored copy actually drifted from example-doctrine-repo HEAD and wants a re-vendor or a memo,
+        not a mark.
 
         Formerly `test_handoff_schema_diverges_from_doe_head_intentionally`: C1's
         schema-hardening sub-step (docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md
@@ -4057,6 +4051,96 @@ class TestCanonicalDriftAdvisory:
         )
         with pytest.raises(SchemaDriftError, match="diverges"):
             check_schema_drift(vendored, fake_doe)
+
+
+class TestDivergenceKind:
+    """`divergence_kind` on check_schema_drift_advisory — the axis orthogonal to
+    `direction` distinguishing a validation-SHAPE delta from a PROSE-only one
+    (description/$comment/x-bump-note), via schema_shape.semantic_shape_hash.
+
+    Spec backlink: 2026-08-13 parity-tail exchange (example-doctrine-repo-EM: "'reconcile by hand'
+    on a punctuation diff trains people to stop reading it" — 10 of 12
+    then-drifted schemas carried DIRECTION_BOTH's reconcile-by-hand prose despite
+    byte-identical validation shape).
+    """
+
+    @pytest.fixture()
+    def fake_doe(self, tmp_path: Path) -> Path:
+        if not _which_git():
+            pytest.skip("git not available")
+        repo = tmp_path / "example-doctrine-repo-fake"
+        schemas = repo / "coordinator" / "schemas"
+        schemas.mkdir(parents=True)
+        (schemas / "widget.schema.json").write_text(
+            json.dumps(_CANONICAL_WIDGET, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _advisory_git(repo, "init", "-q")
+        _advisory_git(repo, "config", "user.email", "test@example.invalid")
+        _advisory_git(repo, "config", "user.name", "divergence kind test")
+        _advisory_git(repo, "add", "-A")
+        _advisory_git(repo, "commit", "-q", "-m", "seed widget schema")
+        return repo
+
+    def test_description_only_delta_reports_prose_only(
+        self, fake_doe: Path, tmp_path: Path
+    ) -> None:
+        """A `description` edit changes nothing schema_shape hashes over ->
+        divergence_kind == 'prose-only', even though the byte/canonical
+        comparison above still reports diverged=True (description is not
+        `$comment`, so D1's canonicalization doesn't absorb it)."""
+        edited = dict(_CANONICAL_WIDGET)
+        edited["description"] = "a longer, more detailed description of widget"
+        vendored = tmp_path / "widget.schema.json"
+        vendored.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = check_schema_drift_advisory(vendored, fake_doe)
+        assert result["diverged"] is True
+        assert result["divergence_kind"] == "prose-only"
+
+    def test_required_field_delta_reports_shape(
+        self, fake_doe: Path, tmp_path: Path
+    ) -> None:
+        """A `required` list edit changes validation behaviour ->
+        divergence_kind == 'shape'."""
+        edited = dict(_CANONICAL_WIDGET)
+        required = list(edited.get("required", []))
+        required.append("newly_required_field")
+        edited["required"] = required
+        vendored = tmp_path / "widget.schema.json"
+        vendored.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = check_schema_drift_advisory(vendored, fake_doe)
+        assert result["diverged"] is True
+        assert result["divergence_kind"] == "shape"
+
+    def test_malformed_vendored_json_reports_divergence_kind_none(
+        self, fake_doe: Path, tmp_path: Path
+    ) -> None:
+        """Malformed vendored JSON falls back to the text-containment path,
+        which has no parsed structure to hash -> divergence_kind is None,
+        never guessed."""
+        vendored = tmp_path / "widget.schema.json"
+        vendored.write_text("not json at all {{{", encoding="utf-8")
+        result = check_schema_drift_advisory(vendored, fake_doe)
+        assert result["diverged"] is True
+        assert result["divergence_kind"] is None
+
+    def test_prose_only_detail_still_warns_about_losing_local_prose(
+        self, fake_doe: Path, tmp_path: Path
+    ) -> None:
+        """The prose-only `detail` string states the kind explicitly, says no
+        validation behaviour differs, and STILL warns that a blind re-vendor
+        drops claude-klabauter's prose — the risk is real (regressed once, commit
+        1825e7771) and the new axis must not read as a downgrade."""
+        edited = dict(_CANONICAL_WIDGET)
+        edited["description"] = "a longer, more detailed description of widget"
+        vendored = tmp_path / "widget.schema.json"
+        vendored.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = check_schema_drift_advisory(vendored, fake_doe)
+        detail_lower = result["detail"].lower()
+        assert "prose-only" in detail_lower
+        assert "no validator" in detail_lower or "validation shape is identical" in detail_lower
+        assert "prose" in detail_lower
+        assert "re-vendor" in detail_lower
 
 
 class TestPinnedQueueSchemaDrift:

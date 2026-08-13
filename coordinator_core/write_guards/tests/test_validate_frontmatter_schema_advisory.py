@@ -321,9 +321,19 @@ class TestSchemaValidationWarn:
     def test_missing_required_fields_warns(self, tmp_path):
         fp = self._handoff_path(tmp_path)
         fp.write_text("---\ntitle: t\n---\nold body", encoding="utf-8")
-        result = guard.check(
-            _payload("Edit", str(fp), str(tmp_path), old_string="old body", new_string="new body")
+        # Review: staff-eng (B8 leg (d)+(f)) -- the override-key pointer is
+        # now audience-gated via `operator_override_note`
+        # (`session.identity.resolves_em_audience`), which requires a
+        # real envelope (a `session_id`, no `agent_id`) to positively
+        # resolve EM before rendering the pointer at all -- see that
+        # function's own docstring. This EM-shaped payload exercises the
+        # positive branch; audience-gating itself (subagent -> "") is
+        # covered by `operator_override_note`'s own tests.
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path), old_string="old body", new_string="new body"
         )
+        payload["session_id"] = "test-session-em"
+        result = guard.check(payload)
         assert result is not None
         text = _advisory_text(result)
         assert "[frontmatter-schema warning]" in text
@@ -333,6 +343,25 @@ class TestSchemaValidationWarn:
         # only that an override route exists, routed to the doc.
         assert "COORDINATOR_SCHEMA_STRICT" not in text
         assert "docs/reference/guard-override-keys.md" in text
+
+    def test_missing_required_fields_subagent_audience_no_pointer(self, tmp_path):
+        # Review: staff-eng (B8 leg (d)+(f)) -- this module used to hand-roll
+        # "see docs/reference/guard-override-keys.md" for EVERY audience,
+        # a dispatched subagent included. A subagent-shaped payload (an
+        # `agent_id`) must now degrade to no pointer at all.
+        fp = self._handoff_path(tmp_path)
+        fp.write_text("---\ntitle: t\n---\nold body", encoding="utf-8")
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path), old_string="old body", new_string="new body"
+        )
+        payload["session_id"] = "test-session-subagent"
+        payload["agent_id"] = "a" * 16
+        result = guard.check(payload)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "[frontmatter-schema warning]" in text
+        assert "docs/reference/guard-override-keys.md" not in text
+        assert "COORDINATOR_SCHEMA_STRICT" not in text
 
     def test_strict_mode_yields_none_not_mine(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")

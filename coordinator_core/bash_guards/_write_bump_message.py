@@ -38,12 +38,14 @@ stays exactly two; this chunk adds an ORTHOGONAL destination-class axis
     pointer -- publishing into a mirror is not forbidden, so none of that
     vocabulary belongs here (AC3, AC15).
 
-Both classes get the same clear line -- `_write_bump_marker.clear_line()`,
-never re-composed here -- because clearing the bump is a per-session action
-available to whichever agent is running when assent is already in hand.
-Phrased as standing the bump down FOR THAT TARGET: the sibling plan's C3
-scopes the marker per-`(session, target)`, so the target-side file location
-this line names is intentional scoping, not an odd place for a file.
+Review: staff-eng (2026-08-13) -- as of C4d
+(docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2,
+see "NO PASTEABLE CLEAR RECIPE ON THIS CHANNEL" on each renderer below), NO
+renderer in this module emits `_write_bump_marker.clear_line()`'s output on
+ANY channel, EM included -- a pasteable bypass recipe is forbidden for
+either audience, not routed by audience. The paragraph this replaced
+described a now-removed design (both classes rendering the same clear line);
+this module no longer imports `clear_line` at all.
 
 SELF-ATTRIBUTION. Every template opens "Coordinator guard --" so the reader
 identifies this as fleet infrastructure speaking, never mistakes it for
@@ -115,19 +117,24 @@ recipe: what the agent is confined to, where it may write instead
 dispatching EM) -- and nothing else. No marker path, no `touch`, no session
 id, no statement that an unlock mechanism exists at all; a subagent that
 cannot see the mechanism exist cannot be tempted by it and cannot classify
-it as a pretext. `render_em_message` and `render_publish_em_message` are
-UNCHANGED by this fix -- the EM is the audience the unlock line is drafted
-for, and keeps it verbatim. This is presentation-only: the marker
-MECHANISM itself (`_write_bump_marker.py`, `XREPO_MARKER_IS_ORDINARY_FILE`
--- an ordinary file, bare `touch`, no identity gating, no expiry) is a
-standing PM ruling this fix does not touch.
+it as a pretext. `render_em_message` and `render_publish_em_message`
+described the unlock line as UNCHANGED by this 2026-08-13 fix at the time
+this paragraph was first written -- superseded by C4d (see each renderer's
+own "NO PASTEABLE CLEAR RECIPE ON THIS CHANNEL" docstring paragraph, and
+the module docstring's opening review note): no renderer in this module,
+EM-class included, emits the clear-line recipe any more. This is
+presentation-only: the marker MECHANISM itself (`_write_bump_marker.py`,
+`XREPO_MARKER_IS_ORDINARY_FILE` -- an ordinary file, bare `touch`, no
+identity gating, no expiry) is a standing PM ruling this fix does not
+touch.
 
 Negative-spec:
     - Does NOT decide whether to bump, or which destination class applies
       -- that is every calling guard's own job, using
       `_write_bump_applicability.target_is_publish_destination`.
-    - Does NOT compose or resolve a gitdir/marker path itself -- delegates
-      to `_write_bump_marker.clear_line()`.
+    - Does NOT compose or resolve a gitdir/marker path itself, and (as of
+      C4d) does not import or delegate to `_write_bump_marker.clear_line()`
+      at all -- no renderer in this module emits its output.
     - Does NOT add a third agent class or a finer subagent taxonomy.
     - Does NOT name an env-var, config flag, or other out-of-band bypass.
     - Does NOT match a publish destination by path pattern, gate the
@@ -135,11 +142,13 @@ Negative-spec:
       this module's own literals (Anti-scope).
     - Does NOT render `clear_line()`'s output, a marker-path fragment
       (`allow-xrepo-write-`), the literal string `touch `, or the session
-      id on either subagent-class renderer, ever, regardless of `surface`
-      or `destination_class` (Anti-scope, this fix -- see "SUBAGENT CHANNEL
-      NEVER CARRIES THE UNLOCK"). Pinned as a property over both subagent
-      renderers in the test suite, not a single string comparison, so a
-      future edit cannot quietly reintroduce the button.
+      id on ANY renderer, ever, regardless of `surface` or
+      `destination_class` (Anti-scope; widened by C4d from "either
+      subagent-class renderer" to all four -- see "SUBAGENT CHANNEL NEVER
+      CARRIES THE UNLOCK" and each renderer's own "NO PASTEABLE CLEAR
+      RECIPE ON THIS CHANNEL" paragraph). Pinned as a property over all
+      four renderers in the test suite, not a single string comparison, so
+      a future edit cannot quietly reintroduce the button.
 """
 
 from __future__ import annotations
@@ -147,7 +156,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from coordinator_core.bash_guards._write_bump_marker import clear_line
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 
 #: The two agent classes this module's copy is drafted for (see module
@@ -207,15 +215,25 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
     Uses `coordinator_core.subagent_sandbox.engine.resolve_effective_types`
     -- the fleet's existing OR-resolver -- rather than re-deriving agent
     identity here. Subagent-class the moment either resolved leg
-    (`agent_id`, `subagent_type`) is non-empty; EM-class otherwise. Never
-    raises: `resolve_effective_types` is itself fail-open, and an empty/
-    missing `payload` or `git_root` simply resolves both legs empty, which
-    this function reads as EM-class.
+    (`agent_id`, `subagent_type`) is non-empty; subagent-class ALSO on any
+    resolution failure. Review: staff-eng (AC-3) -- an empty/missing
+    `payload` or `git_root`, or any exception out of
+    `resolve_effective_types`, now reads as subagent-class, matching the
+    fail-open inversion AC-3 names for this predicate alongside
+    `annotate_deny` and the dispatch seam; EM-class is the strictly
+    narrower, positively-resolved case. Never raises: any exception is
+    caught and degrades to subagent-class, same "degrade to terse, never
+    to emitting" direction as `session.identity.resolves_em_audience`.
     """
-    agent_id, _agent_type, subagent_type = resolve_effective_types(payload or {}, git_root)
+    try:
+        agent_id, _agent_type, subagent_type = resolve_effective_types(payload or {}, git_root)
+    except Exception:
+        return AGENT_CLASS_SUBAGENT
     if agent_id or subagent_type:
         return AGENT_CLASS_SUBAGENT
-    return AGENT_CLASS_EM
+    if payload and git_root:
+        return AGENT_CLASS_EM
+    return AGENT_CLASS_SUBAGENT
 
 
 def _target_phrase(target_repo: str, raw_target: str = "") -> str:
@@ -248,21 +266,6 @@ def _target_phrase(target_repo: str, raw_target: str = "") -> str:
     if not raw_target:
         return f"`{target_repo}`"
     return f"`{target_repo}` (typed `{raw_target}`)"
-
-
-def _clear_offer_phrase(surface: str) -> str:
-    """The truthful per-surface description of what `clear_line()`'s
-    `touch` actually stands down (see module docstring, `SURFACE_BASH`/
-    `SURFACE_TOOL`). Lower-case, mid-sentence form -- a caller that needs it
-    capitalized (a template opening a new sentence with it) title-cases the
-    first character at the call site rather than here. Review:
-    coordinator:code-reviewer (P3) -- only `render_publish_em_message`
-    exercises that branch today (three of the four templates splice this
-    phrase mid-sentence); worded singular rather than plural to match.
-    """
-    if surface == SURFACE_TOOL:
-        return "stand the boundary down, session-wide"
-    return "clear this target"
 
 
 def render_em_message(

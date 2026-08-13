@@ -4283,6 +4283,40 @@ class TestInReplyToExistenceGate:
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
+    def test_unit_glob_metacharacter_does_not_spuriously_match(self, tmp_path):
+        """`in_reply_to` is untrusted, caller-supplied frontmatter — a value
+        containing glob metacharacters must NOT be treated as a glob PATTERN
+        (the regression this workstream's shape repeatedly fixes: rglob()
+        interprets its argument as a pattern, so `*.md` or `2026-07-2[0-9].md`
+        could spuriously match an unrelated archived memo and wrongly
+        validate). Matching must stay literal."""
+        sender = tmp_path / "sender"
+        (sender / "cross-repo" / "archive" / "2026-07").mkdir(parents=True)
+        (sender / "cross-repo" / "archive" / "2026-07" / "2026-07-25-foo.md").write_text(
+            "x", encoding="utf-8",
+        )
+        # A glob pattern that WOULD match the real file above under rglob()
+        # semantics, but names no real file literally.
+        result = _validate_in_reply_to_exists(True, sender, "2026-07-2[0-9]-foo.md")
+        assert isinstance(result, dict)
+        assert result["exit_code"] == 1
+
+    def test_unit_directory_traversal_value_cannot_escape_archive_dir(self, tmp_path):
+        """A value carrying directory separators (e.g. `../`) must be
+        normalized to its bare basename before being joined onto the archive
+        dir — never allowed to escape it. A secret file living OUTSIDE the
+        sender worktree must not be found via a traversal in_reply_to, even
+        though a same-named decoy exists nowhere in the archive."""
+        sender = tmp_path / "sender"
+        (sender / "cross-repo" / "archive").mkdir(parents=True)
+        secret = tmp_path / "secret.md"
+        secret.write_text("classified", encoding="utf-8")
+        result = _validate_in_reply_to_exists(
+            True, sender, "../../../../../../../secret.md",
+        )
+        assert isinstance(result, dict)
+        assert result["exit_code"] == 1
+
     def test_act_omitted_emits_no_in_reply_to_key(self, tmp_path, monkeypatch):
         """No in_reply_to supplied — the delivered memo carries no such key at all."""
         receiver_repo = _make_receiver_git_repo(tmp_path)

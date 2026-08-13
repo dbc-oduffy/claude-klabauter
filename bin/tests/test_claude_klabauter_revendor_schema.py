@@ -21,10 +21,19 @@ Coverage:
      dry-run writes nothing, a real run writes bytes AND pin together, `--reason` and
      `--ack-major` are enforced, `--ref` is refused for HEAD-tracked schemas, and a
      failed post-vendor verification rolls BOTH files back.
+  5. Decline records: a live decline blocks a matching re-vendor, `--ack-declined`
+     overrides it, the decline self-expires once the incoming version moves past the
+     declined one, a decline for a different schema never blocks, and `_write_decline`
+     round-trips a record `_decline_gate_reasons` can then read back. Includes a
+     regression reproducing the 2026-08-13 incident this feature responds to: example-doctrine-repo moves
+     a schema's validation shape while leaving `x-schema-version` unchanged, an operator
+     backs it out and records the decline, and a second re-vendor attempt at the same
+     shape+version is refused without `--ack-declined`.
 
 No network. Real local `git` only, in tmp fake clones. Module path constants
-(`_SCHEMAS_DIR`, `_PIN_REGISTRY_FILE`) are monkeypatched to isolated tmp dirs — this
-suite never touches the real vendored schemas or the real pin registry.
+(`_SCHEMAS_DIR`, `_PIN_REGISTRY_FILE`, `_DECLINE_RECORDS_DIR`) are monkeypatched to
+isolated tmp dirs — this suite never touches the real vendored schemas, pin registry,
+or decline records.
 
 Spec backlink: state/audits/2026-07-28-windows-install-dogfood-friction.md § F3
 """
@@ -126,9 +135,11 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     schemas = tmp_path / "schemas"
     schemas.mkdir()
     registry = _write_pin_registry(tmp_path / "test_schema_validate.py")
+    declines = tmp_path / "schema-decline-records"
     monkeypatch.setattr(_mod, "_SCHEMAS_DIR", schemas)
     monkeypatch.setattr(_mod, "_PIN_REGISTRY_FILE", registry)
-    return {"schemas": schemas, "registry": registry}
+    monkeypatch.setattr(_mod, "_DECLINE_RECORDS_DIR", declines)
+    return {"schemas": schemas, "registry": registry, "declines": declines}
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +301,155 @@ class TestMajorBumpReasons:
     def test_absent_metadata_never_fabricates_a_major(self) -> None:
         reasons, notes = _mod._major_bump_reasons(b"{}\n", b'{"title": "x"}\n')
         assert reasons == [] and notes == []
+
+
+# ---------------------------------------------------------------------------
+# 4a. Decline records
+# ---------------------------------------------------------------------------
+
+def _handoff_like_schema(with_mapping_member: bool) -> dict:
+    """A minimal schema shaped like the incident: `x-schema-version` at 7.1.0,
+    with a nested mapping under `x-producer-typed-command` whose member set
+    changes shape without the version moving."""
+    mapping: dict[str, object] = {"kind": {"type": "string"}}
+    if with_mapping_member:
+        mapping["carried_items"] = {"type": "array"}
+    return {
+        "x-schema-version": "7.1.0",
+        "x-producer-typed-command": {"mapping": mapping},
+        "type": "object",
+    }
+
+
+def _dump(schema: dict) -> bytes:
+    return (json.dumps(schema, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+class TestDeclineGate:
+    def test_write_decline_record_round_trips(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        _commit_schema(fake_clone, "alpha", _dump(_handoff_like_schema(True)))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+
+        rc = _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="that debt is not ours to import",
+            backout_sha="e" * 40,
+        )
+        assert rc == 0
+        record_path = sandbox["declines"] / "alpha.json"
+        assert record_path.is_file()
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        assert record["schema"] == "alpha"
+        assert record["declined_schema_version"] == "7.1.0"
+        assert record["reason"] == "that debt is not ours to import"
+        assert record["backout_sha"] == "e" * 40
+        assert record["status"] == "active"
+        assert record["declined_shape_hash"] == _mod.semantic_shape_hash(
+            _handoff_like_schema(True)
+        )
+
+    def test_live_decline_blocks_matching_revendor_incident_regression(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        """Reproduces the 2026-08-13 incident: same version, shape moved, previously
+        declined — a second re-vendor attempt at the identical shape must refuse."""
+        declined_shape = _handoff_like_schema(False)  # example-doctrine-repo's shape-narrowing edit
+        _commit_schema(fake_clone, "alpha", _dump(declined_shape))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+
+        rc = _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="that debt is not ours to import",
+            backout_sha="e6af1c6cf" + "0" * 31,
+        )
+        assert rc == 0
+
+        with pytest.raises(SystemExit):
+            _mod.run(schema_names=["alpha"], doe_clone_arg=str(fake_clone))
+
+    def test_ack_declined_overrides(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        declined_shape = _handoff_like_schema(False)
+        head = _commit_schema(fake_clone, "alpha", _dump(declined_shape))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+        _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="reason",
+            backout_sha="f" * 40,
+        )
+        rc = _mod.run(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ack_declined=True,
+            reason="operator overrides the decline",
+        )
+        assert rc == 0
+        assert (sandbox["schemas"] / "alpha.schema.json").read_bytes() == _dump(declined_shape)
+
+    def test_decline_self_expires_once_version_moves(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        declined_shape = _handoff_like_schema(False)
+        _commit_schema(fake_clone, "alpha", _dump(declined_shape))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+        _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="reason",
+            backout_sha="a" * 40,
+        )
+
+        # example-doctrine-repo resolves it: same shape, but bumped past the declined version (8.0.0).
+        moved_shape = dict(declined_shape)
+        moved_shape["x-schema-version"] = "8.0.0"
+        _commit_schema(fake_clone, "alpha", _dump(moved_shape))
+
+        rc = _mod.run(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ack_major=True,
+            reason="example-doctrine-repo resolved the shape narrow by bumping to 8.0.0",
+        )
+        assert rc == 0, "a decline must not block once upstream moved the version"
+        assert (sandbox["schemas"] / "alpha.schema.json").read_bytes() == _dump(moved_shape)
+
+    def test_decline_for_different_schema_does_not_block(
+        self, fake_clone: Path, sandbox: dict[str, Path]
+    ) -> None:
+        declined_shape = _handoff_like_schema(False)
+        _commit_schema(fake_clone, "alpha", _dump(declined_shape))
+        _commit_schema(fake_clone, "gamma", _dump(_handoff_like_schema(True)))
+        (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
+        (sandbox["schemas"] / "gamma.schema.json").write_bytes(_dump(_handoff_like_schema(False)))
+        _mod._write_decline(
+            schema_names=["alpha"],
+            doe_clone_arg=str(fake_clone),
+            ref="HEAD",
+            reason="reason",
+            backout_sha="b" * 40,
+        )
+
+        # gamma is HEAD-tracked (not in the pin registry) and carries no decline.
+        rc = _mod.run(schema_names=["gamma"], doe_clone_arg=str(fake_clone))
+        assert rc == 0
+        assert (sandbox["schemas"] / "gamma.schema.json").read_bytes() == _dump(
+            _handoff_like_schema(True)
+        )
+
+    def test_no_decline_record_is_a_pure_no_op_on_the_gate(
+        self, sandbox: dict[str, Path]
+    ) -> None:
+        assert _mod._decline_gate_reasons("nonexistent", _dump(_handoff_like_schema(True))) == []
 
 
 # ---------------------------------------------------------------------------

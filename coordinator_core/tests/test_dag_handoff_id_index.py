@@ -209,6 +209,82 @@ class TestWalkForwardFollowsPredecessorIdAlias:
 # ---------------------------------------------------------------------------
 
 
+class TestWalkForwardLazyIdIndexScan:
+    """Hot-path over-acquisition fix: an eligible-by-edge-kind walk that
+    never actually encounters an id-shaped ref must not pay for the
+    repo-wide handoff_id corpus scan at all — the scan is deferred to the
+    first id-shaped ref lookup, not performed up front just because the
+    edge kind is aliased.
+
+    Spec backlink: state/handoffs/2026-08-13-hot-path-over-acquisition.md
+    """
+
+    def test_zero_id_shaped_refs_never_triggers_the_corpus_scan(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        predecessor = _write_handoff(root, "state/handoffs/predecessor.md", ["title: pred"])
+        successor = _write_handoff(
+            root,
+            "state/handoffs/successor.md",
+            # Only the filename-shaped 'predecessor' field -- no
+            # 'predecessor_id' anywhere in the walked nodes, so no
+            # id-shaped ref is ever encountered.
+            ["predecessor: predecessor.md"],
+        )
+
+        calls = []
+        orig = dag._scan_handoff_corpus_paths
+
+        def counting(repo_root):
+            calls.append(repo_root)
+            return orig(repo_root)
+
+        monkeypatch.setattr(dag, "_scan_handoff_corpus_paths", counting)
+
+        result = dag.walk_forward(
+            str(successor), edge_kinds={"predecessor"}, repo_root=str(root)
+        )
+
+        assert calls == []
+        assert result["terminatedEarly"] == ""
+        assert str(predecessor.absolute()) in result["nodes"]
+
+    def test_an_id_shaped_ref_still_triggers_exactly_one_scan_and_resolves(
+        self, tmp_path, monkeypatch
+    ):
+        root = _init_repo(tmp_path)
+        predecessor = _write_handoff(
+            root, "state/handoffs/predecessor.md", ["handoff_id: hnd-pred-lazy"]
+        )
+        successor = _write_handoff(
+            root,
+            "state/handoffs/successor.md",
+            ["predecessor_id: hnd-pred-lazy"],
+        )
+
+        calls = []
+        orig = dag._scan_handoff_corpus_paths
+
+        def counting(repo_root):
+            calls.append(repo_root)
+            return orig(repo_root)
+
+        monkeypatch.setattr(dag, "_scan_handoff_corpus_paths", counting)
+
+        result = dag.walk_forward(
+            str(successor), edge_kinds={"predecessor"}, repo_root=str(root)
+        )
+
+        # Exactly one scan even though the id-shaped ref is the resolution
+        # path -- memoized within the call, not re-scanned per lookup.
+        assert len(calls) == 1
+        assert result["terminatedEarly"] == ""
+        assert str(predecessor.absolute()) in result["nodes"]
+        assert result["orderedPaths"] == [
+            str(successor.absolute()),
+            str(predecessor.absolute()),
+        ]
+
+
 class TestDanglingIdFailsClosed:
     def test_dangling_predecessor_id_terminates_early_as_missing_link(self, tmp_path):
         root = _init_repo(tmp_path)

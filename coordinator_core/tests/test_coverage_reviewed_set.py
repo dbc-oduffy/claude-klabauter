@@ -24,6 +24,13 @@ from typing import List
 
 import pytest
 
+# Declared, not excused: this file spawns real git because the bug under test is
+# `build_reviewed_set`'s batched `git rev-list A^..A B^..B ...` fast-path -- a real
+# rev-list ancestry defect no mock reproduces. Each test builds its own repo via
+# `_init_repo`/`_make_commit` and several tests mutate real commit history
+# (interleaved SHA ranges), so the fixture is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Git repo helper (mirrors pattern in test_lifecycle_worktree.py)
@@ -2509,3 +2516,618 @@ def test_build_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(
         "the unrecognized kind must be named in a loud WARN to stderr, not "
         "silently swallowed"
     )
+
+
+# ---------------------------------------------------------------------------
+# spec-dispatch PLANNING exemption (2026-08-13 dispatch: "spec-dispatch route
+# and the wsc-brightline gate disagree on plan review"). The S lane runs no
+# Opus plan review by design, on the trade that its own mandatory
+# code-reviewer pass over the diff is the compensating control. A planning-
+# artifact commit whose plan is `scope_mode: spec-dispatch` must not owe a
+# plan review IF that compensating control (a qualifying, non-waived,
+# non-pending code review somewhere in the chain) actually exists.
+# ---------------------------------------------------------------------------
+
+
+def _make_plan_commit_with_scope_mode(
+    repo: Path, rel_path: str, message: str, scope_mode: str,
+    deliverable_id: str = "", scope: tuple = (),
+) -> str:
+    """Commit a plan file at rel_path carrying `scope_mode: <scope_mode>`
+    (and, when given, `deliverable_id: <deliverable_id>` and/or a `scope:`
+    sequence of path prefixes — the plan-to-commit join key
+    `_plan_scope_paths` reads) in its frontmatter block, mirroring a real
+    docs/plans/*.md artifact. `deliverable_id` is retained only as inert
+    fixture noise (a real plan carries one) — it is NOT the join key the
+    exemption reads any more; `scope` is."""
+    full = repo / rel_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    fm = f"scope_mode: {scope_mode}\n"
+    if deliverable_id:
+        fm += f"deliverable_id: {deliverable_id}\n"
+    if scope:
+        fm += "scope:\n" + "".join(f"  - {s}\n" for s in scope)
+    full.write_text(f"---\n{fm}---\n\n# {message}\n", encoding="utf-8")
+    _git(["add", rel_path], repo)
+    _git(["commit", "-m", message], repo)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+
+def _make_path_commit_with_deliverable(
+    repo: Path, rel_path: str, message: str, deliverable_id: str,
+) -> str:
+    """Commit a single file at rel_path, stamped with a `Deliverable-Id`
+    trailer — mirrors a real executor commit's session-level deliverable
+    stamp. Kept for fixture parity with real commits; the exemption's
+    plan-to-commit join no longer reads this trailer (see
+    `_plan_scope_paths`'s docstring) — callers exercising the join must
+    also arrange `rel_path` under the plan's own `scope:` prefixes."""
+    full = repo / rel_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(f"{message}\n", encoding="utf-8")
+    _git(["add", rel_path], repo)
+    _git(
+        ["commit", "-m", f"{message}\n\nDeliverable-Id: {deliverable_id}"],
+        repo,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+
+def test_spec_dispatch_exemption_applies_with_qualifying_code_review(
+    tmp_path: Path,
+) -> None:
+    """AC: exemption applies when scope_mode: spec-dispatch AND a qualifying
+    (non-waived, non-pending, diff-shaped) code review exists somewhere in
+    the chain."""
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+        SPEC_DISPATCH_EXEMPT_REASON,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    plan_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-spec-dispatch-example.md",
+        "author plan", "spec-dispatch", scope=("src/",),
+    )
+    code_sha = _make_path_commit(repo, "src/example.py", "implement plan")
+
+    record_path = tmp_path / "code_record.json"
+    _write_trail_record(record_path, code_sha)  # scope_kind="diff", verdict="ok"
+
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+    assert plan_sha in planning_set
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+
+    assert plan_sha in exempt, (
+        "spec-dispatch route + qualifying code review must discharge the "
+        "planning commit"
+    )
+    assert reasons[plan_sha] == SPEC_DISPATCH_EXEMPT_REASON, (
+        "the exemption must emit the distinguishable reason token so a "
+        "reader can tell it apart from an ordinary trail-record credit"
+    )
+
+
+def test_spec_dispatch_exemption_does_not_apply_without_qualifying_review(
+    tmp_path: Path,
+) -> None:
+    """AC: exemption does NOT apply when the plan is spec-dispatch but no
+    qualifying code review exists anywhere in the chain — the whole point of
+    the exemption being conditional, not a blanket carve-out."""
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    plan_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-spec-dispatch-example.md",
+        "author plan", "spec-dispatch",
+    )
+    code_sha = _make_path_commit(repo, "src/example.py", "implement plan")
+
+    # No trail record at all — the S lane's mandatory code-reviewer pass was
+    # skipped, so the compensating control never existed.
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [], str(repo),
+    )
+
+    assert plan_sha not in exempt, (
+        "AC: no qualifying code review anywhere in the chain must leave the "
+        "planning commit on the hook — an unconditional carve-out is the "
+        "named wrong fix"
+    )
+    assert reasons == {}
+
+
+def test_spec_dispatch_exemption_does_not_apply_to_full_terminal_plan(
+    tmp_path: Path,
+) -> None:
+    """AC: exemption does NOT apply to a `plan`-routed (full terminal) plan —
+    that route already ran its own Opus plan review and is not this
+    exemption's concern; a mislabeled/absent scope_mode must still demand
+    review, never excuse it."""
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    plan_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-full-terminal-example.md",
+        "author plan", "plan",
+    )
+    code_sha = _make_path_commit(repo, "src/example.py", "implement plan")
+
+    record_path = tmp_path / "code_record.json"
+    _write_trail_record(record_path, code_sha)
+
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+
+    assert plan_sha not in exempt, (
+        "a plan-routed (full terminal) plan must never be exempted by this "
+        "carve-out, even with a qualifying code review present"
+    )
+    assert reasons == {}
+
+
+def test_spec_dispatch_exemption_falls_back_on_unreadable_scope_mode(
+    tmp_path: Path,
+) -> None:
+    """AC: an absent/unreadable scope_mode falls back to demanding review —
+    fail toward the review obligation, never toward excusing it."""
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    # No frontmatter at all — scope_mode is unreadable/absent.
+    plan_sha = _make_path_commit(
+        repo, "docs/plans/2026-08-13-no-frontmatter-example.md", "author plan",
+    )
+    code_sha = _make_path_commit(repo, "src/example.py", "implement plan")
+
+    record_path = tmp_path / "code_record.json"
+    _write_trail_record(record_path, code_sha)
+
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+
+    assert plan_sha not in exempt, (
+        "an absent scope_mode must not be treated as spec-dispatch-eligible"
+    )
+    assert reasons == {}
+
+
+def test_spec_dispatch_exemption_unconditional_carveout_fails_discrimination(
+    tmp_path: Path,
+) -> None:
+    """Discrimination proof (dispatch brief requirement): confirm the
+    'exemption does not apply without a qualifying review' case FAILS if the
+    exemption is made unconditional (route alone, no compensating-control
+    gate) — proving the conditional gate 2 in
+    _spec_dispatch_exempt_planning_shas is actually load-bearing, not a
+    vacuous no-op."""
+    import coordinator_core.coverage as cov_mod
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+    plan_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-spec-dispatch-example.md",
+        "author plan", "spec-dispatch",
+    )
+    code_sha = _make_path_commit(repo, "src/example.py", "implement plan")
+
+    # No trail record — no compensating control.
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = cov_mod._classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+
+    def _unconditional_exempt(planning_shas, chain_set, bookkeeping_set,
+                               planning_set, touched_paths_cache, trail_paths, cwd):
+        """Simulates the tempting wrong fix: exempt on route alone."""
+        exempt = set()
+        reasons = {}
+        for sha in planning_shas:
+            plan_paths = sorted(
+                p for p in touched_paths_cache.get(sha, frozenset())
+                if p.startswith("docs/plans/")
+            )
+            for p in plan_paths:
+                if cov_mod._resolve_plan_scope_mode(p, cwd) == "spec-dispatch":
+                    exempt.add(sha)
+                    reasons[sha] = cov_mod.SPEC_DISPATCH_EXEMPT_REASON
+                    break
+        return frozenset(exempt), reasons
+
+    unconditional_exempt, _ = _unconditional_exempt(
+        [plan_sha], chain_set, frozenset(), planning_set, touched_cache, [], str(repo),
+    )
+    assert plan_sha in unconditional_exempt, (
+        "sanity check on the harness: the unconditional carve-out must "
+        "wrongly exempt the commit — if this fails, the harness does not "
+        "actually simulate the named wrong fix"
+    )
+
+    real_exempt, _ = cov_mod._spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [], str(repo),
+    )
+    assert plan_sha not in real_exempt, (
+        "the real (conditional) implementation must NOT exempt this commit "
+        "— proves gate 2 (compensating-control check) is load-bearing"
+    )
+
+
+def _chain_scoped_exempt(planning_shas, chain_set, bookkeeping_set,
+                          planning_set, touched_paths_cache, trail_paths, cwd):
+    """Simulates the reviewer-named wrong fix for Finding 1: the
+    compensating-control gate cleared once for the WHOLE chain (any
+    qualifying code review anywhere), rather than plan-scoped via
+    deliverable_id attribution. Mirrors the pre-fix
+    `_spec_dispatch_exempt_planning_shas` shape."""
+    import coordinator_core.coverage as cov_mod
+
+    code_shas = frozenset(
+        sha for sha in chain_set
+        if sha not in bookkeeping_set and sha not in planning_set
+    )
+    qualifying_code_shas = cov_mod._spec_dispatch_qualifying_code_review_shas(
+        code_shas, trail_paths, cwd
+    )
+    if not qualifying_code_shas:
+        return frozenset(), {}
+    exempt: set = set()
+    reasons: dict = {}
+    for sha in planning_shas:
+        plan_paths = sorted(
+            p for p in touched_paths_cache.get(sha, frozenset())
+            if p.startswith("docs/plans/")
+        )
+        if not plan_paths:
+            continue
+        scope_mode = None
+        for plan_path in plan_paths:
+            scope_mode = cov_mod._resolve_plan_scope_mode(plan_path, cwd)
+            if scope_mode == "spec-dispatch":
+                break
+        if scope_mode != "spec-dispatch":
+            continue
+        exempt.add(sha)
+        reasons[sha] = cov_mod.SPEC_DISPATCH_EXEMPT_REASON
+    return frozenset(exempt), reasons
+
+
+def test_spec_dispatch_exemption_is_plan_scoped_not_chain_scoped(
+    tmp_path: Path,
+) -> None:
+    """Finding 1 fix + discrimination proof: two spec-dispatch plans (A, B)
+    in one chain, only plan A's implementation carries a qualifying code
+    review (attributed via deliverable_id). Plan A must be exempt; plan B
+    must NOT be — proving the compensating-control gate is plan-scoped, not
+    "any review anywhere in the chain."
+
+    Confirms the reviewer-named wrong fix (`_chain_scoped_exempt` above)
+    WOULD wrongly exempt plan B (sanity check the harness actually
+    simulates the old bug), then confirms the real implementation does not.
+    """
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+
+    plan_a_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-plan-a.md",
+        "author plan A", "spec-dispatch", scope=("src/a/",),
+    )
+    plan_b_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-plan-b.md",
+        "author plan B", "spec-dispatch", scope=("src/b/",),
+    )
+    # Only plan A's implementation is ever reviewed.
+    code_a_sha = _make_path_commit(repo, "src/a/impl.py", "implement plan A")
+    code_b_sha = _make_path_commit(
+        repo, "src/b/impl.py", "implement plan B (never reviewed)",
+    )
+
+    record_path = tmp_path / "code_a_record.json"
+    _write_trail_record(record_path, code_a_sha)  # only A's code is reviewed
+
+    all_shas = [plan_a_sha, plan_b_sha, code_a_sha, code_b_sha]
+    chain_set = frozenset(all_shas)
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        all_shas, str(repo), touched_cache,
+    )
+    assert plan_a_sha in planning_set and plan_b_sha in planning_set
+
+    # Sanity check: the chain-scoped (wrong) fix wrongly exempts B too.
+    wrong_exempt, _ = _chain_scoped_exempt(
+        [plan_a_sha, plan_b_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+    assert plan_b_sha in wrong_exempt, (
+        "sanity check on the harness: the chain-scoped wrong fix must "
+        "wrongly exempt plan B (unreviewed) via plan A's review — if this "
+        "fails, the harness does not simulate the named bug"
+    )
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_a_sha, plan_b_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+    assert plan_a_sha in exempt, "plan A's own review must discharge plan A"
+    assert plan_b_sha not in exempt, (
+        "plan B's implementation was never reviewed — plan A's review must "
+        "NOT discharge it; the compensating-control gate must be "
+        "plan-scoped, not chain-scoped"
+    )
+
+
+def _first_match_exempt(planning_shas, chain_set, bookkeeping_set,
+                         planning_set, touched_paths_cache, trail_paths, cwd):
+    """Simulates the reviewer-named wrong fix for Finding 2: the route gate
+    breaks on the FIRST touched plan path resolving `spec-dispatch`, rather
+    than requiring EVERY touched plan path to resolve `spec-dispatch`.
+    Mirrors the pre-fix `_spec_dispatch_exempt_planning_shas` route-gate
+    shape (gate 2 here is the real, already-fixed plan-scoped one, isolating
+    the route-gate bug alone)."""
+    import coordinator_core.coverage as cov_mod
+
+    code_shas = frozenset(
+        sha for sha in chain_set
+        if sha not in bookkeeping_set and sha not in planning_set
+    )
+    qualifying_code_shas = cov_mod._spec_dispatch_qualifying_code_review_shas(
+        code_shas, trail_paths, cwd
+    )
+    if not qualifying_code_shas:
+        return frozenset(), {}
+    qualifying_touched, _note = cov_mod._commit_touched_paths(
+        sorted(qualifying_code_shas), cwd, {}
+    )
+    exempt: set = set()
+    reasons: dict = {}
+    for sha in planning_shas:
+        plan_paths = sorted(
+            p for p in touched_paths_cache.get(sha, frozenset())
+            if p.startswith("docs/plans/")
+        )
+        if not plan_paths:
+            continue
+        scope_mode = None
+        matched_path = None
+        for plan_path in plan_paths:
+            scope_mode = cov_mod._resolve_plan_scope_mode(plan_path, cwd)
+            if scope_mode == "spec-dispatch":
+                matched_path = plan_path
+                break
+        if scope_mode != "spec-dispatch" and matched_path is None:
+            continue
+        if matched_path is None:
+            continue
+        scopes = cov_mod._plan_scope_paths(matched_path, cwd)
+        if not scopes:
+            continue
+        has_review = any(
+            cov_mod._path_matches_scope(p, s)
+            for code_sha in qualifying_code_shas
+            for p in qualifying_touched.get(code_sha, frozenset())
+            for s in scopes
+        )
+        if not has_review:
+            continue
+        exempt.add(sha)
+        reasons[sha] = cov_mod.SPEC_DISPATCH_EXEMPT_REASON
+    return frozenset(exempt), reasons
+
+
+def test_spec_dispatch_exemption_fails_closed_on_mixed_scope_mode_commit(
+    tmp_path: Path,
+) -> None:
+    """Finding 2 fix + discrimination proof: a single commit touches TWO
+    plan artifacts — one `scope_mode: plan` (full terminal, owes a real
+    review) and one `scope_mode: spec-dispatch` — with a qualifying code
+    review present. The commit must NOT be exempted: fail-closed across ALL
+    touched plans, not "any touched plan reads spec-dispatch."
+
+    Confirms the reviewer-named wrong fix (`_first_match_exempt` above)
+    WOULD wrongly exempt this commit when the spec-dispatch plan sorts
+    first, then confirms the real implementation does not.
+    """
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+
+    # rel_path sorted BEFORE the full-terminal plan, so a first-match-wins
+    # route gate finds it first.
+    plan_paths_and_scopes = [
+        ("docs/plans/2026-08-13-aaa-spec-dispatch.md", "spec-dispatch", ("src/",)),
+        ("docs/plans/2026-08-13-zzz-full-terminal.md", "plan", ()),
+    ]
+    plan_shas = []
+    for rel_path, scope_mode, scope in plan_paths_and_scopes:
+        plan_shas.append(
+            _make_plan_commit_with_scope_mode(
+                repo, rel_path, f"author {rel_path}", scope_mode,
+                scope=scope,
+            )
+        )
+
+    # Single commit touches BOTH plan paths at once (and nothing else — a
+    # commit touching a non-plan/non-bookkeeping path classifies CODE, not
+    # PLANNING, per `_classify_bookkeeping_shas`'s own predicate). APPEND,
+    # never overwrite — the frontmatter (`scope_mode`/`scope`) is
+    # read off the WORKING TREE at gate-run time, so clobbering it here
+    # would make the assertion below vacuous.
+    for rel_path, _scope_mode, _scope in plan_paths_and_scopes:
+        with open(repo / rel_path, "a", encoding="utf-8") as fh:
+            fh.write("\ntouched again\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "mixed commit touching both plans"], repo)
+    mixed_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+    # Under src/ — inside the spec-dispatch plan's own `scope:`, so the
+    # compensating-control gate WOULD clear for that plan alone.
+    code_sha = _make_path_commit(repo, "src/mixed.py", "implement")
+    record_path = tmp_path / "code_record.json"
+    _write_trail_record(record_path, code_sha)
+
+    all_shas = plan_shas + [mixed_sha, code_sha]
+    chain_set = frozenset(all_shas)
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        all_shas, str(repo), touched_cache,
+    )
+    assert mixed_sha in planning_set
+
+    # Sanity check: the first-match wrong fix wrongly exempts the mixed commit.
+    wrong_exempt, _ = _first_match_exempt(
+        [mixed_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+    assert mixed_sha in wrong_exempt, (
+        "sanity check on the harness: the first-match-wins wrong fix must "
+        "wrongly exempt the mixed commit — if this fails, the harness does "
+        "not simulate the named bug"
+    )
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [mixed_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+    assert mixed_sha not in exempt, (
+        "a commit touching a full-terminal plan alongside a spec-dispatch "
+        "plan must NOT be exempted — fail closed across every touched plan"
+    )
+    assert reasons == {}
+
+
+def test_spec_dispatch_exemption_applies_via_scope_path_despite_mismatched_deliverable_trailer(
+    tmp_path: Path,
+) -> None:
+    """Regression proof for the join-key fix: on the real chain that exposed
+    this bug, the reviewed CODE commit's `Deliverable-Id` trailer names the
+    SESSION's held-claim deliverable — never the plan's own `deliverable_id` —
+    so the old deliverable_id join could never match and the exemption was
+    permanently inert. The scope-path join must still exempt the planning
+    commit when the reviewed code commit's touched path falls under the
+    plan's `scope:` prefix, even though the trailer points at an unrelated
+    deliverable entirely."""
+    from coordinator_core.coverage import (
+        _classify_bookkeeping_shas,
+        _spec_dispatch_exempt_planning_shas,
+        SPEC_DISPATCH_EXEMPT_REASON,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+
+    plan_sha = _make_plan_commit_with_scope_mode(
+        repo, "docs/plans/2026-08-13-ac-shape.md",
+        "author plan", "spec-dispatch",
+        deliverable_id="dlv-handoff-acceptance-criteria-shape-has-no-f87359",
+        scope=("coordinator_core/write_guards/", "cross-repo/"),
+    )
+    # The reviewed code commit's trailer names an UNRELATED (session-level
+    # held-claim) deliverable — mirrors the real chain's
+    # dlv-close-the-evidence-acs-on-the-three-part-51393a mismatch.
+    code_sha = _make_path_commit_with_deliverable(
+        repo, "coordinator_core/write_guards/example.py", "implement plan",
+        "dlv-close-the-evidence-acs-on-the-three-part-51393a",
+    )
+
+    record_path = tmp_path / "code_record.json"
+    _write_trail_record(record_path, code_sha)
+
+    chain_set = frozenset([plan_sha, code_sha])
+    touched_cache: dict = {}
+    _exhaust, planning_set, _note = _classify_bookkeeping_shas(
+        [plan_sha, code_sha], str(repo), touched_cache,
+    )
+    assert plan_sha in planning_set
+
+    exempt, reasons = _spec_dispatch_exempt_planning_shas(
+        [plan_sha], chain_set, frozenset(), planning_set,
+        touched_cache, [str(record_path)], str(repo),
+    )
+
+    assert plan_sha in exempt, (
+        "a scope-path match must discharge the planning commit even when "
+        "the reviewed code commit's Deliverable-Id trailer names an "
+        "unrelated deliverable — the old deliverable_id join was inert on "
+        "exactly this shape"
+    )
+    assert reasons[plan_sha] == SPEC_DISPATCH_EXEMPT_REASON

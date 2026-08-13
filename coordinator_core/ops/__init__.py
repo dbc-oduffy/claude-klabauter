@@ -186,6 +186,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         '`declined` terminal status)',
     ),
     (
+        "coordinator_core.ops.sizing_ship",
+        'registers "sizing.ship" (2026-08-13, single-target applier for the sizing-object '
+        '`shipped` terminal status when no plan was ever minted for the routed work)',
+    ),
+    (
         "coordinator_core.ops.cascade_backstop_sweep",
         'registers "deliverable.cascade_backstop_sweep" (C6c read-only backstop sweep, AC6d)',
     ),

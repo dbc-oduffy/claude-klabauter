@@ -4266,6 +4266,21 @@ def test_resolve_in_reply_to_target_glob_metachars_do_not_spuriously_match(git_r
     assert _resolve_in_reply_to_target(git_repo.root, "*.md") == "unresolvable"
 
 
+def test_resolve_in_reply_to_target_closed_one_level_shard(git_repo):
+    """A one-level-sharded archive layout (cross-repo/archive/<shard>/<name>) —
+    not today's real flat layout, but the defensive fallback this narrowing
+    keeps — still resolves "closed", not "unresolvable"."""
+    sharded = git_repo.root / "cross-repo" / "archive" / "2026-07"
+    sharded.mkdir(parents=True, exist_ok=True)
+    (sharded / "2026-07-18-sharded-ask.md").write_text(
+        '---\ntitle: "Archived Memo"\nstatus: actioned\n---\n\nMemo body.\n',
+        encoding="utf-8",
+    )
+    assert _resolve_in_reply_to_target(
+        git_repo.root, "2026-07-18-sharded-ask.md",
+    ) == "closed"
+
+
 def test_scan_open_memos_attaches_bulk_eligibility(git_repo):
     """_scan_open_memos composes classify_bulk_eligibility per memo, once, using the
     SAME in_reply_to resolution resolve_named_memo_dispositions later gates on."""

@@ -559,6 +559,49 @@ def _narrow_foreign_session_scope(
     return foreign - waived
 
 
+def _uncovered_foreign_trailer_shas(
+    shas: List[str], own_session_id: Optional[str], cwd: str
+) -> FrozenSet[str]:
+    """Return the subset of `shas` whose OWN Session-Id git trailer is set and
+    names a DIFFERENT session than `own_session_id`.
+
+    Sibling of `_narrow_foreign_session_scope` / `session_attribution.
+    trailer_foreign_shas`, but queries a discrete SHA LIST (`git log --no-walk
+    <sha>...`) rather than a contiguous range: the DR-294 single-node-walk
+    collapse (see `_DagChainResult.terminated_early`) has no single sha_range
+    to walk against — `chain_set` IS the closing node's own attributed
+    segment there, so the range-shaped helper does not apply. Used only to
+    classify `unrecordable_shas` (see `CoverageResult.unrecordable_shas`'
+    docstring) — never to widen or narrow `uncovered_shas`/the verdict.
+
+    Fail-closed on a git failure: returns an empty set rather than guessing,
+    so a transient git error UNDER-classifies `unrecordable_shas` (never
+    over-claims a structurally-recordable commit as unrecordable).
+    """
+    if not shas:
+        return frozenset()
+    rc, out, _err = _run(
+        [
+            "git", "log", "--no-walk", "--no-merges",
+            "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+        ]
+        + list(shas),
+        cwd=cwd,
+    )
+    if rc != 0:
+        return frozenset()
+    foreign: Set[str] = set()
+    for line in out.splitlines():
+        if "\x1f" not in line:
+            continue
+        sha, trailer = line.split("\x1f", 1)
+        sha = sha.strip()
+        trailer = trailer.strip()
+        if sha and trailer and trailer != own_session_id:
+            foreign.add(sha)
+    return frozenset(foreign)
+
+
 # ---------------------------------------------------------------------------
 # Bookkeeping-vs-code partition (signal-honesty fix — coverage.py is an ORACLE,
 # not a lock; see ops/ceremony/tail_ops.py:698's own disclaimer). A ceremony
@@ -904,6 +947,304 @@ def _classify_bookkeeping_shas(
     exhaust_set = frozenset(sha for sha in by_path if sha not in authoring)
     planning_set = frozenset(sha for sha in planning_by_path if sha not in authoring)
     return exhaust_set, planning_set, note
+
+
+# ---------------------------------------------------------------------------
+# spec-dispatch PLANNING exemption — docs/plans/2026-08-13-spec-dispatch-
+# route-and-the-wsc-brightline-gate-disagree-on-plan-review.md (or whatever
+# name the enclosing dispatch's plan ultimately takes; see the improvement-
+# queue entry state/improvement-queue/2026-08-13-spec-dispatch-route-and-
+# the-wsc-brightli-30bc7a7afb2b.yaml this chunk resolves).
+#
+# `spec-dispatch` (the plan skill's "S" light) is a DELIBERATE route that
+# runs NO Opus plan review, on the trade that its own mandatory
+# `code-reviewer` pass over the executor's diff is the compensating control.
+# Absent this exemption, a PLANNING commit authored by that route is
+# permanently uncovered — the gate demands a plan review the route never
+# owed, and the only escape hatch is a `waived` review-trail record, which
+# defeats the review trail (see AC9's own vacuity concern and this module's
+# own "never widen what waived discharges" rule — this exemption does NOT
+# touch that; it is a NEW, conditional bypass, not a relaxation of `waived`).
+#
+# The exemption is intentionally NARROW and CONDITIONAL — see
+# _spec_dispatch_exempt_planning_shas' docstring for the two gates it must
+# clear (route AND compensating control) before it discharges anything.
+# ---------------------------------------------------------------------------
+
+#: Frontmatter field a plan file carries naming its route (`SKILL.md`'s
+#: light-terminal state machine). Only "spec-dispatch" is exempt-eligible —
+#: every other value (including "plan", the full terminal that runs an Opus
+#: plan review) demands a plan review exactly as before this exemption.
+_SPEC_DISPATCH_SCOPE_MODE = "spec-dispatch"
+
+#: Verdicts that do NOT satisfy the exemption's compensating-control leg.
+#: Stricter than `EXCLUDED_VERDICTS` (which admits "waived" into
+#: reviewed_set) — a waived record is exactly the "reads green, nothing was
+#: actually reviewed" case this exemption must not accept as a substitute
+#: for the S lane's real `code-reviewer` pass. A missing/empty verdict field
+#: degrades to "pending" (treated as not-yet-reviewed) rather than credited.
+_SPEC_DISPATCH_NON_QUALIFYING_VERDICTS: FrozenSet[str] = frozenset({"pending", "waived", ""})
+
+
+def _resolve_plan_scope_mode(plan_path: str, cwd: str) -> Optional[str]:
+    """Best-effort read of a plan file's own `scope_mode:` frontmatter field,
+    off the WORKING TREE (not `git show <sha>:<path>`) — the plan artifact's
+    route is a property of the plan, read cheaply from one file, exactly as
+    the dispatch brief prefers over the `sizing_object:` FK indirection.
+
+    Fail-closed toward "not spec-dispatch": any read failure (missing file,
+    permission error, OS error) or an absent `scope_mode:` key returns None.
+    The caller treats None identically to any non-"spec-dispatch" value —
+    demand review, never excuse it.
+    """
+    full_path = os.path.join(cwd, plan_path)
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read(8192)
+    except OSError:
+        return None
+    return read_fm_field_unquoted(content, "scope_mode")
+
+
+def _spec_dispatch_qualifying_code_review_shas(
+    code_shas: FrozenSet[str],
+    trail_paths: List[str],
+    cwd: str,
+) -> FrozenSet[str]:
+    """Return the subset of `code_shas` covered by a trail record that is (a)
+    diff-shaped (`scope_kind` absent or `"diff"` — never a `"plan"` record
+    crediting itself) and (b) carries a verdict outside
+    `_SPEC_DISPATCH_NON_QUALIFYING_VERDICTS` — i.e. a genuine, non-waived,
+    non-pending `code-reviewer` pass, the S lane's own compensating control.
+
+    A record failing to parse, or citing an unsafe/unresolvable sha_range, is
+    silently skipped — fail-closed: it simply cannot supply the compensating
+    control, the same posture `build_reviewed_set` takes toward a malformed
+    record (never manufactures coverage from a record that cannot be read).
+    """
+    if not code_shas:
+        return frozenset()
+    covered: Set[str] = set()
+    for path in trail_paths:
+        try:
+            records = _parse_trail_file(path)
+        except _TrailParseError:
+            continue
+        for rec in records:
+            scope_kind = rec.get("scope_kind")
+            if scope_kind not in (None, "diff"):
+                continue
+            verdict = str(rec.get("verdict") or "").strip().lower()
+            if verdict in _SPEC_DISPATCH_NON_QUALIFYING_VERDICTS:
+                continue
+            sha_range = rec.get("sha_range", "")
+            if not sha_range or not SAFE_RANGE.match(sha_range):
+                continue
+            rc, out, _err = _run(["git", "rev-list", sha_range], cwd=cwd)
+            if rc != 0 or not out:
+                continue
+            covered |= set(out.splitlines()) & code_shas
+    return frozenset(covered)
+
+
+#: Distinguishable reason token — a reader of the gate output (or a test)
+#: can grep this to tell "exempt: spec-dispatch route, compensating
+#: code-review present" apart from an ordinary "covered by a record" credit
+#: (build_reviewed_set) or the still-owed PLANNING note above. Never emitted
+#: for a commit that fails EITHER gate below.
+SPEC_DISPATCH_EXEMPT_REASON = (
+    "exempt: spec-dispatch route, compensating code-review present"
+)
+
+
+#: Matches the `scope:` frontmatter key's own line (a bare sequence-value
+#: key, no inline scalar) — mirrors `_resolve_plan_scope_mode`'s posture of
+#: reading the raw frontmatter text rather than pulling in a YAML parser for
+#: one small block. Only ever anchored against lines already known to be
+#: inside the `---`-delimited frontmatter block (see `_plan_scope_paths`).
+_SCOPE_KEY_RE = re.compile(r"^scope:\s*(?:#.*)?$")
+
+#: Matches one `  - <path>` sequence-item line under a `scope:` key. The
+#: captured group is trimmed and quote-stripped by the caller.
+_SCOPE_ITEM_RE = re.compile(r"^\s+-\s+(.+?)\s*$")
+
+
+def _plan_scope_paths(plan_path: str, cwd: str) -> List[str]:
+    """Best-effort read of a plan file's own `scope:` frontmatter field (a
+    YAML sequence of path prefixes, e.g. `coordinator_core/write_guards/`),
+    off the WORKING TREE — same read shape as `_resolve_plan_scope_mode`.
+
+    This is the plan-to-commit join key that replaced the `deliverable_id`
+    trailer join (Review: PM finding — the `Deliverable-Id` trailer names
+    the SESSION's held-claim deliverable, not the plan a commit implements,
+    so that join could never match in practice). A code commit now counts
+    as a given plan's compensating review only when it touches a path under
+    one of that plan's declared `scope:` prefixes (`_path_matches_scope`).
+
+    Fail-closed toward "cannot attribute": any read failure, an absent
+    `scope:` key, or an empty list all return `[]`, which the caller treats
+    as "this plan can never be satisfied by any code review" — never a
+    wildcard match. Does not use a general YAML parser (none is a dependency
+    of this module) — a minimal, deliberately narrow sequence-of-scalars
+    reader bounded to the frontmatter block only.
+    """
+    full_path = os.path.join(cwd, plan_path)
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read(8192)
+    except OSError:
+        return []
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return []
+    paths: List[str] = []
+    in_scope = False
+    for line in lines[1:end]:
+        if in_scope:
+            m = _SCOPE_ITEM_RE.match(line)
+            if m:
+                val = m.group(1).strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                    val = val[1:-1]
+                if val:
+                    paths.append(val)
+                continue
+            in_scope = False
+        if _SCOPE_KEY_RE.match(line):
+            in_scope = True
+    return paths
+
+
+def _path_matches_scope(path: str, scope_entry: str) -> bool:
+    """Directory-aware prefix match: `path` is "under" `scope_entry` only at
+    a path-segment boundary — `coordinator_core/write_guards/` matches
+    `coordinator_core/write_guards/x.py` but must NOT match
+    `coordinator_core/write_guards_other/x.py` (a bare string-prefix check
+    would wrongly match the latter)."""
+    trimmed = scope_entry.rstrip("/")
+    if not trimmed:
+        return False
+    return path == trimmed or path.startswith(trimmed + "/")
+
+
+def _spec_dispatch_exempt_planning_shas(
+    planning_shas: List[str],
+    chain_set: FrozenSet[str],
+    bookkeeping_set: FrozenSet[str],
+    planning_set: FrozenSet[str],
+    touched_paths_cache: Dict[str, FrozenSet[str]],
+    trail_paths: List[str],
+    cwd: str,
+) -> Tuple[FrozenSet[str], Dict[str, str]]:
+    """Return (exempt_shas, {sha: reason}) — the subset of `planning_shas`
+    that does NOT owe a plan review because BOTH gates below clear for
+    EVERY `docs/plans/` path the commit touches:
+
+    1. Route gate: EVERY touched `docs/plans/` path (read off
+       `touched_paths_cache`, already populated by the caller's
+       `_classify_bookkeeping_shas` call) has a `scope_mode:` frontmatter
+       reading `"spec-dispatch"` (`_resolve_plan_scope_mode`). Fail-closed
+       across the whole set (Review: code-reviewer, finding 2) — a commit
+       touching one `scope_mode: spec-dispatch` plan and one
+       `scope_mode: plan` (or unresolvable) plan must NOT be exempted
+       wholesale; ANY non-spec-dispatch or unreadable path among those
+       touched means no exemption. A commit with no `docs/plans/` path at
+       all is never eligible.
+
+    2. Compensating-control gate: EVERY touched plan has its OWN
+       qualifying (non-waived, non-pending, diff-shaped) code review —
+       PLAN-SCOPED (Review: code-reviewer, finding 1; re-scoped again by PM
+       finding — see `_plan_scope_paths`'s docstring for why the
+       `Deliverable-Id`-trailer join it originally used could never match),
+       not chain-wide. A qualifying code commit supplies THAT plan's
+       compensating control only when it touches at least one path under
+       one of the plan's own `scope:` frontmatter prefixes
+       (`_plan_scope_paths` + `_path_matches_scope`) — a qualifying review
+       for some other plan's paths in the same chain does not count. A plan
+       with no `scope:` of its own (missing key, empty list, or unreadable
+       file) can never be satisfied — fail-closed, same discipline
+       `_resolve_plan_scope_mode` already applies to the route gate.
+    """
+    if not planning_shas:
+        return frozenset(), {}
+    code_shas = frozenset(
+        sha for sha in chain_set
+        if sha not in bookkeeping_set and sha not in planning_set
+    )
+    if not code_shas:
+        return frozenset(), {}
+    qualifying_code_shas = _spec_dispatch_qualifying_code_review_shas(
+        code_shas, trail_paths, cwd
+    )
+    exempt: Set[str] = set()
+    reasons: Dict[str, str] = {}
+    if not qualifying_code_shas:
+        # Gate 2 never clears for anyone in this chain — nothing to check
+        # gate 1 for; still fail-closed rather than short-circuiting the
+        # loop implicitly.
+        return frozenset(), {}
+
+    # CODE-side path attribution: which paths does each qualifying code
+    # review actually touch. Computed ONCE for the whole chain's qualifying
+    # code shas, then consulted per touched plan below via
+    # `_path_matches_scope` against that plan's own `scope:` prefixes.
+    qualifying_touched, _note = _commit_touched_paths(
+        sorted(qualifying_code_shas), cwd, {}
+    )
+
+    _scope_cache: Dict[str, Optional[str]] = {}
+    _scope_paths_cache: Dict[str, List[str]] = {}
+
+    def _scope_for(plan_path: str) -> Optional[str]:
+        if plan_path not in _scope_cache:
+            _scope_cache[plan_path] = _resolve_plan_scope_mode(plan_path, cwd)
+        return _scope_cache[plan_path]
+
+    def _scope_paths_for(plan_path: str) -> List[str]:
+        if plan_path not in _scope_paths_cache:
+            _scope_paths_cache[plan_path] = _plan_scope_paths(plan_path, cwd)
+        return _scope_paths_cache[plan_path]
+
+    def _has_compensating_review(plan_path: str) -> bool:
+        scopes = _scope_paths_for(plan_path)
+        if not scopes:
+            return False
+        for code_sha in qualifying_code_shas:
+            touched = qualifying_touched.get(code_sha, frozenset())
+            if any(
+                _path_matches_scope(p, s) for p in touched for s in scopes
+            ):
+                return True
+        return False
+
+    for sha in planning_shas:
+        plan_paths = sorted(
+            p
+            for p in touched_paths_cache.get(sha, frozenset())
+            if p.startswith("docs/plans/")
+        )
+        if not plan_paths:
+            continue
+
+        # Route gate — every touched plan must be spec-dispatch.
+        if any(_scope_for(p) != _SPEC_DISPATCH_SCOPE_MODE for p in plan_paths):
+            continue
+
+        # Compensating-control gate — every touched plan must have its OWN
+        # qualifying code review, attributed by scope-path overlap.
+        if any(not _has_compensating_review(p) for p in plan_paths):
+            continue
+
+        exempt.add(sha)
+        reasons[sha] = SPEC_DISPATCH_EXEMPT_REASON
+    return frozenset(exempt), reasons
 
 
 # ---------------------------------------------------------------------------
@@ -3543,6 +3884,20 @@ class CoverageResult:
                    the code-partition denominator is
                    chain_commits - len(bookkeeping_shas) - len(planning_shas). Empty
                    by default, same additive-field property as bookkeeping_shas.
+    spec_dispatch_exempt_shas: List of PLANNING-classified commit SHAs that
+                   were subtracted OUT of both uncovered_shas and
+                   planning_shas because they clear the spec-dispatch
+                   exemption (see coverage.py's own
+                   `_spec_dispatch_exempt_planning_shas` docstring): the
+                   commit's plan carries `scope_mode: spec-dispatch`
+                   frontmatter AND the chain carries a qualifying (non-
+                   waived, non-pending) code review. Distinct from
+                   bookkeeping_shas/planning_shas — those two are always
+                   reported even when excluded from the code ratio; this one
+                   is fully discharged, the way an ordinary reviewed commit
+                   is, so it is REMOVED from the reported obligation sets
+                   rather than merely re-labeled. Empty by default, same
+                   additive-field property as bookkeeping_shas above.
     dag_ordered_ancestry: DAG-mode only (empty in flat mode) — the baton
                    ancestry chain _derive_dag_chain_set walked, verbatim from
                    _DagChainResult.ordered_ancestry. Empty by default, same
@@ -3582,6 +3937,30 @@ class CoverageResult:
                    for visibility so it is not mistaken for silently-dropped
                    work. Empty by default, same additive-field property as
                    bookkeeping_shas above.
+    unrecordable_shas: DAG-mode only (empty in flat mode) — SUBSET of
+                   uncovered_shas (never excluded from it, same
+                   subset-not-excluded contract as planning_shas above)
+                   classified structurally UNRECORDABLE for this chain: a
+                   foreign-attributed commit (own Session-Id trailer names a
+                   different session — see _uncovered_foreign_trailer_shas)
+                   seen only when the DAG walk collapsed to a genuine
+                   single-node `predecessor: none`
+                   (len(_DagChainResult.ordered_ancestry) == 1 AND
+                   _DagChainResult.terminated_early == ""; schema rule C2-4,
+                   every spinoff baton, by construction). Membership here means "cannot be
+                   recorded for THIS chain, ever" — no chain-ancestry waiver
+                   can be minted over a single-node walk (nothing to mint
+                   ancestry over) and `_guard_foreign_session_range` refuses
+                   the record permanently — ruled: docs/decisions/DR-294-
+                   pickup-claim-as-guard-evidence-is-declin.md. Deliberately
+                   NOT populated on `terminated_early == "missing-link"` — a
+                   broken/dangling predecessor pointer is a bug, not a ruled
+                   limit, and must not be told it is one (see the DAG-mode
+                   walk-collapsed diagnostic in run_coverage_gate). Exposed
+                   so a consumer can derive the ACTIONABLE uncovered count —
+                   len(uncovered_shas) - len(unrecordable_shas) — without
+                   re-running the classifier. Empty by default, same
+                   additive-field property as bookkeeping_shas above.
 
     Negative-spec (hard-won):
       - UNCOVERED means "no covering trail record was found" -- it is AGNOSTIC to
@@ -3604,10 +3983,12 @@ class CoverageResult:
     uncovered_shas: List[str] = field(default_factory=list)
     bookkeeping_shas: List[str] = field(default_factory=list)
     planning_shas: List[str] = field(default_factory=list)
+    spec_dispatch_exempt_shas: List[str] = field(default_factory=list)
     coverage_ratio: float = 0.0
     dag_ordered_ancestry: List[str] = field(default_factory=list)
     dag_node_attribution: Dict[str, "_DagNodeAttribution"] = field(default_factory=dict)
     unattributable_shas: List[str] = field(default_factory=list)
+    unrecordable_shas: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -4668,7 +5049,60 @@ def run_coverage_gate(
     # bookkeeping_set exclusion above, since exhaust_set/planning_set are
     # disjoint by construction (_classify_bookkeeping_shas' own docstring).
     planning_shas = [sha for sha in uncovered_shas if sha in planning_set]
+
+    # spec-dispatch PLANNING exemption (see _spec_dispatch_exempt_planning_shas'
+    # docstring for the two gates it must clear): unlike bookkeeping_shas and
+    # the rest of planning_shas, an exempted commit is fully DISCHARGED — it
+    # is subtracted from BOTH uncovered_shas and planning_shas, not merely
+    # re-labeled, because its compensating control (a qualifying code review)
+    # genuinely stands in for the plan review AC9 otherwise demands.
+    spec_dispatch_exempt_set, _spec_dispatch_reasons = _spec_dispatch_exempt_planning_shas(
+        planning_shas,
+        frozenset(chain_list),
+        bookkeeping_set,
+        planning_set,
+        touched_paths_cache,
+        trail_paths,
+        cwd,
+    )
+    if spec_dispatch_exempt_set:
+        uncovered_shas = [sha for sha in uncovered_shas if sha not in spec_dispatch_exempt_set]
+        planning_shas = [sha for sha in planning_shas if sha not in spec_dispatch_exempt_set]
+    spec_dispatch_exempt_shas = sorted(spec_dispatch_exempt_set)
     covered_count = len(chain_list) - len(uncovered_shas)
+
+    # unrecordable_shas (DR-294 / state/bug-backlog/2026-08-08-a-chain-terminal-
+    # session-cannot-record-r-1ca60b924446.yaml's second option): a SUBSET of
+    # uncovered_shas — see CoverageResult.unrecordable_shas' docstring — never
+    # excluded from it. Only meaningful in DAG mode, and only on a genuine
+    # single-node walk collapse (dag_result.terminated_early == ""); a
+    # 'missing-link' collapse is a broken pointer, a bug, not the ruled DR-294
+    # limit, and must not be classified unrecordable.
+    unrecordable_shas: List[str] = []
+    if (
+        from_handoff
+        and len(dag_result.ordered_ancestry) == 1
+        and dag_result.terminated_early == ""
+        and uncovered_shas
+    ):
+        foreign_uncovered = _uncovered_foreign_trailer_shas(
+            uncovered_shas, closing_session_id or None, cwd
+        )
+        unrecordable_shas = sorted(
+            sha for sha in uncovered_shas if sha in foreign_uncovered
+        )
+
+    if spec_dispatch_exempt_shas:
+        # SPEC_DISPATCH_EXEMPT_REASON is the distinguishable token — a reader
+        # (or a test) must be able to tell this apart from an ordinary
+        # "covered by a record" credit (build_reviewed_set) and from the
+        # still-owed PLANNING note below.
+        notes.append(
+            "coverage: "
+            f"{len(spec_dispatch_exempt_shas)} PLANNING commit(s) "
+            f"{SPEC_DISPATCH_EXEMPT_REASON} — discharged, not counted in "
+            f"uncovered_shas/planning_shas/the VERDICT: {spec_dispatch_exempt_shas!r}"
+        )
 
     # C3/AC6: classification skipped for >=1 commit (a chunked `git log`
     # call still failed even after batching under the Windows argv ceiling —
@@ -4925,8 +5359,10 @@ def run_coverage_gate(
         uncovered_shas=uncovered_shas,
         bookkeeping_shas=bookkeeping_shas,
         planning_shas=planning_shas,
+        spec_dispatch_exempt_shas=spec_dispatch_exempt_shas,
         coverage_ratio=coverage_ratio,
         dag_ordered_ancestry=dag_ordered_ancestry,
         dag_node_attribution=dag_node_attribution,
         unattributable_shas=dag_unattributable_shas,
+        unrecordable_shas=unrecordable_shas,
     )

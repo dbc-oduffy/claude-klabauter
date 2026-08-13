@@ -65,6 +65,12 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     write_review_trail_entry,
 )
 
+# The write-time symbolic-ref concretization tests below spawn real git to build
+# commits and resolve HEAD SHAs — no mock stands in for real commit-object creation,
+# since the assertion is that write_review_trail_entry concretizes a live symbolic
+# ref against an actual git object database, not a stubbed one.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Fixed test constants
 # ---------------------------------------------------------------------------

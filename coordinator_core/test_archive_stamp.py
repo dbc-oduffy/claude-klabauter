@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +31,13 @@ import coordinator_core.ops.memo_transition  # noqa: F401
 import coordinator_core.ops.session.record_pickup  # noqa: F401
 
 import coordinator_core.archive_stamp as arstamp
+
+# Real-git spawn is load-bearing: archive_stamp's SHA resolution, session-id
+# resolution, and ownership gating orchestrate over ACTUAL git-tracked repo
+# state, and TestArchiveStampColdImport spawns a fresh interpreter to prove
+# real cold-import behaviour — no mock stands in for either. Fixtures spin up
+# per-test repos (mutation-heavy: stamps/transitions per test), so the git
+# fixture is not hoisted to module scope.
 
 # TestArchiveStampColdImport below spawns a fresh interpreter that imports
 # coordinator_core. That child inherits cwd but NOT pytest's rootdir sys.path
@@ -3148,3 +3156,103 @@ class TestDiskReadHelpersDegradeOnUnicodeDecodeError:
         p = tmp_path / "bad.md"
         p.write_bytes(b"\xff\xfe not utf-8")
         assert arstamp._reread_supersede_frontmatter(p) == (None, None)
+
+
+@pytest.mark.spawns_process
+class TestArchiveStampFirstImportOrderDoesNotDropOps:
+    """Regression: state/debt-backlog/DSR-2026-08-13-archive-stamp-import-order-
+    drops-an-op-from-the-registry.yaml. Importing `coordinator_core.archive_stamp`
+    BEFORE `coordinator_core.ops._eager_import_all()` used to trigger a genuine
+    import cycle (archive_stamp -> pickup_assemble -> session_ledger.
+    aggregate_chain_loe -> pickup_assemble, half-initialised), which raised
+    ImportError inside `_eager_import_all`'s per-module try/except and silently
+    dropped `session_ledger.aggregate_chain_loe` from the op registry while every
+    other op module loaded fine.
+
+    Must run in a FRESH interpreter: import order cannot be reset within a live
+    process once `sys.modules` is populated, so a same-process assertion here
+    would either always pass (module already cached) or corrupt every other
+    test's import state.
+
+    Asserts on the engine's own eager-import diagnostic, NOT on op resolution.
+    Resolution is the WRONG oracle here and a vacuous one: `get_op_handler`
+    retries a registry miss through `_lazy_import_and_lookup`, and by that
+    point `archive_stamp` has finished initialising, so the retry succeeds and
+    the op resolves even on the broken tree. `ops.get_poisoned_modules()` is
+    equally vacuous — `_eager_import_all` pops the entry once a later pass
+    succeeds. Both were measured against a clean pre-fix checkout and passed
+    there, which is what makes them useless as regression oracles.
+
+    What actually differs pre/post fix is the diagnostic: the broken tree emits
+    2 `FAILED to import` lines plus an ImportError traceback during eager
+    import; the fixed tree emits none. That noise is the real defect — the op
+    self-heals, so nothing is permanently lost, but every process taking this
+    import order printed a cycle traceback into hook and CLI output.
+
+    Op resolution is still asserted alongside, as a floor: it would catch a
+    future break severe enough to defeat the lazy retry as well."""
+
+    def test_archive_stamp_first_leaves_aggregate_chain_loe_registered(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; sys.path.insert(0, '.')\n"
+                    "import coordinator_core.archive_stamp\n"
+                    "import coordinator_core.ops as o\n"
+                    "o._eager_import_all()\n"
+                    "from coordinator_core.ipc import get_op_handler\n"
+                    "handler = get_op_handler('session_ledger.aggregate_chain_loe')\n"
+                    "assert handler is not None, 'aggregate_chain_loe not registered'\n"
+                    "print('OK')\n"
+                ),
+            ],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert proc.returncode == 0, (
+            f"archive_stamp-first import order failed to leave "
+            f"session_ledger.aggregate_chain_loe registered: "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+        assert "OK" in proc.stdout
+        assert "FAILED to import" not in proc.stderr, (
+            f"eager import reported a module failure under the "
+            f"archive_stamp-first order — the import cycle is back: "
+            f"stderr={proc.stderr!r}"
+        )
+
+    def test_ops_first_reciprocal_order_still_leaves_it_registered(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; sys.path.insert(0, '.')\n"
+                    "import coordinator_core.ops as o\n"
+                    "o._eager_import_all()\n"
+                    "import coordinator_core.archive_stamp\n"
+                    "from coordinator_core.ipc import get_op_handler\n"
+                    "handler = get_op_handler('session_ledger.aggregate_chain_loe')\n"
+                    "assert handler is not None, 'aggregate_chain_loe not registered'\n"
+                    "print('OK')\n"
+                ),
+            ],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert proc.returncode == 0, (
+            f"ops-first reciprocal import order failed to leave "
+            f"session_ledger.aggregate_chain_loe registered: "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+        assert "OK" in proc.stdout

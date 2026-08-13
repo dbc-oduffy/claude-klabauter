@@ -206,17 +206,36 @@ def resolves_em_audience(
     ``resolve_subagent_identity``/backpointer resolution is out of scope for
     this plan.
 
-    Contract (DECISIONS.md D1):
+    Contract (DECISIONS.md D1) — Review: staff-eng flagged this contract as
+    previously documenting two post-resolver legs as live discriminators;
+    both are unreachable given the raw ``agent_id`` short-circuit below,
+    and ``git_root`` is inert at this seam. Corrected to name the one leg
+    that actually runs:
       False  if ``payload`` is ``None``, not a ``dict``, or carries no
              ``session_id`` (not a real envelope).
-      False  if the RAW ``agent_id`` leg is present and non-empty but
-             canonicalizes to empty (present-but-unresolvable — see
-             "ABSENT VS UNRESOLVABLE" below).
-      False  if the ``agent_id`` leg resolves non-empty.
-      False  if the ``subagent_type`` leg resolves non-empty.
+      False  if the RAW ``agent_id`` leg is present and non-empty —
+             present-but-unresolvable is treated the same as resolved
+             (see "ABSENT VS UNRESOLVABLE" below). This single early
+             return is the ONLY leg that actually discriminates: by the
+             time the shared resolver runs, ``raw_agent_id`` is already
+             known falsy, so ``resolve_effective_types``'s ``agent_id``
+             leg (computed only ``if raw_agent_id``) and its
+             ``subagent_type`` leg (computed only ``if agent_id and
+             git_root``) both resolve empty every time control reaches
+             them — the two post-resolver checks below are provably
+             unreachable given the raw-``agent_id`` short-circuit above,
+             and ``git_root`` is inert at this seam. They are kept as a
+             belt-and-braces guard against a future change to
+             ``resolve_effective_types`` that would make them live, not
+             because they currently discriminate anything.
+      False  [unreachable today] if the ``agent_id`` leg resolves
+             non-empty.
+      False  [unreachable today] if the ``subagent_type`` leg resolves
+             non-empty.
       False  on ANY exception during resolution — degrade to terse, never
              to emitting.
-      True   only otherwise (a well-formed envelope with both legs empty).
+      True   only otherwise (a well-formed envelope with the raw
+             ``agent_id`` leg empty).
 
     ABSENT VS UNRESOLVABLE (C1i, tasks/guard-messages-keys/C1i.md):
     ``resolve_effective_types`` -> ``_canonical_agent_id`` silently

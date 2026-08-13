@@ -2865,14 +2865,54 @@ def compute_deliverable_evidence(
     return evidence
 
 
+#: Subtrees that can never legitimately hold a committed repo artifact a
+#: handoff premise would cite — VCS internals, build/dist output, bytecode
+#: caches, and ephemeral scratch — pruned from the premise-witness walk
+#: below (2026-08-13 hot-path-over-acquisition fix). Deliberately NOT a
+#: narrower "known artifact roots" allowlist (state/docs/cross-repo/...):
+#: a path premise can cite ANY tracked file, including source under
+#: `coordinator_core/`, so excluding by what a directory categorically
+#: cannot hold is the only narrowing that cannot turn a real hit into a
+#: miss. Measured against this repo's tree (2026-08-13): full unpruned
+#: walk 85,737 entries; pruned walk 24,845 entries — a 3.45:1 reduction,
+#: `.git/` alone accounting for 45,682 of the excluded entries.
+_PREMISE_WALK_PRUNE_DIRNAMES = frozenset({
+    ".git", "__pycache__", "build", "dist", "scratch", "scratchpad",
+})
+
+
+def _premise_walk_prune(dirname: str) -> bool:
+    """True when `dirname` (a bare directory name, not a path) must never be
+    descended into by `_search_repo_for_basename` — see
+    `_PREMISE_WALK_PRUNE_DIRNAMES` for what and why."""
+    return dirname in _PREMISE_WALK_PRUNE_DIRNAMES or dirname.endswith(".egg-info")
+
+
+def _search_repo_for_basename(repo_root: Path, basename: str) -> list[Path]:
+    """Repo-wide basename search for `compute_premise_checks`' path-premise
+    miss arm, narrowed to prune non-artifact subtrees (`_premise_walk_prune`)
+    rather than capped — see that helper's docstring for the ratio this
+    earns and why an allowlist of artifact roots would risk a correctness
+    regression here. `os.walk` (not `Path.rglob`) so pruning happens via
+    `dirnames[:]` BEFORE descent, not after a wasted enumeration."""
+    hits: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [d for d in dirnames if not _premise_walk_prune(d)]
+        if basename in filenames:
+            hits.append(Path(dirpath) / basename)
+    return hits
+
+
 def compute_premise_checks(repo_root: Path, premises: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Function 4 — MECHANICAL premise-witness evidence (Step 3.4e).
 
     `premises` is a list of `{"type": "path" | "sha" | "pathspec", "value": str}`.
-    Path premises: `is_file`/`is_dir` first; on a miss, a repo-wide `rglob` for
-    the basename BEFORE concluding absent (a single failed direct check is not
-    "absent" — contract dispatch brief). SHA premises: `git cat-file -e` +
-    `git branch --contains`. Pathspec premises: glob; empty = surface.
+    Path premises: `is_file`/`is_dir` first; on a miss, a pruned repo-wide
+    walk for the basename BEFORE concluding absent (a single failed direct
+    check is not "absent" — contract dispatch brief); see
+    `_search_repo_for_basename` for what is pruned and why. SHA premises:
+    `git cat-file -e` + `git branch --contains`. Pathspec premises: glob;
+    empty = surface.
     """
     results: list[dict[str, Any]] = []
     for premise in premises:
@@ -2887,7 +2927,7 @@ def compute_premise_checks(repo_root: Path, premises: list[dict[str, Any]]) -> l
                 entry["witness"] = "present"
             else:
                 basename = Path(value).name
-                hits = [h for h in repo_root.rglob(basename)] if basename else []
+                hits = _search_repo_for_basename(repo_root, basename) if basename else []
                 rel_hits = [rel_id(h, repo_root) for h in hits if _is_relative(h, repo_root)]
                 entry["found_elsewhere"] = rel_hits
                 entry["witness"] = "found-elsewhere" if rel_hits else "absent"

@@ -1149,12 +1149,27 @@ def _resolve_in_reply_to_target(worktree_root: Path, in_reply_to: str) -> str:
     "open"          — a file matching the basename is still sitting in
                        cross-repo/inbox/ (the ask this memo replies to has not
                        been resolved).
-    "closed"        — no match in the inbox, but one exists somewhere under
-                       cross-repo/archive/ (searched recursively — archive is
-                       nested by date) — the ask was already resolved.
+    "closed"        — no match in the inbox, but one exists under
+                       cross-repo/archive/ (checked directly — the on-disk
+                       layout is flat — and one level of subdirectory deep,
+                       defensively, should a shard level ever appear) — the
+                       ask was already resolved.
     "unresolvable"  — no match in either location (typo or missing target).
                        Callers MUST treat this as fail-CLOSED (AC4a case c),
                        never as equivalent to "closed".
+
+    Narrowing (perf): cross-repo/archive/ grows monotonically (archives only
+    accumulate — 1,003 files measured 2026-08-13) and this runs on every
+    inbound memo carrying in_reply_to, so a full-tree rglob() filtered in
+    Python scales O(archive size) for a single-basename lookup. basename is
+    untrusted (memo-frontmatter-derived), so — same discipline as the rglob
+    it replaces — matching stays a literal filename comparison, never a glob
+    PATTERN: a direct ``archive_dir / basename`` check (today's real, flat
+    layout) plus a bounded one-level ``iterdir()`` of immediate
+    subdirectories (defensive shard support, cost scales with shard count
+    not file count — mirrors handoff_creation_guard.find_archived_twin_by_filename's
+    sharded/direct dual check, adapted since that helper uses glob() over a
+    basename it trusts more than this one does).
     """
     basename = _normalize_in_reply_to(in_reply_to)
     inbox_dir = worktree_root / "cross-repo" / "inbox"
@@ -1162,14 +1177,10 @@ def _resolve_in_reply_to_target(worktree_root: Path, in_reply_to: str) -> str:
         return "open"
     archive_dir = worktree_root / "cross-repo" / "archive"
     if archive_dir.is_dir():
-        # basename is untrusted (memo-frontmatter-derived) — rglob() would
-        # interpret glob metacharacters in it (e.g. "*.md", "[0-5]") as a
-        # PATTERN rather than a literal filename, letting a malformed
-        # in_reply_to spuriously match an unrelated archived file and
-        # resolve "closed" instead of the fail-closed "unresolvable" AC4a
-        # requires. Walk and compare names literally instead.
-        for candidate in archive_dir.rglob("*"):
-            if candidate.is_file() and candidate.name == basename:
+        if (archive_dir / basename).is_file():
+            return "closed"
+        for entry in archive_dir.iterdir():
+            if entry.is_dir() and (entry / basename).is_file():
                 return "closed"
     return "unresolvable"
 

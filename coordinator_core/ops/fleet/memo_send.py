@@ -386,6 +386,22 @@ def _validate_in_reply_to_exists(
     the check it exists to enforce.
 
     Returns None on pass, else a build_setup_error_result envelope.
+
+    Matching discipline (mirrors branch_resolution._resolve_in_reply_to_target,
+    the just-narrowed sibling — see that function's own docstring for the
+    perf/safety rationale): `in_reply_to` is untrusted, caller-supplied
+    frontmatter — matching stays a literal filename comparison, NEVER a glob
+    PATTERN (a value containing `*`/`?`/`[...]` must not spuriously match an
+    unrelated archived memo). The value is normalized to a bare basename via
+    `_normalize_in_reply_to` BEFORE it is joined onto `archive_dir`/`inbox_dir`
+    — required, not optional, now that matching is path-joining rather than
+    `rglob(pattern)`: an unnormalized value carrying directory separators
+    (e.g. `../../etc/passwd`) would otherwise be a path-traversal vector that
+    the previous `rglob()` form did not expose. The archive is flat on disk
+    (1,003 files, zero subdirs, measured 2026-08-13) — a direct
+    `archive_dir / basename` check plus a bounded one-level `iterdir()` over
+    immediate subdirectories (defensive shard support) replaces the prior
+    unbounded recursive walk.
     """
     if sender_worktree is None:
         return build_setup_error_result(
@@ -395,21 +411,24 @@ def _validate_in_reply_to_exists(
             f"search cross-repo/inbox/ or cross-repo/archive/ against.",
         )
 
+    basename = _normalize_in_reply_to(in_reply_to)
     inbox_dir = sender_worktree / "cross-repo" / "inbox"
     archive_dir = sender_worktree / "cross-repo" / "archive"
 
-    if (inbox_dir / in_reply_to).is_file():
+    if (inbox_dir / basename).is_file():
         return None
     if archive_dir.is_dir():
-        for candidate in archive_dir.rglob(in_reply_to):
-            if candidate.is_file():
+        if (archive_dir / basename).is_file():
+            return None
+        for entry in archive_dir.iterdir():
+            if entry.is_dir() and (entry / basename).is_file():
                 return None
 
     return build_setup_error_result(
         _MODE, dry_run,
         f"memo.send: in_reply_to={in_reply_to!r} does not match any memo in "
-        f"this repo's own {inbox_dir} or {archive_dir} (searched recursively) "
-        f"— in_reply_to must name a memo THIS repo actually received. "
+        f"this repo's own {inbox_dir} or {archive_dir} — in_reply_to must "
+        f"name a memo THIS repo actually received. "
         f"Check for a typo, or omit in_reply_to if this send isn't a reply.",
     )
 

@@ -241,12 +241,14 @@ from coordinator_core.workstream_complete.directives_review import (  # noqa: E4
     verify_trail_range_termination,
 )
 from coordinator_core.coverage import (  # noqa: E402
+    SPEC_DISPATCH_EXEMPT_REASON,
     _UUID_RE,
     _chain_ancestry_waived_shas,
     _classify_bookkeeping_shas,
     _commit_touched_paths,
     _derive_dag_chain_set,
     _resolve_numstat_row_path,
+    _spec_dispatch_exempt_planning_shas,
 )
 from coordinator_core.ops.review_brightline_gate import (  # noqa: E402
     _is_prose_bearing_path,
@@ -493,6 +495,51 @@ def _resolve_chain_planning_shas(from_handoff: str) -> list[str]:
     repo_root, dag_shas = resolved
     _exhaust_set, planning_set, _note = _classify_bookkeeping_shas(dag_shas, repo_root, {})
     return [sha for sha in dag_shas if sha in planning_set]
+
+
+def _resolve_chain_spec_dispatch_exempt_shas(
+    from_handoff: str, uncovered_planning_shas: list[str],
+) -> tuple[frozenset[str], dict[str, str]]:
+    """The live-path twin of `coverage.run_coverage_gate`'s spec-dispatch
+    PLANNING exemption (`coverage._spec_dispatch_exempt_planning_shas`),
+    wired into THIS runner's own `_classify_bookkeeping_shas` call rather
+    than `run_coverage_gate`'s — `run_coverage_gate` is not the live path
+    for `cmd_brightline_gate`'s C13 PARTITION-MANDATORY HALT (that HALT
+    reads `_resolve_chain_planning_shas`, not `run_coverage_gate`'s
+    result), so the exemption must be re-derived here off the SAME two
+    gates (route: the commit's plan carries `scope_mode: spec-dispatch`;
+    compensating control: a qualifying non-waived/non-pending code-review
+    trail record over a CODE commit in this chain) rather than imported
+    as a precomputed set.
+
+    `uncovered_planning_shas`, empty, or `_derive_dag_shas` failing,
+    degrades to `(frozenset(), {})` — no exemption available — mirroring
+    every other resolver in this module's fail-safe posture: this backs a
+    discharge-widening leg that must never manufacture an exemption from
+    incomplete data, only ever narrow toward "still owed"."""
+    if not uncovered_planning_shas:
+        return frozenset(), {}
+    resolved = _derive_dag_shas(from_handoff)
+    if resolved is None:
+        return frozenset(), {}
+    repo_root, dag_shas = resolved
+    touched_paths_cache: dict[str, frozenset[str]] = {}
+    bookkeeping_set, planning_set, _note = _classify_bookkeeping_shas(
+        dag_shas, repo_root, touched_paths_cache
+    )
+    try:
+        trail_paths = _list_review_trail_paths()
+    except ReviewTrailListError:
+        trail_paths = []
+    return _spec_dispatch_exempt_planning_shas(
+        uncovered_planning_shas,
+        frozenset(dag_shas),
+        bookkeeping_set,
+        planning_set,
+        touched_paths_cache,
+        trail_paths,
+        repo_root,
+    )
 
 
 def _resolve_chain_code_shas(from_handoff: str) -> list[str]:
@@ -1912,7 +1959,39 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 if chain_code_shas and chain_dag_shas
                 else []
             )
+            # Conditional spec-dispatch PLANNING exemption (see
+            # `_resolve_chain_spec_dispatch_exempt_shas`'s docstring) — the
+            # live-path twin of `coverage.run_coverage_gate`'s own
+            # exemption, which this HALT does not otherwise reach (it reads
+            # `_resolve_chain_planning_shas`/`_classify_bookkeeping_shas`
+            # directly, not `run_coverage_gate`'s result). Fully discharges
+            # a qualifying sha — subtracted from `uncovered` itself, not
+            # merely relabeled — because a genuine compensating code review
+            # stands in for the plan review this HALT would otherwise
+            # demand.
+            spec_dispatch_exempt_shas, _spec_dispatch_exempt_reasons = (
+                _resolve_chain_spec_dispatch_exempt_shas(
+                    args.from_handoff,
+                    [sha for sha in uncovered if sha in chain_planning_shas],
+                )
+            )
+            if spec_dispatch_exempt_shas:
+                uncovered = [
+                    sha for sha in uncovered if sha not in spec_dispatch_exempt_shas
+                ]
             discharged = bool(chain_code_shas) and bool(chain_dag_shas) and not uncovered
+            if spec_dispatch_exempt_shas:
+                # SPEC_DISPATCH_EXEMPT_REASON is the distinguishable token a
+                # reader (or a test) greps to tell this apart from an
+                # ordinary trail-record discharge or the still-owed
+                # PLANNING label below.
+                print(
+                    "NOTE: "
+                    f"{len(spec_dispatch_exempt_shas)} PLANNING commit(s) "
+                    f"{SPEC_DISPATCH_EXEMPT_REASON} — discharged, not "
+                    f"counted in UNCOVERED: {sorted(spec_dispatch_exempt_shas)!r}",
+                    file=sys.stderr,
+                )
         # Read-only narration companion (chunk C4b, docs/plans/2026-08-11-
         # review-trail-carries-execution-basis.md, AC4). Never read by
         # `discharged`/`uncovered` above or by any HALT/return-code decision

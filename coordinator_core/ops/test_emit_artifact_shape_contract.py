@@ -286,6 +286,35 @@ def test_missing_coordinator_root_env_returns_2(monkeypatch):
     assert main([]) == 2
 
 
+class TestArgvIsNotIgnored:
+    """`main` once accepted argv and discarded it, so `--help` emitted the bundle into
+    example-doctrine-repo's working tree instead of printing usage. These pin that an operator
+    reaching for an interface, or fat-fingering a flag, never triggers a peer-tree write.
+    """
+
+    @pytest.mark.parametrize("flag", ["-h", "--help"])
+    def test_help_prints_usage_and_emits_nothing(self, flag, tmp_path, monkeypatch, capsys):
+        # A valid root is deliberately present: help must win over a runnable config,
+        # or the regression reappears the moment the env happens to be set.
+        (tmp_path / "schemas").mkdir()
+        out_dir = tmp_path / "out"
+        monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(tmp_path))
+        monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(out_dir))
+
+        assert main([flag]) == 0
+        assert "usage: emit-artifact-shape-contract" in capsys.readouterr().out
+        assert not out_dir.exists()
+
+    def test_unrecognized_argument_returns_2_and_emits_nothing(self, tmp_path, monkeypatch):
+        (tmp_path / "schemas").mkdir()
+        out_dir = tmp_path / "out"
+        monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(tmp_path))
+        monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(out_dir))
+
+        assert main(["--dry-run"]) == 2
+        assert not out_dir.exists()
+
+
 def test_nonexistent_schemas_dir_returns_2(tmp_path, monkeypatch):
     monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(tmp_path / "nope"))
     assert main([]) == 2

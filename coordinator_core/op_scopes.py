@@ -658,6 +658,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # against the wrong worktree.
     # Spec: docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2
     "sizing.decline":                           "common_dir",
+    # sizing.ship — same scope class as sizing.decline above: the handler
+    # reads/writes a main-worktree-rooted state/sizings/ file, derived via
+    # main_worktree_root(common_dir). Without this entry dispatch resolves
+    # repo_root=None and the handler raises rather than silently deriving
+    # against the wrong worktree.
+    # Spec: PM ruling 2026-08-13 (see coordinator_core/ops/sizing_ship.py docstring)
+    "sizing.ship":                               "common_dir",
     # strang-11 B8 new ops — all keyed on git_common_dir: handlers derive worktree via
     # main_worktree_root(common_dir), matching the fleet.*/handoff.*/ceremony.* precedent.
     # Class-A ops (fleet.*) use archive_and_commit and read/write main-worktree-rooted paths.

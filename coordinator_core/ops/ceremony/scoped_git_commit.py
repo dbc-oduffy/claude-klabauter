@@ -1047,6 +1047,24 @@ def _collect_untracked_omitted(
     """
     seen = set()
     all_found: List[str] = []
+    # Review: staff-eng -- a caller can name BOTH a directory and an
+    # untracked file beneath it in the same `paths` list (e.g.
+    # `paths=[dir, dir/untracked_file]`); the explicitly-named file IS
+    # staged and committed via that second element, but was previously
+    # still reported here as "NOT staged" because this loop only ever
+    # looked at directory-shaped elements, never subtracting the caller's
+    # own non-directory elements from what it found. Normalized (forward
+    # slashes) so the comparison is stable across platforms.
+    explicitly_named = set()
+    for p in paths:
+        if not isinstance(p, str):
+            continue
+        try:
+            if (Path(worktree_root) / p).is_dir():
+                continue
+        except OSError:
+            pass
+        explicitly_named.add(p.replace("\\", "/"))
     for p in paths:
         try:
             is_dir = isinstance(p, str) and (Path(worktree_root) / p).is_dir()
@@ -1055,6 +1073,8 @@ def _collect_untracked_omitted(
         if not is_dir:
             continue
         for f in _untracked_files_under(worktree_root, p, cache):
+            if f.replace("\\", "/") in explicitly_named:
+                continue
             if f not in seen:
                 seen.add(f)
                 all_found.append(f)

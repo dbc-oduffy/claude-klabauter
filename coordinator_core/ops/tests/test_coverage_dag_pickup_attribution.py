@@ -567,3 +567,155 @@ def test_single_node_walk_note_fires_regardless_of_mint_flag(tmp_path: Path) -> 
             f"note must fire with mint_chain_waivers={mint_flag}; "
             f"notes={result['notes']!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# unrecordable_shas (state/sizings/2026-08-13-make-the-uncovered-count-
+# actionable-by-s.yaml): a SUBSET of uncovered_shas, classified structurally
+# unrecordable for this chain — foreign-attributed AND the walk collapsed to
+# a genuine single-node predecessor: none (DR-294). Copies the shipped
+# planning_shas subset-not-excluded contract exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_unrecordable_shas_subset_of_uncovered_and_not_excluded(tmp_path: Path) -> None:
+    """DR-286 claim-gated pickup, single-node walk: both of author A's
+    commits are attributed to the closing node when runner B holds a live
+    claim, and both carry A's (foreign, relative to B) Session-Id trailer.
+    Neither commit has a review-trail record, so both are uncovered AND
+    foreign — unrecordable_shas must equal uncovered_shas exactly, and
+    uncovered_shas itself must be untouched (the risk note: subsetting must
+    never move the verdict's membership)."""
+    closing, repo = _build_repo_with_handoff(
+        tmp_path, author_session_id=_SESSION_A, claimed_by=_SESSION_B
+    )
+    add_sha = _git(["rev-parse", "HEAD~1"], repo).stdout.strip()
+    follow_up_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_B,
+    )
+
+    assert set(result.uncovered_shas) == {add_sha, follow_up_sha}, (
+        f"expected both commits uncovered; uncovered_shas={result.uncovered_shas!r}"
+    )
+    assert set(result.unrecordable_shas).issubset(set(result.uncovered_shas)), (
+        f"unrecordable_shas must be a SUBSET of uncovered_shas, never "
+        f"excluded from it; uncovered={result.uncovered_shas!r} "
+        f"unrecordable={result.unrecordable_shas!r}"
+    )
+    assert set(result.unrecordable_shas) == {add_sha, follow_up_sha}, (
+        f"both commits are foreign-attributed (A) relative to the closing "
+        f"session (B) on a single-node walk — both must classify "
+        f"unrecordable; unrecordable_shas={result.unrecordable_shas!r}"
+    )
+
+
+def test_unrecordable_shas_does_not_move_verdict_or_exit_code(tmp_path: Path) -> None:
+    """Risk note: subsetting moves no verdict. A same-session fixture (no
+    foreign trailers, so unrecordable_shas is empty) and the DR-286
+    claim-gated pickup fixture (foreign trailers present, unrecordable_shas
+    non-empty) are otherwise structurally identical -- two commits, single-
+    node walk, no review-trail records -- and must produce byte-identical
+    verdict/exit_code/uncovered count regardless of unrecordable_shas
+    membership."""
+    (tmp_path / "same").mkdir()
+    same_session_closing, same_session_repo = _build_repo_with_handoff(
+        tmp_path / "same", author_session_id=_SESSION_A
+    )
+    same_session_result = cov.run_coverage_gate(
+        from_handoff=str(same_session_closing.resolve()),
+        repo_root=str(same_session_repo),
+        closing_session_id=_SESSION_A,
+    )
+    assert same_session_result.unrecordable_shas == []
+
+    (tmp_path / "pickup").mkdir()
+    pickup_closing, pickup_repo = _build_repo_with_handoff(
+        tmp_path / "pickup", author_session_id=_SESSION_A, claimed_by=_SESSION_B
+    )
+    pickup_result = cov.run_coverage_gate(
+        from_handoff=str(pickup_closing.resolve()),
+        repo_root=str(pickup_repo),
+        closing_session_id=_SESSION_B,
+    )
+    assert pickup_result.unrecordable_shas != []
+
+    assert pickup_result.verdict == same_session_result.verdict
+    assert pickup_result.exit_code == same_session_result.exit_code
+    assert len(pickup_result.uncovered_shas) == len(same_session_result.uncovered_shas)
+
+
+def test_unrecordable_shas_empty_on_multi_node_chain(tmp_path: Path) -> None:
+    """A walk that reaches more than one node never collapses to the DR-294
+    single-node case (len(ordered_ancestry) != 1) -- unrecordable_shas must
+    stay empty regardless of any foreign trailers present."""
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    predecessor = repo / "state" / "handoffs" / "predecessor.md"
+    predecessor.write_text("---\nsession_id: s0\npredecessor: none\n---\nEarlier.\n")
+    _git(["add", "state/handoffs/predecessor.md"], repo)
+    _git(
+        ["commit", "-m", f"add predecessor handoff\n\nSession-Id: {_SESSION_A}"],
+        repo,
+    )
+    closing.write_text(
+        "---\nsession_id: s1\npredecessor: state/handoffs/predecessor.md\n---\n"
+        "Closing body.\n"
+    )
+    _git(["add", "state/handoffs/closing.md"], repo)
+    _git(
+        [
+            "commit", "-m",
+            f"repoint closing handoff at predecessor\n\nSession-Id: {_SESSION_A}",
+        ],
+        repo,
+    )
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_A,
+    )
+
+    assert result.unrecordable_shas == [], (
+        f"a multi-node walk must never populate unrecordable_shas; "
+        f"unrecordable_shas={result.unrecordable_shas!r}"
+    )
+
+
+def test_unrecordable_shas_empty_on_missing_link_collapse(tmp_path: Path) -> None:
+    """A single-node collapse caused by a broken/dangling predecessor pointer
+    (terminatedEarly='missing-link') is a bug, not the ruled DR-294 limit --
+    unrecordable_shas must stay empty even though len(ordered_ancestry) == 1,
+    mirroring test_missing_link_walk_emits_broken_pointer_note_not_dr294
+    above."""
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    closing.write_text(
+        "---\nsession_id: s1\n"
+        "predecessor: state/handoffs/never-existed-broken-link.md\n"
+        "---\nClosing body.\n"
+    )
+    _git(["add", "state/handoffs/closing.md"], repo)
+    _git(
+        [
+            "commit", "-m",
+            f"repoint closing handoff at a dangling predecessor\n\n"
+            f"Session-Id: {_SESSION_A}",
+        ],
+        repo,
+    )
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_A,
+    )
+
+    assert result.unrecordable_shas == [], (
+        f"a missing-link collapse must never populate unrecordable_shas; "
+        f"unrecordable_shas={result.unrecordable_shas!r}"
+    )

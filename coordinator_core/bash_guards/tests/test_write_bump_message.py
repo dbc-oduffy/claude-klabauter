@@ -220,8 +220,23 @@ def test_render_bump_message_defaults_to_foreign_destination_class(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_agent_class_no_agent_id_is_em_class():
-    assert message.resolve_agent_class({}, None) == message.AGENT_CLASS_EM
+# Review: staff-eng (AC-3) -- resolve_agent_class was fail-open to EM-class
+# on an empty/missing payload or git_root; AC-3 names it alongside
+# annotate_deny and the dispatch seam for inversion. Tests below follow the
+# corrected production behaviour: unresolvable audience now degrades to
+# subagent-class (the safer template), not EM-class.
+
+
+def test_resolve_agent_class_empty_payload_is_subagent_class():
+    # An empty/unresolvable payload can no longer positively resolve EM --
+    # it degrades to the safer subagent-class template.
+    assert message.resolve_agent_class({}, None) == message.AGENT_CLASS_SUBAGENT
+
+
+def test_resolve_agent_class_no_agent_id_with_real_envelope_is_em_class(tmp_path):
+    root = _init_repo(tmp_path)
+    payload = {"session_id": "s1"}
+    assert message.resolve_agent_class(payload, str(root)) == message.AGENT_CLASS_EM
 
 
 def test_resolve_agent_class_bare_hex_agent_id_is_subagent_class():
@@ -231,8 +246,9 @@ def test_resolve_agent_class_bare_hex_agent_id_is_subagent_class():
 
 def test_resolve_agent_class_never_raises_on_missing_payload():
     # Fail-open defensive posture (see module docstring): None/empty inputs
-    # degrade to EM-class rather than raising.
-    assert message.resolve_agent_class(None, None) == message.AGENT_CLASS_EM
+    # degrade to subagent-class -- the safer template -- rather than
+    # raising or resolving EM.
+    assert message.resolve_agent_class(None, None) == message.AGENT_CLASS_SUBAGENT
 
 
 # ---------------------------------------------------------------------------

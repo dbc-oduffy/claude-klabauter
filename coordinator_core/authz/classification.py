@@ -2942,6 +2942,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # sizing.decline — MUTATING: writes `status: declined` under locked_rmw
     # (2026-08-10, docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2).
     "sizing.decline": OpClass.MUTATING,
+    # sizing.ship — MUTATING: writes `status: shipped` under locked_rmw
+    # (2026-08-13, PM ruling; see coordinator_core/ops/sizing_ship.py docstring).
+    "sizing.ship": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # distill.curate_clusters — COMPUTE_ONLY: a pure structural verdict over a
     # caller-supplied {system_tag: count} map. Reads no file, opens no path, and

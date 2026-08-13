@@ -121,13 +121,49 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
         for candidate in glob.glob(str(archive_dir / pattern)):
             if not os.path.isfile(candidate):
                 continue
-            try:
-                text = Path(candidate).read_text(encoding="utf-8")
-            except OSError:
+            header = _read_frontmatter_block(candidate)
+            if header is None:
                 continue
-            if extract_frontmatter_scalar(text, "handoff_id") == handoff_id:
+            if extract_frontmatter_scalar(header, "handoff_id") == handoff_id:
                 return Path(candidate)
     return None
+
+
+def _read_frontmatter_block(path: PathLike) -> Optional[str]:
+    """Read only the leading frontmatter fence block (``---`` ... ``---``) of
+    ``path``, streaming line-by-line and stopping at the closing fence — never
+    reading the file body.
+
+    Frontmatter is always the FIRST block of a handoff record (see
+    ``extract_frontmatter_scalar``'s own fence-anchored parse, which only
+    ever consults content up to the second ``---`` line and ignores
+    everything after). Reading the whole file to hand that function a body
+    it discards is pure waste — this reads exactly the same region
+    ``extract_frontmatter_scalar`` would use, and nothing more, so the
+    narrowing changes bytes-read only, never match outcome.
+
+    Conservative by construction: if the fence structure is malformed (no
+    opening ``---``, or a closing fence never found before EOF), the whole
+    file read so far is returned rather than ``None`` for "found a real
+    fence pair" — ``extract_frontmatter_scalar`` on that text degrades
+    identically to how it always has (it never required a closing fence
+    either; it simply keeps scanning until ``fence_count >= 2`` or EOF).
+    Returns ``None`` only on an ``OSError`` (unreadable file), preserving
+    the prior code's "skip on read failure" behavior.
+    """
+    lines: list[str] = []
+    fence_count = 0
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                lines.append(line)
+                if line.strip() == "---":
+                    fence_count += 1
+                    if fence_count >= 2:
+                        break
+    except OSError:
+        return None
+    return "".join(lines)
 
 
 def assert_no_archived_twin(

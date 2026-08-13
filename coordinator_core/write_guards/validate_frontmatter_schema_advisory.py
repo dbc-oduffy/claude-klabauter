@@ -333,7 +333,19 @@ def derive_sidecar_plan_stem(repo_rel: str, sidecar_type: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_violation_payload_advisory(schema_name: str, errors: list[dict]) -> Optional[dict]:
+def build_violation_payload_advisory(
+    schema_name: str,
+    errors: list[dict],
+    *,
+    payload: Optional[dict] = None,
+    git_root: Optional[str] = None,
+) -> Optional[dict]:
+    # Review: staff-eng (B8 leg (d)+(f)) -- this builder hand-rolled its own
+    # "see docs/reference/guard-override-keys.md" pointer, unconditionally,
+    # for every audience including a dispatched subagent. Routed through
+    # `bash_guards._helpers.operator_override_note` so it degrades to the
+    # empty string for a non-EM audience like every other override-key
+    # pointer site, instead of hand-editing the literal.
     if _is_strict():
         return None
     parts = []
@@ -342,15 +354,23 @@ def build_violation_payload_advisory(schema_name: str, errors: list[dict]) -> Op
         hint = f"; required shape: {e['hint']}" if e.get("hint") else ""
         parts.append(f"{field}: {e.get('error')}{hint}")
     message = f"{schema_name}: {'; '.join(parts)}"
+    from coordinator_core.bash_guards._helpers import operator_override_note
+
+    override_note = operator_override_note(
+        "COORDINATOR_SCHEMA_STRICT", payload=payload, git_root=git_root
+    )
+    trailer_parts = [
+        "The write will proceed. Fix the frontmatter on the next edit."
+    ]
+    if override_note:
+        trailer_parts.append(override_note)
+    trailer_parts.append("Periodic drift is swept by /update-docs.")
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "additionalContext": (
                 f"[frontmatter-schema warning] {message}\n\n"
-                "The write will proceed. Fix the frontmatter on the next edit. "
-                "An operator override exists to block on violations instead — "
-                "see docs/reference/guard-override-keys.md. "
-                "Periodic drift is swept by /update-docs."
+                + " ".join(trailer_parts)
             ),
         },
     }
@@ -912,6 +932,9 @@ def _evaluate_schema_validation_advisory(
     prospective_content: str,
     repo_rel: str,
     schemas: dict,
+    *,
+    payload: Optional[dict] = None,
+    git_root: Optional[str] = None,
 ) -> Optional[dict]:
     match_mode = schema.get("match_mode")
 
@@ -925,11 +948,16 @@ def _evaluate_schema_validation_advisory(
             else:
                 parsed = parse_yaml(prospective_content)
         except Exception as err:  # noqa: BLE001 — mirrors reference's bare catch
-            return build_violation_payload_advisory(schema_name, [{
-                "field": "(parse error)",
-                "error": f"YAML parse error: {err}",
-                "hint": "Ensure the file is valid YAML with no --- frontmatter fences",
-            }])
+            return build_violation_payload_advisory(
+                schema_name,
+                [{
+                    "field": "(parse error)",
+                    "error": f"YAML parse error: {err}",
+                    "hint": "Ensure the file is valid YAML with no --- frontmatter fences",
+                }],
+                payload=payload,
+                git_root=git_root,
+            )
         validation_result = validate_frontmatter_obj(parsed, schema)
 
     elif match_mode == "no-frontmatter":
@@ -943,11 +971,16 @@ def _evaluate_schema_validation_advisory(
                 if required_fields
                 else "add --- delimited YAML frontmatter"
             )
-            return build_violation_payload_advisory(schema_name, [{
-                "field": "(missing frontmatter)",
-                "error": "no YAML frontmatter found",
-                "hint": hint,
-            }])
+            return build_violation_payload_advisory(
+                schema_name,
+                [{
+                    "field": "(missing frontmatter)",
+                    "error": "no YAML frontmatter found",
+                    "hint": hint,
+                }],
+                payload=payload,
+                git_root=git_root,
+            )
         validation_result = validate_frontmatter_obj(frontmatter, schema)
 
     errors = [] if validation_result.get("ok") else list(validation_result.get("errors", []))
@@ -958,7 +991,9 @@ def _evaluate_schema_validation_advisory(
     if not errors:
         return None
 
-    return build_violation_payload_advisory(schema_name, errors)
+    return build_violation_payload_advisory(
+        schema_name, errors, payload=payload, git_root=git_root
+    )
 
 
 def _check_lineage_reachability_fires(
@@ -1166,7 +1201,14 @@ def check(payload: dict) -> Optional[dict]:
         return envelope if kind == "advisory" else None
 
     schema_advisory = _evaluate_schema_validation_advisory(
-        schema_name, schema, frontmatter, prospective_content, repo_rel, schemas
+        schema_name,
+        schema,
+        frontmatter,
+        prospective_content,
+        repo_rel,
+        schemas,
+        payload=payload,
+        git_root=repo_root,
     )
 
     # Lineage reachability is an UNCONDITIONAL deny that overrides whatever

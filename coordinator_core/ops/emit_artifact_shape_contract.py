@@ -1037,13 +1037,49 @@ def _emit(coordinator_root: str) -> int:
     return 0
 
 
+_USAGE = (
+    "usage: emit-artifact-shape-contract\n"
+    "\n"
+    "Emits artifact-shape-contract/artifact-shape-contract.schema.json into the\n"
+    "example-doctrine-repo coordinator root. Takes no arguments.\n"
+    "\n"
+    "NOTE — this writes into a SIBLING repo's working tree (example-doctrine-repo owns\n"
+    "artifact-shape-contract/; claude-klabauter owns the sole regeneration path). The write is\n"
+    "deterministic and uncommitted; claim it with the peer rather than leaving it for\n"
+    "them to find in a diff.\n"
+    "\n"
+    "Env: EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT (required; the trampoline\n"
+    "     sets it), ARTIFACT_CONTRACT_OUT_DIR (output-dir override).\n"
+)
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: resolve the example-doctrine-repo coordinator root from the environment and emit.
 
-    argv is accepted (and currently unused, mirroring the JS oracle's own zero-args
-    CLI) for signature parity with every other direct-import trampoline target in this
-    migration (`def main(argv) -> int`).
+    This op takes NO arguments, and says so rather than emitting anyway. It previously
+    accepted argv and ignored it wholesale "for signature parity" — which made
+    `--help` a silent peer-tree write: the operator reaching for an interface got a
+    regenerated bundle in example-doctrine-repo's working tree instead of usage text. Any argv
+    that is not a help flag is a config failure (exit 2, the module's dedicated
+    transport/config code), never a no-op that proceeds to write.
+
+    Negative spec: do NOT restore argv-ignoring for signature parity. The parity that
+    matters is `def main(argv) -> int` (satisfied here); accepting-and-discarding the
+    caller's intent is not part of it.
     """
+    unknown = [a for a in argv if a not in ("-h", "--help")]
+    if any(a in ("-h", "--help") for a in argv) and not unknown:
+        print(_USAGE, end="")
+        return 0
+    if unknown:
+        print(
+            f"emit-artifact-shape-contract: unrecognized argument(s): {' '.join(unknown)}\n"
+            f"{_USAGE}",
+            file=sys.stderr,
+            end="",
+        )
+        return 2  # dedicated transport/config-failure code — see module docstring
+
     coordinator_root = os.environ.get(COORDINATOR_ROOT_ENV)
     if not coordinator_root:
         print(
